@@ -89,60 +89,198 @@ function offline(err: unknown): RestError {
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/** A query-string value. `undefined` leaves the parameter out. */
+export type QueryValue = string | number | boolean | undefined;
+
+export interface RequestOptions {
+  /**
+   * The request body. Encoded as JSON unless `contentType` names a type that
+   * is not JSON, in which case it must already be a string and is sent
+   * byte for byte: `PUT /secrets/{name}` takes the credential itself, and an
+   * encoding step would seal JSON quotes into it.
+   */
+  body?: unknown;
+  /**
+   * What the body is. Defaults to `application/json` when there is a body.
+   * `application/merge-patch+json` is JSON too, and is encoded as such.
+   */
+  contentType?: string;
+  headers?: Record<string, string>;
+  /** Appended to the path's query string; `undefined` values are skipped. */
+  query?: Record<string, QueryValue>;
+  /**
+   * The caller's own cancellation. An aborted request rejects with the
+   * signal's reason (an `AbortError` unless the caller gave another), which
+   * [isAbort] recognises: a request the caller superseded is not an engine
+   * that could not be reached, and reporting it as one would put an
+   * "unreachable" state on a screen whose only fault was being quick.
+   */
+  signal?: AbortSignal;
+  /**
+   * How a SUCCESSFUL body is read. `json` (the default) parses it; `text`
+   * hands it over as the string the engine sent, for the one kind of answer
+   * that is a file rather than a document: `GET /config?format=yaml`, which a
+   * JSON parse turned into an `unreadable_body` refusal. A refusal is read as
+   * JSON either way, because every refusal the engine writes is one.
+   */
+  read?: "json" | "text";
+}
+
+/** What the engine answered, whole: the status and entity-tag beside the body. */
+export interface RestResponse {
+  status: number;
+  /**
+   * The parsed JSON body, or null for an empty one (a 204, a 304). With
+   * `read: "text"` a success's body is the text itself, empty included.
+   */
+  body: unknown;
+  /**
+   * The `ETag` header verbatim, quoted as the engine writes it, or null. The
+   * config surface tags a document with its revision id, and `If-Match` takes
+   * the tag back exactly as it was given.
+   */
+  etag: string | null;
+}
+
+/** Whether a rejection is the caller's own abort rather than a failure. */
+export function isAbort(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null && (err as { name?: unknown }).name === "AbortError"
+  );
+}
+
+/** JSON is `application/json` and every `+json` type, merge patch included. */
+function isJson(contentType: string): boolean {
+  const essence = contentType.split(";")[0]!.trim().toLowerCase();
+  return essence === "application/json" || essence.endsWith("+json");
+}
+
+/** The path with the caller's query parameters merged into its own. */
+function withQuery(path: string, query: Record<string, QueryValue> | undefined): string {
+  if (!query) return path;
+  const at = path.indexOf("?");
+  const params = new URLSearchParams(at < 0 ? "" : path.slice(at + 1));
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return (at < 0 ? path : path.slice(0, at)) + (qs ? `?${qs}` : "");
+}
+
 /**
- * The one request path. `body` is already encoded, and `type` is what it is
- * encoded as — the split exists because not every write on this API takes
- * JSON. See `putText` below.
+ * The one request path, answering the status and entity-tag as well as the
+ * body.
+ *
+ * NOT CACHED, EVER. Every answer here is either a write or a guarded read of
+ * something that changes under the reader (a configuration revision, the
+ * sealed store's names, an integration's requirements), and a heuristic cache
+ * hit on one of those is a screen showing the company as it was. A 304 still
+ * reaches the caller, when the caller sent the precondition that asks for it.
  */
-async function send(
+async function request(
   method: string,
   path: string,
-  body?: string,
-  type?: string,
-  headers: Record<string, string> = {},
-): Promise<unknown> {
+  options: RequestOptions = {},
+): Promise<RestResponse> {
+  const { body, headers = {}, query, signal, read = "json" } = options;
+  const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
+  let encoded: string | undefined;
+  if (body !== undefined) {
+    if (contentType && !isJson(contentType)) {
+      if (typeof body !== "string") {
+        throw new TypeError(`rest.request: a ${contentType} body must be a string`);
+      }
+      encoded = body;
+    } else {
+      encoded = JSON.stringify(body);
+    }
+  }
+
+  // Refused before a round trip: a caller that already gave up has no use
+  // for an answer, and sending the request anyway could still write.
+  if (signal?.aborted) throw signal.reason;
+
   const token = apiToken();
   const init: RequestInit = {
     method,
+    cache: "no-store",
     headers: {
       ...(token ? { Authorization: "Bearer " + token } : {}),
-      ...(type ? { "Content-Type": type } : {}),
+      ...(contentType ? { "Content-Type": contentType } : {}),
       ...headers,
     },
-    ...(body === undefined ? {} : { body }),
+    ...(encoded === undefined ? {} : { body: encoded }),
   };
 
-  // ABORTED RATHER THAN AWAITED FOR EVER — see [REQUEST_TIMEOUT_MS]. The
-  // abort surfaces as offline(), which every caller already handles: a
-  // request this process gave up on and one the engine never answered are
-  // the same fact to somebody looking at the screen.
-  const deadline = new AbortController();
-  const timer = setTimeout(() => deadline.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetch(location.origin + path, { ...init, signal: deadline.signal });
-  } catch (err) {
-    throw deadline.signal.aborted
+  // ABORTED RATHER THAN AWAITED FOR EVER, see [REQUEST_TIMEOUT_MS]. The
+  // deadline and the caller's signal abort ONE controller, because a fetch
+  // takes one signal; which of them fired decides what the rejection says.
+  //
+  // BOTH STAY ARMED UNTIL THE BODY HAS BEEN READ, not only until the headers
+  // arrive. A fetch resolves on the status line, and an engine that sends its
+  // headers and then stalls, or a connection that drops half way through a
+  // body, would otherwise leave a request no deadline and no caller could end.
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward, { once: true });
+
+  // Why a request ended before it had an answer, as the one rejection a
+  // caller can act on: its own abort, the deadline, or an engine it never
+  // fully heard from.
+  const unanswered = (err: unknown): unknown => {
+    if (signal?.aborted) return signal.reason;
+    return timedOut
       ? new RestError(0, {
           error: "unreachable",
           detail: `the engine did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds`,
         })
       : offline(err);
+  };
+
+  let response: Response;
+  let text: string;
+  try {
+    try {
+      response = await fetch(location.origin + withQuery(path, query), {
+        ...init,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw unanswered(err);
+    }
+    // A 204, a 304 and a body-less 200 are all real answers, and each reads
+    // as an empty string. A body that FAILS to read is not one of them: it is
+    // a connection that dropped part way through, which says nothing about
+    // what the engine did, so it is status 0 like any other request that was
+    // never fully answered. Reading it as an empty body turned a write whose
+    // outcome is unknown into a success with no body.
+    try {
+      text = await response.text();
+    } catch (err) {
+      throw unanswered(err);
+    }
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", forward);
   }
 
-  // A 204 and a body-less 200 are both real answers. Reading them as JSON
-  // would turn a success into a parse failure.
-  const text = await response.text().catch(() => "");
+  if (read === "text" && response.ok) {
+    return { status: response.status, body: text, etag: response.headers.get("ETag") };
+  }
+
   let parsed: unknown = null;
   if (text !== "") {
     try {
       parsed = JSON.parse(text);
     } catch {
-      // A proxy's HTML error page, or a truncated body. On a refusal that is
-      // all the detail there is; on a success it is a broken answer either
-      // way, so both become an error rather than a silent null.
+      // A proxy's HTML error page, or a body the engine cut short. On a
+      // refusal that is all the detail there is; on a success it is a broken
+      // answer either way, so both become an error rather than a silent null.
       throw new RestError(response.ok ? 502 : response.status, {
         error: "unreadable_body",
         detail: "the engine answered something that is not JSON",
@@ -150,31 +288,34 @@ async function send(
     }
   }
 
-  if (!response.ok) {
-    const body = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    throw new RestError(response.status, body);
+  // 304 IS NOT A REFUSAL. It answers a conditional read whose precondition
+  // the caller wrote, and it means the representation the caller holds is
+  // still current.
+  if (!response.ok && response.status !== 304) {
+    const refusal = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    throw new RestError(response.status, refusal);
   }
-  return parsed;
+  return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
 }
 
-/** JSON in, for every route that takes a document. */
-function json(
-  method: string,
-  path: string,
-  body?: unknown,
-  headers?: Record<string, string>,
-): Promise<unknown> {
-  return send(method, path, JSON.stringify(body ?? {}), "application/json", headers);
+/** The body alone, for the callers that need nothing else. */
+async function bodyOf(method: string, path: string, options?: RequestOptions): Promise<unknown> {
+  return (await request(method, path, options)).body;
 }
 
 export const rest = {
-  get: (path: string) => send("GET", path),
+  /**
+   * The whole answer: status, entity-tag and body. For a caller that sends a
+   * precondition, reads a tag, cancels, or branches on a success status.
+   */
+  request,
+  get: (path: string) => bodyOf("GET", path),
   post: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    json("POST", path, body, headers),
+    bodyOf("POST", path, { body: body ?? {}, headers }),
   put: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    json("PUT", path, body, headers),
+    bodyOf("PUT", path, { body: body ?? {}, headers }),
   patch: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    json("PATCH", path, body, headers),
+    bodyOf("PATCH", path, { body: body ?? {}, headers }),
   /**
    * THE BODY IS THE VALUE, not a document carrying one.
    *
@@ -184,7 +325,8 @@ export const rest = {
    * sequence the vendor compares is a 401 nobody can explain. Sending it
    * through `put` would seal the JSON quotes into the credential.
    */
-  putText: (path: string, value: string) => send("PUT", path, value, "text/plain; charset=utf-8"),
+  putText: (path: string, value: string) =>
+    bodyOf("PUT", path, { body: value, contentType: "text/plain; charset=utf-8" }),
   // DELETE CARRIES A BODY HERE, which is unusual and deliberate: a
   // disconnect is not one act but a family of them, and which one it is —
   // whether the accounts go too, whether to stop waiting for a third-party
@@ -192,7 +334,5 @@ export const rest = {
   // separate routes. Passing them as query parameters would put a destructive
   // choice in a proxy log.
   del: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    body === undefined
-      ? send("DELETE", path, undefined, undefined, headers)
-      : json("DELETE", path, body, headers),
+    bodyOf("DELETE", path, { body, headers }),
 };

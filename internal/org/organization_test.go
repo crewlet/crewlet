@@ -113,9 +113,143 @@ func TestUnresolvedLeadIsKeptAndReported(t *testing.T) {
 	if err := o.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want nil for a half-wired org", err)
 	}
-	want := []DanglingRef{{Kind: RefLead, From: "Engineering", To: "Ghost"}}
+	// The unit carrying the reference is the entity itself, which is what
+	// a caller placing it in a document locates it by.
+	want := []DanglingRef{{Kind: RefLead, From: "Engineering", To: "Ghost", Unit: o.Unit("Engineering")}}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
+	}
+}
+
+// TestNestedUnitsReportAnInheritedDanglingLeadOnce: the misspelling is
+// written once, on the division, and reported once. DanglingRefs used to run
+// over the effective leads after the cascade, so every descendant that
+// inherited the name was reported as well, naming units whose authors had
+// written no lead at all. A descendant that WRITES the same name is a second
+// misspelling and is reported on its own.
+func TestNestedUnitsReportAnInheritedDanglingLeadOnce(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "Ghost", Roles: []*Role{{Name: "VP Eng"}},
+			Children: []*Unit{
+				{
+					Name: "Backend", Roles: []*Role{{Name: "Dev A"}},
+					Children: []*Unit{{Name: "Storage", Roles: []*Role{{Name: "Dev S"}}}},
+				},
+				{Name: "Infra", Roles: []*Role{{Name: "Dev I"}}},
+				{Name: "Security", Lead: "Ghost", Roles: []*Role{{Name: "Dev X"}}},
+			},
+		}},
+	})
+	// The inheritance itself is unchanged: every descendant still carries
+	// the reference, and every reader still treats it as no lead.
+	for _, name := range []string{"Backend", "Storage", "Infra"} {
+		if got := o.Unit(name).Lead; got != "Ghost" {
+			t.Errorf("unit %q lead = %q, want the inherited Ghost", name, got)
+		}
+	}
+	want := []DanglingRef{
+		{Kind: RefLead, From: "Engineering", To: "Ghost", Unit: o.Unit("Engineering")},
+		{Kind: RefLead, From: "Security", To: "Ghost", Unit: o.Unit("Security")},
+	}
+	if got := o.DanglingRefs(); !slices.Equal(got, want) {
+		t.Errorf("DanglingRefs() = %v, want %v", got, want)
+	}
+}
+
+// TestNormalizeRecordsWhatEachUnitDeclared: after the cascade an inherited
+// lead and a declared one are the same string, so the authored value has to
+// be recorded before it is overwritten, and a second pass must read that
+// record rather than record the inherited value as authored.
+func TestNormalizeRecordsWhatEachUnitDeclared(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
+			Roles: []*Role{{Name: "VP Eng"}},
+			Children: []*Unit{
+				{Name: "Backend", Roles: []*Role{{Name: "Dev A"}}},
+				// Names the same seat and channel as its parent. Declared,
+				// not inherited: changing the parent must not move it.
+				{Name: "Platform", Lead: "VP Eng", Channel: "C_ENG", Roles: []*Role{{Name: "Dev P"}}},
+				{Name: "Frontend", Channel: "C_WEB", Roles: []*Role{{Name: "Dev F"}}},
+			},
+		}},
+	})
+	o.Normalize()
+
+	for _, tc := range []struct {
+		unit                     string
+		lead, declaredLead       string
+		channel, declaredChannel string
+	}{
+		{unit: "Engineering", lead: "VP Eng", declaredLead: "VP Eng", channel: "C_ENG", declaredChannel: "C_ENG"},
+		{unit: "Backend", lead: "VP Eng", declaredLead: "", channel: "C_ENG", declaredChannel: ""},
+		{unit: "Platform", lead: "VP Eng", declaredLead: "VP Eng", channel: "C_ENG", declaredChannel: "C_ENG"},
+		{unit: "Frontend", lead: "VP Eng", declaredLead: "", channel: "C_WEB", declaredChannel: "C_WEB"},
+	} {
+		u := o.Unit(tc.unit)
+		if u.Lead != tc.lead || u.DeclaredLead != tc.declaredLead {
+			t.Errorf("unit %q lead = %q declared %q, want %q declared %q",
+				tc.unit, u.Lead, u.DeclaredLead, tc.lead, tc.declaredLead)
+		}
+		if u.Channel != tc.channel || u.DeclaredChannel != tc.declaredChannel {
+			t.Errorf("unit %q channel = %q declared %q, want %q declared %q",
+				tc.unit, u.Channel, u.DeclaredChannel, tc.channel, tc.declaredChannel)
+		}
+	}
+}
+
+// A manages entry naming neither a seat nor a unit is kept verbatim (the seat
+// may not have landed yet) and reported; an entry naming a seat, a unit, or a
+// unit that happens to hold no seats is not a misspelling.
+func TestADanglingManagesEntryIsReported(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Roles: []*Role{
+			{Name: "CEO", Manages: []string{"CTO", "Engineering", "Hiring", "Ghost"}},
+			{Name: "CTO"},
+			human(func(r *Role) { r.Manages = []string{"CEO", "Nobody"} }),
+		},
+		Units: []*Unit{
+			{Name: "Engineering", Lead: "Tech Lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
+			{Name: "Hiring"},
+		},
+	})
+	want := []DanglingRef{
+		{Kind: RefManages, From: "CEO", To: "Ghost", Seat: o.Role("CEO")},
+		{Kind: RefManages, From: "Sarah Chen", To: "Nobody", Seat: o.Role("Sarah Chen")},
+	}
+	if got := o.DanglingRefs(); !slices.Equal(got, want) {
+		t.Errorf("DanglingRefs() = %v, want %v", got, want)
+	}
+	if err := o.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil: a dangling entry is a warning", err)
+	}
+}
+
+// Every kind renders a message naming both ends of the reference, so a log
+// line or a warning is actionable without the structured fields beside it.
+func TestADanglingReferenceMessageNamesBothEnds(t *testing.T) {
+	t.Parallel()
+	for _, ref := range []DanglingRef{
+		{Kind: RefLead, From: "Engineering", To: "Ghost"},
+		{Kind: RefUnit, From: "Dev", To: "Nowhere"},
+		{Kind: RefManages, From: "CEO", To: "Ghost"},
+		{Kind: RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "old-seat"},
+		{Kind: RefKind("future_kind"), From: "somewhere", To: "something"},
+	} {
+		msg := ref.Message()
+		if !strings.Contains(msg, ref.From) || !strings.Contains(msg, ref.To) {
+			t.Errorf("%s message %q does not name %q and %q", ref.Kind, msg, ref.From, ref.To)
+		}
+		if strings.Contains(msg, "\u2014") {
+			t.Errorf("%s message %q contains an em dash", ref.Kind, msg)
+		}
 	}
 }
 
@@ -196,6 +330,144 @@ func TestInheritedLeadAutoManagesTheChildUnit(t *testing.T) {
 	want := []string{"Dev B", "Tech Lead"}
 	if got := sortedManages(t, o, "VP Eng"); !slices.Equal(got, want) {
 		t.Errorf("VP Eng manages %v, want %v", got, want)
+	}
+}
+
+// managementCycle returns the name of a seat that manages itself through a
+// chain of reports, or "" when the chart is acyclic. Every manages edge
+// counts, not only the primary one [Organization.Manager] reports, because a
+// cycle anywhere is a loop an escalation or a roster walk can enter.
+func managementCycle(o *Organization) string {
+	for start := range o.AllRoles() {
+		seen := map[string]struct{}{}
+		frontier := slices.Clone(start.Manages)
+		for len(frontier) > 0 {
+			name := frontier[0]
+			frontier = frontier[1:]
+			if name == start.Name {
+				return start.Name
+			}
+			if _, done := seen[name]; done {
+				continue
+			}
+			seen[name] = struct{}{}
+			if r := o.Role(name); r != nil {
+				frontier = append(frontier, r.Manages...)
+			}
+		}
+	}
+	return ""
+}
+
+// TestAUnitReferenceShieldsTheMembersItReaches is the shield probe: a direct
+// member that manages its own unit BY NAME has claimed those members as
+// surely as one that lists them. Auto-management used to read the entry as
+// written, see no member names in it, and hand the inherited lead every
+// member as well, so each developer had two managers and the primary one
+// (the first seat in walk order) was the VP rather than the tech lead the
+// chart named.
+func TestAUnitReferenceShieldsTheMembersItReaches(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+			Children: []*Unit{{Name: "Backend", Roles: []*Role{
+				{Name: "Tech Lead", Manages: []string{"Backend"}},
+				{Name: "Dev A"},
+				{Name: "Dev B"},
+			}}},
+		}},
+	})
+	if got, want := sortedManages(t, o, "VP Eng"), []string{"Tech Lead"}; !slices.Equal(got, want) {
+		t.Errorf("VP Eng manages %v, want %v: the unit reference shields its members", got, want)
+	}
+	if got, want := sortedManages(t, o, "Tech Lead"), []string{"Dev A", "Dev B"}; !slices.Equal(got, want) {
+		t.Errorf("Tech Lead manages %v, want %v", got, want)
+	}
+	for _, dev := range []string{"Dev A", "Dev B"} {
+		if m := o.Manager(o.Role(dev)); m == nil || m.Name != "Tech Lead" {
+			t.Errorf("Manager(%s) = %v, want Tech Lead", dev, m)
+		}
+	}
+}
+
+// A name that is both a seat and a unit is the SEAT in the shield exactly as
+// it is in the expansion, because the shield is only honest while it reads
+// manages the way the expansion will leave it.
+func TestTheShieldReadsASeatNameAsTheSeat(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name:  "T",
+		Roles: []*Role{{Name: "Backend", Goal: "Cross-cutting backend advisor"}},
+		Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			{Name: "Lead"},
+			{Name: "Mentor", Manages: []string{"Backend"}},
+			{Name: "Dev A"},
+		}}},
+	})
+	if got, want := sortedManages(t, o, "Mentor"), []string{"Backend"}; !slices.Equal(got, want) {
+		t.Errorf("Mentor manages %v, want %v (the seat, not the unit)", got, want)
+	}
+	if got, want := sortedManages(t, o, "Lead"), []string{"Dev A", "Mentor"}; !slices.Equal(got, want) {
+		t.Errorf("Lead manages %v, want %v: nothing in the unit is shielded", got, want)
+	}
+}
+
+// TestAMemberManagingItsOwnUnitIsNeverClaimedByItsLead is the cycle probe.
+// The member's unit reference reaches the lead, so the member manages the
+// lead; claiming the member back is the two-seat cycle the member-manages-
+// lead guard exists to prevent, and the guard missed it because it looked
+// for the lead's name among the entries as written.
+func TestAMemberManagingItsOwnUnitIsNeverClaimedByItsLead(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{Name: "Backend", Lead: "Backend Lead", Roles: []*Role{
+			{Name: "Backend Lead"},
+			{Name: "Engineering Manager", Manages: []string{"Backend"}},
+			{Name: "Dev A"},
+		}}},
+	})
+	if seat := managementCycle(o); seat != "" {
+		t.Fatalf("seat %q manages itself through its reports: Backend Lead manages %v, Engineering Manager manages %v",
+			seat, o.Role("Backend Lead").Manages, o.Role("Engineering Manager").Manages)
+	}
+	if got := sortedManages(t, o, "Backend Lead"); len(got) != 0 {
+		t.Errorf("Backend Lead manages %v, want nobody: every member is already managed", got)
+	}
+	if got, want := sortedManages(t, o, "Engineering Manager"), []string{"Backend Lead", "Dev A"}; !slices.Equal(got, want) {
+		t.Errorf("Engineering Manager manages %v, want %v", got, want)
+	}
+}
+
+// TestARootSeatManagingAUnitGivesItsMembersASecondManager pins a DELIBERATE
+// consequence of the shield's scope. The shield is the unit's own direct
+// members' manages, never the company's: management is stored on the
+// manager, so a CEO managing a division by name lists every seat in it, and
+// an org-wide shield would strip every lead beneath it of their roster. The
+// cost is visible and documented instead: the member has two managers, and
+// [Organization.Manager] names the root seat because root seats walk first.
+func TestARootSeatManagingAUnitGivesItsMembersASecondManager(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name:  "T",
+		Roles: []*Role{{Name: "CEO", Manages: []string{"Backend"}}},
+		Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			{Name: "Lead"}, {Name: "Dev A"},
+		}}},
+	})
+	if got, want := sortedManages(t, o, "CEO"), []string{"Dev A", "Lead"}; !slices.Equal(got, want) {
+		t.Errorf("CEO manages %v, want %v", got, want)
+	}
+	if got, want := sortedManages(t, o, "Lead"), []string{"Dev A"}; !slices.Equal(got, want) {
+		t.Errorf("Lead manages %v, want %v: an outside manager does not shield a unit's members", got, want)
+	}
+	if m := o.Manager(o.Role("Dev A")); m == nil || m.Name != "CEO" {
+		t.Errorf("Manager(Dev A) = %v, want CEO (root seats walk first)", m)
+	}
+	if seat := managementCycle(o); seat != "" {
+		t.Errorf("seat %q manages itself", seat)
 	}
 }
 
@@ -300,6 +572,34 @@ func TestManagesExpansion(t *testing.T) {
 			},
 			seat: "CEO", want: []string{"Dev", "Junior"},
 		},
+		{
+			// The same pair in the other order. The expansion used to
+			// deduplicate only the names a unit expanded to, so a seat
+			// entry AFTER a unit reaching it was listed twice.
+			name: "a seat listed after a unit that reaches it is not duplicated",
+			org: &Organization{
+				Name:  "T",
+				Roles: []*Role{{Name: "CEO", Manages: []string{"Backend", "Dev"}}},
+				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{
+					{Name: "Dev", Manages: []string{"Junior"}}, {Name: "Junior"},
+				}}},
+			},
+			seat: "CEO", want: []string{"Dev", "Junior"},
+		},
+		{
+			// Organization.Unit answers with the first unit of a name, and
+			// so must the expansion: a stored revision can still hold two.
+			name: "a duplicated unit name expands to the first unit",
+			org: &Organization{
+				Name:  "T",
+				Roles: []*Role{{Name: "CEO", Manages: []string{"Core"}}},
+				Units: []*Unit{
+					{Name: "Core", Roles: []*Role{{Name: "First"}}},
+					{Name: "Core", Roles: []*Role{{Name: "Second"}}},
+				},
+			},
+			seat: "CEO", want: []string{"First"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -366,6 +666,44 @@ func TestMCPEnvInheritanceAndOverride(t *testing.T) {
 	}
 }
 
+// TestHumanMembersInheritNoToolCredentials: a human seat runs no tools and is
+// refused an mcp_env of its own. Layering the unit's block under a human
+// member put that forbidden field on a seat whose author never wrote it, so a
+// human lead of a team sharing a tracker token failed validation with an
+// error about a field nobody could remove.
+func TestHumanMembersInheritNoToolCredentials(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "Sarah Chen",
+			MCPEnv: MCPEnv{"tracker": {"TOKEN": "${TRACKER_TOKEN}"}},
+			Roles:  []*Role{human(), {Name: "Dev"}},
+		}},
+	})
+	if err := o.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil: the human seat authored no mcp_env", err)
+	}
+	if got := o.Role("Sarah Chen").MCPEnv; len(got) != 0 {
+		t.Errorf("the human seat inherited %v", got)
+	}
+	if got := o.Role("Dev").MCPEnv["tracker"]["TOKEN"]; got != "${TRACKER_TOKEN}" {
+		t.Errorf("the agent member inherited %q, want the unit credential", got)
+	}
+
+	// What a human seat WRITES is still refused: the fix is to stop
+	// inventing the field, not to stop checking it.
+	authored := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{Name: "Engineering", Roles: []*Role{
+			human(func(r *Role) { r.MCPEnv = MCPEnv{"tracker": {"TOKEN": "${MINE}"}} }),
+		}}},
+	})
+	if err := authored.Validate(); !errors.Is(err, ErrHumanSeatField) {
+		t.Errorf("Validate() = %v, want ErrHumanSeatField for an authored mcp_env", err)
+	}
+}
+
 // ---- the unit: soft reference ----------------------------------------- //
 
 func TestRootSeatMovesIntoItsNamedUnit(t *testing.T) {
@@ -411,7 +749,7 @@ func TestUnresolvedUnitRefKeepsTheSeatAtRoot(t *testing.T) {
 	if got := roleNames(o.Roles); !slices.Equal(got, []string{"Dev"}) {
 		t.Errorf("root seats = %v, want the seat kept", got)
 	}
-	want := []DanglingRef{{Kind: RefUnit, From: "Dev", To: "Nowhere"}}
+	want := []DanglingRef{{Kind: RefUnit, From: "Dev", To: "Nowhere", Seat: o.Role("Dev")}}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
 	}
@@ -432,10 +770,23 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 				Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
 				MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 				Roles:  []*Role{{Name: "VP Eng"}, {Name: "Analyst"}},
-				Children: []*Unit{{
-					Name:  "Backend",
-					Roles: []*Role{{Name: "Tech Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}},
-				}},
+				Children: []*Unit{
+					{
+						Name:  "Backend",
+						Roles: []*Role{{Name: "Tech Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}},
+					},
+					{
+						// A unit reference that shields its members: a
+						// second pass reads the expanded names and must
+						// reach the same roster.
+						Name: "Frontend", Lead: "Frontend Lead",
+						Roles: []*Role{
+							{Name: "Frontend Lead"},
+							{Name: "Frontend Manager", Manages: []string{"Frontend"}},
+							{Name: "Dev F"},
+						},
+					},
+				},
 			}},
 		}
 	}
@@ -454,6 +805,21 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 	}
 	if string(first) != string(second) {
 		t.Errorf("a second Normalize changed the org:\n--- once ---\n%s\n--- twice ---\n%s", first, second)
+	}
+	// The declared record is not part of the wire form, so the marshal
+	// above cannot see it: a second pass that promoted an inherited lead
+	// to a declared one would pass that comparison and still report
+	// every descendant of a misspelled lead.
+	onceUnits, twiceUnits := slices.Collect(once.AllUnits()), slices.Collect(twice.AllUnits())
+	for i := range onceUnits {
+		a, b := onceUnits[i], twiceUnits[i]
+		if a.DeclaredLead != b.DeclaredLead || a.DeclaredChannel != b.DeclaredChannel {
+			t.Errorf("unit %q declared lead %q channel %q after one pass, %q and %q after two",
+				a.Name, a.DeclaredLead, a.DeclaredChannel, b.DeclaredLead, b.DeclaredChannel)
+		}
+	}
+	if got := twice.Unit("Backend").DeclaredLead; got != "" {
+		t.Errorf("Backend declared lead = %q after two passes, want none: it inherits", got)
 	}
 }
 
@@ -844,5 +1210,33 @@ func TestTraversalCoversRootAndUnits(t *testing.T) {
 	}
 	if o.Role("Nobody") != nil || o.Unit("Nowhere") != nil {
 		t.Error("a missing name resolved to something")
+	}
+}
+
+// WHAT AUTO-MANAGEMENT ADDED IS RECORDED, and a second pass records nothing
+// more. Once normalized, an entry the operator wrote and one the lead gained
+// read identically in Manages, and a chart that tells a person which reports
+// they wrote needs the difference.
+func TestAutoManagementRecordsWhatItAdded(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{Name: "T", Units: []*Unit{{
+		Name: "Backend", Lead: "Lead",
+		Roles: []*Role{
+			{Name: "Lead", Manages: []string{"Written"}},
+			{Name: "Written"},
+			{Name: "Derived A"},
+			{Name: "Derived B"},
+		},
+	}}})
+	lead := o.Role("Lead")
+	if want := []string{"Written", "Derived A", "Derived B"}; !slices.Equal(lead.Manages, want) {
+		t.Errorf("Manages = %v, want %v", lead.Manages, want)
+	}
+	if want := []string{"Derived A", "Derived B"}; !slices.Equal(lead.AutoManaged, want) {
+		t.Errorf("AutoManaged = %v, want %v", lead.AutoManaged, want)
+	}
+	o.Normalize()
+	if want := []string{"Derived A", "Derived B"}; !slices.Equal(lead.AutoManaged, want) {
+		t.Errorf("after a second pass AutoManaged = %v, want %v", lead.AutoManaged, want)
 	}
 }

@@ -165,8 +165,8 @@ func TestAPatchThatBreaksTheCompanyIsRefused(t *testing.T) {
 	// A signing secret whose SHAPE the validator checks. Chosen over
 	// "delete the provider every seat names", which is deliberately
 	// ACCEPTED: a company with no models at all is a documented authoring
-	// state — an org chart written before the credentials exist — and it
-	// fails at the first turn, where the failure is actionable.
+	// state (an org chart written before the credentials exist), and every
+	// node applies it, holding each seat's work until a provider returns.
 	res := s.do(t, http.MethodPatch, "/config",
 		`{"integrations": {"gitlab": {"signing_secret": "not-a-signing-secret"}}}`,
 		summaryHeader)
@@ -315,6 +315,13 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 			t.Errorf("the conflict omits %q: %s", want, res.Body.String())
 		}
 	}
+	// AS HISTORY, and nothing more: this node goes on serving the revision
+	// it served, which its reconciler moves on to whatever won.
+	s.assertKeptInert(t, decode(t, res))
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"`+base+`"` {
+		t.Errorf("GET /config after the refusal serves %s, want the base %s it served before",
+			got.Header().Get("ETag"), base)
+	}
 }
 
 // AND A WRITE WITH NOTHING IN ITS WAY STILL LANDS, or the guard above is
@@ -395,7 +402,21 @@ func TestATypoIsRefusedEvenOnAPeerExtendedDocument(t *testing.T) {
 // Seeded as RAW BYTES, because the struct is precisely what cannot carry it.
 func seedWithPeerField(t *testing.T, s *surface) {
 	t.Helper()
-	cfg, err := config.ParseCompany([]byte(companyDoc))
+	s.seedStored(t, companyDoc, func(document map[string]any) {
+		document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
+	})
+}
+
+// seedStored activates a revision as STORED BYTES: the document parsed from
+// doc, marshalled, and then edited as generic JSON by mutate.
+//
+// It is how a test holds what this build could not have written itself: a
+// field only a newer peer knows, or a document the validator refuses, which
+// an older build or a later rule leaves in a store. Nothing here validates
+// the document or the result, which is the point. It returns the revision id.
+func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]any)) string {
+	t.Helper()
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -407,7 +428,7 @@ func seedWithPeerField(t *testing.T, s *surface) {
 	if err := json.Unmarshal(known, &document); err != nil {
 		t.Fatal(err)
 	}
-	document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
+	mutate(document)
 	raw, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -416,12 +437,14 @@ func seedWithPeerField(t *testing.T, s *surface) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
-		Source: "peer", CreatedBy: "a newer node", Summary: "seed",
+	id, err := s.configs.InsertActive(t.Context(), store.Revision{
+		Source: "peer", CreatedBy: "another node", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	return id
 }
 
 // A QUOTED ENTITY-TAG IS THE STANDARD SPELLING, and it has to work.

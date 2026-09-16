@@ -22,6 +22,8 @@ import {
   rollUp,
 } from "./Integrations.tsx";
 import type { IntegrationRow } from "~/protocol/types.ts";
+import { Tag } from "@crewlethq/ui";
+import { drawnClasses } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -41,22 +43,22 @@ test("a surface with no status renders nothing", () => {
 // is fine on the strength of a word this build cannot interpret is the one
 // answer that is certainly wrong.
 test("an unknown phase is never positive", () => {
-  expect(phaseTone("something_a_newer_build_wrote")).not.toBe("positive");
-  expect(phaseTone("")).not.toBe("positive");
-  expect(phaseTone("ready")).toBe("positive");
+  expect(phaseTone("something_a_newer_build_wrote")).not.toBe("success");
+  expect(phaseTone("")).not.toBe("success");
+  expect(phaseTone("ready")).toBe("success");
 });
 
 // Degraded is caution rather than critical, and the distinction is real:
 // agents are still working, which is what separates it from a surface that
 // cannot authenticate at all.
 test("the tone follows how much is not working", () => {
-  expect(phaseTone("degraded")).toBe("caution");
-  expect(phaseTone("unconfigured")).toBe("critical");
+  expect(phaseTone("degraded")).toBe("warning");
+  expect(phaseTone("unconfigured")).toBe("danger");
   // EVERY IN-PROGRESS PHASE IS AMBER. Each one is an integration that does
   // not work yet, and neutral is the tone this screen uses for a state
   // nobody needs to come back to.
   for (const phase of ["provisioning", "activating", "awaiting_admin", "disconnecting"]) {
-    expect(phaseTone(phase)).toBe("caution");
+    expect(phaseTone(phase)).toBe("warning");
   }
 });
 
@@ -258,7 +260,7 @@ test("a tool reports its least ready surface, and names it", () => {
     ),
   );
   expect(state.tag).toBe("degraded");
-  expect(state.tone).toBe("caution");
+  expect(state.tone).toBe("warning");
 });
 
 // A SURFACE NOTHING CAN REACH IS NOT DRAWN AS HEALTHY, and the tag's colour
@@ -267,7 +269,7 @@ test("a tool reports its least ready surface, and names it", () => {
 test("a surface whose secret did not resolve colours the tag", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
   expect(state.tag).toBe("Connecting");
-  expect(state.tone).toBe("caution");
+  expect(state.tone).toBe("warning");
 });
 
 // A ready tool is drawn ready. The tag is the whole claim, and its tone must
@@ -278,7 +280,7 @@ test("a ready tool is drawn ready", () => {
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready", detail: "3 seats" } }),
   );
   expect(state.tag).toBe("ready");
-  expect(state.tone).not.toBe("caution");
+  expect(state.tone).not.toBe("warning");
 });
 
 // NOT CONFIGURED, PAUSED and CONFIGURED are three different facts. Absent is
@@ -299,7 +301,7 @@ test("absent, paused and connecting are told apart", () => {
   // pass, and it says so.
   const connecting = rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true }));
   expect(connecting.tag).toBe("Connecting");
-  expect(connecting.tone).toBe("caution");
+  expect(connecting.tone).toBe("warning");
 });
 
 // A phase a newer node wrote outranks ready and is outranked by every phase
@@ -314,7 +316,7 @@ test("an unknown phase is never the tool's ready state", () => {
     ),
   );
   expect(unknown.tag).toBe("something new");
-  expect(unknown.tone).not.toBe("positive");
+  expect(unknown.tone).not.toBe("success");
 
   const broken = rollUp(
     atlassian,
@@ -414,9 +416,10 @@ test("a card's header says what the tool is, not what is wrong with it", () => {
 // chevron that opens an empty box is a control that lies.
 test("an absent tool is a plain card with no disclosure and no badge", () => {
   const { container } = render(<EntryRow entry={slack} rows={rowsOf()} />);
-  // NO STATUS BADGE. Nothing has been configured, so there is nothing to
+  // NO STATUS TAG. Nothing has been configured, so there is nothing to
   // report; the Connect button is the whole message.
-  expect(container.querySelector(".badge")).toBeNull();
+  const tag = drawnClasses(Tag, { children: "any" })[0]!;
+  expect(container.querySelector(`.${tag}`)).toBeNull();
   expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
   // And it still says what the tool is for, because the catalogue is what
   // tells a reader the engine serves it at all.
@@ -444,7 +447,7 @@ test("a ready tool with a refused secret is not drawn ready", () => {
   // with it, it said "Connected" in amber: a word and a colour saying
   // opposite things, leaving a reader to work out which to believe.
   expect(state.tag).toBe("Action needed");
-  expect(state.tone).toBe("caution");
+  expect(state.tone).toBe("warning");
 });
 
 // CONNECTED IS ONLY EVER GREEN. The rule, asserted over every way a card can
@@ -465,7 +468,7 @@ test("nothing draws Connected in a colour that disagrees with it", () => {
           reconcile: { phase: "ready", phase_label: "Connected" },
         }),
       );
-      if (state.tag === "Connected") expect(state.tone).toBe("positive");
+      if (state.tag === "Connected") expect(state.tone).toBe("success");
       // And the card that cannot say Connected says what is true instead.
       if (secret_usable === false || routes === false) {
         expect(state.tag).toBe("Action needed");
@@ -504,7 +507,7 @@ test("a ready tool that routes nothing is not drawn ready", () => {
     rowsOf({ key: "datadog", configured: true, routes: false, reconcile: { phase: "ready" } }),
   );
   expect(state.tag).toBe("Action needed");
-  expect(state.tone).toBe("caution");
+  expect(state.tone).toBe("warning");
 });
 
 // A PHASE THE ENGINE OWNS IS NOT A PROBLEM, and its tone says so: marking
@@ -518,7 +521,7 @@ test("a phase the engine is working through is not drawn as a fault", () => {
       reconcile: { phase: "activating", actor: "engine", detail: "Atlassian is applying it" },
     }),
   );
-  expect(state.tone).not.toBe("critical");
+  expect(state.tone).not.toBe("danger");
 });
 
 // THE LEAST READY SURFACE IS THE ENGINE'S OWN ORDER, integration.Phases: a
@@ -1239,14 +1242,14 @@ test("the catalogue is ordered by name, whatever is connected", () => {
 // list and not the other is either watched forever or never watched at all.
 test("every in-flight phase is amber, and the only amber phase that settles is degraded", () => {
   for (const phase of IN_FLIGHT) {
-    expect(phaseTone(phase)).toBe("caution");
+    expect(phaseTone(phase)).toBe("warning");
   }
   const amber = ["awaiting_admin", "provisioning", "activating", "disconnecting", "degraded"];
   for (const phase of amber) {
-    expect(phaseTone(phase)).toBe("caution");
+    expect(phaseTone(phase)).toBe("warning");
     expect(IN_FLIGHT.has(phase)).toBe(phase !== "degraded");
   }
-  expect(phaseTone("ready")).toBe("positive");
+  expect(phaseTone("ready")).toBe("success");
   expect(IN_FLIGHT.has("ready")).toBe(false);
 });
 
@@ -1635,7 +1638,7 @@ test("a tool with no provisioning pass reports from what can be seen", () => {
     [noPass],
   );
   expect(healthy.tag).toBe("Connected");
-  expect(healthy.tone).toBe("positive");
+  expect(healthy.tone).toBe("success");
 
   // AND AN INGRESS FAULT STILL OUTRANKS IT. A route that turns no delivery
   // into work for a seat is not connected, whoever converges it.
@@ -1645,7 +1648,7 @@ test("a tool with no provisioning pass reports from what can be seen", () => {
     [noPass],
   );
   expect(deaf.tag).toBe("Action needed");
-  expect(deaf.tone).toBe("caution");
+  expect(deaf.tone).toBe("warning");
 
   // A TOOL THAT DOES HAVE A PASS KEEPS THE WINDOW, because for it the loop
   // really is about to report.
@@ -1733,7 +1736,7 @@ test("a surface registered at a moved address needs action", () => {
     }),
   );
   expect(moved.tag).toBe("Action needed");
-  expect(moved.tone).toBe("caution");
+  expect(moved.tone).toBe("warning");
 
   // AND A SURFACE NOBODY HAS RECORDED AN ADDRESS FOR IS NOT A FAULT. Null
   // is "nothing here can say", which is what every row said before this
@@ -1774,7 +1777,7 @@ test("a phaseless row does not become an empty tag", () => {
     [{ key: "slack", configured: true, can_provision: false } as never],
   );
   expect(state.tag).toBe("Action needed");
-  expect(state.tone).toBe("caution");
+  expect(state.tone).toBe("warning");
 });
 
 // AN AGENT THE LOOP HAS A FINDING ABOUT IS NOT BADGED READY.

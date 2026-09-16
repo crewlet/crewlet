@@ -42,9 +42,10 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // path did.
 //
 // A resumer wraps its error in this when, and only when, the turn's own record
-// PROVES an outward write. The coordinator then leaves the claim taken rather
-// than reverting it — which is what stops a retry winning the flip — and
-// settles the delivery. Every other resume failure still reverts and comes
+// PROVES an outward write. The coordinator then never reverts the claim, which
+// is what stops a retry winning the flip: it settles the delivery and the run,
+// reclaiming the box and deleting the record, so no redelivery finds anything
+// to claim. Every other resume failure still reverts and comes
 // back, because the suspended conversation is the expensive thing here and a
 // resume that proved nothing has lost nothing by trying again.
 var ErrResumeActed = errors.New("sandbox: the resumed turn broke after writing outside the engine")
@@ -483,9 +484,9 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 // resumeAndSettle re-enters the suspended loop, then settles the box.
 //
 // After the resumed Execute returns: if the executor called run_sandbox AGAIN
-// the row is back in running and a new job owns the paused box — leave it for
-// the next completion. Otherwise the phase is done with the box, so tear it
-// down and mark the run done.
+// the row is back in running and a new job owns the paused box, so it is left
+// for the next completion. Otherwise the phase is done with the box, so the box
+// is torn down and the run finished.
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) error {
@@ -508,32 +509,43 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"started it cannot be continued")
 		return nil
 	}
-	if c.resume == nil {
-		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, run.AgentHandle)
-	}
-
 	// Freed only NOW, immediately before the resume, so no queued event can
 	// take the slot first.
 	c.clearBusy(run.AgentHandle)
 
-	if err := c.resume.Resume(ctx, ResumeRequest{
+	if err := c.dispatchResume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
 		if errors.Is(err, ErrResumeActed) {
-			// THE CLAIM STAYS TAKEN. Reverting it here would hand the
-			// completion back to a retry, and that retry would re-enter
-			// the same suspended conversation and repeat the writes this
-			// turn has already made — which is the one thing a resume
-			// must not do twice. The turn is lost; its writes are not
-			// un-doable, and only one of those two is recoverable by
-			// trying again. The row stays in resumed for the settle path
-			// and the reaper, exactly as a successful resume leaves it.
+			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
+			// the completion to a retry, and that retry would re-enter the
+			// same suspended conversation and repeat the writes this turn
+			// has already made, which is the one thing a resume must not
+			// do twice. The turn is lost; its writes are not un-doable,
+			// and only one of those two is recoverable by trying again.
+			//
+			// So the run is SETTLED, which keeps that promise for good: a
+			// finished run has no record for a redelivery to claim. Left
+			// claimed instead, it was settled by nothing (recovery runs
+			// only when the seat changes hands), and re-marking the seat
+			// busy parked every message it received for as long as this
+			// node kept it, beside a paused box nobody would collect.
+			//
+			// The seat's busy count is RECOUNTED from the store rather than
+			// re-marked: the resumed turn is over, but it may have called
+			// run_sandbox again before it broke, and that relaunch's start
+			// event counted the seat busy on a job this settle has just
+			// ended. And nothing is announced, because the turn did resume
+			// and has already published its own failed completion.
 			log.ErrorContext(ctx, "sandbox_resume_abandoned_after_acting",
 				"turn_id", run.TurnID, "error", err.Error(),
-				"detail", "the claim is left taken so the completion is not "+
-					"redelivered into a conversation whose writes already landed")
-			c.markBusy(run.AgentHandle)
+				"detail", "the run is settled rather than un-claimed, so the completion is "+
+					"not redelivered into a conversation whose writes already landed")
+			if settle, ok := c.current(ctx, run); ok {
+				c.finish(ctx, settle, fenceOf(run))
+			}
+			c.syncBusy(ctx, run.AgentHandle)
 			return nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -554,12 +566,11 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		return err
 	}
 
-	latest, found, err := c.pending.Get(ctx, run.TurnID)
-	if err != nil {
-		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
+	latest, ok := c.current(ctx, run)
+	if !ok {
 		return nil
 	}
-	if found && (latest.Status == StatusRunning || latest.Status == StatusLaunching) {
+	if latest.Status == StatusRunning || latest.Status == StatusLaunching {
 		// The resumed executor called run_sandbox AGAIN: a new detached job
 		// owns the box and the suspending turn re-marked the seat busy.
 		//
@@ -573,39 +584,108 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			"turn_id", run.TurnID, "status", latest.Status)
 		return nil
 	}
-	// Tear down the box the LATEST row points at: a re-seeded run
-	// provisioned a fresh one, so the claimed row's id is stale.
-	settle := run
-	if found {
-		settle = latest
-	}
-	c.teardown(ctx, settle)
-	if err := c.pending.SetStatus(ctx, run.TurnID, StatusDone, fenceOf(run)); err != nil {
-		log.WarnContext(ctx, "sandbox_done_mark_failed", "turn_id", run.TurnID, "error", err.Error())
-	}
+	c.finish(ctx, latest, fenceOf(run))
+	// RECOUNTED, not assumed free. The count was cleared before the resume,
+	// but a start event redelivered while the turn ran recomputes it from
+	// the store, where this run, claimed, still held the seat; with no
+	// recount here that seat stayed parked on a run that no longer exists
+	// until the seat changed hands. The store now has no record of this run,
+	// so the recount keeps only the seat's other live runs.
+	c.syncBusy(ctx, run.AgentHandle)
 	return nil
 }
 
-// settleFailed marks a run failed, reaps its box, frees the seat, and SAYS SO.
+// current is a claimed run as its record stands after the resumed turn
+// returned, false when the record could not be read.
+//
+// The LATEST record, because the box to settle is the one it names now: a
+// re-seeded run provisioned a fresh box, so the claimed snapshot's id is stale,
+// and a resumed executor that called run_sandbox again has a new job in it. A
+// record that is already gone is answered with the snapshot, whose settle then
+// reclaims a box that may still be there and finds nothing to delete. A read
+// that fails settles nothing: the record is still active, so the seat's next
+// recovery reaps it, where acting on the snapshot could kill a relaunched job.
+func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, bool) {
+	latest, found, err := c.pending.Get(ctx, run.TurnID)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
+		return PendingRun{}, false
+	}
+	if !found {
+		return run, true
+	}
+	return latest, true
+}
+
+// dispatchResume hands a claimed run to the resumer.
+//
+// A node with NO resumer answers [ErrResumeUnavailable] from here, inside the
+// failure handling every other unavailable resume goes through, rather than
+// before it. Returned ahead of that handling it left the claim taken: the
+// NAK'd completion came back to a claim that refused it, and the suspended
+// conversation was stranded in resumed until the seat next changed hands.
+func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) error {
+	if c.resume == nil {
+		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, req.Run.AgentHandle)
+	}
+	return c.resume.Resume(ctx, req)
+}
+
+// settleFailed ends a run that failed: it reaps the box, finishes the run,
+// frees the seat, and SAYS SO.
 //
 // Every step is attempted regardless of the ones before it: each is a network
 // or store call that can fail on its own, and none of them failing is a reason
 // to leave a seat parked on a run that is over.
 //
-// The announcement is the step that was missing. This path destroys a turn —
-// the row leaves the active board, the box is gone, and the completion that
-// would have explained it has already been acked — and it published nothing,
-// so all three ways of reaching here presented to the seat, the dashboard and
-// the requester as an identical silence. The first symptom was a wait that
+// The announcement is the step that was missing. This path destroys a turn:
+// the record is deleted, the box is gone, and the completion that would have
+// explained it has already been acked. It published nothing, so every way of
+// reaching here presented to the seat, the dashboard and the requester as an
+// identical silence. The first symptom was a wait that
 // never ended. `park` announces a QUESTION; a lost turn cannot be quieter than
 // that.
+//
+// Announced only when this call ended the run. One that a newer lease owns,
+// or that somebody else ended first, is that party's to settle and to explain,
+// and a second announcement would name a reason the run did not end for.
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
-	if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, fenceOf(run)); err != nil {
-		log.WarnContext(ctx, "sandbox_failed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
-	}
-	c.teardown(ctx, run)
+	ended := c.finish(ctx, run, fenceOf(run))
 	c.clearBusy(run.AgentHandle)
-	c.announceFailure(ctx, run, reason, detail)
+	if ended {
+		c.announceFailure(ctx, run, reason, detail)
+	}
+}
+
+// FailRun settles a run the turn that launched it cannot suspend into.
+//
+// The engine calls it when the conversation a resume would re-enter never
+// reached the run's record: the runner recorded none, it would not serialize,
+// or the record could not be written. The job is already executing in its box
+// by then, and marking the record alone left that box running to its
+// provider's TTL with nothing to reclaim it, because a record that is not
+// active is read by no recovery pass. So the run is settled here like any
+// other lost turn, while this node still owns the seat: the box reclaimed, the
+// run finished, the seat freed and the loss announced.
+//
+// ONLY A RUN STILL LAUNCHING is settled, because that is the one state the
+// failed suspension proves nothing else will act on. A run whose record is
+// gone was ended by somebody else. A run already running carries a
+// conversation after all: a write reported as failed can have landed, and that
+// run is an ordinary suspended one the completion poll resumes, so settling it
+// here would destroy a turn that is fine. Any other state belongs to a party
+// that has moved the run on. A record that cannot be read is returned, because
+// the box it names is then unknown.
+func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string) error {
+	run, found, err := c.pending.Get(ctx, turnID)
+	if err != nil {
+		return fmt.Errorf("sandbox: reading run %s to settle it: %w", turnID, err)
+	}
+	if !found || run.Status != StatusLaunching {
+		return nil
+	}
+	c.settleFailed(ctx, run, reason, detail)
+	return nil
 }
 
 // announceFailure publishes the lost run, to the board and to its seat.
@@ -637,22 +717,81 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 	}
 }
 
-// teardown reclaims a run's box and clears the row's record of it.
-//
-// A CONTEXT OF ITS OWN, like [abandon] and [Manager.discard], and for the
-// same reason: this is reached right after a failure — settleFailed,
-// resumeAndSettle — and from the queue handler a drain cancels, so the
-// context that got us here is very often already dead. Inheriting it makes
-// both calls below no-ops, and the two failures are different and both bad.
-// On a remote provider the box is left to run out its TTL, billed, with the
-// row's record of it already cleared so nothing will ever collect it. On the
-// local one Kill's wait for the process group is what stops removeBox racing
-// the dying wrapper's writes, which is exactly what Kill's own comment says
-// the wait prevents.
-//
-// WithoutCancel rather than Background, so the warnings still carry the
-// turn's values.
+// teardown reclaims a run's box and clears the record's reference to it, for
+// a run that goes on without its box: one parked straight into reseed.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
+	killCtx, cancel := detached(ctx)
+	defer cancel()
+	_ = c.reclaimBox(ctx, killCtx, run)
+	if run.SandboxID == "" {
+		return
+	}
+	if err := c.pending.ReleaseBox(killCtx, run.TurnID); err != nil {
+		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
+	}
+}
+
+// finish ends a run: its box is reclaimed and then its record deleted.
+// Reports whether the ending is this call's, which is what licenses the caller
+// to announce it: false when a newer lease owns the run or somebody else had
+// already ended it.
+//
+// IN THAT ORDER, for the reason [PendingStore.Finish] gives: a record that
+// outlives its box is reaped by the next recovery pass, while a box that
+// outlives its record is named by nothing. A record that cannot be deleted is
+// logged rather than retried here: it is still an active record of its seat,
+// so the seat's next recovery pass reaps it, and the ending still counts as
+// this call's, because the box is reclaimed and the turn is over.
+//
+// A kill that fails does not keep the record, unlike in [Coordinator.RetireSeat]:
+// nothing retries a settle, and a record left claimed or launching would park
+// its seat on the next busy count for as long as this node keeps the seat. The
+// failure is logged, and a remote box runs out its TTL.
+func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) bool {
+	if outranked(run, fence) {
+		// A newer lease owns the run; its box is that owner's to reclaim.
+		log.WarnContext(ctx, "sandbox_finish_outranked", "turn_id", run.TurnID,
+			"owner_epoch", run.OwnerEpoch, "epoch", fence.Epoch)
+		return false
+	}
+	killCtx, cancel := detached(ctx)
+	defer cancel()
+	_ = c.reclaimBox(ctx, killCtx, run)
+	ended, err := c.pending.Finish(killCtx, run.TurnID, fence)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", run.TurnID, "error", err.Error(),
+			"detail", "the run's box is reclaimed but its record was not deleted; the seat's "+
+				"next recovery pass reaps it")
+		return true
+	}
+	return ended
+}
+
+// detached is the context a teardown runs under.
+//
+// A CONTEXT OF ITS OWN, like [abandon] and [Manager.discard], and for the same
+// reason: a teardown is reached right after a failure (settleFailed,
+// resumeAndSettle) and from the queue handler a drain cancels, so the context
+// that got us here is very often already dead. Inheriting it makes the kill and
+// the store write no-ops, and the two failures are different and both bad. On
+// a remote provider the box is left to run out its TTL, billed, with nothing
+// left to collect it. On the local one Kill's wait for the process group is
+// what stops removeBox racing the dying wrapper's writes, which is exactly
+// what Kill's own comment says the wait prevents.
+//
+// WithoutCancel rather than Background, so the warnings still carry the turn's
+// values.
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+}
+
+// reclaimBox kills a run's box under killCtx and closes the run's credentials,
+// logging under ctx.
+//
+// The error is a kill that failed, the one outcome a retry can change. A run
+// with no box, and a box whose placement this company no longer configures,
+// report nil: there is nothing any later attempt could reach either.
+func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) error {
 	// BEFORE THE BOX CHECK, because a run that never got one still ended —
 	// a launch that failed at create is exactly the case where a bridge
 	// session was opened and nothing else will ever close it.
@@ -660,25 +799,24 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 		c.ended(run.TurnID)
 	}
 	if run.SandboxID == "" {
-		return
+		return nil
 	}
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
-	defer cancel()
 	provider, err := c.mgr().Provider(Placement(run.Placement))
 	if err != nil {
-		// The row names a cell this company no longer configures. The box
-		// is unreachable and cannot be reclaimed here, so the row is still
-		// released below — leaving it open would hold the seat's busy count
-		// forever over a box that will expire on its own TTL anyway.
+		// The record names a cell this company no longer configures. The
+		// box is unreachable and cannot be reclaimed here, so the caller
+		// still settles the record: leaving it open would hold the seat's
+		// busy count forever over a box that will expire on its own TTL.
 		log.WarnContext(ctx, "sandbox_teardown_no_backend",
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
-	} else if err := provider.Kill(killCtx, run.SandboxID); err != nil {
+		return nil
+	}
+	if err := provider.Kill(killCtx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
+		return fmt.Errorf("sandbox: reclaiming box %s of run %s: %w", run.SandboxID, run.TurnID, err)
 	}
-	if err := c.pending.ReleaseBox(killCtx, run.TurnID); err != nil {
-		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
-	}
+	return nil
 }
 
 // RecoverSeat re-attaches to a seat's still-active runs as this node claims it.
@@ -720,18 +858,19 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 			log.WarnContext(ctx, "sandbox_abandoned_tail_reaped",
 				"turn_id", run.TurnID, "agent", run.AgentHandle,
 				"sandbox_id", run.SandboxID, "status", run.Status)
-			c.teardown(ctx, run)
-			// Announced like the other two ways a run is lost: the seat's
-			// new owner is about to open its mailbox, and a turn that
-			// died with the previous owner has to be visible rather than
-			// inferred from a row that quietly left the board.
+			// Fenced on the lease this node just took, so a record a
+			// newer owner has already claimed is left to that owner, and
+			// neither ended nor announced here.
+			if !c.finish(ctx, run, Fence{Owner: owner, Epoch: epoch}) {
+				continue
+			}
+			// Announced like the other ways a run is lost: the seat's new
+			// owner is about to open its mailbox, and a turn that died
+			// with the previous owner has to be visible rather than
+			// inferred from a record that quietly left the board.
 			c.announceFailure(ctx, run, types.SandboxFailureAbandoned,
 				"the node that owned this seat stopped mid-run, so its turn "+
 					"cannot be continued by the seat's new owner")
-			if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, Fence{}); err != nil {
-				log.WarnContext(ctx, "sandbox_abandoned_mark_failed",
-					"turn_id", run.TurnID, "error", err.Error())
-			}
 			abandoned++
 		case StatusRunning:
 			if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
@@ -746,6 +885,80 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 		"seat", handle, "epoch", epoch, "running", recovered,
 		"abandoned", abandoned, "active", len(active))
 	return nil
+}
+
+// RetireSeat ends every run of a seat that has left the company.
+//
+// Called by the seat's mailbox retirement, which is the one moment a removed
+// seat's runs are known to be nobody's: the seat has been absent from the
+// active revision for the whole retirement grace, and the caller HOLDS ITS
+// LEASE under owner and epoch, so no node can claim the seat and recover these
+// runs while they are ended. Until then they are kept on purpose, for the
+// reason the mailbox is: a seat restored within the grace comes back to its
+// parked questions and its running jobs rather than to lost turns.
+//
+// Every run is ended whatever its status, because none can continue: a resume
+// needs the seat in the company, a parked question's answer arrives on an
+// inbox about to be deleted, and a job's completion is routed to a control
+// topic that goes with it. Each box is reclaimed, each loss announced, and
+// each record finished under the retirement's fence.
+//
+// Everything runs under ctx, NOT detached like the settle paths: the lease is
+// what keeps a returning seat's owner off these records, and it is only held
+// for as long as the caller's budget. A run this call could not end is
+// returned as an error, and the caller retries the retirement on its next
+// tick; ending the same run twice reclaims a box that is already gone and
+// finds a record that is already deleted.
+func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoch int64) error {
+	runs, err := c.pending.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return fmt.Errorf("sandbox: listing the runs of retired seat %q: %w", handle, err)
+	}
+	fence := Fence{Owner: owner, Epoch: epoch}
+	var errs []error
+	for _, run := range runs {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q was not ended: %w",
+				run.TurnID, handle, err))
+			break
+		}
+		if outranked(run, fence) {
+			// Claimed under a newer lease than the one this retirement
+			// holds, which a held lease rules out; left to that owner
+			// rather than killed out from under it.
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q is owned by a newer "+
+				"lease (epoch %d) than the retirement's (%d)", run.TurnID, handle, run.OwnerEpoch, epoch))
+			continue
+		}
+		// A box that could not be reclaimed keeps its record, so the
+		// retry the caller makes on its next tick still knows the box
+		// exists. Deleting the record anyway would leave a billed box
+		// named by nothing, which a settle accepts only because nothing
+		// retries it.
+		if err := c.reclaimBox(ctx, ctx, run); err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q was not ended: %w",
+				run.TurnID, handle, err))
+			continue
+		}
+		ended, err := c.pending.Finish(ctx, run.TurnID, fence)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",
+				run.TurnID, handle, err))
+			continue
+		}
+		if !ended {
+			// Settled by somebody else since the listing, who announced
+			// it if it was lost.
+			continue
+		}
+		c.announceFailure(ctx, run, types.SandboxFailureSeatRemoved,
+			"the seat was removed from the company and not restored within the retirement "+
+				"grace, so its run was ended; any work it pushed is on its branch")
+		log.InfoContext(ctx, "sandbox_retired_seat_run_ended",
+			"turn_id", run.TurnID, "agent", handle, "status", run.Status, "sandbox_id", run.SandboxID)
+	}
+	c.ReleaseSeat(handle)
+	return errors.Join(errs...)
 }
 
 // ReleaseSeat stops tracking a seat's runs.

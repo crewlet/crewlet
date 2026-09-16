@@ -266,3 +266,73 @@ func TestAChangeInsideAListElementIsFound(t *testing.T) {
 		t.Errorf("change = %+v", change)
 	}
 }
+
+// A ROTATED CREDENTIAL IS A CHANGE, AND NEITHER VALUE IS IN IT.
+//
+// The diff used to compare two REDACTED documents, where every literal
+// credential is the same marker on both sides, so a rotation diffed to
+// nothing: the one change an operator opens a diff to confirm. Both halves are
+// asserted, because reporting the change by comparing raw values and then
+// printing them passes the first half and leaks.
+func TestARotatedCredentialIsReportedWithoutEitherValue(t *testing.T) {
+	t.Parallel()
+	base := companyFrom(t, companyDoc)
+	rotated := companyFrom(t, strings.Replace(companyDoc, `"sk-literal"`, `"sk-rotated-literal"`, 1))
+
+	changes, err := configapi.Changes(base, rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, present := pathsOf(changes)["providers.llm.zulu.api_keys[0]"]
+	if !present {
+		t.Fatalf("a rotated credential diffed to nothing: %+v", changes)
+	}
+	if change.Kind != configapi.KindChanged || change.From != config.Redacted || change.To != config.Redacted {
+		t.Errorf("change = %+v, want a change from the mask to the mask", change)
+	}
+	assertNoValue(t, changes, "sk-literal", "sk-rotated-literal")
+}
+
+// AN ADDED OR REMOVED SUBTREE CARRIES ITS VALUE REDACTED.
+//
+// An addition is reported as the whole subtree, so a seat added with its own
+// credentials would otherwise print them in full. The seat is appended at the
+// END of the list, so position alone makes it an addition or a removal.
+func TestAnAddedOrRemovedSubtreeIsRedacted(t *testing.T) {
+	t.Parallel()
+	const literal = "per-seat-literal-token"
+	withSeat := companyDoc + `  - name: CFO
+    handle: cfo
+    llm: zulu
+    mcp_env:
+      tracker: {TOKEN: ` + literal + `}
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+`
+	base := companyFrom(t, companyDoc)
+	grown := companyFrom(t, withSeat)
+
+	for name, pair := range map[string][2]*config.Company{
+		"added": {base, grown}, "removed": {grown, base},
+	} {
+		changes, err := configapi.Changes(pair[0], pair[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, present := pathsOf(changes)["roles[2]"]; !present {
+			t.Errorf("%s: the seat is not reported: %+v", name, changes)
+		}
+		assertNoValue(t, changes, literal)
+	}
+}
+
+// assertNoValue fails when any rendered change carries one of the values.
+func assertNoValue(t *testing.T, changes []configapi.Change, values ...string) {
+	t.Helper()
+	rendered := fmt.Sprintf("%+v", changes)
+	for _, value := range values {
+		if strings.Contains(rendered, value) {
+			t.Errorf("the diff carries the credential %q: %s", value, rendered)
+		}
+	}
+}

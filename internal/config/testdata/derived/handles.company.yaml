@@ -1,0 +1,9 @@
+# A handle is a declared one, or the slug of the name with Go's own case
+# mapping: a dotted capital I folds to a plain i here, where a JavaScript
+# lowercase keeps a combining dot and derives a different seat.
+name: Acme
+roles:
+  - name: İlker Demir
+  - name: Grace Hopper
+    handle: grace
+  - name: "  Ada   Lovelace  "

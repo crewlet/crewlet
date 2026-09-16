@@ -144,8 +144,8 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 	}
 
 	// A company with no providers at all answers false rather than
-	// crashing: the registry refuses that company at construction, and
-	// validation has to survive long enough to say so.
+	// crashing: it is a valid company (the engine builds it with no model
+	// registry), and validation walks every seat of it.
 	empty := &Company{}
 	if _, _, ok := empty.ExecutorProvider(&Role{}); ok {
 		t.Error("a company with no providers resolved an executor entry")
@@ -282,7 +282,7 @@ func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 
 	// And an AGENT seat falling through the same fallback still reaches it,
 	// or this would just be "the fallback never counts".
-	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", agentModeEntryPath("coder"))
+	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", agentModeEntryPath("coder").String())
 }
 
 // THE FALLBACK IS THE COMPANY'S, NOT THE SEAT'S — the entry called "default",

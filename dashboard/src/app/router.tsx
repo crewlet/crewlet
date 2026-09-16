@@ -41,6 +41,15 @@
  * `history.state` and files the outgoing position under it; an entry with NO
  * key is exactly the test for "somewhere new", which is the only case that
  * starts at the top.
+ *
+ * WORK THAT EXISTS NOWHERE ELSE IS NOT LEFT BEHIND UNASKED. A surface holding
+ * it (an editor with typed changes) registers a leave guard, and every move
+ * to ANOTHER ENTRY is put to it first: a push from code, a link, and Back or
+ * Forward. A replace is never held, by the table above: it stays on the
+ * entry. Back has already happened by the time a page hears of it, so a held
+ * one is undone at once and made again only if the reader agrees, which is
+ * why each entry carries its place in the session (`crewletIndex`) as well as
+ * its key. A reload or a closed tab gets the browser's own prompt.
  */
 
 import {
@@ -237,24 +246,222 @@ function stampKey(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Where the reader stands in the session
+// ---------------------------------------------------------------------------
+
+/** An entry's place among the session's entries, as the router stamped it; `null` for none. */
+function entryIndex(): number | null {
+  const index = (history.state as { crewletIndex?: unknown } | null)?.crewletIndex;
+  return typeof index === "number" ? index : null;
+}
+
+/**
+ * The entry the router is on. Module state beside the scroll positions,
+ * because both describe the one session history a page has, whichever
+ * Router is mounted.
+ */
+let settled = { hash: "", index: 0 };
+
+/** Whether a held Back or Forward is being undone, and the move it was should be ignored. */
+let reverting = false;
+
+/** Whether the reader agreed to a held Back or Forward, which the next move makes. */
+let bypassing = false;
+
+/** Adopts the entry the page loaded on, stamping its place if the router never has. */
+function adoptEntry(): void {
+  let index = entryIndex();
+  if (index === null) {
+    index = 0;
+    history.replaceState({ ...(history.state as object), crewletIndex: index }, "");
+  }
+  settled = { hash: location.hash, index };
+  reverting = false;
+  bypassing = false;
+}
+
+// ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
 
-function scrollTarget(): HTMLElement | null {
+/**
+ * The ONE scroll container: the shell's main region, named by its id.
+ *
+ * Exported because two other things read it, and a second spelling of it is a
+ * second thing that stops matching when the shell moves: the settled list asks
+ * whether the reader is at the top before it splices rows in, and the palette
+ * has the same reason the router does for scrolling this element directly
+ * rather than calling `scrollIntoView`, which scrolls every scrollable
+ * ancestor it can find.
+ */
+export function screenScroller(): HTMLElement | null {
   return document.getElementById("screen-scroll");
 }
 
-function go(hash: string, replace: boolean): void {
+function scrollTarget(): HTMLElement | null {
+  return screenScroller();
+}
+
+function go(hash: string, replace: boolean, agreed = false): void {
+  // A PUSH IS A MOVE TO ANOTHER ENTRY, which a surface holding work may hold
+  // until the reader agrees. A replace stays on the entry, and is never held.
+  if (!replace && !agreed && held(parseHash(hash), () => go(hash, false, true))) return;
+
   // File the outgoing position under the entry we are leaving, before the
   // entry changes.
   const from = stateKey();
   const el = scrollTarget();
   if (from && el) positions.set(from, el.scrollTop);
 
-  if (replace) history.replaceState({ crewletKey: from }, "", hash);
-  else history.pushState({}, "", hash);
+  // THE PLACE IS THE ENTRY'S OWN. A screen can navigate in its first effect,
+  // which React runs before this router's own (`adoptEntry`), and after a
+  // reload the entry stands wherever the session had got to while `settled`
+  // still says 0: a replace would stamp the wrong place on it, and every Back
+  // after it would be undone in the wrong direction.
+  const here = entryIndex() ?? settled.index;
+  const index = replace ? here : here + 1;
+  if (replace) history.replaceState({ crewletKey: from, crewletIndex: index }, "", hash);
+  else history.pushState({ crewletIndex: index }, "", hash);
+  settled = { hash: location.hash, index };
   // `pushState` does not fire `hashchange`, so the router is told directly.
   window.dispatchEvent(new Event("crewlet:route"));
+}
+
+/**
+ * Reads a move the BROWSER made (Back, Forward, a link, a URL typed into the
+ * address bar) and answers whether the router follows it.
+ *
+ * A browser fires two events for one such move (`popstate`, then
+ * `hashchange`), and one more pair when a held move is undone; the second of
+ * a pair, and the pair of the undo, find the router already where the entry
+ * is and change nothing. An entry the browser made itself (a link, a typed
+ * URL) carries no place yet: it is the one after the entry the reader was
+ * on, and is stamped so.
+ */
+function traversed(): boolean {
+  const hash = location.hash;
+  const stamped = entryIndex();
+  if (stamped === settled.index && hash === settled.hash) {
+    reverting = false;
+    return false;
+  }
+  if (reverting) return false;
+  const index = stamped ?? settled.index + 1;
+  if (stamped === null) {
+    history.replaceState({ ...(history.state as object), crewletIndex: index }, "");
+  }
+  const delta = index - settled.index;
+  if (delta !== 0 && !bypassing) {
+    const leave = () => {
+      bypassing = true;
+      history.go(delta);
+    };
+    if (held(parseHash(hash), leave)) {
+      reverting = true;
+      history.go(-delta);
+      return false;
+    }
+  }
+  bypassing = false;
+  settled = { hash, index };
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Leave guards
+// ---------------------------------------------------------------------------
+
+/**
+ * Asked before the reader moves to another entry, with the route the move
+ * goes to. Answering true holds the move: the guard asks the reader, and
+ * calls `leave` to make the move once they agree to lose what it holds.
+ * Answering false lets the move go.
+ */
+export type LeaveGuard = (to: Route, leave: () => void) => boolean;
+
+/**
+ * The guards that hold moves, in the order they began to hold. The one that
+ * began last is asked first: it is the surface the reader opened last (an
+ * editor over the lens that holds a draft), so its question is the one on
+ * top.
+ */
+const guards: { readonly ask: LeaveGuard }[] = [];
+
+/** Whatever a reload or a closed tab would lose, for the browser's own prompt. */
+const unloadHolders = new Set<object>();
+
+/**
+ * Holds the browser's prompt for a reload or a closed tab until the result is
+ * called.
+ *
+ * LISTENING ONLY WHILE SOMETHING HOLDS. A page with a `beforeunload` listener
+ * is kept out of the browser's back-forward cache by some browsers, so every
+ * screen of the dashboard would be loaded from scratch on a Back from another
+ * site. The listener is added by the first holder and removed with the last.
+ */
+function holdUnload(holder: object): () => void {
+  if (unloadHolders.size === 0) window.addEventListener("beforeunload", onBeforeUnload);
+  unloadHolders.add(holder);
+  return () => {
+    unloadHolders.delete(holder);
+    if (unloadHolders.size === 0) window.removeEventListener("beforeunload", onBeforeUnload);
+  };
+}
+
+/**
+ * Whether a guard holds a move to `to`, asking from the last guard down.
+ * EVERY GUARD IS ASKED BEFORE THE MOVE IS MADE: the `leave` a guard is handed
+ * asks the guards below it, and only the last agreement makes the move, so an
+ * editor agreeing to lose its form never also loses the lens's work unasked.
+ * The guards are the ones holding when the move was asked for, because
+ * agreeing can close a surface and take its guard off the list.
+ */
+function held(to: Route, move: () => void): boolean {
+  const asking = [...guards];
+  const from = (i: number): boolean => {
+    for (let at = i; at >= 0; at--) {
+      if (asking[at]!.ask(to, () => from(at - 1) || move())) return true;
+    }
+    return false;
+  };
+  return from(asking.length - 1);
+}
+
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  // The browser shows its own sentence; the page only says that it holds
+  // something. Both halves, because browsers honour one or the other.
+  e.preventDefault();
+  e.returnValue = "";
+}
+
+/**
+ * Holds every move to another entry while `guard` is set, and a reload or a
+ * closed tab asks first: for work that exists nowhere else, such as an
+ * editor's typed changes. `null` holds nothing.
+ */
+export function useLeaveGuard(guard: LeaveGuard | null): void {
+  const latest = useRef(guard);
+  latest.current = guard;
+  const holding = guard !== null;
+  useEffect(() => {
+    if (!holding) return;
+    const entry = { ask: (to: Route, leave: () => void) => latest.current?.(to, leave) ?? false };
+    guards.push(entry);
+    const release = holdUnload(entry);
+    return () => {
+      guards.splice(guards.indexOf(entry), 1);
+      release();
+    };
+  }, [holding]);
+}
+
+/**
+ * A reload or a closed tab asks first while `holding`: for work that
+ * survives a move within the page (it is kept elsewhere, such as the org
+ * builder's draft in session storage) but not the tab going away.
+ */
+export function useUnloadGuard(holding: boolean): void {
+  useEffect(() => (holding ? holdUnload({}) : undefined), [holding]);
 }
 
 export interface Navigator {
@@ -277,25 +484,130 @@ export function useNavigator(): Navigator {
   return nav;
 }
 
-/** An href for an anchor, so a link is a real link — middle-clickable. */
+/** An href for an anchor, so a link is a real link: middle-clickable. */
 export function href(path: string[], query?: Record<string, string>): string {
   return buildHash(path, query);
 }
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Revealing what a link points at
+// ---------------------------------------------------------------------------
+
+/**
+ * An entry the reader has just ARRIVED at, and whether a reveal may still
+ * move the page for it.
+ *
+ * `open` closes on the first reveal and on the first sign the reader is
+ * reading: a wheel, a touch, a pointer or a key on the scroller. The page
+ * moves only when the reader is not reading.
+ */
+interface Arrival {
+  hash: string;
+  open: boolean;
+}
+
+interface Arrivals {
+  current: { value: Arrival | null };
+  /** Reveal attempts to run the moment the router has settled an arrival. */
+  attempts: Set<() => void>;
+}
+
+const ArrivalContext = createContext<Arrivals | null>(null);
+
+/**
+ * Scroll an element into view when the reader arrives at a NEW entry.
+ *
+ * For a link that names a thing inside a screen (`#/org?unit=Backend`): the
+ * reader followed it to see that thing, and a long chart that opens at the
+ * top has put it somewhere they have to hunt for.
+ *
+ * THREE RULES, each of which the obvious implementation breaks:
+ *
+ *  - IT RUNS AFTER THE ROUTER'S SCROLL RESET. A screen's own effect runs
+ *    before this component's (React runs a child's passive effects first), so
+ *    a screen that scrolled on its own was scrolled straight back to the top
+ *    by the reset for a new entry.
+ *  - ONLY FOR SOMEWHERE NEW, never while a Back restore is pending. Back to a
+ *    chart the reader had scrolled means back to where they were, and a
+ *    reveal fighting the restore for its frames is a page that jumps twice.
+ *    A filter change replaces the entry and restores its position too, so it
+ *    never reveals: the reader is already looking at what they changed.
+ *  - IT SCROLLS `#screen-scroll` DIRECTLY. `scrollIntoView` scrolls every
+ *    scrollable ancestor it finds, including ones this layout does not own,
+ *    and jsdom does not implement it at all. The element's own
+ *    `scroll-margin-top` is honoured, so the stylesheet says how much room to
+ *    leave above it.
+ *
+ * The element may not exist yet on arrival (the org projection arrives on the
+ * socket after the route does), so an arrival stays open and the hook tries
+ * again on every render until it finds the element or the reader moves.
+ * `null` reveals nothing.
+ */
+export function useRevealOnArrival(elementId: string | null): void {
+  const arrivals = useContext(ArrivalContext);
+  const route = useContext(RouteContext);
+  const latest = useRef({ elementId, hash: route?.hash ?? "" });
+  latest.current = { elementId, hash: route?.hash ?? "" };
+
+  const attempt = useCallback(() => {
+    const arrival = arrivals?.current.value;
+    const { elementId: id, hash } = latest.current;
+    if (!id || !arrival || !arrival.open || arrival.hash !== hash) return;
+    const scroller = scrollTarget();
+    const target = document.getElementById(id);
+    if (!scroller || !target || !scroller.contains(target)) return;
+    arrival.open = false;
+    const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+    const offset = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += offset - margin;
+  }, [arrivals]);
+
+  useEffect(() => {
+    if (!arrivals) return;
+    arrivals.attempts.add(attempt);
+    return () => {
+      arrivals.attempts.delete(attempt);
+    };
+  }, [arrivals, attempt]);
+
+  // Every render, deliberately: the element appears when the data does, and
+  // the attempt is one lookup that does nothing once the arrival has closed.
+  useEffect(attempt);
+}
+
 export function Router({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
   const pending = useRef<string | null>(null);
+  const arrivals = useMemo<Arrivals>(() => ({ current: { value: null }, attempts: new Set() }), []);
 
   useEffect(() => {
-    const read = () => setRoute(parseHash(location.hash));
-    window.addEventListener("hashchange", read);
-    window.addEventListener("popstate", read);
+    adoptEntry();
+    // The entry the browser is on, when this state is not already on it. The
+    // comparison is what makes the catch-up below free: an event for a hash
+    // this router already holds leaves the route object alone, so nothing
+    // below it re-renders for a move that did not happen.
+    const read = () =>
+      setRoute((was) => {
+        const next = parseHash(location.hash);
+        return next.hash === was.hash ? was : next;
+      });
+    const follow = () => {
+      if (traversed()) read();
+    };
+    window.addEventListener("hashchange", follow);
+    window.addEventListener("popstate", follow);
     window.addEventListener("crewlet:route", read);
+    // A SCREEN CAN MOVE IN ITS OWN FIRST EFFECT, and React runs a child's
+    // effects before its parent's, so the listeners above did not exist when
+    // it did: a table correcting a page past the end of its rows wrote the
+    // corrected page into the URL and this state never heard of it, leaving
+    // the reader on a page the link no longer names and no rows on it.
+    read();
     return () => {
-      window.removeEventListener("hashchange", read);
-      window.removeEventListener("popstate", read);
+      window.removeEventListener("hashchange", follow);
+      window.removeEventListener("popstate", follow);
       window.removeEventListener("crewlet:route", read);
     };
   }, []);
@@ -342,17 +654,30 @@ export function Router({ children }: { children: ReactNode }) {
   useEffect(() => {
     const key = stateKey();
     const el = scrollTarget();
+    arrivals.current.value = null;
     if (!el) return;
+    // Somewhere new starts at the top, and is the one case a link may then
+    // reveal what it points at. See [useRevealOnArrival].
+    const arrive = () => {
+      el.scrollTop = 0;
+      const arrival: Arrival = { hash: route.hash, open: true };
+      arrivals.current.value = arrival;
+      const reading = () => {
+        arrival.open = false;
+      };
+      const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+      for (const type of events) el.addEventListener(type, reading, { once: true, passive: true });
+      for (const attempt of arrivals.attempts) attempt();
+      return () => {
+        for (const type of events) el.removeEventListener(type, reading);
+      };
+    };
     if (!key) {
       stampKey();
-      el.scrollTop = 0;
-      return;
+      return arrive();
     }
     const want = positions.get(key);
-    if (want == null) {
-      el.scrollTop = 0;
-      return;
-    }
+    if (want == null) return arrive();
     pending.current = key;
     let tries = 0;
     const settle = () => {
@@ -370,11 +695,13 @@ export function Router({ children }: { children: ReactNode }) {
       el.removeEventListener("wheel", abandon);
       el.removeEventListener("touchstart", abandon);
     };
-  }, [route.hash]);
+  }, [route.hash, arrivals]);
 
   return (
     <RouteContext.Provider value={route}>
-      <NavContext.Provider value={nav}>{children}</NavContext.Provider>
+      <NavContext.Provider value={nav}>
+        <ArrivalContext.Provider value={arrivals}>{children}</ArrivalContext.Provider>
+      </NavContext.Provider>
     </RouteContext.Provider>
   );
 }

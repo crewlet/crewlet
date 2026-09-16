@@ -1,11 +1,17 @@
 The faces in this directory are redistributed under the SIL Open Font License,
-Version 1.1. They are unmodified `latin` and `latin-ext` subsets of the
-upstream variable fonts.
+Version 1.1. They are the `latin` and `latin-ext` subsets that Google Fonts
+serves for these families: subsets and partial instances of the upstream
+variable fonts, and therefore Modified Versions under the definitions below.
+Neither family declares a Reserved Font Name. fonts/README.md records where
+each file was downloaded from, and SHA256SUMS its checksum.
 
-  Inter            — Copyright (c) 2016 The Inter Project Authors
-                     https://github.com/rsms/inter
-  JetBrains Mono   — Copyright (c) 2020 The JetBrains Mono Project Authors
-                     https://github.com/JetBrains/JetBrainsMono
+  Inter
+    Copyright (c) 2016 The Inter Project Authors
+    https://github.com/rsms/inter
+
+  JetBrains Mono
+    Copyright (c) 2020 The JetBrains Mono Project Authors
+    https://github.com/JetBrains/JetBrainsMono
 
 -----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007

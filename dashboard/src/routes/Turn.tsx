@@ -47,27 +47,11 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useCallback, useMemo, type ReactNode } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
+import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import {
-  Badge,
-  Button,
-  Code,
-  CopyButton,
-  Disclosure,
-  DownloadButton,
-  KeyValue,
-  Panel,
-  PhaseTag,
-  Skeleton,
-  Stat,
-  StatRow,
-  cx,
-} from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { PhaseTag } from "~/components/PhaseTag.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -98,6 +82,42 @@ import {
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
+import {
+  ArrowDownwardGlyph,
+  BoltGlyph,
+  Book2Glyph,
+  CheckGlyph,
+  DatabaseGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  InfoGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  ScheduleGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  Callout,
+  Card,
+  CodeBlock,
+  CopyButton,
+  cx,
+  DescriptionList,
+  Disclosure,
+  EmptyValue,
+  InlineCode,
+  PageHeader,
+  Skeleton,
+  Stack,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+import type { StatCardTone } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -115,6 +135,24 @@ function str(event: EventRecord | undefined, key: string): string {
   const v = field(event, key);
   return typeof v === "string" ? v : "";
 }
+
+/**
+ * The word for a turn nothing has recorded an outcome for, and the design
+ * system's tone for each word [outcomeOf] answers with.
+ *
+ * KEPT APART because they answer different questions. What a turn's records
+ * say about how it ended is a decision about two events, exercised as a pure
+ * function over them and therefore in the engine's own vocabulary; how the
+ * tile is painted, and what a marked absence looks like, is the design
+ * system's. The two meet where the tile is built and nowhere else.
+ */
+const NO_OUTCOME = "—";
+
+const OUTCOME_TONE: Record<"positive" | "caution" | "critical", StatCardTone> = {
+  positive: "success",
+  caution: "warning",
+  critical: "danger",
+};
 
 /**
  * How a turn ended, in the two words that mean different things.
@@ -138,7 +176,7 @@ export function outcomeOf(rec: TurnRecord): {
   // for an absence of record. A turn the engine stopped before any phase
   // decided anything carries `failed: true` and no word at all — `decision`
   // and `review_outcome` are both the zero `phase.Decision` — and this used
-  // to fall through the em-dash return three lines below, which the caller
+  // to fall through the no-outcome return three lines below, which the caller
   // then captioned "no turn record", printed directly above the panel
   // rendering that very record.
   if (failed || review === "failed") {
@@ -149,10 +187,10 @@ export function outcomeOf(rec: TurnRecord): {
       sub: kind ? `the engine stopped it: ${kind}` : "the turn will not retry",
     };
   }
-  if (!review && !executor) return { word: "—", tone: undefined, sub: "" };
+  if (!review && !executor) return { word: NO_OUTCOME, tone: undefined, sub: "" };
   const label: Record<string, string> = {
     delivered: "delivered the work",
-    no_action: "nothing to do — ended silently",
+    no_action: "nothing to do, so it ended silently",
     blocked: "blocked, and said why",
     incomplete: "never said what it did",
   };
@@ -195,7 +233,7 @@ export function problemCount(wentWrong: readonly EventRecord[], failed: boolean)
  *
  * THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
  * Read off `events` only, a turn whose phases all arrived on the stream
- * reported a duration of "—" beside a phase list several minutes long.
+ * reported no duration at all beside a phase list several minutes long.
  *
  * The start is a minimum over EVERY phase, never over `phases[0]`. That list
  * is ordered by when each phase LANDED, so its first element is the earliest
@@ -225,7 +263,8 @@ export function turnSpan(
   const starts = live([...stamps, ...phases.map(phaseStart)]);
   const ends = live([...stamps, ...phases.map((p) => tsKey(p.at))]);
   // Both or neither: a start with no end would render a duration measured
-  // against nothing, which is worse than the em dash the caller falls back to.
+  // against nothing, which is worse than the marked absence the caller falls
+  // back to.
   if (!starts.length || !ends.length) return { from: 0, to: 0 };
   return { from: Math.min(...starts), to: Math.max(...ends) };
 }
@@ -246,7 +285,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
   if (!woke && !said) return null;
   return (
-    <Panel padding="normal">
+    <Card>
       <div className="col gap-3">
         {woke && (
           <div className="col gap-1">
@@ -260,9 +299,9 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
                   header. The integration is the one thing the sentence does
                   not reliably carry. */}
               {trigger?.integration && (
-                <Badge outline mono title="where this turn's trigger came from">
+                <Tag appearance="outline" monospace title="where this turn's trigger came from">
                   {trigger.integration}
-                </Badge>
+                </Tag>
               )}
               <span className="spacer" />
               {triggerId && (
@@ -286,15 +325,15 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
           </div>
         )}
       </div>
-    </Panel>
+    </Card>
   );
 }
 
 /**
  * What went INTO the prompt, from both directions: the six context blocks the
  * executor's prompt was assembled from, and what each phase's prompt then came
- * to. Two halves of one question — whether a heavy prompt is heavy because of
- * what was prefetched or in spite of it — and either alone leaves it open.
+ * to. Two halves of one question, whether a heavy prompt is heavy because of
+ * what was prefetched or in spite of it, and either alone leaves it open.
  *
  * Either half can be absent. A turn whose prefetch record fell out of the
  * store still has its `prompt.size` rows, and the reverse holds too, so the
@@ -322,66 +361,87 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
   const gated = blocks.filter((b) => !b.hit && b.gated);
   const empty = blocks.filter((b) => !b.hit && !b.gated);
   return (
-    <Panel
-      title="What the turn was given"
-      icon="book"
-      subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
-      padding="tight"
-    >
-      <div className="col gap-2">
-        {blocks.length === 0 && (
-          <span className="t-caption">
-            No prefetch record for this turn, so there is no breakdown of where the prompt&rsquo;s
-            context came from — only what each phase&rsquo;s prompt came to.
-          </span>
-        )}
-        {blocks.length > 0 && got.length > 0 ? (
-          <div className="col gap-1">
-            {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
-                The grid's second track starts at 120px, so a byte count sat
-                stranded mid-panel with the whole right half empty — and a
-                bare "134 B" beside a label says nothing about what was
-                measured. The heading says it once, and the rows carry the
-                numbers where numbers go. */}
-            <div className="row gap-2">
-              <span className="t-label spacer">Reached the prompt</span>
-              <span className="t-label">Rendered size</span>
-            </div>
-            {got.map((b) => (
-              <div key={b.label} className="row gap-2">
-                <span className="t-cell truncate">{b.label}</span>
-                {b.note && <span className="t-caption truncate">{b.note}</span>}
-                <span className="spacer" />
-                <span className="mono t-num t-caption">{fmtBytes(b.bytes)}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          blocks.length > 0 && (
+    <Card as="section">
+      <Card.Header
+        icon={<Book2Glyph size="sm" />}
+        subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
+      >
+        <Card.Title>What the turn was given</Card.Title>
+      </Card.Header>
+      <Card.Body padding="sm">
+        <div className="col gap-2">
+          {blocks.length === 0 && (
             <span className="t-caption">
-              The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
-              alone — no stored context reached it.
+              No prefetch record for this turn, so there is no breakdown of where the prompt&rsquo;s
+              context came from, only what each phase&rsquo;s prompt came to.
             </span>
-          )
-        )}
-        {gated.length > 0 && (
-          <div className="banner neutral">
-            <Icon name="info" size="sm" />
-            <span>
-              Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
-              these filters were skipped — the executor searches later with{" "}
-              <code className="inline">search_knowledge</code>, once it knows what the task needs.
+          )}
+          {blocks.length > 0 && got.length > 0 ? (
+            <div className="col gap-1">
+              {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
+                  The grid's second track starts at 120px, so a byte count sat
+                  stranded mid-panel with the whole right half empty, and a
+                  bare "134 B" beside a label says nothing about what was
+                  measured. The heading says it once, and the rows carry the
+                  numbers where numbers go. */}
+              <div className="row gap-2">
+                <span className="t-label spacer">Reached the prompt</span>
+                <span className="t-label">Rendered size</span>
+              </div>
+              {got.map((b) => (
+                <div key={b.label} className="row gap-2">
+                  <span className="t-cell truncate">{b.label}</span>
+                  {b.note && <span className="t-caption truncate">{b.note}</span>}
+                  <span className="spacer" />
+                  <span className="mono t-num t-caption">{fmtBytes(b.bytes)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            blocks.length > 0 && (
+              <span className="t-caption">
+                The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s
+                trigger alone. No stored context reached it.
+              </span>
+            )
+          )}
+          {gated.length > 0 && (
+            <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
+              <span>
+                Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
+                these filters were skipped. The executor searches later with{" "}
+                <InlineCode>search_knowledge</InlineCode>, once it knows what the task needs.
+              </span>
+            </Callout>
+          )}
+          {empty.length > 0 && (
+            <span className="t-caption">
+              Nothing to add from {list(empty.map((b) => b.label))}.
             </span>
-          </div>
-        )}
-        {empty.length > 0 && (
-          <span className="t-caption">Nothing to add from {list(empty.map((b) => b.label))}.</span>
-        )}
-        {weights.length > 0 && <PromptWeights rows={weights} />}
-      </div>
-    </Panel>
+          )}
+          {weights.length > 0 && <PromptWeights rows={weights} />}
+        </div>
+      </Card.Body>
+    </Card>
   );
 }
+
+/**
+ * A figure's own column, because three figures in a row are not three columns.
+ *
+ * `.row` is a flex line with a gap and nothing else, so a trailing figure
+ * after a `.spacer` lands wherever its own text ends. That is right for ONE
+ * figure (the spacer pushes the heading and the value to the same right edge)
+ * and wrong the moment there is a second: three figures of differing widths
+ * sit adjacent, and the headings above them sit adjacent at their own widths,
+ * so nothing lines up with anything.
+ *
+ * Written here rather than as a class: the rule lived in the engine's own
+ * component stylesheet, which went with the component layer it styled, and
+ * this panel was its only caller. 5.5rem holds a six-figure token count at
+ * the caption step with room for the separators.
+ */
+const NUM_COL = { flex: "none", width: "5.5rem", textAlign: "right" } as const;
 
 /**
  * What each phase's prompt came to, off the engine's own measurement.
@@ -391,9 +451,8 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * browser and rendering nowhere: the screen read one event out of the `given`
  * band and dropped the rest, so the only route to the number was the raw
  * payload of a row in the residual list. It belongs here, beside the blocks
- * the prompt was assembled FROM — the two halves of one question, and the
- * pair is what says whether a heavy prompt is heavy because of what was
- * prefetched or in spite of it.
+ * the prompt was assembled FROM, and the pair is what says whether a heavy
+ * prompt is heavy because of what was prefetched or in spite of it.
  *
  * PER PHASE AND PER ROUND, never summed. A prompt is re-sent on every round of
  * the tool loop, so a total here would be neither the turn's input bill (which
@@ -406,9 +465,15 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
     <div className="col gap-1">
       <div className="row gap-2">
         <span className="t-label spacer">Prompt sent</span>
-        <span className="t-label num-col">System</span>
-        <span className="t-label num-col">User</span>
-        <span className="t-label num-col">Approx. tokens</span>
+        <span className="t-label" style={NUM_COL}>
+          System
+        </span>
+        <span className="t-label" style={NUM_COL}>
+          User
+        </span>
+        <span className="t-label" style={NUM_COL}>
+          Approx. tokens
+        </span>
       </div>
       {rows.map((w, i) => (
         <div key={`${w.phase}|${w.iteration}|${i}`} className="row gap-2">
@@ -419,13 +484,25 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             </span>
           )}
           <span className="spacer" />
-          <span className="mono t-num t-caption num-col" title="characters in the system prompt">
+          <span
+            className="mono t-num t-caption"
+            style={NUM_COL}
+            title="characters in the system prompt"
+          >
             {fmtBytes(w.systemChars)}
           </span>
-          <span className="mono t-num t-caption num-col" title="characters in the user message">
+          <span
+            className="mono t-num t-caption"
+            style={NUM_COL}
+            title="characters in the user message"
+          >
             {fmtBytes(w.userChars)}
           </span>
-          <span className="mono t-num t-caption num-col" title="the engine's own approximation">
+          <span
+            className="mono t-num t-caption"
+            style={NUM_COL}
+            title="the engine's own approximation"
+          >
             {fmtCount(w.approximateTokens)}
           </span>
         </div>
@@ -466,21 +543,20 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
       href={href(["events", event.id])}
       title={fmtDateTime(event.timestamp)}
     >
-      <time className="feed-time" dateTime={event.timestamp}>
+      <time className="turn-time" dateTime={event.timestamp}>
         {fmtTime(event.timestamp)}
       </time>
       <span className="what truncate">
         {event.failed && (
-          <Icon
-            name="alert"
+          <ErrorGlyph
             size="xs"
-            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
+            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
         )}
         {withoutActor(event.summary, actor) || event.type}
       </span>
-      <span className="feed-tail">
-        <span className="faint mono truncate">{event.type}</span>
+      <span className="turn-tail">
+        <span className="muted mono truncate">{event.type}</span>
       </span>
     </a>
   );
@@ -502,12 +578,259 @@ export function withoutActor(summary: string, actor: string): string {
 
 function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
   return (
-    <div className="list">
+    <Stack gap={0}>
       {events.map((e) => (
         <TurnEventRow key={e.id} event={e} actor={actor} />
       ))}
-    </div>
+    </Stack>
   );
+}
+
+/**
+ * How long the download's confirmation holds before the control offers its
+ * action again.
+ *
+ * Long enough to be read at a glance, short enough that a reader who wants it
+ * twice is not waiting on it. A REFUSAL is not on this clock, for the reason
+ * in the click handler below.
+ */
+const DOWNLOAD_HOLD_MS = 2000;
+
+/**
+ * Hand the turn to the reader as a FILE, beside the control that copies it.
+ *
+ * The two things an operator does with a turn are different: one is pasted
+ * into a thread, the other is attached to a bug report and opened weeks
+ * later. A clipboard also holds exactly one thing, so copying two turns to
+ * compare them is not a gesture that exists.
+ *
+ * It composes the design system's Button rather than drawing a control of its
+ * own: uilet has no download control yet, and everything below is behaviour
+ * rather than appearance. The moment uilet gains one this becomes a call to
+ * it.
+ *
+ * Two failure modes, both checked up front rather than assumed, and one of
+ * them is worse than a dead button:
+ *
+ *  1. **No `URL.createObjectURL`** leaves nothing to point a saveable link
+ *     at, and a `data:` URL is the wrong fallback: several engines cap it
+ *     around two megabytes and a self-iterating turn's JSON goes past that,
+ *     so it would work on the small turns nobody needs it for and fail
+ *     silently on the large ones.
+ *  2. **No `download` attribute** makes the click NAVIGATE to the JSON
+ *     instead of saving it, which looks enough like something happening that
+ *     nobody checks.
+ *
+ * What it reports is a HAND-OFF and never a saved file: there is no completion
+ * event on an `<a download>`, and a browser's automatic-multiple-download gate
+ * can stop it silently after the click. The NAME is the half that is true and
+ * the half worth saying, since a reader who cannot see the download shelf has
+ * nothing else to tell them what to open.
+ */
+function DownloadTurnButton({
+  text,
+  filename,
+  title,
+}: {
+  /** A THUNK, never the string. On a live turn the bytes are assembled from
+      every phase and every streamed frame, and `agents` is pushed twice per
+      tool round, so a string prop would re-serialize the whole turn twice a
+      round for a button nobody has clicked. */
+  text: () => string;
+  /** The name to offer it under. Sanitised here, see [safeFilename]. */
+  filename: string;
+  title: string;
+}) {
+  // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
+  // running is not a DOM change and a live region announces changes only. A
+  // second refusal would otherwise leave a reader who cannot see the button
+  // with silence. Keyed on the count, the status node is REPLACED rather than
+  // re-rendered, which is a change.
+  const [{ state, attempt }, setOutcome] = useState<{
+    state: "idle" | "done" | "failed";
+    attempt: number;
+  }>({ state: "idle", attempt: 0 });
+  // The confirmation's timeout outlives the component otherwise, and a screen
+  // left during the seconds after a click would set state on something
+  // unmounted. The hand-off itself is synchronous, so there is nothing else
+  // in flight to guard.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const name = safeFilename(filename);
+  const onClick = useCallback(() => {
+    const ok = saveTextFile(text(), name);
+    setOutcome((prior) => ({ state: ok ? "done" : "failed", attempt: prior.attempt + 1 }));
+    clearTimeout(timer.current);
+    // A CONFIRMATION SETTLES BACK. A REFUSAL DOES NOT. Two seconds after a
+    // download the reader is looking at the browser's shelf rather than at
+    // the button, and a control that has reverted to offering its action is
+    // indistinguishable from one that was never pressed. So a refusal holds
+    // until the next click, which is the gesture a reader who wants to retry
+    // makes anyway.
+    if (ok) {
+      timer.current = setTimeout(
+        () => setOutcome((prior) => ({ ...prior, state: "idle" })),
+        DOWNLOAD_HOLD_MS,
+      );
+    }
+  }, [text, name]);
+
+  const said =
+    state === "done"
+      ? `download started, ${name}`
+      : state === "failed"
+        ? "the browser refused the download"
+        : "";
+
+  return (
+    <span className="row gap-1">
+      <Button
+        variant="secondary"
+        size="small"
+        leadingIcon={
+          state === "done" ? (
+            <CheckGlyph />
+          ) : state === "failed" ? (
+            <ErrorGlyph />
+          ) : (
+            <ArrowDownwardGlyph />
+          )
+        }
+        onClick={onClick}
+        title={state === "failed" ? said : title}
+      >
+        {state === "done"
+          ? "Downloading"
+          : state === "failed"
+            ? "Download failed"
+            : "Download turn"}
+      </Button>
+      {/* Announced, not just drawn: the icon swap is the only signal a sighted
+          reader gets, and a screen reader gets none of it.
+
+          A SIBLING of the button, never a child. A button's accessible name is
+          computed from its contents, so inside it this would name the control
+          "Downloading download started, turn-t-1.json". */}
+      <span className="sr-only" role="status" aria-live="polite">
+        <span key={attempt}>{said}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Save `text` to the reader's machine as `filename`, and report whether the
+ * browser took it.
+ *
+ * The blob URL is revoked on the NEXT macrotask rather than here: the click
+ * only QUEUES the download, and freeing the entry inside the same task races
+ * the fetch that is about to read it. Not revoking at all is the other
+ * failure, since the blob is a second copy of the whole turn held for the
+ * life of the tab, and a reader comparing turns clicks this several times.
+ */
+function saveTextFile(text: string, filename: string): boolean {
+  if (typeof URL.createObjectURL !== "function" || !("download" in HTMLAnchorElement.prototype)) {
+    return false;
+  }
+  let url = "";
+  try {
+    url = URL.createObjectURL(new Blob([text], { type: "application/json;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    // In the document for the one synchronous call: not every engine
+    // dispatches an activation behaviour on a node that is in no document,
+    // and there is no state to leave behind either way.
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+/** Longer than any extension in use, so a `.` deep inside a name is not read
+ *  as one when a long name has to be cut. */
+const MAX_EXTENSION = 12;
+/**
+ * Every filesystem a reader of this dashboard is on allows at least 255
+ * BYTES, and the browser appends its own " (1)" to deduplicate against what
+ * is already in the folder; eCryptfs stops at 143. 120 clears all three with
+ * room to spare.
+ */
+const MAX_FILENAME = 120;
+
+/**
+ * A filename the reader will actually get, out of whatever the caller had.
+ *
+ * The name is composed from data, since a turn id comes off the URL, and the
+ * `download` attribute is only a SUGGESTION: the browser sanitises it its own
+ * way, stripping path separators and whatever else each engine dislikes.
+ * Deciding it here means a name that arrived as `../etc/passwd` or with a
+ * newline in it never reaches that guess.
+ *
+ * UNICODE-AWARE, and that is not a nicety. `\w` is ASCII-only, so an
+ * ASCII-only class collapses a whole non-Latin stem to a single `-` and the
+ * leading strip below then takes that hyphen AND the extension's own
+ * separator with it. What has to be excluded is the separators and the
+ * invisibles, and not one of those is a letter, a mark or a number in any
+ * script.
+ */
+function safeFilename(name: string): string {
+  const cleaned = name.replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, "-").replace(/-{2,}/g, "-");
+  // An extension is a dot with SOMETHING after it and not much: a `.` deep
+  // inside a long name is part of the name, and a trailing one is not an
+  // extension at all, as well as being illegal on Windows.
+  const dot = cleaned.lastIndexOf(".");
+  const tail = cleaned.length - dot;
+  const ext = dot >= 0 && tail >= 2 && tail <= MAX_EXTENSION ? cleaned.slice(dot) : "";
+  // THE STEM IS WHAT GETS STRIPPED AND WHAT GETS CUT, never the extension: a
+  // name that loses its `.json` opens in the wrong application on every
+  // desktop there is. Leading dots are what make `..` a traversal and `.turn`
+  // a hidden file, and they can only ever be in the stem.
+  const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
+  if (!stem) return `download${ext}`;
+  return cutToBytes(stem, MAX_FILENAME - byteLength(ext)) + ext;
+}
+
+const encoder = new TextEncoder();
+
+/** How many BYTES a string takes on a filesystem, which is what limits it. */
+function byteLength(s: string): number {
+  return encoder.encode(s).length;
+}
+
+/**
+ * Cut to a byte budget, on whole characters.
+ *
+ * `MAX_FILENAME` is a BYTE limit and `slice` counts UTF-16 code units, which
+ * are the same thing only for ASCII. The sanitizer above deliberately keeps
+ * letters in every script, so the gap is not hypothetical: 120 units of
+ * Japanese is 360 bytes, past ext4's 255 and well past eCryptfs's 143.
+ *
+ * Iterated with `for…of`, which walks CODE POINTS rather than units: a cut
+ * that lands between the halves of a surrogate pair leaves a lone surrogate,
+ * which is not valid UTF-8 and reaches the disk as a replacement character.
+ */
+function cutToBytes(s: string, max: number): string {
+  if (max <= 0) return "";
+  if (byteLength(s) <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = byteLength(ch);
+    if (used + n > max) break;
+    out += ch;
+    used += n;
+  }
+  return out;
 }
 
 export function TurnScreen({ turnId }: { turnId: string }) {
@@ -663,22 +986,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Turn"
-        sub={<code className="inline">{turnId}</code>}
+        description={<InlineCode>{turnId}</InlineCode>}
         badges={
           <>
-            {role && <Badge outline>{role}</Badge>}
-            <Badge outline>{own.length} phases</Badge>
+            {role && <Tag appearance="outline">{role}</Tag>}
+            <Tag appearance="outline">{own.length} phases</Tag>
             {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records
                 alone. `phases.some(p => p.failed)` misses every turn the
                 engine killed BETWEEN phases — a refused charge, an exhausted
                 chain, a guard that fired — which are precisely the turns with
                 no failed phase record to find. */}
             {trouble > 0 && (
-              <Badge tone="critical" icon="alert">
+              <Tag variant="danger" leadingIcon={<ErrorGlyph />}>
                 {trouble === 1 ? "1 problem" : `${trouble} problems`}
-              </Badge>
+              </Tag>
             )}
             {/* A HEADER BADGE, not a banner at the foot of the page. "This
                 turn was clean" is a property of the turn, so it belongs where
@@ -688,13 +1011,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 weight, after everything, reading as an announcement about
                 nothing. */}
             {clean && (
-              <Badge
-                tone="positive"
-                icon="check"
+              <Tag
+                variant="success"
+                leadingIcon={<CheckGlyph />}
                 title="no guard fired, no provider fell through, no call was refused"
               >
                 nothing went wrong
-              </Badge>
+              </Tag>
             )}
             {/* WHAT THE VIEW IS MISSING, in the header, because every other
                 badge beside it is a claim made from these rows. The `trace`
@@ -702,29 +1025,40 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 it; `turn` did not carry one at all, so a cut turn looked
                 exactly like a short one. */}
             {cut && (
-              <Badge
-                tone="caution"
-                icon="alert"
+              <Tag
+                variant="warning"
+                leadingIcon={<WarningGlyph />}
                 title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
               >
                 middle not shown
-              </Badge>
+              </Tag>
             )}
           </>
         }
         actions={
           <>
             {role && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["seats", role])}>
+              <Button
+                variant="secondary"
+                size="small"
+                leadingIcon={<PersonGlyph />}
+                onClick={() => nav.to(["seats", role])}
+              >
                 The seat
               </Button>
             )}
             {traceId && (
-              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", traceId])}>
+              <Button
+                variant="secondary"
+                size="small"
+                leadingIcon={<ForkRightGlyph />}
+                onClick={() => nav.to(["traces", traceId])}
+              >
                 Trace
               </Button>
             )}
             <CopyButton
+              variant="secondary"
               text={turnJSON}
               label="Copy turn"
               title="the whole turn as JSON — its record, its phases and everything else it published"
@@ -734,17 +1068,16 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 a clipboard gesture: an incident is read weeks later, a
                 clipboard holds exactly one thing, and a self-iterating turn's
                 JSON is past what anyone wants inline. */}
-            <DownloadButton
+            <DownloadTurnButton
               text={turnJSON}
               filename={`turn-${turnId}.json`}
-              label="Download turn"
               title="the same JSON, saved as a file"
             />
           </>
         }
       />
 
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton label="Loading the turn" variant="text" rows={6} />}
       <QueryState
         error={error}
         loading={loading}
@@ -769,98 +1102,107 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             that are missing are the ending", which is the difference between
             a reader distrusting the page and a reader distrusting the turn. */}
         {cut && (
-          <div className="banner caution">
-            <Icon name="alert" size="sm" />
+          <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
             <span>
               This turn published more than the store returns for one turn. What is here is its{" "}
-              <strong>opening and its ending</strong> — {events.length} events, so the records below
-              are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle
+              <strong>opening and its ending</strong> ({events.length} events, so the records below
+              are the turn&rsquo;s own), and what is missing is the middle. Phases from the middle
               of a long self-iterating turn are not on this page, and neither is anything that went
               wrong in them.{" "}
               {traceId ? "The trace carries the same work from the trigger down." : ""}
             </span>
-          </div>
+          </Callout>
         )}
 
-        <Panel padding="none">
-          <StatRow cols={4}>
-            <Stat
-              icon="user"
-              label="Seat"
-              value={role ? <SeatChip name={role} handle={role} size="md" /> : "—"}
-              // The conversation key used to sit here, raw and truncated —
-              // "mattermost:9zd7xj4mqj8hf8fy4gt7aitiny:cnjzasu…" under a seat's
-              // name, with nothing saying what it was. It is a property of the
-              // TURN, not of the seat, and it is explained below rather than
-              // dumped here.
-              sub={running ? "running now" : "ran this turn"}
-            />
-            <Stat
-              icon="clock"
-              label="Took"
-              value={
-                durationMs != null
-                  ? fmtDuration(durationMs)
-                  : to > from
-                    ? fmtDuration(to - from)
-                    : "—"
-              }
-              sub={
-                durationMs != null
-                  ? "the engine's own measurement"
-                  : running
-                    ? "still running"
-                    : cut
-                      ? // A CUT VIEW HOLDS BOTH ENDS, so the span is the
-                        // turn's real window — but it is the window rather
-                        // than the engine's own measurement, and on this
-                        // branch the record that carries that measurement is
-                        // missing from a turn that has both its ends. Say
-                        // which of the two the number is.
-                        "spanning the turn's ends — its own record is not among them"
-                      : "spanning the turn's first and last event"
-              }
-            />
-            <Stat
-              icon="coin"
-              label="Tokens"
-              // THE TURN'S OWN PHASES. A worker's tokens are already charged
-              // through the shared meter, which is why the engine keeps them
-              // out of `total_tokens` and reports them as `subagent_tokens` —
-              // so summing every record made this tile disagree with the very
-              // record shown further down the same page. The split is also
-              // the only thing that answers "how much of this turn was
-              // fan-out" when a seat's spend jumps and its own rounds did not.
-              value={fmtCount(own.reduce((n, p) => n + p.totalTokens, 0))}
-              sub={
-                workerTokens > 0
-                  ? `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls · +${fmtCount(
-                      workerTokens,
-                    )} in ${workerCount} worker${workerCount === 1 ? "" : "s"}`
-                  : `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls`
-              }
-            />
-            <Stat
-              icon="check"
-              label="Outcome"
-              value={outcome.word}
-              tone={outcome.tone}
-              sub={
-                outcome.sub ||
-                (running
+        <StatGroup columns={4}>
+          <StatCard
+            icon={<PersonGlyph />}
+            label="Seat"
+            value={
+              role ? (
+                <SeatChip name={role} handle={role} size="sm" />
+              ) : (
+                <EmptyValue label="No seat recorded" />
+              )
+            }
+            // The conversation key used to sit here, raw and truncated, as
+            // "mattermost:9zd7xj4mqj8hf8fy4gt7aitiny:cnjzasu…" under a seat's
+            // name, with nothing saying what it was. It is a property of the
+            // TURN, not of the seat, and it is explained below rather than
+            // dumped here.
+            sub={running ? "running now" : "ran this turn"}
+          />
+          <StatCard
+            icon={<ScheduleGlyph />}
+            label="Took"
+            value={
+              durationMs != null ? (
+                fmtDuration(durationMs)
+              ) : to > from ? (
+                fmtDuration(to - from)
+              ) : (
+                <EmptyValue label="Not measured" />
+              )
+            }
+            // A CUT VIEW HOLDS BOTH ENDS, so the span is the turn's real
+            // window, but it is the window rather than the engine's own
+            // measurement, and on the branch below the record that carries
+            // that measurement is missing from a turn that has both its ends.
+            // Say which of the two the number is.
+            sub={
+              durationMs != null
+                ? "the engine's own measurement"
+                : running
                   ? "still running"
                   : cut
-                    ? // "no turn record" is a claim about the TURN, and on a
-                      // cut view it would be a claim about the READ. The
-                      // answer recovers the turn's ending precisely so this
-                      // branch is rare: reaching it means the records are
-                      // genuinely absent from a view that holds both ends.
-                      "no turn record, and this view holds both ends"
-                    : "no turn record")
-              }
-            />
-          </StatRow>
-        </Panel>
+                    ? "spanning the turn's ends, and its own record is not among them"
+                    : "spanning the turn's first and last event"
+            }
+          />
+          <StatCard
+            icon={<TokenGlyph />}
+            label="Tokens"
+            // THE TURN'S OWN PHASES. A worker's tokens are already charged
+            // through the shared meter, which is why the engine keeps them
+            // out of `total_tokens` and reports them as `subagent_tokens`, so
+            // summing every record made this tile disagree with the very
+            // record shown further down the same page. The split is also
+            // the only thing that answers "how much of this turn was
+            // fan-out" when a seat's spend jumps and its own rounds did not.
+            value={fmtCount(own.reduce((n, p) => n + p.totalTokens, 0))}
+            sub={
+              workerTokens > 0
+                ? `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls · +${fmtCount(
+                    workerTokens,
+                  )} in ${workerCount} worker${workerCount === 1 ? "" : "s"}`
+                : `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls`
+            }
+          />
+          <StatCard
+            icon={<CheckGlyph />}
+            label="Outcome"
+            value={
+              outcome.word === NO_OUTCOME ? (
+                <EmptyValue label="No outcome recorded" />
+              ) : (
+                outcome.word
+              )
+            }
+            tone={outcome.tone ? OUTCOME_TONE[outcome.tone] : undefined}
+            // "no turn record" is a claim about the TURN, and on a cut view it
+            // would be a claim about the READ. The answer recovers the turn's
+            // ending precisely so that branch is rare: reaching it means the
+            // records are genuinely absent from a view that holds both ends.
+            sub={
+              outcome.sub ||
+              (running
+                ? "still running"
+                : cut
+                  ? "no turn record, and this view holds both ends"
+                  : "no turn record")
+            }
+          />
+        </StatGroup>
 
         <TurnBrief rec={rec} trigger={trigger} />
 
@@ -869,132 +1211,164 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             entirely on a healthy turn, which is the state the flat list could
             never reach. */}
         {story.wentWrong.length > 0 && (
-          <Panel
-            title="What went wrong"
-            icon="alert"
-            count={story.wentWrong.length}
-            subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              icon={<ErrorGlyph size="sm" />}
+              count={story.wentWrong.length}
+              subtitle="guard breaches, exhausted chains and refused calls, the reason to open this page"
+            >
+              <Card.Title>What went wrong</Card.Title>
+            </Card.Header>
             <EventList events={story.wentWrong} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {(prefetch.length > 0 || weights.length > 0) && (
           <Given blocks={prefetch} weights={weights} />
         )}
 
-        <Panel title="Phases" icon="brain" count={own.length} padding="tight">
-          <div className="col gap-2">
-            {own.map((p, i) => (
-              <PhaseCard key={p.key} record={p} nested={nested.get(p.key)} defaultOpen={i === 0} />
-            ))}
-            {!own.length && (
-              <span className="t-caption">
-                No phase completed in this turn — it may have died before its first phase published.
-              </span>
-            )}
-          </div>
-        </Panel>
+        <Card as="section">
+          <Card.Header icon={<NeurologyGlyph size="sm" />} count={own.length}>
+            <Card.Title>Phases</Card.Title>
+          </Card.Header>
+          <Card.Body padding="sm">
+            <div className="col gap-2">
+              {own.map((p, i) => (
+                <PhaseCard
+                  key={p.key}
+                  record={p}
+                  nested={nested.get(p.key)}
+                  defaultOpen={i === 0}
+                />
+              ))}
+              {!own.length && (
+                <span className="t-caption">
+                  No phase completed in this turn. It may have died before its first phase
+                  published.
+                </span>
+              )}
+            </div>
+          </Card.Body>
+        </Card>
 
         {story.did.length > 0 && (
-          <Panel
-            title="What else it did"
-            icon="zap"
-            count={story.did.length}
-            subtitle="work outside the tool loop: coding runs, delegations, colleagues"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              icon={<BoltGlyph size="sm" />}
+              count={story.did.length}
+              subtitle="work outside the tool loop: coding runs, delegations, colleagues"
+            >
+              <Card.Title>What else it did</Card.Title>
+            </Card.Header>
             <EventList events={story.did} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {story.leftBehind.length > 0 && (
-          <Panel
-            title="What the seat learned"
-            icon="database"
-            count={story.leftBehind.length}
-            // "What it left behind" read as work abandoned rather than as
-            // memory written. This is the reflection pass — it runs AFTER the
-            // last phase, on auxiliary workers of its own, and everything in
-            // it is something the seat now knows that it did not before.
-            subtitle="the reflection pass, once the phases were done"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              // "What it left behind" read as work abandoned rather than as
+              // memory written. This is the reflection pass: it runs AFTER the
+              // last phase, on auxiliary workers of its own, and everything in
+              // it is something the seat now knows that it did not before.
+              divided
+              icon={<DatabaseGlyph size="sm" />}
+              count={story.leftBehind.length}
+              subtitle="the reflection pass, once the phases were done"
+            >
+              <Card.Title>What the seat learned</Card.Title>
+            </Card.Header>
             <EventList events={story.leftBehind} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {story.rest.length > 0 && (
-          <Panel
-            title="Also published"
-            icon="activity"
-            count={story.rest.length}
-            subtitle="rows this build has no particular place for"
-            padding="none"
-          >
-            <div className="list">
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              icon={<TimelineGlyph size="sm" />}
+              count={story.rest.length}
+              subtitle="rows this build has no particular place for"
+            >
+              <Card.Title>Also published</Card.Title>
+            </Card.Header>
+            <Stack gap={0}>
               {story.rest.map((e) => (
                 <EventRow key={e.id} event={e as unknown as FeedRow} showDate />
               ))}
-            </div>
-          </Panel>
+            </Stack>
+          </Card>
         )}
 
         {(rec.summary || rec.learning) && (
-          <Panel
-            title="The turn's own record"
-            icon="file"
-            subtitle="the two events the engine closes every turn with"
-            padding="tight"
-          >
-            <div className="col gap-2">
-              {conversation && (
-                <KeyValue
-                  items={[
-                    [
-                      "Conversation",
-                      // LABELLED, and explained. It is "{source}:{channel}:
-                      // {thread}" — which external thread this turn was
-                      // answering — and it used to be an unexplained
-                      // truncated string under the seat's name.
-                      <span className="row gap-2 baseline">
-                        <code className="inline">{conversation}</code>
-                        <span className="t-caption">the external thread this turn served</span>
-                      </span>,
-                    ],
-                  ]}
-                />
-              )}
-              {/* One expander per record, EACH with its own copy button. A
-                  single control in the panel head copied one of the two
-                  without saying which. */}
-              {rec.summary && (
-                <Disclosure
-                  label="agent_turn_completed — the dashboard's summary"
-                  actions={
-                    <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
-                  }
-                >
-                  <Code selectable label="agent_turn_completed, as JSON">
-                    {summaryJSON}
-                  </Code>
-                </Disclosure>
-              )}
-              {rec.learning && (
-                <Disclosure
-                  label="turn_completed — the learning subsystem's record"
-                  actions={
-                    <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
-                  }
-                >
-                  <Code selectable label="turn_completed, as JSON">
-                    {learningJSON}
-                  </Code>
-                </Disclosure>
-              )}
-            </div>
-          </Panel>
+          <Card as="section">
+            <Card.Header
+              icon={<DescriptionGlyph size="sm" />}
+              subtitle="the two events the engine closes every turn with"
+            >
+              <Card.Title>The turn's own record</Card.Title>
+            </Card.Header>
+            <Card.Body padding="sm">
+              <div className="col gap-2">
+                {conversation && (
+                  <DescriptionList
+                    items={[
+                      [
+                        "Conversation",
+                        // LABELLED, and explained. It is "{source}:{channel}:
+                        // {thread}", which external thread this turn was
+                        // answering, and it used to be an unexplained
+                        // truncated string under the seat's name.
+                        <span className="row gap-2 baseline">
+                          <InlineCode>{conversation}</InlineCode>
+                          <span className="t-caption">the external thread this turn served</span>
+                        </span>,
+                      ],
+                    ]}
+                  />
+                )}
+                {/* One expander per record, EACH with its own copy button. A
+                    single control in the panel head copied one of the two
+                    without saying which. */}
+                {rec.summary && (
+                  <Disclosure
+                    title="agent_turn_completed, the dashboard's summary"
+                    actions={
+                      <CopyButton text={summaryJSON} variant="tertiary" title="copy this record" />
+                    }
+                  >
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label="agent_turn_completed, as JSON"
+                      code={summaryJSON}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
+                  </Disclosure>
+                )}
+                {rec.learning && (
+                  <Disclosure
+                    title="turn_completed, the learning subsystem's record"
+                    actions={
+                      <CopyButton text={learningJSON} variant="tertiary" title="copy this record" />
+                    }
+                  >
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label="turn_completed, as JSON"
+                      code={learningJSON}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
+                  </Disclosure>
+                )}
+              </div>
+            </Card.Body>
+          </Card>
         )}
       </QueryState>
     </>

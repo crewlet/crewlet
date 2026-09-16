@@ -558,6 +558,17 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 			name: "an mcp server", kind: configapi.EntityMCPServers, id: "nothing",
 			body: `{"name":"tracker","transport":"http","url":"https://mcp.example.com"}`,
 		},
+		{
+			// And a body that cannot be read at all: the path is what went
+			// wrong first, and a body is read at the place of the entity
+			// it replaces, which a missing entity does not have.
+			name: "a seat whose body has a typo", kind: configapi.EntityRoles, id: "nobody",
+			body: `{"name":"CEO","handle":"ceo","gaol":"x"}`,
+		},
+		{
+			name: "a unit whose body has a typo", kind: configapi.EntityUnits, id: "nowhere",
+			body: `{"name":"nowhere","rolez":[]}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -593,13 +604,19 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 		kind string
 		id   string
 		body string
+		// at is where the typo sits in the WHOLE document, which is where
+		// a refusal's problems are placed on every route.
+		at string
 	}{
-		{configapi.EntityRoles, "ceo", `{"name":"CEO","llm":"zulu","gaol":"ship it"}`},
-		{configapi.EntityUnits, "engineering", `{"name":"engineering","lead":"cto","rolez":[]}`},
-		{configapi.EntityLLMProviders, "zulu", `{"type":"anthropic","modell":"claude-sonnet-5"}`},
-		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`},
+		{configapi.EntityRoles, "ceo", `{"name":"CEO","llm":"zulu","gaol":"ship it"}`, "roles[0].gaol"},
+		{configapi.EntityRoles, "staff-eng", `{"name":"Staff Engineer","handle":"staff-eng","llm":"zulu","gaol":"x"}`,
+			"units[0].children[0].roles[0].gaol"},
+		{configapi.EntityUnits, "platform", `{"name":"platform","rolez":[]}`, "units[0].children[0].rolez"},
+		{configapi.EntityLLMProviders, "zulu", `{"type":"anthropic","modell":"claude-sonnet-5"}`, "providers.llm.zulu.modell"},
+		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`,
+			"mcp_servers[0].comand"},
 	} {
-		t.Run(tc.kind, func(t *testing.T) {
+		t.Run(tc.kind+"/"+tc.id, func(t *testing.T) {
 			t.Parallel()
 			// nestedDoc, because every kind has to address something that
 			// EXISTS: a 404 for a missing entity would pass this test
@@ -617,6 +634,15 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 			// be told which one, not that "the body is invalid".
 			if !strings.Contains(res.Body.String(), "invalid_body") {
 				t.Errorf("the refusal is not reported as a body problem: %s", res.Body.String())
+			}
+			// AND PLACES IT, in the document the entity is spliced into,
+			// as the unknown field it is: the same problem the same typo
+			// in a whole document is, so a screen puts it beside the field.
+			problems := problemsOf(t, res)
+			if len(problems) != 1 || problems[0].Path != tc.at || problems[0].Kind != "unknown_field" {
+				t.Errorf("problems = %+v, want one unknown_field at %s", problems, tc.at)
+			} else if !strings.Contains(decode(t, res)["detail"].(string), problems[0].Message) {
+				t.Errorf("the problem %q is not a line of the detail: %s", problems[0].Message, res.Body)
 			}
 		})
 	}

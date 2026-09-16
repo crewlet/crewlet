@@ -31,8 +31,7 @@ short. See [Search](search.md).
 
 **Shared coordination.** Seat leases live in the `coordination` slot.
 `coordination.type: local` holds them in this process, so every node
-believes it owns the whole company; the engine logs
-`seat_placement_is_process_local` at boot. It is *only* the leases: the
+would believe it owns the whole company. It is *only* the leases: the
 fleet's shared records — the token counter, the completion ledger, the
 delivery dedupe, agent-to-agent channels, scheduled-fire claims, detached
 sandbox runs — are on the KV whatever this setting says, because each of
@@ -132,8 +131,8 @@ node:
 | Role | What it does |
 |---|---|
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
-| `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns |
-| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, and the learning passes (skill clustering, curation, episode compaction) on one lease |
+| `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -289,8 +288,12 @@ it can talk to.
 ## Draining and rolling upgrades
 
 A node stops by draining: it stops taking new work, lets in-flight turns
-finish, releases each seat as it goes idle, and exits. Peers pick the
-seats up. Point load-balancer readiness at `/ready` (`503` while
+finish, releases each seat as it goes idle, gives back every fleet duty it
+holds once its duty loops have finished their last tick, and exits. Peers
+pick the seats and the duties up. A node that is killed instead releases
+nothing: its seats move after the lease TTL, and its duties after their own
+TTL, which for the retention sweep is 45 minutes and for the skill curator
+three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
 turn — the engine does not impose its own cutoff, because that would be a
@@ -311,6 +314,13 @@ Two consequences worth stating plainly:
 - **Rolling *back* across a protocol bump needs a full stop.** An older
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
+- **A stalled rollout stalls the fleet duties too, on upgrades that move
+  them.** Upgrading from a build that kept the `worker:` leases beside the
+  seat leases, newer nodes run no scheduler tick, retention sweep,
+  integration reconcile or curator pass while any older node is live, and
+  say so once with `coord_kv_duties_wait_for_older_build` (and
+  `coord_kv_duties_resumed` when it ends). See
+  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
 
 ## Watching a fleet
 
@@ -318,8 +328,6 @@ Two consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
-- **`seat_placement_is_process_local`** — `coordination.type: local`, so
-  the leases never left this process. Every node thinks it owns everything.
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Fleet** screen puts every node's
   side by side, with seat ownership and per-node config epoch.

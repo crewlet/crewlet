@@ -106,16 +106,24 @@ func (s *StallDetector) Reset() { s.history = nil }
 // BreachKind names why a guard ended a turn. Carried on the breach the caller
 // publishes, so a dashboard can tell a loop that gave up from one that never
 // moved.
+//
+// EACH VALUE IS THE WIRE STRING the turn.guard_breach event carries in its
+// `kind`, and the one a summary carries in `error_kind`: the engine publishes
+// it by conversion, with no mapping in between, so a value spelled
+// differently from its [types.GuardKind] reaches the dashboard as a cause it
+// has no sentence for. `depth` did exactly that while the event, the docs and
+// the seat screen all said `depth_cap`.
 type BreachKind string
 
 const (
-	// BreachStall — repeated rounds produced the same artifact.
+	// BreachStall means repeated rounds produced the same artifact.
 	BreachStall BreachKind = "stall"
-	// BreachMaxIterations — the loop ran out of rounds without reaching done.
+	// BreachMaxIterations means the loop ran out of rounds without reaching
+	// done.
 	BreachMaxIterations BreachKind = "max_iter"
-	// BreachDepth — the delegation chain hit its cap.
-	BreachDepth BreachKind = "depth"
-	// BreachScheduledTimeout — the turn ran past the wall-clock cap its
+	// BreachDepth means the delegation chain reached its cap.
+	BreachDepth BreachKind = "depth_cap"
+	// BreachScheduledTimeout means the turn ran past the wall-clock cap its
 	// trigger carried. Only a scheduled fire sets one, which is why the
 	// operator-facing string is the one docs/concepts/scheduling.md and
 	// [types.GuardScheduledTimeout] already name.

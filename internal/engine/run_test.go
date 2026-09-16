@@ -41,6 +41,22 @@ func newEngine(t *testing.T, opts engine.Options) *engine.Engine {
 	return e
 }
 
+// unconfiguredEngine is [newEngine] for a node that boots with no company at
+// all, which newEngine cannot build: it hands a nil company the ordinary one.
+func unconfiguredEngine(t *testing.T) *engine.Engine {
+	t.Helper()
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("an engine with no company was refused: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	return e
+}
+
 func TestAnEngineBuildsEverySeam(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -259,6 +275,44 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	}
 }
 
+// A STOPPED ENGINE APPLIES NOTHING.
+//
+// The reconcile loop can be mid-tick when the process is told to stop, and an
+// apply that ran on after the teardown started again what the teardown had
+// ended: the scheduler it had stopped, the background passes, and on a node's
+// first company the inbound edge, on a node that was leaving. Lent backends
+// outlive the engine's stop, which is the case where such an apply otherwise
+// goes through to the end.
+func TestAStoppedEngineAppliesNothing(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := engine.OpenBackends(t.Context(), b, nil)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := engine.New(t.Context(), engine.Options{Bootstrap: b, Backends: back})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	e.Stop(context.Background())
+
+	if _, _, err := e.Apply(t.Context(), scheduledCompany(t)); err == nil {
+		t.Fatal("a stopped engine applied a revision")
+	}
+	if e.Company() != nil {
+		t.Error("a stopped engine published an epoch")
+	}
+	if e.RoutedSources() != nil {
+		t.Error("a stopped engine started an inbound edge on a node that is leaving")
+	}
+	if e.SchedulerRunning() {
+		t.Error("a stopped engine armed a scheduler after its teardown stopped it")
+	}
+}
+
 func TestOwnedBackendsCloseWithTheEngine(t *testing.T) {
 	t.Parallel()
 	// The counterfactual. "Does not close what it was lent" is satisfied
@@ -400,9 +454,17 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	// The TTL is shortened so the lapse would happen inside a test rather
 	// than in forty-five seconds. The heartbeat follows it, which is what
 	// makes a short TTL workable at all.
+	//
+	// THREE SECONDS, not the 0.9 this carried: the beat is a third of the
+	// TTL, so at 0.9 one beat delayed by a second (a loaded machine running
+	// several packages at once, which is what `make check` is) lapsed a
+	// lease on an engine that was renewing exactly as it should, and the
+	// failure read as the regression this guards. At three the same jitter
+	// has to be three times worse to be mistaken for it, and the lapse it
+	// does catch still happens a second before the assertion.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		b.Coordination.LeaseTTLSeconds = 0.9
+		b.Coordination.LeaseTTLSeconds = 3
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b})
 
@@ -417,7 +479,7 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	cancel()
 	// Comfortably past the lease TTL: an engine whose loops died with the
 	// context has stopped renewing, so the leases have expired.
-	time.Sleep(2 * time.Second)
+	time.Sleep(4 * time.Second)
 
 	if got := e.Node().Host().Held(); len(got) != 2 {
 		t.Errorf("held seats = %v after the start context was cancelled, want both: "+
@@ -471,15 +533,7 @@ func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
 // the epoch, and Start read the company's name to log that it had started.
 func TestAnEngineRunsUnconfigured(t *testing.T) {
 	t.Parallel()
-	e, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		}),
-	})
-	if err != nil {
-		t.Fatalf("an engine with no company was refused: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	e := unconfiguredEngine(t)
 	if e.Company() != nil {
 		t.Error("an unconfigured engine reports an epoch")
 	}
@@ -498,15 +552,7 @@ func TestAnEngineRunsUnconfigured(t *testing.T) {
 // to bootstrap a fleet through PUT /config.
 func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	t.Parallel()
-	e, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		}),
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	e := unconfiguredEngine(t)
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
 		t.Fatalf("the first apply onto an unconfigured node failed: %v", err)
 	}

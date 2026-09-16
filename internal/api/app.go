@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -152,10 +153,10 @@ type Options struct {
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//
-	// It belongs to the API for the same reason too: in a SPLIT deployment
-	// this is the externally reachable process, so the engine opens a run's
-	// session and a different process verifies its token. That is why the
-	// token is signed rather than stored — see internal/runtoken.
+	// Unlike OtelReceiver it is NOT a split-deployment surface: a session
+	// is a live tool surface in the process that opened it, so it must be
+	// the ENGINE's own bridge, served by the node that runs the seat. A
+	// node without the ingress role serves it alone, through [BridgeOnly].
 	Bridge *mcpbridge.Bridge
 
 	// Operator is the company's own tracker and knowledge base, served to
@@ -245,7 +246,7 @@ func New(opts Options) *App {
 		// The three config-derived surfaces, read live for the same
 		// reason Handles is: an apply replaces the company.
 		Roster: func() []map[string]any { return rosterTick(opts.Sources.Company, opts.Runtime) },
-		Org:    func() map[string]any { return orgTree(opts.Sources.Company) },
+		Org:    func() any { return orgProjection(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
@@ -341,7 +342,7 @@ func New(opts Options) *App {
 	// giving it one would hand a sandbox the credential that reads the
 	// whole company. Its per-run token is in the path instead.
 	a.mountOTLP(mux, opts.OtelReceiver)
-	a.mountBridge(mux, opts.Bridge)
+	mountBridge(mux, opts.Bridge)
 	// The config surface. GUARDED in full, reads included: the auth
 	// package makes /config one of the two prefixes never eligible for
 	// allow_anonymous_read, because reading it exposes the whole company
@@ -362,8 +363,15 @@ func New(opts Options) *App {
 	// attach an Authorization header to anything. Inside the guard every
 	// preflight to a guarded route answers 401 and the real request is
 	// never sent. See [auth.CORS.Middleware].
+	//
+	// The security headers go on outside both, so a refusal and a preflight
+	// carry them as well as an answer does, and before routing, so the
+	// responses no handler writes deliberately (the mux's own 404 and 405,
+	// the redirect from `/`, which has an HTML body) are covered without
+	// each needing to remember. A handler serving a page replaces the
+	// policy with its own.
 	a.cors = auth.NewCORS(opts.Bootstrap)
-	a.handler = a.cors.Middleware(a.guard.Middleware(mux))
+	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(mux)))
 	return a
 }
 

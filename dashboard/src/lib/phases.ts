@@ -31,6 +31,7 @@ import type {
   PromptMessage,
   ToolExecution,
 } from "~/protocol/index.ts";
+import { DATA_COLOR_OTHER } from "@crewlethq/ui";
 import { tsKey } from "./format.ts";
 
 export interface ToolCall {
@@ -666,4 +667,32 @@ export function decisionLabel(phase: string, decision: string): string {
     return { done: "read its team's pages and marked itself onboarded" }[decision] ?? decision;
   }
   return decision;
+}
+
+/**
+ * The colour of a phase mark inside a chart.
+ *
+ * Phase is the one categorical identity this product spends colour on outside
+ * a chart, so a bar or a stack segment that stands for a phase takes the phase
+ * hue rather than a slot in the data ramp: the same three colours then mean
+ * the same three things on the Overview, Spend and Seat screens as they do on
+ * a `PhaseTag`. Anything the engine runs UNDER one of the three, and anything
+ * this build does not know, takes the residual neutral, because a fourth and
+ * fifth categorical colour in one chart is a legend nobody reads.
+ *
+ * It lives here rather than beside the charts because the claim is the
+ * engine's own: which phases exist and which of them carry a hue. How a bar
+ * is drawn is the design system's.
+ */
+export function phaseColor(phase: string): string {
+  switch ((phase || "").toLowerCase()) {
+    case "onboarding":
+      return "var(--color-phase-onboarding)";
+    case "execute":
+      return "var(--color-phase-execute)";
+    case "review":
+      return "var(--color-phase-review)";
+    default:
+      return DATA_COLOR_OTHER;
+  }
 }

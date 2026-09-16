@@ -30,8 +30,11 @@ know a single concrete tool name.
 ## Tool annotations
 
 The [MCP spec](https://modelcontextprotocol.io) lets a server advertise
-behavioural *hints* per tool. Crewlet captures them, carries them on every
-registry entry, and advertises them again on the two MCP surfaces it *serves*:
+behavioural *hints* per tool. Crewlet captures them as `mcp.Annotations`
+(`internal/mcp/annotations.go`), carries them on every bridged tool
+(`mcp.Tool.Annotations`) and beside the tool in the registry
+(`tools.Entry.Annotations`), and advertises them again on the two MCP
+surfaces it *serves*:
 
 | Field | MCP hint | Meaning |
 |---|---|---|
@@ -41,26 +44,30 @@ registry entry, and advertises them again on the two MCP surfaces it *serves*:
 | `open_world` | `openWorldHint` | The tool touches entities outside the local system (the network, external services, shared surfaces a human can see) |
 | `title` | `title` | Human-friendly name |
 
-Every field is **tri-state** — yes / no / **unknown** (the server didn't say).
-Unknown is never coerced to "no": "unknown" and "explicitly safe" are different
-facts, and every classifier below depends on the distinction. The MCP Go SDK's
-own struct cannot hold it — two of its four hint fields are plain booleans — so
-Crewlet reads a server's annotations off the wire rather than out of the
-decoded struct, and trusts only an explicit `true`.
+Every hint has **three values**, `mcp.Yes`, `mcp.No` and `mcp.Unknown`
+(the server did not say). `Unknown` is never coerced to `No`: "unknown"
+and "explicitly safe" are different facts, and every classifier below
+depends on the distinction. The MCP Go SDK's own struct cannot hold it
+(two of its four hint fields are plain booleans), so Crewlet reads a
+server's annotations off the wire rather than out of the decoded struct
+and trusts only an explicit `true`. A value that is not a JSON boolean is
+read as `Unknown`.
 
-First-party builtins declare their own hints in code, and the same
-classification works for them.
+First-party builtins declare their own annotations in code, registered
+with `tools.Registry.RegisterWith`, so the same classification works for
+them.
 
 ### Where annotations come from, and where they go
 
 ```mermaid
 flowchart TD
-    MCP["an MCP server Crewlet dials"] -->|advertises| ANN["wire annotations"]
-    ANN --> OVR["operator config override (optional)<br/>mcp_servers[].tool_annotations"]
-    BI["a first-party builtin"] -->|declared in code| REG
-    OVR --> REG["the tool registry entry"]
-    REG --> Q["engine capability questions<br/>e.g. writes_to_shared_surface"]
-    REG --> OUT["the surfaces Crewlet SERVES<br/>/operator/mcp and the sandbox bridge"]
+    MCP["an MCP server Crewlet dials"] -->|"advertises (read from the raw JSON)"| ANN["mcp.Annotations"]
+    ANN --> OVR["operator override from tool_annotations (optional)<br/>Annotations.Merge"]
+    OVR --> WRAP["mcp.Tool.Annotations"]
+    BUILTIN["a first-party builtin"] -->|RegisterWith| ENTRY
+    WRAP -->|RegisterMCP| ENTRY["tools.Entry.Annotations"]
+    ENTRY --> Q["engine capability questions<br/>(mcp.WritesToSharedSurface, the delivery check)"]
+    ENTRY --> OUT["the surfaces Crewlet SERVES<br/>/operator/mcp and the sandbox bridge"]
 ```
 
 **The outbound half is not optional.** Both MCP surfaces this engine serves —
@@ -79,39 +86,58 @@ same reason as the inbound rule above.
 
 ---
 
-## The classifier: `writes_to_shared_surface`
+## The classifiers
 
-Today the one runtime question the engine asks is: *would a sub-agent
-calling this tool write to a surface a human reads, under the parent
-agent's identity?* A sub-agent posting to a channel or commenting on an
-issue as its parent would leak identity onto a transcript, so the
-[sub-agent guard](turn-engine.md#runtime-invariants) denies such tools.
+The engine asks annotations two questions, and they deliberately fail in
+opposite directions.
 
-The classifier answers it, conservatively about unknowns:
+### `mcp.WritesToSharedSurface`: may a worker call this?
 
-- read-only is **yes** → **no** (a pure read).
-- destructive is **yes** → **yes**.
-- read-only is **no** and open-world is not explicitly **no** → **yes**
-  (a write to the outside world).
-- everything unknown → **no**. The engine does not block what it cannot
-  classify; the task's (or its template's) explicit allowlist already
-  curates the worker surface.
+*Would a worker calling this tool write to a surface a human reads, under
+the parent agent's identity?* A worker posting to a channel or commenting
+on an issue as its parent would leak identity onto a transcript, so the
+[worker guard](turn-engine.md#runtime-invariants) (`subagent.Permit`)
+denies such tools.
 
-First-party control tools (`delegate`, `a2a_ask`, the discovery
-meta-tools, `run_sandbox`) are denied separately by name — they are
-Crewlet's *own* tools, so naming them is not a third-party coupling.
-`run_sandbox` is on that list because a detached coding run is keyed to
-the **parent** turn: the pending row carries the parent's `turn_id` and
-the launch pauses the parent seat's inbox, while a worker cannot park
-for the result. The parent turn would finish without persisting the
-suspended conversation, leaving the seat deaf for the whole coding run
-with nothing to resume into.
+`mcp.WritesToSharedSurface` answers it, conservatively about unknowns:
+
+- `ReadOnly` is `Yes` → **no** (a pure read).
+- `Destructive` is `Yes` → **yes**.
+- `ReadOnly` is `No` and `OpenWorld` is not `No` → **yes** (a write to
+  the outside world).
+- everything else, including all-unknown → **no**. The engine does not
+  block what it cannot classify; the task's (or its template's) explicit
+  allowlist already curates the worker surface.
+
+First-party control tools (`delegate`, `run_sandbox`, `a2a_ask` and the
+parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
+separately by name, because they are Crewlet's *own* tools and naming them
+is not a third-party coupling. `run_sandbox` is on that list because a
+detached coding run is keyed to the **parent** turn: the pending row
+carries the parent's `turn_id` and a completion resumes the parent's
+suspended executor, while a worker's loop cannot suspend. The parent turn
+would finish without persisting a suspended conversation, and the run
+would come back with nothing to resume into.
+
+### The delivery check: did this answer reach anybody?
+
+The [delivery check](turn-engine.md#three-checks-in-increasing-cost) asks
+the opposite question and fails closed. `turn.Deliverable` is one
+membership test against the map `tools.Registry.Deliveries` computes, and
+two kinds of tool are in it: an MCP-served tool whose own annotations do
+**not positively** call it a read, and a first-party tool the engine
+registered as one that reaches somebody. So an unannotated server tool
+counts, and so does commenting on a native work item, while a diary write
+does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
+beside `mcp.WritesToSharedSurface` precisely because the two questions fail
+in opposite directions: reusing the worker guard's answer here would read
+every under-annotated write tool as having reached nobody.
 
 ### `open_world` is a tri-state, and unset is not `false`
 
-Read the third rule again: read-only is **no** *and* open-world is *not
-explicitly* **no**. A tool that writes only *private* state — an agent's
-own diary, its own learned skills, its own onboarding marker — is not a
+Read the third rule again: `ReadOnly` is `No` **and** `OpenWorld` *not
+explicitly* `No`. A tool that writes only *private* state (an agent's
+own diary, its own learned skills, its own onboarding marker) is not a
 write to a surface a human reads, but saying so takes an explicit
 `open_world: false`. Leaving the hint unset classifies it with the public
 writes.
@@ -160,10 +186,13 @@ mcp_servers:
 
 Keys accept snake_case (`read_only`) or the MCP camelCase
 (`readOnlyHint`). Overrides win over whatever the server advertised
-(`ToolAnnotations.merge`). The **tool-name key** matches either the
-server's raw name or the engine's prefixed catalogue name (e.g. a Slack
-server's `conversations_add_message` **or** `slack_conversations_add_message`),
-so keying by the name you see in the catalogue never silently no-ops.
+(`mcp.Annotations.Merge`), and a hint the override leaves unset keeps
+the server's value. The **tool-name key** matches either the server's raw
+name or the catalogue name with the entry's `tool_prefix` applied (for a
+Slack server with `tool_prefix: slack_`, `conversations_add_message`
+**or** `slack_conversations_add_message`; the raw name wins when both are
+present), so keying by the name you see in the catalogue never silently
+no-ops.
 
 Every tool server — including Jira/Confluence (`atlassian`), Slack, and
 GitHub — is an `mcp_servers` entry, so `tool_annotations` is declared
@@ -199,9 +228,10 @@ tools, so these overrides are usually unnecessary — they exist so an
 under-annotating build of any server is correctable without engine
 changes.
 
-If a server under-annotates and no override is supplied, the only effect
-is that the sub-agent guard cannot auto-deny that server's write tools —
-the parent's explicit allowlist remains the curation, exactly as before.
+If a server under-annotates and no override is supplied, the worker
+guard cannot auto-deny that server's write tools (the parent's explicit
+allowlist remains the curation), and the delivery check counts every one
+of its tools, reads included, as a possible delivery.
 
 ---
 
@@ -221,7 +251,7 @@ overridable by the operator when the server falls short.
 
 ## See also
 
-- [Turn Engine](turn-engine.md) — the sub-agent guard and runtime invariants.
-- [Tool Skills](tool-skills.md) — the *how-to* half of tool decoupling (knowledge-base-sourced per-tool guidance).
-- [Agent Runtime](agent-runtime.md) — the tool registry and MCP bridge.
-- [Tools & MCP guide](../guides/tools-and-mcp.md) — `mcp_servers[].tool_annotations` config.
+- [Turn Engine](turn-engine.md): the worker guard, the delivery check and the runtime invariants.
+- [Tool Skills](tool-skills.md): the *how-to* half of tool decoupling (knowledge-base-sourced per-tool guidance).
+- [Agent Runtime](agent-runtime.md): the tool registry and MCP bridge.
+- [Tools & MCP guide](../guides/tools-and-mcp.md): `mcp_servers[].tool_annotations` config.

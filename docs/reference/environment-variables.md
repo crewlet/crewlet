@@ -23,6 +23,8 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 | `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` | Conventional name for a `cli-agent` provider's exported credential bundle (`<KEY>` is the `providers.llm` key upper-cased, non-alphanumerics folded to `_`). Restored into the provider's credential directory at boot when that directory is empty, so a fresh container comes up already authenticated. Overridden by `cli.auth.credential_bundle`. | `crewlet llm export <key> -secret-store` |
 | `CREWLET_SANDBOX_LOCAL_HOME` | Read directly by the [`local` sandbox backend](../concepts/code-sandbox.md#local-sandboxes): the parent directory its per-box homes are created under. Default `~/.crewlet/sandboxes`. Overridden per provider by `providers.sandbox.local.state_dir`. | — |
 | `CREWLET_TOOL_SKILLS_SPACE` | The `-space` default for `crewlet confluence import` and `crewlet confluence resync`: which Confluence space [Tool Skill](../concepts/tool-skills.md) pages are published into and read back from. Default `knowledge.skills_container`, itself defaulting to `TS`. **The engine never reads this variable** — the space it watches comes from the company document and only from there, because a fleet whose nodes each read a variable out of whoever's shell started them would disagree about which space holds the skills. To turn tool skills off, set `skills_container: ""` in the company config. | — |
+| `CREWLET_API_TOKEN` | Read directly by the CLI commands that write through a running node (`crewlet config` against a live node, `crewlet secrets` with `-api`, `crewlet budgets`): the bearer token to send. Read before the Tier A file's first `api.auth.tokens` entry, and never taken as a flag value, because a token on a command line lands in shell history and `ps` | The value of one of the node's `api.auth.tokens` |
+| `CREWLET_OPERATOR` | Read directly by the CLI as the operator it records when it writes or reads the stores itself rather than through a node: a revision `crewlet config import` writes locally or `crewlet config rekey` writes, a secret `crewlet secrets set` or `crewlet llm login` stores locally, a secrets rekey, and the `secret_revealed` log line. Falls back to `USER`, then `LOGNAME`, then `unknown` | Your own name or a CI job id |
 
 ---
 
@@ -76,16 +78,21 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `JIRA_URL` | Your Jira instance URL | e.g., `https://company.atlassian.net` |
-| `JIRA_API_TOKEN` | Jira API token (admin/service account) | Atlassian account > API tokens |
-| `JIRA_EMAIL` | Admin email for Cloud Basic Auth | Your Atlassian account email |
-| `JIRA_WEBHOOK_SECRET` | Secret for HMAC verification | Set when creating the Jira webhook |
+| `JIRA_URL` | Your Jira instance URL (`integrations.jira.url`, and the `JIRA_URL` the shared `atlassian` MCP server reads) | e.g., `https://company.atlassian.net` |
+| `JIRA_ADMIN_TOKEN` | Admin or service-account API token (`integrations.jira.token`) | Atlassian account > API tokens |
+| `JIRA_ADMIN_EMAIL` | That account's email, for Cloud Basic Auth (`integrations.jira.email`) | Your Atlassian account email |
+| `JIRA_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.jira.webhook_secret`); Cloud relays through the Forge app instead | Set when creating the Jira webhook |
+| `JIRA_SITE_URL` | The human-clickable site base, as the `jira_base_url` [skill variable](../concepts/tool-skills.md#skill-variables) | e.g., `https://company.atlassian.net` |
 
-### Per-Agent Jira Tokens
+### Per-agent Atlassian credentials
+
+Each seat's own Atlassian account covers Jira and Confluence alike, on the shared `atlassian` MCP server's `mcp_env` entry.
 
 | Variable | Description |
 |----------|-------------|
-| `<ROLE>_JIRA_TOKEN` | Per-agent Jira API token (e.g., `CTO_JIRA_TOKEN`) |
+| `ATLASSIAN_EMAIL_<SEAT>` | The seat's Atlassian account email (`mcp_env.atlassian.JIRA_USERNAME` and `CONFLUENCE_USERNAME`, e.g. `ATLASSIAN_EMAIL_CTO`) |
+| `ATLASSIAN_TOKEN_<SEAT>` | That account's API token (`mcp_env.atlassian.JIRA_API_TOKEN` and `CONFLUENCE_API_TOKEN`, e.g. `ATLASSIAN_TOKEN_CTO`). The knowledge search runs as the seat when it holds one |
+| `ATLASSIAN_FOUNDER_ACCOUNT_ID` | A human seat's Atlassian account id (`contact.atlassian_account_id`) |
 
 ---
 
@@ -94,13 +101,15 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `CONFLUENCE_URL` | Your Confluence instance URL (`integrations.confluence.url`) | e.g., `https://company.atlassian.net/wiki` |
-| `CONFLUENCE_API_TOKEN` | Admin/service API token (`integrations.confluence.token`) | Atlassian account > API tokens |
-| `CONFLUENCE_EMAIL` | Admin email for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
+| `CONFLUENCE_ADMIN_TOKEN` | Admin or service-account API token (`integrations.confluence.token`), what the tool-skill sync and skill promotion run on | Atlassian account > API tokens |
+| `CONFLUENCE_ADMIN_EMAIL` | That account's email, for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
+| `CONFLUENCE_SITE_URL` | The human-clickable wiki base, as the `confluence_base_url` [skill variable](../concepts/tool-skills.md#skill-variables) | e.g., `https://company.atlassian.net/wiki` |
 | `CONFLUENCE_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.confluence.webhook_secret`) | Set when creating the webhook |
 | `CONFLUENCE_WEBHOOK_TOKEN` | Shared token every **Cloud** hook carries in its URL (`integrations.confluence.webhook_token`), compared constant-time by `/webhooks/confluence/{event}`. Confluence Cloud signs nothing, so this is the whole authentication: treat it as a signing key. | Minted by `crewlet confluence provision`; `-recreate-webhooks` rotates it |
 
 Per-agent Confluence credentials go through `role.mcp_env` on the `atlassian`
-MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.
+MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), the
+`ATLASSIAN_EMAIL_<SEAT>` and `ATLASSIAN_TOKEN_<SEAT>` pair above.
 
 ---
 
@@ -168,14 +177,6 @@ Conventions used by the [Datadog integration](../integrations/datadog.md).
 
 ---
 
-## Email
-
-| Variable | Description |
-|----------|-------------|
-| `GMAIL_APP_PASSWORD` | Gmail app password (if using Gmail) |
-
----
-
 ## The store
 
 **There is no database environment variable, because there is no database
@@ -228,7 +229,7 @@ Four more `stream:` fields carry no `${VAR}` convention because they are paths o
 
 The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. Without a keyring, Crewlet keeps the default `${VAR}`-reference behaviour and every env var on this page is resolved from the environment at construction time. See [Configuration § Secrets](../concepts/configuration.md#secrets).
 
-A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `<ROLE>_JIRA_TOKEN`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
+A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `ATLASSIAN_TOKEN_<SEAT>`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, and the rest) two different ways:
 
 - **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted store (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults it **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is a write of one record, and it reaches every node.
 - **Literal values in the encrypted config** — set them via `PUT /config` or import a `company.yaml` with literals. Simpler, but every rotation writes a new immutable revision that archives the superseded secret, and one credential referenced from two places (a Slack bot token is both `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`) becomes two literals that must change together.
@@ -293,7 +294,7 @@ Used only when `providers.sandbox` is configured so sandbox-enabled roles can au
 | `E2B_API_KEY` | E2B API key, referenced by `providers.sandbox.api_key`. **Required for self-hosted clusters too** — every call authenticates with it, sent as `X-API-KEY`; the cluster domain only changes *which* API is talked to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted cluster's key management |
 | `E2B_DOMAIN` | Self-hosted / local cluster domain, referenced by `providers.sandbox.domain`. Omit for the vendor cloud. The engine reads it **through the config field**, never from the environment directly, so a stale export cannot silently reroute a box. | Your self-hosted E2B deployment |
 | `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read by every node: the externally-reachable base URL of whichever node serves your webhooks (an `ingress` one) (e.g. `http://host.docker.internal:80`). When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route and sandbox runs export telemetry through it (forwarded to `OTEL_EXPORTER_OTLP_*` when configured). Unset = no sandbox telemetry. | Your engine's public address |
-| `CREWLET_MCP_BRIDGE_URL` | Read by every node: the externally-reachable base URL of whichever node serves the API, as a sandbox can dial it. When set, the engine mounts its `/mcp/{token}` tool bridge, which is what lets a subscription CLI in **agent mode** call its seat's own tools from inside a box (see [Code sandbox § The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). Unset = no bridge, and agent mode is refused for the seat rather than started without tools. | Your engine's public address |
+| `CREWLET_MCP_BRIDGE_URL` | Read by every node that runs seats: the base URL of **this node's own** HTTP listener, as a sandbox can dial it. A session lives in the process that opened it, so on a fleet each node sets its own value; a load balancer in front of several nodes, or a peer that runs only `ingress`, answers `401` to every call. When set, the engine mounts its `/mcp/{token}` tool bridge, which is what lets a subscription CLI in **agent mode** call its seat's own tools from inside a box (see [Code sandbox § The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). Unset = no bridge, and agent mode is refused for the seat rather than started without tools; set on a node with no listener (`api.port: 0`), agent mode is refused naming `api.port`. | This node's own address, as a sandbox reaches it |
 
 Inside each sandbox run the engine **injects** `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL` — the running agent's identity facts, readable by `role.sandbox.setup` recipes (e.g. to configure `git config user.name`/`user.email`). They are outputs of the engine, not inputs you set.
 

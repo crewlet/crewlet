@@ -175,13 +175,13 @@ units:
         backstory: "Full-stack engineer who writes clean, tested code"
 ```
 
-> **Set `handle` now, and keep it.** An agent's durable id is
-> `uuid5(namespace, f"{company name}:{handle}")`, so changing a handle —
-> *or the company `name`* — mints a new id and orphans that seat's diary,
-> onboarding markers, and counterparty profiles. It keeps working, but it
+> **Set `handle` now, and keep it.** An agent's durable id is a UUIDv5
+> over `"<company name>:<handle>"` (`org.DeriveAgentID`), so changing a
+> handle, *or the company `name`*, mints a new id and orphans that seat's
+> diary, onboarding markers, and counterparty profiles. It keeps working, but it
 > has lost its memory. Leaving `handle` unset auto-derives it from the
 > role name, which ties the id to a label you may well rename later. See
-> [Agent Runtime](../concepts/agent-runtime.md#agent-definition-vs-agent-instance).
+> [Agent Runtime](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ### LLM options
 
@@ -405,6 +405,18 @@ curl -X PUT http://localhost:8000/config \
   -H "X-Summary: initial bootstrap" \
   --data-binary @company.yaml
 ```
+
+Or create the company from the dashboard: open **Org chart** and its
+**Builder** lens (`#/org?lens=builder`). With no configuration active it opens
+on a form that starts the company from a template, has the engine check it,
+and creates it with `PUT /config`. The builder reads and writes `/config`, so
+it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
+dashboard writes no model provider, so one step stays outside it. Until it is
+done the company runs and no agent seat takes a turn; whatever is sent to a
+seat waits on its inbox. Add `providers.llm` afterwards with
+`crewlet config import` or `PATCH /config`, as the builder's next steps show
+([The Org Builder](../guides/org-builder.md#creating-the-company)), and the
+work that waited runs.
 
 ## Split deployment (optional)
 

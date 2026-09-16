@@ -36,8 +36,9 @@ node, a tool origin — is **neutral**, and its identity is carried by its name,
 its icon and its position. Those are stable, legible, and do not run out at
 eight.
 
-The one exception is a **third-party app's own mark** on the Integrations screen
-(`ui/VendorMark.tsx`): Slack's four colours, Atlassian's blue, GitLab's orange,
+The one exception is a **third-party app's own mark** on the Integrations
+screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
+Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
 to exactly that: a mark is drawn only beside the third-party app's name,
@@ -63,28 +64,54 @@ a seat that fell over have both stopped, and only one of them is a failure.
 
 ## The palette is measured, not asserted
 
-`dashboard/src/styles/tokens.css` is the one source of colour, type, space and
-motion. Every claim it makes is recomputed from the shipped file by
-`dashboard/src/styles/palette.test.ts`, in **both themes**, over **every
-composited surface a token can land on** — including a hovered row inside a
-nested panel, which is where a ramp anchored to the panel fill quietly falls
-under its floor.
+`@crewlethq/tokens` is the one source of colour, type, space and motion. The
+dashboard declares none of its own: it imports the palette, the themes, the
+density scale, the faces and the document baseline, in that order, above every
+other import in `dashboard/src/main.tsx`. Above, because an import is
+evaluated in source order and the components carry their own stylesheets, and
+the baseline has to be the thing a component rule outranks rather than the
+other way round.
+
+The rule table and the colour maths are the package's own,
+`@crewlethq/tokens/test/palette`, so the design system and this application
+cannot come to disagree about what a floor is.
+`dashboard/src/styles/palette.test.ts` runs them over the INSTALLED
+stylesheets in that same import order, in **every theme state** (light, dark
+by media query, dark by attribute) and over **every composited surface a token
+can land on**, including a hovered row inside a nested panel, which is where a
+ramp anchored to the panel fill quietly falls under its floor. The engine
+measures as well as the package because a tokens release that lowered a ratio
+would otherwise arrive here through an auto-merged bump with nothing in `make
+check` measuring one.
 
 What is measured, and the floor each clears:
 
 | Claim | Floor |
 |---|---|
-| `--text`, `--heading` on every surface | 7:1 |
-| `--text-secondary`, `--text-muted` on every surface | 4.5:1 |
-| `--text-faint` on a panel | **between 2.8 and 4.5** — it is decoration, and a step that crept up to 4.5 would invite itself into a table cell |
-| every `-ink` step as TEXT on every surface | 4.5:1 |
+| `--color-text-primary` on every surface | 7:1 |
+| `--color-text-secondary`, `--color-text-tertiary` on every surface | 4.5:1 |
+| `--color-text-muted` on a panel | **between 2.8 and 4.5**, because it is decoration, and a step that crept up to 4.5 would invite itself into a table cell |
+| every `-ink` step as TEXT on every surface, and on its own `-soft` tint | 4.5:1 |
 | every fill step as a MARK on the page surfaces it sits on | 3:1 |
-| `--text-on-fill` on `--accent` | 4.5:1 |
+| `--color-text-on-accent` on the accent, and white on danger | 4.5:1 |
+| the focus ring against every surface | 3:1 |
 | the three phase hues, pairwise, under normal / protan / deutan vision | ΔE 10 |
+| the four status hues, pairwise, under all three | ΔE 10 |
 | adjacent data hues, in series order, under all three | ΔE 9 |
-| every data hue against the reserved `--critical` | ΔE 14 |
+| every data hue against the reserved danger hue | ΔE 14 |
+| every other hue against the accent, under all three | ΔE 10 normal, 8 dichromat |
 | the neutral ramp's chroma | ≤ 2.2 |
-| the accent's chroma against every other hue | the highest |
+
+**A measured token is only as good as where it is spent.**
+`--color-text-muted` clears its floor as decoration, and the dashboard spent it
+on words a reader has to read: "(optional)", "not set", "none", "not reported
+by this engine", a seat's goal, an event's category, the placeholder in every
+text box. Those take `--color-text-tertiary` now, and
+`dashboard/src/designSystem.test.ts` fails when a rule in ANY of the
+dashboard's stylesheets gives the decoration step to anything but a glyph. The
+same file fails on a `var()` naming a token the engine used to declare for
+itself, because an undeclared custom property does not fall back to what it
+used to be: it takes its whole declaration with it.
 
 **The fill/ink split is enforced by that measurement, not by convention.** An
 `-ink` step is text; a fill step is a mark or a background. Mixing them is how
@@ -118,8 +145,8 @@ three families fetched from a CDN, which was the tree's ONLY external runtime
 reference: on an air-gapped engine — a supported deployment — every face fell
 back to a system font the design was never measured against.
 
-Nine sizes, `--fs-3xs` … `--fs-3xl`, and **they are the only sizes in the
-product**. The system this replaces had 194 `font-size` declarations across 14
+Nine sizes, `--font-size-2xs` … `--font-size-3xl`, and **they are the only
+sizes in the product**. The system this replaces had 194 `font-size` declarations across 14
 literal pixel values, eight of them off any ramp, so its scale was fiction —
 and so was its density control, which resized three of those steps and left the
 rest.
@@ -138,9 +165,10 @@ its top edge, because a shadow is invisible against near-black; on light the
 shadow does the work. One recipe, two grounds, no second component.
 
 The sidebar's inset is the one place that scale is split in two, because a rail
-row has two edges that want different things. `--nav-gutter` insets the rail —
-it is where a row's own background, hover and active tint begin, so it decides
-how much of the rail's width the click target covers. `--nav-row-pad` insets
+row has two edges that want different things. `--size-nav-gutter` insets the
+rail, and it is where a row's own background, hover and active tint begin, so
+it decides how much of the rail's width the click target covers.
+`--size-nav-row-pad` insets
 the content inside that row. Every glyph in the rail therefore lands on the sum
 of the two, and anything with no row of its own — the brand lockup, the group
 labels — adds them rather than carrying a literal. That is what lets the rows
@@ -161,14 +189,15 @@ meets their company first and the engine last.
 |---|---|---|---|
 | — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
-| | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
-| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
+| | Org chart | `#/org?lens=chart\|directory\|charter\|builder&unit=&seat=&view=&chart=` | the hierarchy, the directory, and the company's own mission, vision and policies, from the `org` projection and the hierarchy the engine derived. `unit` and `seat` select, and a link carrying one reveals it on arrival. The **builder** lens *(operator-gated)* edits the organization over `/config` and creates the company where none is active; `view=canvas\|outline` and `chart=structure\|reporting` are its sections, and `unit` and `seat` its selection |
+| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access. Identity and reporting lines from the `org` projection; email, model, token budget, schedules, contact identities, integrations and tool credential names from the `config` query *(operator-gated)* |
 | **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
 | | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
 | | *the project strip* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the filter offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts, its lead, the unit that owns it and the sprint that is running. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
 | | *the feed* | `#/work?project=ENG` | `work_activity` — what HAPPENED in the container, which is a different question from what is on the board: the feed is ordered by the log rather than by anything the rows sort on, so a change that moved nothing on screen is still visible. A change is rendered from its DELTAS (`status: todo → in_progress`), falling back to its excerpt and then to its kind — a row with neither is still a real commit, and rendering it blank would read as a bug |
 | | My work | `#/work/me` | `work_my_work` — one person's seven claims. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the Work board's own header |
-| **Sprints** | Sprint report | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
+| | Sprints | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
+| | Goals | `#/goals?group=&owner=&archived=` | `work_goals`: the tier above projects, with what each goal is at (computed from the targets behind it on every read rather than stored) and the health its owner set. Read-only, like the board |
 | | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
@@ -181,7 +210,7 @@ meets their company first and the engine last.
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
 | | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
 | | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
-| | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
+| | Configuration | `#/config?lens=&revision=&against=` | `config` / `config_audit` / `config_diff` *(operator-gated)*. The diff lens compares `revision` with the active revision, or with `against` when a link names one (what one save changed is its revision against its parent). It reads and writes nothing: every surface that reports no active configuration (the shell's banner, the attention row, this screen's empty state) links to `#/org?lens=builder` to create the company, and names `crewlet config import` beside it |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
 | — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` and `Download turn` in the header assemble the record, the phases and the rest as one JSON object — the same bytes, for pasting into a thread and for attaching to a bug report — and the Turn record panel copies itself and owns ⌘A |
@@ -227,6 +256,37 @@ clamped to the height that exists, so one attempt lands short — and abandoned
 the moment the reader touches the page.
 
 All three of these shipped wrong once, and none of them is visible in a URL.
+
+**A link that names something inside a screen reveals it on arrival.**
+`#/org?unit=Backend` scrolls the chart to that unit and rings it, through the
+router's `useRevealOnArrival(elementId)`. It runs after the router's own reset
+for a new entry (a screen scrolling in its own effect was scrolled straight
+back to the top), only for somewhere new and never while a Back restore is
+pending, and it scrolls `#screen-scroll` directly, honouring the element's
+`scroll-margin-top`, rather than calling `scrollIntoView`. An element that
+arrives with the data after the route is revealed when it appears, unless the
+reader has already started reading. The ring is static: nothing on a live
+screen animates for data.
+
+**Work that exists nowhere else is not left behind unasked.** A surface
+holding it registers a leave guard (`useLeaveGuard`, the org builder's node
+editor while it has typed changes), and every move to another entry is put to
+that guard first: a push from code, a link, and Back or Forward. A guard is
+handed the route the move goes to and holds only a move that would lose its
+work: the org builder keeps its draft and an open editor through a move within
+the lens (a view or a chart), so its guards let that go
+(`BuilderContext.keepsTheLens`). A replace is never held, because by the table
+above it stays on the entry. Back has already happened by the time a page
+hears of it, so a held one is undone at once and made again only when the
+reader agrees to lose the work; every entry carries its place in the session
+(`crewletIndex`) beside its scroll key, which is how the router knows which
+way to undo it. The guard that began to hold last is asked first, and agreeing
+to it asks the next one before the move is made. A reload or a closed tab gets
+the browser's own prompt while any guard holds, and `useUnloadGuard` asks for
+that prompt alone, for work a move within the page keeps but a closed tab does
+not (the builder's draft, kept in session storage). The page listens for a
+reload only while something holds, because some browsers keep a page with a
+`beforeunload` listener out of their back-forward cache.
 
 ### The attention queue
 
@@ -434,8 +494,9 @@ of which is what makes them worth having at all:
   Model activity tab wrapped its turns in the query-state component, which
   renders nothing while a query is in flight and a banner *instead of* its
   children when one fails. So a turn happening right now was invisible until
-  the event store answered — and invisible for good on a node that keeps no
-  event log, where the answer is a permanent `no_event_store`. The query's
+  the event store answered, and invisible for good on a node that keeps no
+  event log, where the engine does not serve the question at all and the
+  answer is a permanent `unknown_query`. The query's
   state renders beside the turns now, never in place of them.
 
 The seat screen makes the same split, where it answers a second question:
@@ -447,31 +508,87 @@ accent ring rather than only by finding a badge.
 The Model screen collected eighteen controls in one sticky row — a segmented
 control, a free-text box, a chip per seat, a chip per phase and a failures
 chip — fifteen of them near-identical pills in two different active idioms.
-Above them sat four `--fs-2xl` numerals, a step LARGER than the screen title,
+Above them sat four `--font-size-2xl` numerals, a step LARGER than the screen title,
 so the loudest thing on a transcript page was a token count. Below the list
 sat a copy of Spend's own panel, which every "load older" click pushed
 another sixty cards further down a single scroller.
 
 What replaced it:
 
+- **The row of controls is the list screen's own toolbar**, and every axis on
+  it is one the screen declares: a search box that is always there, a Filter
+  menu offering the rest, a chip per axis a reader added, and a Sort menu over
+  every column. A screen that hid its search behind "add a filter" is a screen
+  where nobody finds the search.
 - **The counts moved into the header badges**, and the failure count became
   the control that filters to failures. It used to be an inert tile reading
   "4 failed" beside an unrelated chip that did the filtering, so a reader who
-  saw the number had to go find the pill that acted on it. `Badge` renders as
-  a real `<button>` with `aria-pressed` when given an action — a `<span>`
+  saw the number had to go find the pill that acted on it. `Tag` renders as
+  a real `<button>` with `aria-pressed` when given an action: a `<span>`
   with a click handler is neither focusable nor announced, and looks
-  identical to the inert badges next to it.
+  identical to the inert tags next to it. A tag that is ON keeps the ground
+  its label was measured on, because the press is carried by its boundary;
+  the badge this replaces repainted the ground with its own ink, which is a
+  contrast ratio of 1:1 on the one control whose state has to be readable.
 - **The seat filter became a picker.** It was a text box, but the match is
   exact on both sides of the wire — the server query and the in-memory
   filter both compare for equality — so typing a prefix returned nothing
-  while looking exactly like a search that found no matches. `Select` is a
-  native `<select>`: keyboard navigation, type-ahead and the platform's own
-  overlay come free, and a hand-built listbox would have to earn all three
-  back. It also scales past the ten seats at which the chip row silently
-  disappeared.
+  while looking exactly like a search that found no matches. `Select` is the
+  design system's listbox, and it searches once the roster passes eight,
+  which no native dropdown can do at all. It also scales past the ten seats
+  at which the chip row silently disappeared.
+
+  **EVERY choice on this dashboard is that listbox.** No dropdown here is the
+  platform's own, on any screen or in any dialog: the list takes the theme, the
+  density, the tokens and the layer stack, rather than the operating system's
+  palette in the middle of a dark dialog. What a reader used to get free from
+  the platform it earns back for itself, and those rules are shared with every
+  other list in the package: type-ahead, Home and End, disabled answers stepped
+  over, the highlight announced through `aria-activedescendant`, Tab closing
+  the list and carrying on to the next control, Escape stopping at the list,
+  and a stored value the options no longer offer kept rather than swapped.
 - **The spend panel is a link.** It was Spend's panel on Spend's data at
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
+
+Three rows of buttons, and a table, that behaved differently from a keyboard
+than they looked:
+
+- **A section row activates manually.** `Tabs`, and a `SegmentedControl`
+  with `semantics="tabs"` (a lens, a window, a grouping), are one tab stop: the
+  arrow keys and Home and End move focus along the row, and Enter or Space
+  selects. A section pushes a history entry, and a row that selected as focus
+  moved left one entry per keypress for Back to walk through. Each tab names
+  the `TabPanel` it controls.
+- **A setting is a radio group.** The theme and density controls are
+  `SegmentedControl` with `semantics="radio"`: announced as a choice rather than as
+  tabs with no panel, and the arrows select as they move, because changing a
+  setting costs nothing on every keypress. The same applies to a filter that
+  replaces the history entry.
+- **The group keeps one tab stop, wherever the reader is standing.** The stop
+  travels with the arrows rather than sitting on the selection, because on a
+  section row the two stop being the same question: a reader stands on an
+  option they have not chosen for as long as they are still deciding, and a
+  stop left behind on the selected one drops them somewhere they did not leave
+  when they tab out and back. A change from outside the group (a click
+  elsewhere, the browser's Back button, a pasted URL) retires whatever the
+  arrows were pointing at and takes the stop back, and so does an option
+  leaving `options`. It survives a value the options do not carry, too: `value`
+  comes off the query string at most of these call sites, so an older build's
+  link, a typo or a renamed option arrives as a value no option matches, and a
+  stop that fell back only when the *held* option left the set gave every
+  option `tabIndex="-1"` on `?lens=bogus` and dropped the whole control out of
+  the page's tab order, unreachable by keyboard and strictly worse than the
+  plain buttons it replaced. It falls back to the first option; nothing is
+  selected, so nothing else has a claim to the stop.
+- **A sortable column is a button in its header.** The click used to be on the
+  `th` itself, which a keyboard cannot reach and a screen reader does not
+  announce as a control. `aria-sort` stays on the header cell, and each column
+  says which way its FIRST press sorts: a number and a timestamp read from the
+  big end and the newest row, everything else from A, where one blanket
+  direction for a whole table ordered every name from Z. An absent value sorts
+  last in BOTH directions, because a seat with no meter has not spent nothing,
+  it has not been measured.
 
 Four more controls that looked like something they were not:
 
@@ -481,7 +598,7 @@ Four more controls that looked like something they were not:
   a secure context, so `navigator.clipboard` is simply undefined at the
   `http://<node-ip>:8000` anyone reads the dashboard of a machine that is not
   their laptop at. `navigator.clipboard?.writeText(x)` swallowed that. The
-  `CopyButton` primitive falls back to the deprecated `execCommand` path,
+  design system's `CopyButton` falls back to the deprecated `execCommand` path,
   which is the only one that works there, and then says `Copied` or
   `Copy failed` — announced as well as drawn.
 - **A download button says whether it downloaded, and refuses rather than
@@ -511,130 +628,37 @@ Four more controls that looked like something they were not:
 - **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
   gesture, so on a screen whose point is one JSON record — a turn's record,
   the active configuration — it took the nav, the stat row and every phase
-  card along with it. A `Code selectable` block is focusable and owns the
+  card along with it. A `CodeBlock selectable` block is focusable and owns the
   chord while it holds focus; everywhere else the browser keeps it. The
   focus ring is not decoration: a keyboard verb that changes meaning on
   click is a secret without one.
 
-Three more that announced as something they were not. Each of these is a
-control a sighted reader could use and a keyboard or screen-reader one could
+Two more a sighted reader could use and a keyboard or screen-reader one could
 not, which is the class of defect that never shows up in a screenshot:
 
-- **A segmented control is a radio group, not a tab list.** `Segmented`
-  declared `role="tablist"` with `role="tab"` children, and not one of its
-  eight call sites is a tab widget: they pick a theme, a density, a grouping,
-  a scope, a window and a lens. A tab controls a `tabpanel` it is adjacent to
-  and labels; these narrow or regroup what is already on screen, and several
-  sit in a screen head with the content they affect hundreds of pixels below.
-  It is `role="radiogroup"` with `aria-checked` options now. `Tabs` keeps the
-  tab role — it is the one control here whose options sit directly above the
-  panel each of them shows.
-- **A group of choices is ONE tab stop, with arrow keys inside it.** Both
-  controls rendered plain buttons under the old role, so the ARIA promised
-  one stop and arrow-key movement while the DOM delivered N stops and no
-  arrow keys — neither behaviour, rather than one or the other. The shell's
-  theme and density controls alone put six stops in front of the page on
-  every screen. One shared roving-focus hook gives both of them the contract
-  their role implies: arrows (both axes) and Home/End move within the group,
-  `tabIndex` 0 travels with them, and every other key — Tab above all — is
-  left to the browser.
-- **A group always keeps one tab stop, whatever the URL says.** `value` comes
-  off the query string at seven of the nine call sites, so a link from an
-  older build, a typo or a renamed option reaches the control as a value no
-  option carries. The roving stop fell back only when the *held* option left
-  the set, not when `value` was outside it — so `?lens=bogus` gave every
-  option `tabIndex="-1"` and the whole control dropped out of the page's tab
-  order, unreachable by keyboard and strictly worse than the plain buttons it
-  replaced. It falls back to the first option now; nothing is checked, so
-  nothing else has a claim to the stop.
-- **The arrows move focus; Enter and Space choose.** That is manual
-  activation, and it is the default on both controls because of what they are
-  wired to: seven of the nine groups on the dashboard drive a `useParam`,
-  five of those push a history entry, and every one of them re-runs its
-  screen's query — which the socket mints fresh, with no cache, no dedupe and
-  no coalescing behind it. Under selection-follows-focus, one reader arrowing
-  across the five options of a group to hear what is there is four queries
-  nobody asked for and four history entries they then have to press Back
-  through, and the reader most likely to arrow across every option is the one
-  using a screen reader. That is the trade the pattern names by its own
-  terms: selection follows focus only while the result is displayed without
-  noticeable latency and is not costly to undo, and a query behind a pushed
-  history entry satisfies neither clause. Two groups do satisfy both — the
-  shell's theme and density, which write `localStorage` and a `data-`
-  attribute — and those pass `activate="automatic"`, where selection
-  following focus is the better control and there is nothing to undo.
-  Nothing in the hook handles Enter or Space: every option is a real
-  `<button>`, so the browser's own activation fires the click the group
-  already listens for, and a second handler would commit one keypress twice.
-- **The tab stop is under the reader's feet, not on the selection.** The two
-  stop being the same question is what ends when arrows stop selecting: a
-  reader stands on an option they have not chosen for as long as they are
-  still deciding, and a stop left behind on the checked option means tabbing
-  out and back drops them somewhere they did not leave. A change from
-  outside the group — a click elsewhere, the browser's Back button, a pasted
-  URL — retires whatever the arrows were pointing at and takes the stop back,
-  and so does an option disappearing from `options`, which would otherwise
-  leave the group carrying no tab stop at all and reachable by no key.
-- **A tab list without a panel is a row of buttons wearing the role.** `Tabs`
-  declared `role="tablist"` and `role="tab"` and stopped there: no rendered
-  element carried `role="tabpanel"`, nothing was referenced by
-  `aria-controls`, and the switched content was an ordinary run of siblings
-  after the strip. A screen reader could find the tabs and then had no way to
-  reach what the selected one controlled — pressing Tab from a freshly chosen
-  tab left the widget and landed on whatever came next in the DOM, so choosing
-  a tab moved the reader *further* from the content they had just chosen. The
-  panel is part of the component now: pass the content as `children` and both
-  ids, the `aria-controls` and the `aria-labelledby` back-reference are minted
-  with `useId` here. A documented id convention would have been a convention
-  each caller could follow halfway, and a half-wired widget looks exactly like
-  a whole one. `aria-controls` sits on the *selected* tab only, because only
-  its panel is rendered — an id that resolves to nothing offers a reader a
-  jump that goes nowhere. The panel takes a tab stop for reach rather than for
-  interaction, so its focus ring is suppressed while it stays reachable, and
-  `.tabpanel` carries its own flex column and gap: the sections it now wraps
-  used to take their spacing from the screen's own column, and that is the one
-  part of this change no rendered test can see.
-- **A manual group owes the reader a sentence.** A radio group's learned
-  contract is that the arrows choose — native radios do, and the authoring
-  practices describe no manual variant of the pattern. The deviation here is
-  deliberate and every announcement along the way is honest: a reader arrowing
-  onto an option hears it is not checked, which is true. What they were never
-  told is *which key would check it*, so a reader who pressed Right, heard
-  "not checked" and moved on took the silence for a control that ignored them.
-  The group carries an `aria-describedby` note saying the arrows move and
-  Enter or Space chooses, announced on entry, and only where the arrows do not
-  already choose. A description rather than a different role: the alternatives
-  that would make the arrows conform — a toolbar of `aria-pressed` buttons, a
-  plain group with `aria-current` — each drop either the mutual exclusivity
-  that says these are one choice or the "2 of 3" that says how many there are.
-  Losing a true semantic to gain a convention is the wrong trade when a
-  sentence closes the gap.
 - **A meter needs a name, and a value inside its own range.** `role="meter"`
-  with no accessible name announces as a bare number on screens that render
-  several, and the visible legend is not the name: two call sites pass none
-  at all, and the ones that do pass a reading ("94% of the meter used")
-  rather than a noun. `ariaLabel` is a required prop for that reason, as it
-  already is on `Segmented`, `Tabs` and `Select`. The bar's fill was clamped
-  and `aria-valuenow` was not, so a budget *lowered* under a counter that has
-  already spent past it — the exact state an operator opens the screen in —
-  published a value above `aria-valuemax`; it is clamped now, with the true
-  figures in `aria-valuetext` so the overage is reported rather than hidden.
-  A meter with no ceiling drops the role entirely instead of announcing "0 of
-  100", which is a confident claim that nothing has been spent where the
-  truth is that nobody has said what the limit is.
-
-And one that was only reachable by mouse. `.code` is `overflow: auto` under a
-460px cap, so **any** block taller than that is a scroll container — and in
-Chrome and Safari a scroll container is reachable by keyboard only if
-something makes it focusable. The `selectable` blocks were, because ⌘A needed
-it; the rest were not, and they are the tall ones: a phase card's verbatim
-system prompt runs to tens of kilobytes and could not be scrolled from the
-keyboard at all. `Code` measures its own box — both axes, since `plain` sets
-`white-space: pre` and scrolls sideways — and the blocks that actually
-overflow become named `region`s with a tab stop. A stop on every block would
-put one in front of each of a round's tool arguments, so it is measured rather
-than assumed, and `label` is required on every block because taking focus
-without a name is the other half of the same trade.
+  with no accessible name announces as a bare number on a screen that renders
+  several, and the visible legend is not the name: a reading ("94% of the
+  meter used") is not a noun. `Meter` takes its `label` for that reason, as
+  every other named control in the package does. The bar's fill is clamped and
+  so is `aria-valuenow`, because a budget *lowered* under a counter that has
+  already spent past it (the exact state an operator opens the screen in)
+  would otherwise publish a value above `aria-valuemax`; `valueText` carries
+  the true figures, so the overage is reported rather than hidden. A meter
+  with no ceiling is not drawn as one at all, because "0 of 100" is a
+  confident claim that nothing has been spent where the truth is that nobody
+  has said what the limit is.
+- **A tall record block is reachable from a keyboard.** A `CodeBlock` scrolls
+  under its height cap, and in Chrome and Safari a scroll container is
+  reachable by keyboard only if something makes it focusable. A `selectable`
+  block is, because select-all needs it; the rest were not, and they are the
+  tall ones: a phase card's verbatim system prompt runs to tens of kilobytes
+  and could not be scrolled from the keyboard at all. A block that actually
+  overflows, on both axes, since `plain` sets `white-space: pre` and scrolls
+  sideways, is a named `region` with a tab stop. Measured rather than
+  assumed, because a stop on every block would put one in front of each of a
+  round's tool arguments, and `label` is what such a block takes focus under:
+  taking focus without a name is the other half of the same trade.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
@@ -819,31 +843,30 @@ way on a narrow card: the message truncates, the source stays whole.
 
 ### The document does not scroll
 
-`.screen` scrolls, and it is the only thing that may. The sidebar is a fixed
-rail beside a scrolling pane, so a page that can *also* scroll as a whole
-carries that rail off the top of the window and leaves the reader looking at
-background below the app — with two scrollbars, neither obviously the one they
-want.
+`#screen-scroll`, the shell's own main region, scrolls, and it is the only
+thing that may. The rail is fixed beside a scrolling pane, so a page that can
+*also* scroll as a whole carries that rail off the top of the window and leaves
+the reader looking at background below the application, with two scrollbars and
+neither obviously the one they want. The shell is the design system's, and it
+is what holds that: the document is not allowed to grow, so the invariant is
+unreachable rather than merely unused.
 
-`body { min-height: 100dvh }` only asked the body to be at least a viewport
-tall. It still permitted it to grow, so the invariant held because nothing
-happened to exceed it rather than because anything enforced it. `height:
-100dvh` with `overflow: hidden` makes it unreachable instead of merely unused,
-and costs nothing: `.app` is already exactly that height. Verified by driving
-the built bundle in a browser — with 6000px of injected content and an
-explicit `window.scrollTo(0, 5000)`, `window.scrollY` stays 0 and the rail
-stays at the top, at every viewport from 600×900 to 1854×890.
+One id rather than a class, and everything that needs the scroller asks the
+router for it (`screenScroller`): the router restoring a position per history
+entry, the settled list asking whether the reader is at the top before it
+splices rows in, and search scrolling its results directly rather than calling
+`scrollIntoView`, which scrolls every scrollable ancestor it can find.
 
-### A panel has one left edge
+### A card has one left edge
 
-`.panel-body.tight` reduced the horizontal padding as well as the vertical
-one, so a tight panel's content sat on a different vertical line from its own
-heading — visibly closer to the border than the title above it — and a code
-block inside one was pushed hard against the panel's right edge with nowhere
-for its scrollbar. What `tight` is for is a panel whose rows carry their own
-vertical rhythm (a stack of cards, a footer strip), and that is a claim about
-height. It is vertical-only now, on the `--space-4` inset the head sets, and
-all five tight panels in the product align with their own titles.
+A tight body used to reduce the horizontal padding as well as the vertical
+one, so its content sat on a different vertical line from its own heading,
+visibly closer to the border than the title above it, and a code block inside
+one was pushed hard against the card's right edge with nowhere for its
+scrollbar. What `tight` is for is a card whose rows carry their own vertical
+rhythm (a stack of cards, a footer strip), and that is a claim about height.
+It is vertical-only in `Card.Body`, on the inset the header sets, and all four
+tight bodies in the product align with their own titles.
 
 ### A fact that moves is a fact nobody can scan
 
@@ -857,7 +880,7 @@ facts are in the same places always. That is what lets a reader scan a list
 down a column instead of hunting each row, and a source is exactly the kind of
 thing somebody scans.
 
-### `KeyValue` is a metadata list, not a panel layout
+### A description list is a metadata list, not a panel layout
 
 Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,
 a timestamp, a key. Used for a panel's actual content it puts everything in a
@@ -872,8 +895,8 @@ far end of a full-width row**, behind a `.spacer`, with the heading naming the
 unit once rather than every row repeating it — a bare "134 B" beside a label
 says nothing about what was measured.
 
-`KeyValue` keeps the one thing it is for on this screen: the conversation key,
-which really is a label and a value.
+`DescriptionList` keeps the one thing it is for on this screen: the
+conversation key, which really is a term and its detail.
 
 And **a chip must not repeat the sentence beside it.** The trigger's summary
 is built by the vendor's own summariser and already opens with who wrote it
@@ -929,10 +952,12 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" on a node with no event log are the same empty list
   and completely different problems. `QueryState` renders the engine's own code
-  — `no_event_store`, `unauthorized`, `unknown_query`, `bad_params`,
-  `timeout` — as a sentence saying which. `bad_params` is the one that names
-  the SCREEN as the fault: the engine understood the question and refused it,
-  so retrying sends the same bad request again.
+  (`unknown_query` for a question this node does not serve, such as the event
+  log on a node with none, `unauthorized`, `not_found`, `unavailable`,
+  `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
+  saying which. `bad_params` is the one that names the SCREEN as the fault: the
+  engine understood the question and refused it, so retrying sends the same bad
+  request again.
 - **Zero** vs **unknown.** The integrations answer's counts are three-valued,
   and a node not serving ingress reports `unknown`, not `0`. The budgets answer
   says `durable: false` when the counter could not be READ.
@@ -949,10 +974,13 @@ Every empty state names what would fill it.
 dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/protocol/             the wire, typed. NO React, NO DOM at module scope
   src/app/                  shell, hash router, IA, command palette
-  src/lib/                  store bindings, one clock, formatting, derivations
-  src/ui/                   the component library and the chart kit
-  src/routes/               one file per screen
-  src/styles/               tokens, base, components, shell, screens
+  src/lib/                  store bindings, formatting, derivations
+  src/components/           the pieces more than one screen draws, composed
+                            out of the design system
+  src/routes/               one file per screen; a multi-lens screen keeps its
+                            shell there and its lenses in routes/<screen>/
+  src/styles/               what the design system does not draw: the
+                            utilities, and each screen family's own layout
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
 ```
 
@@ -987,6 +1015,46 @@ rendered idle from the first phase to the last.
   an 85-line reimplementation of the token aggregation — and three copies of
   that logic meant a refresh routinely disagreed with what had been on screen a
   moment earlier.
+- **The hierarchy is the engine's, too.** A seat's handle, the unit a root
+  seat's `unit:` reference moved it into, a unit's inherited lead, what a unit
+  name in `manages` expands to, automatic management by a lead and which of
+  several managers is primary are all rules of the engine, and the `org`
+  projection carries their result in its `derived` block. `lib/seats.ts`
+  indexes that block over the authored tree and implements none of the rules:
+  its earlier TypeScript copy derived a different handle than Go for a name
+  like "İlker Demir", and a handle keys a seat's memory. A projection with no
+  `derived` block (an older engine) is indexed as the document wrote it, and
+  every screen reports reporting lines and inherited leads as unknown rather
+  than computing them.
+- **What a redacted document holds is shown as what it is.** A credential
+  field arrives as one whole `${VAR}` reference, shown as the name it is, or
+  as the engine's mask, shown as "A literal value is set (hidden)". The mask is
+  never printed as if it were a value, and a credential field holding anything
+  else (a partial reference such as `Bearer sk-${SUFFIX}`) is hidden the same
+  way whatever the engine sent. The guarded half of a screen is drawn only
+  while the guarded read succeeds: a refused re-read takes it off the page
+  rather than leaving the last answer beside the banner.
+- **A screen that throws takes only itself down.** `app/App.tsx` wraps the
+  routed screen in an error boundary, so a malformed field renders "This
+  screen could not be drawn" with the error's message and a Try again button,
+  inside a shell whose navigation still works. Without it React unmounts the
+  whole application on a render error, which is what a seat whose `llm` was a
+  per-phase mapping once did. The boundary resets when the reader navigates.
+- **One REST transport, one REST loader.** `protocol/rest.ts` is the only
+  path to a REST route: `rest.request(method, path, options)` answers the
+  status and the `ETag` beside the body, takes a caller's `AbortSignal`, never
+  lets the browser cache a guarded answer, and resolves a 304 rather than
+  throwing it; the body-only wrappers sit on top of it. The deadline and the
+  caller's abort cover reading the body as well as waiting for the headers,
+  and a body that breaks part way through is status 0 (an answer never fully
+  heard, so a write's outcome is unknown) rather than an empty success. A
+  screen that reads a REST answer uses `lib/useRest.ts`, which aborts a
+  superseded read, re-reads when the operator token changes and, where asked,
+  when the tab comes back.
+  A refusal replaces what is on screen; a request that never reached the
+  engine keeps the last answer with the error beside it; and an answer belongs
+  to its path, so a read whose path changed reports nothing until the new path
+  answers.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop
   round; a store that woke every listener on every envelope would re-render the
   application several times a second for the length of a turn.
@@ -1013,13 +1081,385 @@ rendered idle from the first phase to the last.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
 
+### The components come from the design system
+
+- **`@crewlethq/ui` draws it, and the engine composes it.** The palette, the
+  glyphs, the overlays, the layer stack, the primitives, the record table, the
+  list screen, the charts, the canvas and the tree model are the design
+  system's, shared with the console and the documentation site, so a control
+  looks and behaves the same wherever somebody meets it. The dashboard has no
+  component library of its own at all: what `src/components/` holds is
+  COMPOSITION, each piece built out of the package and each one about this
+  engine's own domain (a seat, a phase, a turn, a configuration field), and
+  `designSystem.test.ts` fails the build on a recipe the package already
+  draws being written by hand beside it.
+- **The shell is the design system's too.** The rail, the top bar, the banner
+  strip, the drawer the narrow layout opens, the brand lockup, the sections
+  nav, the search trigger, the theme and density switchers and the command
+  palette are all the package's. What this application says for itself is its
+  own half: which sections exist, what the rail's foot reports about the
+  engine, and which surfaces the chrome can raise. A screen's own head is
+  `PageHeader`, and a list screen does not draw one at all: `DataView` is the
+  head, the toolbar, the chips, the table and the footer together.
+- **A LIST SCREEN IS ONE SHAPE, everywhere.** The event log, model activity,
+  tools, coding runs, agent-to-agent, secrets and the org directory are the
+  same thing: a head, a toolbar carrying the search box and the Filter and Sort
+  menus, a removable chip for each axis a reader narrowed, the rows, and a
+  footer saying how many of how many are on screen. The NARROWING is the
+  screen's: every axis is a URL parameter, so a narrowed list is a link
+  somebody can send, and the view is handed values and hands back callbacks.
+  It applies nothing of its own.
+- **One stack decides which surface a key belongs to.** Dialogs, sheets,
+  menus and listbox popups register on the design system's layer stack
+  (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the shell's own token dialog, search, engine
+  panel and the narrow layout's sections drawer: no modal hand-rolls its veil
+  or listens for Escape beside the stack. The sections drawer is the rail
+  itself, a dialog only while it is open; closed, the stylesheet hides it
+  rather than only sliding it away, so its links leave the tab order, and it
+  closes when a resize takes the layout past the breakpoint. Only the topmost
+  surface handles Escape or a press outside, so a prompt over the node editor
+  closes on its own Escape and leaves the editor open, a token dialog raised
+  by a refused request over that editor does the same, and an open menu
+  closes before the dialog it sits in. A modal traps Tab, moves focus in when
+  it opens (honouring a field's `autoFocus`) and returns it to whatever opened
+  it. When that control has gone with a modal that closed as this one opened
+  (a panel's "Set token" handing over to the token dialog), focus goes back
+  where that modal would have sent it; when it has gone from a modal that is
+  still open, or is still there but can no longer take focus (disabled by the
+  action the modal confirmed), to that modal rather than behind its veil. A
+  modal closed
+  beneath a surface still open above it (by a route change or a data push)
+  leaves focus where it is. A control that consumes Escape itself, such as a
+  completion list, keeps the key. A veil press closes its modal on the
+  press's click rather than on its first contact, so the tap that dismisses a
+  dialog never also lands on the control the veil was covering.
+  The page's own shortcuts (Ctrl or Command with K, and a bare `/`, for
+  search) wait for the page: while a modal is open (`isModalLayerOpen`) they do
+  nothing, because the page behind `aria-modal` is inert and search opened
+  over a dialog could navigate away from under it, unmounting an unsaved
+  editor or a write whose outcome the operator has not seen. Search closes on
+  its own chord only from inside it.
+  What happens inside an open menu stays there: its keys, presses and clicks
+  do not reach the card or row it was opened from, so Enter on "Delete" is
+  never also the card's Enter.
+- **Anything drawn as a button is `Button` or `ButtonLink`, never a
+  hand-written `.btn` class list.** `Button` passes a ref, aria and data
+  attributes, `id`, `tabIndex` and `onKeyDown` through, so a menu trigger or
+  a list's Move control is built on it rather than beside it; it refuses
+  `className` and `style`, so the variants stay the only way to style it.
+  `ButtonLink` is the same recipe on an anchor, for an action that goes
+  somewhere, and its `external` form opens a new tab without the referrer or
+  the opener. A control drawn as a glyph ALONE is `IconButton`, whose name is
+  required: an icon-only button with none is announced as "button".
+  `designSystem.test.ts` fails on a `btn` class list spelled anywhere at all,
+  because that recipe has no owner in this tree any more.
+- **A shortcut hint is `Kbd`, never a hand-written `<kbd>`.** The
+  command key is Command on Apple platforms and Control everywhere else, so a
+  literal "⌘K" tells most readers to press a key they do not have. The glyphs
+  are hidden from assistive technology, which reads the key names instead
+  ("Control plus K"), because a screen reader reads "⌘" as "place of interest
+  sign". The shell's search button and the search footer use it too, and the
+  same scan fails on a `<kbd>` drawn anywhere at all.
+- **A key an input method is composing with belongs to the input method.**
+  Somebody typing Japanese, Chinese or Korean walks candidates with the
+  arrows, accepts a word with Enter and abandons it with Escape, and every one
+  of those presses still reaches the page. `isComposing` decides once whether a
+  press is part of a composition, reading both the `isComposing` flag and the
+  key code Safari leaves on the Enter that ends one, and the layer stack, the
+  listbox keys, the multi-select and the list field all leave such a press
+  alone: search does not close or navigate in the middle of a word, and a list
+  field does not add half of one.
+- **A canvas never takes the page's scroll.** The design system's `Canvas`
+  fills the box its screen gives it and clips, and the shell's one scroller
+  stops scrolling while it is on screen: the screen ASKS for the window's
+  height (`useFillScreen`) and `AppShell` answers, rather than a rule in the
+  screen's own stylesheet reaching up at a wrapper the shell draws. A plain
+  wheel pans the canvas only while focus is inside it, and Ctrl or Command
+  with the wheel zooms toward the cursor. On touch, one finger scrolls the page
+  until the canvas is tapped, after which it pans and a visible Done control
+  gives the finger back; two fingers pinch at any time. `+`, `-` and `0` zoom
+  and fit only while the viewport element itself holds focus, so an item's
+  own keys are never taken. The view fits once, on the first measured layout,
+  and after that moves only when the operator moves it. The canvas is a
+  `LayerHost`, so a menu or picker opened from an item renders in an
+  untransformed layer over it rather than inside the transform, and the zoom
+  neither scales nor clips them; the canvas tells that layer whenever the
+  content beneath it moves, so an open surface follows what it is anchored to. Fullscreen belongs to the screen,
+  which must take its dialogs and toasts into the fullscreen element with it.
+- **Every dropdown is the design system's own, and no screen draws a native
+  one.** A platform dropdown is painted by the operating system: it takes none
+  of the theme, none of the density and none of the tokens, so a dark dialog
+  opened a light grey menu in the middle of itself, and the product read as
+  two products in one surface. What a reader used to get free from the
+  platform, `Select` earns back and shares with every other list in the
+  package: type-ahead, Home and End, disabled rows stepped over, the highlight
+  announced through `aria-activedescendant`, Tab closing the list and carrying
+  on, and a stored value the options no longer offer kept rather than swapped.
+  It is also the only control that can do what several of these surfaces need
+  at all: a search over dozens, a group heading, and a second line under an
+  option, which is where a choice's hint belongs. Choosing MANY is `TagsInput`
+  over the same keys, because a multiple select cannot be searched and loses
+  its selection to a stray click, and completing a `${NAME}` inside a longer
+  value is `Combobox`, which filters on the name under the caret rather than
+  on the whole field. Search's results take those keys too: its input is a
+  combobox naming the highlighted result, and the list is the modal's whole
+  body rather than a popup over it (`popup: false`), so Escape and the veil
+  stay the modal's. The one choice that is not a `Select` is a value picked IN
+  PLACE from a menu an item already opens, such as a unit's lead chosen from
+  its chart card: a list there would be a second control inside the item and a
+  second click after the first. Its answers are `menuitemradio` entries (a
+  `checked` item of the design system's `Menu`) that say which one is current,
+  nested in one `group` apart from the menu's actions so a screen reader
+  counts them among themselves, and the form that edits the same value still
+  uses the list.
+- **The layout is measured, never assumed.** A chart card's width is the
+  `--crewlet-tree-canvas-card-width` knob, declared on the builder's own root;
+  its height is measured in the browser and fed to the design system's own pure
+  tidy tree layout, because density and the reader's font size change every
+  card's height. Nothing is shown before the first measurement, and a relayout
+  keeps the node the operator acted on where it was on screen.
+
+### The org builder lens
+
+`routes/org/builder/Builder.tsx` is the one component with a lifetime in the
+builder: the reducer over the pure model in `routes/org/builder/model/`, the
+dry-run check, the live region, the shortcuts, the selection and the dialog
+that is open. Its views and dialogs are handed in (`BuilderSurfaces`, bound
+in `routes/org/builder/surfaces.ts`) and reach all of it through
+`BuilderContext`, so no view or dialog starts a request or touches storage.
+Every surface is required: a Builder suite stands a view in with a fake,
+while the screen binds the real canvas, outline, editor and dialogs, and
+`surfaces.test.tsx` mounts the lens with exactly those.
+
+- **The posture is what the engine answers.** `GET /config` is read on mount
+  and on every token change, and its answer decides edit mode, create mode,
+  a node that has not caught up, a request for a token, a process that does
+  not serve the configuration, or an unreachable engine
+  ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
+  A stored token is never the test: an engine with auth disabled needs none.
+  A token change mid-edit keeps the draft and checks it again.
+- **Every draft is a dry run of the write a save would send.** The same
+  `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
+  plus `dry_run=true` and without the audit summary. A draft that changes
+  moves its generation, and an answer for an older generation is dropped.
+- **The canvas is handed the chart it draws.** `chart=structure|reporting` is
+  the Builder's own section param, chosen in its toolbar, so the canvas is
+  given the answer as a prop rather than reading the URL a second time.
+- **The canvas view fills the screen.** With `view=canvas` the lens asks the
+  shell for the window's height (`useFillScreen`), and it and the tab panel it
+  sits in become flex columns of definite height, so the canvas takes what is
+  left under the toolbar and the shell's scroller has nothing to scroll. The
+  outline view withdraws the request, and so does the posture screen the lens
+  draws before the engine has answered.
+- **Fullscreen takes the builder container**, never the canvas: the toolbar,
+  the view, the dialog host, a toast outlet of its own and the live region all
+  render inside it, because a fullscreen element renders only its subtree.
+  The control is not drawn where the Fullscreen API is missing. The shell's
+  token dialog is outside it, so asking for a token leaves fullscreen first.
+- **The selection is in the URL, and the toolbar mirrors it.** `unit=` and
+  `seat=` are filters that name the selected node; a link naming one selects
+  it, a rename rewrites it, and a removed node clears it. The toolbar carries
+  the selected node's own actions, because a canvas tree item may contain no
+  tab stops of its own, and they are the card's and the row's own list
+  (`nodeActions.nodeMenu`) rather than a copy: the same entries, order, names
+  and icons, Edit reports included. Open seat is offered only for a seat the
+  saved company has. A node's key can move under whatever holds it: the first
+  check keys a loaded base by the engine's handles, and a save keys the nodes
+  it created. The reducer lists what moved (`state.rekeyed`), and the
+  selection and an open dialog read their node through that list in the very
+  render the keys change. Each dialog is mounted once per opening, never keyed
+  by its node, so a key that moves under an open editor keeps its drawer, its
+  form and its focus.
+- **One polite live region** says what each operation, undo and redo did (an
+  undo or a redo names itself, since the operation's own sentence is in the
+  past tense and would announce the change as just made), and focus moves to
+  the node it touched through the mounted view's registered handle
+  (`useBuilderView`).
+- **Undo and redo are Ctrl or Command with Z**, and Shift with it, anywhere in
+  the builder except a text field, and never under a modal.
+- **A newer revision is an update, never an overwrite.** A check answering
+  `409` (or a dry run validated against another base) halts checking and
+  offers Update my draft. A draft holding no work is updated at once instead,
+  an update of nothing confirmed as it lands, and never by reading the
+  configuration again: a plain read keys the seats that declare no handle by
+  their paths until the next check, so an open editor lost its node, typed
+  form and all, and the selection was cleared. The update is read only from a
+  node serving the conflict's revision or a descendant of it, with the
+  engine's description of it, and `UpdateDraftDialog.tsx` shows what still
+  applies, what is dropped and every conflict with its three values;
+  confirming waits for a choice on each. A value is shown as a person reads
+  it: the model tags a conflict over its own structures with their shape, so
+  a node key reads as the node's name, a removed node as the fields that
+  changed, a kind change's stripped fields by name only, and a credential's
+  mask as "A literal value is set (hidden)", never as the marker or as JSON.
+- **Only the operation log is kept, and nothing is written before it is
+  decided.** `useDraftKeeping.ts` reads the kept draft once the base is keyed,
+  offers Keep or Discard for the same revision (read-only until answered),
+  restores through the update flow for another, and discards one kept for the
+  other mode. It writes nothing before that decision, because the plan for an
+  empty log is to clear. A token change or a refused token clears it and
+  withdraws an offer. A draft with changes asks the browser's prompt before
+  the tab goes (session storage does not outlive the tab), and one that
+  storage cannot keep at all asks before the lens is left, since that loses it
+  too; a move within the lens keeps the Builder and asks nothing.
+- **A save is the checked write, signed, and never believed blindly.**
+  `useSave.ts` sends the model's save request with the audit summary signed by
+  a write id minted when the review opens and kept for as long as the draft
+  does not change, so a second press after a lost answer carries the same id.
+  A lost answer is settled from the revision history before anything else
+  happens; while it is unknown the lens records nothing. A write in flight is
+  never aborted, and a save that lands after the lens was left still records
+  the revision and clears the kept draft. The kept log is marked with the
+  write id before the save is sent and unmarked once the save is known not to
+  have landed, so an answer lost after the lens was left, or across a reload,
+  is settled on the next visit (`useSave.resume`) before the kept log is
+  offered: replayed onto its own revision it would apply every change twice.
+  A save this page still has out when the lens opens again is waited for
+  first, because the engine may not have stored it yet and settling it then
+  would read as not landed. Such a save is not the draft on screen, so the revision it stored is read
+  like any newer revision rather than made the base. A save of the draft on
+  screen makes that draft the base, keyed by the save's answer, and the
+  stored document is then read back, never over an edit made while that read
+  is out: such an edit already stands on the saved revision.
+  `ReviewSaveDialog.tsx` states every change and consequence and gates the
+  irreversible ones on an acknowledgement, whose sentences (`dialogParts`'s
+  `ACKNOWLEDGEMENT_TEXT`) the editor's company rename shares.
+- **Create mode is a form, one template operation, and a create-only write.**
+  `CreateCompany.tsx` collects the charter, the starting shape and an optional
+  seat for the operator, and records the model's `applyTemplate` (refused
+  outside create mode), so the start is a single undo and is checked like any
+  other draft. The save is `PUT` with `If-None-Match: *`; a company that
+  appeared meanwhile is offered instead, and the draft is discarded rather
+  than replayed onto it.
+- **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
+  keeps `{revision_id, epoch}` in a tab-lived store outside any screen
+  (`savedRevision.ts`), watches the `stream` query's `applied_epoch` and the
+  `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
+  N of M nodes, or the node that refused it with a link to the Fleet screen.
+  Its View changes opens the saved revision against its parent
+  (`against=`), since against the active revision a save that is active now
+  differs from nothing; the conflict banner's Show what changed is the newer
+  revision against the draft's base for the same reason. Until this node
+  applies it, the Org screen's read lenses carry a note that they draw the
+  previous revision.
+- **The status is the last answer about the current draft**, whoever asked:
+  a save's refusal is placed on the nodes like a check's, and the check
+  machine decides the status only while a check is out or before any answer.
+- **A read-only lens records nothing.** The guarded and read-only postures, a
+  conflict and a base the engine has not keyed yet all refuse operations at
+  the one door every view goes through, and say why in the live region. The
+  actions themselves are DISABLED rather than hidden, so an operator still
+  reads what the builder does; Edit and Open seat change no draft and stay
+  available.
+
+### The org builder draws the engine's organization
+
+The Builder lens of the Org chart screen shows the draft two ways, and both
+read one module (`routes/org/builder/chartModel.ts`), so they can never
+disagree about where a seat is drawn, who leads a unit or who a seat reports
+to.
+
+- **The document gives the shape, the engine gives the meaning.** Units,
+  their seats and their children are drawn as the draft holds them, because
+  that is what an operation edits. Every derived fact comes from the last
+  check's `derived` block, read through the document that check was sent: a
+  root seat the engine placed in a unit by its `unit:` reference is drawn in
+  that unit and marked "Placed by unit reference", a reference that names no
+  unit stays at the root marked with the engine's warning, a unit with no lead
+  of its own shows the lead it inherits, and a seat shows its primary manager.
+  A derived fact is shown only while the draft still holds the values the
+  check saw (for an inherited lead, that includes where each unit above sits);
+  after an edit the chart says it is waiting for the check rather than showing
+  a placement or a lead the engine has not confirmed. A seat's primary
+  manager follows from the whole organization, so no single field says it
+  still holds: it is shown only from a check of the draft as it stands. A
+  value the engine has not given yet reads "Lead after the check", "Manager
+  after the check" or "Handle after the check", never that a check is
+  running: whether one is on its way, or the engine cannot be reached at all,
+  is the toolbar's check status to say, and a card cannot know. A seat's
+  handle is one rule for every surface and for the reducer that records by it
+  (`model/document.knownHandles`): declared, else the one its key carries,
+  else the one a check derived while the seat keeps the name that check saw,
+  since the engine derives an undeclared handle from the name alone. The
+  editor and the dialogs read it, the seat a reported handle names and the
+  Datadog fallback from `chartModel.ts` too, so a card and the dialog it opens
+  never name a seat two ways. The reporting
+  chart, drawn from the last check while the draft has moved past it, says so
+  in a note over the canvas.
+- **The canvas is a tree of cards.** The structure chart has the company card
+  at the root, root seats as cards and units as cards with their seats
+  stacked inside as rows. The reporting chart is the engine's forest: seats
+  with no manager at the top, marked "No manager", and seats that manage each
+  other in a loop under one "Reporting cycle" group, each loop drawn from its
+  first seat in the engine's order. The reporting chart is read-only, because
+  a reporting line is not written anywhere as such; "Edit reports" (and Enter
+  on a reporting card) opens the seat's editor at its Manages field, where
+  `manages` is. The Builder's `openEditor` names the part of the form to start
+  on (`EditorSectionName`), so an action about one field lands on it: a lead
+  chip's "Choose another seat" opens the unit's editor at its lead.
+- **A card holds no control a keyboard has to reach.** Each card header and
+  each seat row is a `treeitem` with its level, position and expansion, and
+  one roving tab stop moves among them: the arrows, Home, End and type-ahead
+  walk the tree, Enter edits, Delete or Backspace deletes, and the ContextMenu
+  key or Shift+F10 opens the node's menu. The buttons a pointer uses (expand,
+  Add, More and the lead chip) sit beside the treeitem, hidden from assistive
+  technology and out of the tab order, and open the same menus. **Nothing in a
+  hidden strip ever holds focus**: a press on one of those buttons focuses the
+  node instead, so a screen reader always has something to announce and a menu
+  closing hands focus back to a card rather than to a button nobody can reach.
+  Focus moves with `preventScroll` and the canvas then pans to reveal the node,
+  opening a collapsed unit on the way. The Builder decides which node is
+  focused after an add, a delete, a move, an undo or a redo; the mounted view
+  performs it.
+- **Colour stays state.** A card is neutral whatever it holds. A human seat
+  has the dashed edge every human seat on the dashboard has, a problem count
+  takes the critical tone, a reference that names nothing takes the caution
+  tone, and the Datadog fallback seat carries a neutral badge while Datadog is
+  enabled, the only time the engine routes an alert to it.
+- **A live push never moves a card, and neither does a check.** A saved agent
+  seat shows the same `StateBadge` as every other screen, in a slot that
+  neither shrinks nor wraps while the seat's name truncates beside it, and
+  live state is no input to the layout, so a push changes a word and never a
+  measured height. The problem count, which is the current draft's and so is
+  absent while the check of every edit is out, has a slot of its own on the
+  same first line, which is as tall with it as without it. A mark the engine
+  gave (a lead or a unit reference that names nothing) is held by the chart
+  like a placement, while the node still writes what the check warned about,
+  rather than leaving with each check and coming back with its answer.
+- **The outline is a treegrid of rows.** The same structure as rows with
+  navigable cells: Name, Kind or type, Handle, Lead or reports to, Problems
+  and the row's actions. A row's keys are a card's keys; Right opens a row or
+  steps into its cells, Left steps back out, Up and Down keep the column, and
+  a cell holding a control (the lead choice, the actions menu, an add button)
+  focuses the control, which becomes the grid's one tab stop. A press that
+  opens such a control moves that tab stop too, because the control keeps the
+  focus and hands it back when its menu closes; the row's chevron, which is
+  hidden from assistive technology, takes no focus at all and hands the press
+  to the row. Navigation keys are the grid's before they are the control's, so
+  ArrowDown on a menu button moves to the next row rather than opening the
+  menu. The grid scrolls sideways in its own box at narrow widths, and that
+  box is the containing block of everything in it: a scroller clips only the
+  descendants placed inside it, and a screen-reader label placed against the
+  frame instead gave the page a sideways overflow as wide as the grid. A box
+  that scrolls on one axis clips on both, so a row's menus open in a
+  `.popup-layer` over the grid, placed from their trigger, and follow a
+  sideways scroll (or close once their trigger has left the frame) rather than
+  being cut off under the last rows. An inline add row closes each unit's rows
+  and the company's while the draft can change. Alt+Up and Alt+Down move a row
+  among its siblings of the same kind, past the row drawn beside it: a root
+  seat the engine placed in a unit by its reference is drawn in that unit, so
+  the root seats around it step over it rather than make a move nobody can
+  see. Because the engine's primary manager is the first seat that lists a
+  seat, the reporting lines the next check reports are compared with the ones
+  before, and a changed primary manager is announced.
+
 ---
 
 ## Rules a change has to keep
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names. The third-party app marks in `ui/VendorMark.tsx` are the one, bounded
+   names. The third-party app marks in `@crewlethq/icons` are the one, bounded
    exception (see "The one rule" above); nothing else is.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
@@ -1050,8 +1490,11 @@ rendered idle from the first phase to the last.
 10. **Every screen, section and filter is in the URL**, and obeys the
     push/replace table above.
 11. **A screen subscribes to the slices it reads and no others.**
-12. **Numbers are tabular**, and an absent number is an em dash rather than a
-    zero — zero is a measurement.
+12. **Numbers are tabular**, and an absent number is a MARKED absence rather
+    than a zero: zero is a measurement. `EmptyValue` draws the mark and says
+    what the absence means ("Not reported", "Not measured"), because a bare
+    dash is read aloud as "dash" or skipped, and a value still arriving is a
+    different fact again, which a tile reports by being busy.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
     a download, a write, a revoke — if the reader cannot see the result, the
     control says it, in text a screen reader reaches as well as an icon. A
@@ -1064,11 +1507,23 @@ rendered idle from the first phase to the last.
     reconciles and anything the screen remembers about A — a held refusal, an
     open disclosure, a selected tab — describes B until something clears it.
     Every id-bearing route carries `key={id}`.
-15. **A head's controls wrap.** `.row` does not on its own and every `.btn` is
-    `white-space: nowrap`, so a head with several controls overflows a phone's
-    line instead of taking a second one.
+15. **A screen head's controls wrap.** A button does not break its own label,
+    so a head carrying several of them overflows a phone's line instead of
+    taking a second one. `PageHeader` takes its badges and its actions as slots
+    that wrap, and any row built beside one wraps too.
 16. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.
 17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.
+18. **Everything the page runs or loads is its own bundle.** The engine serves
+    the shell under a Content-Security-Policy that allows scripts, styles,
+    fonts, images and connections from this origin only (images also as
+    `data:`), and no inline script or `<style>` block
+    ([API endpoints](api-endpoints.md#security-headers-on-every-response)).
+    A `style` prop is fine, because React applies it through the CSSOM; a
+    `style` attribute in markup set as a string, an injected `<style>`, an
+    `eval`, or a font, image or request from another host is refused by the
+    browser with nothing on screen but a console violation. A form may post
+    to this origin or to an `https:` host, which is what the GitHub App
+    manifest flow needs.

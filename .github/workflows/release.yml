@@ -31,6 +31,10 @@ on:
       - ".github/workflows/release.yml"
       - "go.mod"
       - "internal/version/**"
+      # The before hook's generator: a module it can no longer read, or a
+      # change to what it copies, fails the release rather than the pull
+      # request unless the pipeline runs here too.
+      - "scripts/notices/**"
 
 permissions:
   contents: read

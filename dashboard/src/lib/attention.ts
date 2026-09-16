@@ -13,16 +13,28 @@
  * item carries where to go.
  */
 
+import type { ComponentType } from "react";
 import type { AgentRow, EngineHealth, OrgBudget, SandboxEntry } from "~/protocol/index.ts";
-import type { IconName } from "~/ui/Icon.tsx";
 import { runState, staleness, type Seat } from "./seats.ts";
+import {
+  type GlyphProps,
+  DnsGlyph,
+  ErrorGlyph,
+  HelpGlyph,
+  KeyGlyph,
+  ManufacturingGlyph,
+  PauseGlyph,
+  PowerSettingsNewGlyph,
+  ScheduleGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export type Severity = "critical" | "caution" | "info";
 
 export interface Attention {
   id: string;
   severity: Severity;
-  icon: IconName;
+  icon: ComponentType<GlyphProps>;
   /** What happened, in the fewest words that are still true. */
   title: string;
   /** What it costs to leave it, or what to do about it. */
@@ -57,7 +69,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "auth",
       severity: "critical",
-      icon: "key",
+      icon: KeyGlyph,
       title: "The engine refused this browser's token",
       detail:
         "Reads and writes are both blocked. Set a token matching one of the api.auth.tokens entries.",
@@ -66,7 +78,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "offline",
       severity: "critical",
-      icon: "power",
+      icon: PowerSettingsNewGlyph,
       title: "No connection to the engine",
       detail:
         "The page is showing the last state it received and polling a REST snapshot until the socket returns.",
@@ -80,18 +92,22 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "unconfigured",
       severity: "critical",
-      icon: "sliders",
+      icon: ManufacturingGlyph,
       title: "No company configuration is active",
       detail:
-        "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import a company revision.",
-      path: ["config"],
+        "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import a company file with crewlet config import.",
+      // Where one can be CREATED. The Configuration screen reads and cannot
+      // write, so a row sending the reader there named a problem and a place
+      // that could not fix it.
+      path: ["org"],
+      query: { lens: "builder" },
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
     out.push({
       id: `posture-${engine.posture}`,
       severity: "critical",
-      icon: "server",
+      icon: DnsGlyph,
       title: `This node's control-plane posture is "${engine.posture}"`,
       detail:
         engine.posture === "shed"
@@ -104,7 +120,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "draining",
       severity: "caution",
-      icon: "power",
+      icon: PowerSettingsNewGlyph,
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
       path: ["fleet"],
@@ -117,7 +133,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "org-budget",
       severity: "critical",
-      icon: "coin",
+      icon: TokenGlyph,
       title: "The company token budget is refusing charges",
       detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}.`,
       path: ["spend"],
@@ -127,7 +143,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "org-budget-near",
       severity: "caution",
-      icon: "coin",
+      icon: TokenGlyph,
       title: "The company token budget is nearly spent",
       detail: `${Math.round((org.used / org.max) * 100)}% of the process-lifetime meter is used.`,
       path: ["spend"],
@@ -140,7 +156,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: `sandbox-${box.turn_id}`,
       severity: "caution",
-      icon: "help",
+      icon: HelpGlyph,
       title: `${box.role || box.agent_handle} is waiting on an answer`,
       detail: box.question || "A coding run paused on a clarification and cannot continue.",
       path: ["runs"],
@@ -157,7 +173,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `error-${agent.role}`,
         severity: "critical",
-        icon: "alert",
+        icon: ErrorGlyph,
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
         path: ["seats", String(agent.handle ?? agent.id)],
@@ -170,7 +186,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `afk-${agent.role}`,
         severity: "caution",
-        icon: "pause",
+        icon: PauseGlyph,
         title: `${agent.role} is AFK`,
         detail: agent.afk_reason
           ? `The engine paused it: ${agent.afk_reason}.`
@@ -188,7 +204,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         out.push({
           id: `stale-${agent.role}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
-          icon: "clock",
+          icon: ScheduleGlyph,
           title:
             how === "stalled"
               ? `${agent.role} has been on one round for over 10 minutes`
@@ -206,7 +222,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",
-        icon: "coin",
+        icon: TokenGlyph,
         title: `${agent.role}'s token budget is refusing charges`,
         detail: "This seat's turns are being declined at the budget gate.",
         path: ["seats", String(agent.handle ?? agent.id)],

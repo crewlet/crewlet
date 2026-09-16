@@ -1,0 +1,41 @@
+{
+  "seats": [
+    {
+      "path": "roles[0]",
+      "handle": "ilker-demir",
+      "name": "İlker Demir",
+      "kind": "agent",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": null
+    },
+    {
+      "path": "roles[1]",
+      "handle": "grace",
+      "name": "Grace Hopper",
+      "kind": "agent",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": null
+    },
+    {
+      "path": "roles[2]",
+      "handle": "ada-lovelace",
+      "name": "  Ada   Lovelace  ",
+      "kind": "agent",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": null
+    }
+  ],
+  "units": null
+}

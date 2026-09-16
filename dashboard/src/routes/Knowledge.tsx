@@ -14,16 +14,37 @@
  */
 
 import { useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useMemo } from "react";
+import {
+  ArrowForwardGlyph,
+  Book2Glyph,
+  CloseGlyph,
+  DatabaseGlyph,
+  OpenInNewGlyph,
+  ScheduleGlyph,
+  SearchGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  Callout,
+  Card,
+  EmptyState,
+  InlineCode,
+  Input,
+  PageHeader,
+  Section,
+  Skeleton,
+  Stack,
+  Tag,
+  Toolbar,
+} from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -38,52 +59,56 @@ export function Knowledge() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Knowledge"
-        sub="The company knowledge base, searched live the way an agent searches it — there is no local copy, so what you see here is what the backend holds right now."
-        badges={data?.backend ? <Badge outline>{data.backend}</Badge> : undefined}
+        description="The company knowledge base, searched live the way an agent searches it. There is no local copy, so what you see here is what the backend holds right now."
+        badges={data?.backend ? <Tag appearance="outline">{data.backend}</Tag> : undefined}
       />
 
       <form
-        className="toolbar"
         onSubmit={(e) => {
           e.preventDefault();
           setQ(draft.trim());
         }}
       >
-        <div style={{ flex: 1, maxWidth: 520 }}>
-          <SearchInput
+        <Toolbar label="Knowledge search" mode="group" sticky>
+          <Input
+            type="search"
+            width="lg"
             value={draft}
-            onChange={setDraft}
-            ariaLabel="Search the knowledge base"
-            placeholder="Search the knowledge base — plain text, not a query language"
+            onChange={(event) => setDraft(event.target.value)}
+            onClear={() => setDraft("")}
+            aria-label="Search the knowledge base"
+            placeholder="Search the knowledge base in plain text, not a query language"
+            leading={<SearchGlyph size="sm" />}
           />
-        </div>
-        <Button variant="primary" type="submit" icon="search">
-          Search
-        </Button>
-        {q && (
-          <Button
-            icon="x"
-            onClick={() => {
-              setDraft("");
-              setQ("");
-            }}
-          >
-            Clear
+          <Button variant="primary" type="submit" leadingIcon={<SearchGlyph />}>
+            Search
           </Button>
-        )}
+          {q && (
+            <Button
+              variant="secondary"
+              leadingIcon={<CloseGlyph />}
+              onClick={() => {
+                setDraft("");
+                setQ("");
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </Toolbar>
       </form>
 
       {!q && (
-        <Empty
-          icon="book"
+        <EmptyState
+          icon={<Book2Glyph />}
           title="Search the company's shared knowledge"
-          hint="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
+          description="The engine runs this against the configured knowledge backend at query time, the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
       )}
 
-      {loading && <Skeleton rows={4} />}
+      {loading && <Skeleton label="Searching the knowledge base" variant="text" rows={4} />}
 
       {/* The search DID NOT RUN. `available: false` covers four states — no
           company, no backend, a backend with no org-wide read scope, and an
@@ -93,24 +118,25 @@ export function Knowledge() {
           company" alike, and telling somebody with no company configured to
           go and wire a wiki is the wrong fix. */}
       {q && data?.available === false && (
-        <div className={data.reason === "building" ? "banner caution" : "banner neutral"}>
-          <Icon name={data.reason === "building" ? "clock" : "book"} size="sm" />
+        <Callout
+          variant={data.reason === "building" ? "warning" : "neutral"}
+          icon={data.reason === "building" ? <ScheduleGlyph size="sm" /> : <Book2Glyph size="sm" />}
+        >
           <span>
             This search could not run: {data.note || "the engine gave no reason"}.
             {data.reason === "no_backend" && (
               <>
                 {" "}
-                Set <code className="inline">knowledge.backend</code> to{" "}
-                <code className="inline">native</code> to use the engine's own knowledge base, or to{" "}
-                <code className="inline">confluence</code> alongside an{" "}
-                <code className="inline">integrations.confluence</code> block.
+                Set <InlineCode>knowledge.backend</InlineCode> to <InlineCode>native</InlineCode> to
+                use the engine's own knowledge base, or to <InlineCode>confluence</InlineCode>{" "}
+                alongside an <InlineCode>integrations.confluence</InlineCode> block.
               </>
             )}
             {data.reason === "no_scope" && (
               <>
                 {" "}
                 The backend itself is fine — add the containers to search to{" "}
-                <code className="inline">knowledge.scope</code>.
+                <InlineCode>knowledge.scope</InlineCode>.
               </>
             )}
             {/* NOT A MISCONFIGURATION, and the banner must not read as one:
@@ -125,21 +151,20 @@ export function Knowledge() {
               </>
             )}
           </span>
-        </div>
+        </Callout>
       )}
 
       {/* The search DID run and came back degraded — a different banner,
           because an empty result that ran is not the same fact as one that
           never started. */}
       {q && data?.available !== false && data?.note && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
           <span>
             The search did not complete: {data.note}. Knowledge search is best effort by design — a
             turn never dies because a wiki was slow — so an empty result here is not proof that
             nothing matches.
           </span>
-        </div>
+        </Callout>
       )}
 
       {q && (
@@ -157,15 +182,18 @@ export function Knowledge() {
                   }
           }
         >
-          <Panel title="Results" icon="search" count={data?.hits?.length ?? 0} padding="none">
-            <div className="list">
+          <Card as="section" padding="none">
+            <Card.Header divided icon={<SearchGlyph size="sm" />} count={data?.hits?.length ?? 0}>
+              <Card.Title>Results</Card.Title>
+            </Card.Header>
+            <Stack gap={0}>
               {(data?.hits ?? []).map((hit) => (
                 <div key={hit.id} className="hit">
                   <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
-                    {hit.title} <Icon name="external" size="xs" style={{ display: "inline" }} />
+                    {hit.title} <OpenInNewGlyph size="xs" style={{ display: "inline" }} />
                   </a>
                   <div className="row gap-1">
-                    {hit.container && <Badge outline>{hit.container}</Badge>}
+                    {hit.container && <Tag appearance="outline">{hit.container}</Tag>}
                     {hit.updated_at && (
                       <span className="t-caption">updated {fmtDateTime(hit.updated_at)}</span>
                     )}
@@ -173,43 +201,44 @@ export function Knowledge() {
                   {hit.snippet && <p className="hit-snippet">{hit.snippet}</p>}
                 </div>
               ))}
-            </div>
-            <footer className="panel-foot">
-              A snippet is capped by contract — it exists to say WHICH page to read, not to be the
+            </Stack>
+            <Card.Footer
+              variant="meta"
+              style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
+            >
+              A snippet is capped by contract. It exists to say WHICH page to read, not to be the
               page.
-            </footer>
-          </Panel>
+            </Card.Footer>
+          </Card>
         </QueryState>
       )}
 
       <Section
         title="What each seat has learned for itself"
-        hint="private to the seat — its diary, its past turns, the skills it drafted"
+        description="private to the seat: its diary, its past turns, the skills it drafted"
       >
         <div className="grid grid-auto">
           {index.seats
             .filter((s) => s.kind === "agent")
             .slice(0, 12)
             .map((seat) => (
-              <a
-                key={seat.handle}
-                className="seat-card"
-                href={href(["seats", seat.handle], { tab: "memory" })}
-              >
-                <div className="row">
-                  <span className="attention-icon" data-severity="info">
-                    <Icon name="database" size="sm" />
+              <Card key={seat.key} variant="subtle" href={href(seatPath(seat), { tab: "memory" })}>
+                <Stack gap={2}>
+                  <div className="row">
+                    <DatabaseGlyph size="sm" />
+                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                      <strong className="truncate t-cell">{seat.name}</strong>
+                      {seat.handle && (
+                        <span className="truncate t-caption mono">@{seat.handle}</span>
+                      )}
+                    </span>
+                    <ArrowForwardGlyph size="sm" />
+                  </div>
+                  <span className="t-caption truncate">
+                    {seat.goal || "memory, episodes and skills"}
                   </span>
-                  <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                    <strong className="truncate t-cell">{seat.name}</strong>
-                    <span className="truncate t-caption mono">@{seat.handle}</span>
-                  </span>
-                  <Icon name="arrowRight" size="sm" />
-                </div>
-                <span className="t-caption truncate">
-                  {seat.goal || "memory, episodes and skills"}
-                </span>
-              </a>
+                </Stack>
+              </Card>
             ))}
         </div>
       </Section>

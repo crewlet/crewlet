@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -998,6 +999,50 @@ func TestADocumentWithNoSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	}
 }
 
+// AND A DOCUMENT CARRYING THE KEY KEEPS ITS LINE NUMBERS TOO.
+//
+// Lifting `_summary` out used to hand the reader the body encoded again, and
+// that renumbers it: a YAML body opening with its summary, a blank line and a
+// comment had a typo on line 6 reported on line 2. The reader takes the
+// document as it was parsed from what the caller sent, so a failure names the
+// line in their file, on every route that reads a body.
+func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
+	t.Parallel()
+	const opening = "_summary: break it\n\n# the company\n"
+	for _, tc := range []struct {
+		name, method, path, body string
+		seeded                   bool
+		line                     int
+	}{
+		{"a put", http.MethodPut, "/config",
+			opening + "name: Acme\nnotification_coalesce_max_batch: 3\nnonsense: true\n", false, 6},
+		{"a patch", http.MethodPatch, "/config",
+			opening + "mission: checked\nnonsense: true\n", true, 5},
+		{"an entity", http.MethodPut, "/config/roles/cto",
+			opening + "name: CTO\nhandle: cto\nllm: zulu\ngaol: ship it\n", true, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			if tc.seeded {
+				s.seed(t, companyDoc, nil)
+			}
+			res := s.do(t, tc.method, tc.path, tc.body, nil)
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("got %d: %s", res.Code, res.Body)
+			}
+			problems := problemsOf(t, res)
+			if len(problems) != 1 || problems[0].Line != tc.line {
+				t.Errorf("problems = %+v, want one on line %d, where the body has it", problems, tc.line)
+			}
+			detail, _ := decode(t, res)["detail"].(string)
+			if want := "(line " + strconv.Itoa(tc.line) + ")"; !strings.Contains(detail, want) {
+				t.Errorf("the detail %q does not name %s", detail, want)
+			}
+		})
+	}
+}
+
 // A process with no coordination store cannot activate anything, and the
 // binary shipped without one wired in at all — so every /config write reached
 // a nil plane. Refused with a 503 that says where to post instead, never a
@@ -1145,23 +1190,24 @@ func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 // `If-Match: *` answered 409 — it was compared to the revision id as a
 // literal, so the wildcard could never equal it — when the spec makes it
 // "any current representation", the ordinary way to say "only if something is
-// there". `If-Match: none` is the reverse: this surface DOCUMENTED it as the
-// unconfigured case and never implemented it, so it fell through to the
-// no-revision branch and answered 412 on exactly the node it was meant to
-// permit.
+// there". `If-None-Match: *` is the reverse, and the only create-only
+// precondition: every other If-Match value is an entity-tag, whatever word it
+// happens to be, and one no revision carries matches nothing, configured or
+// not.
 func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, header, value string
 		configured          bool
 		want                int
+		code                string
 	}{
-		{"a wildcard matches a configured node", "If-Match", "*", true, http.StatusCreated},
-		{"a wildcard refuses an unconfigured one", "If-Match", "*", false, http.StatusPreconditionFailed},
-		{"none is the unconfigured case", "If-Match", "none", false, http.StatusCreated},
-		{"none refuses a configured node", "If-Match", "none", true, http.StatusPreconditionFailed},
-		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated},
-		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed},
+		{"a wildcard matches a configured node", "If-Match", "*", true, http.StatusCreated, ""},
+		{"a wildcard refuses an unconfigured one", "If-Match", "*", false, http.StatusPreconditionFailed, "no_active_revision"},
+		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated, ""},
+		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed, "already_configured"},
+		{"a word is an entity-tag an unconfigured node cannot match", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
+		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1176,6 +1222,11 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 			if res.Code != tc.want {
 				t.Fatalf("%s: %s = %d, want %d: %s",
 					tc.name, tc.header+": "+tc.value, res.Code, tc.want, res.Body.String())
+			}
+			if tc.code != "" {
+				if got := decode(t, res)["error"]; got != tc.code {
+					t.Errorf("%s: error = %v, want %s", tc.name, got, tc.code)
+				}
 			}
 		})
 	}
@@ -1419,6 +1470,47 @@ func TestReferencesNeverReportsALiteralCredential(t *testing.T) {
 		strings.Contains(body, "sk-literal") ||
 		strings.Contains(body, signingSecret) {
 		t.Errorf("a literal credential reached the reference index: %s", body)
+	}
+}
+
+// AN EMBEDDED REFERENCE IS MASKED ON THE READ AND STILL INDEXED.
+//
+// A header written as "Bearer sk-live-${SUFFIX}" carries a literal half that
+// is a credential, so GET /config masks the whole value. The reference index
+// answers "what breaks if I remove SUFFIX", and building it from that mask
+// would report that nothing does. Both halves are asserted together because
+// either one alone is satisfied by a regression in the other direction.
+func TestAnEmbeddedReferenceIsMaskedOnTheReadAndStillIndexed(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc+`
+mcp_servers:
+  - name: tracker
+    transport: http
+    url: https://tracker.example.com/mcp
+    headers:
+      Authorization: "Bearer sk-live-${SUFFIX}"
+`, nil)
+
+	read := s.do(t, http.MethodGet, "/config", "", nil)
+	if read.Code != http.StatusOK {
+		t.Fatalf("GET /config = %d: %s", read.Code, read.Body)
+	}
+	if body := read.Body.String(); strings.Contains(body, "sk-live") {
+		t.Errorf("the literal half of an embedded reference was served: %s", body)
+	}
+
+	res := s.do(t, http.MethodGet, "/config/references", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET /config/references = %d: %s", res.Code, res.Body)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `"mcp_servers[0].headers.Authorization"`) ||
+		!strings.Contains(body, `"SUFFIX"`) {
+		t.Errorf("the embedded reference is missing from the index: %s", body)
+	}
+	if strings.Contains(body, "sk-live") {
+		t.Errorf("the reference index carried a value: %s", body)
 	}
 }
 

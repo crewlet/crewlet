@@ -50,7 +50,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 	return nc
 }
 
-// bucketSeq gives every store its own pair of buckets.
+// bucketSeq gives every store its own set of buckets.
 var bucketSeq atomic.Int64
 
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
@@ -72,7 +72,10 @@ func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 // would reap a LongTTL record early, and this backend refuses a TTL it cannot
 // honour rather than quietly shortening it. The suite's ShortTTL and churnTTL
 // leases are honoured by the deadline the record carries, judged against the
-// STORE's clock (Store.resolveNow), never the test process's.
+// STORE's clock (Store.storeNow), never the test process's. The duty cases
+// are the exception the suite names: they claim at coord.MaxDutyTTL, far past
+// this bucket's age, and are honoured by the duty bucket, whose ceiling is the
+// contract's rather than this configuration's.
 //
 // And there is no coordtest.Advancer: a real broker's clock is its own and
 // cannot be moved, which is exactly the case the hook was made optional for.
@@ -307,7 +310,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	if got, err := s.Get(ctx, "seat:ceo"); err != nil || got != nil {
 		t.Fatalf("an unrenewed lease is still readable: (%v, %v)", got, err)
 	}
-	if raw, err := s.leases.Get(ctx, encodeResource("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if raw, err := s.leases.kv.Get(ctx, encodeResource("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Fatalf("the lease KEY survived its bucket TTL: (%v, %v)", raw, err)
 	}
 
@@ -351,7 +354,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	}
 	// A delete would take the record away; a tombstone leaves it, which is
 	// what keeps the resource's history readable while it is unheld.
-	kve, err := s.leases.Get(ctx, encodeResource("seat:ceo"))
+	kve, err := s.leases.kv.Get(ctx, encodeResource("seat:ceo"))
 	if err != nil {
 		t.Fatalf("the released key was deleted, not expired in place: %v", err)
 	}
@@ -585,12 +588,21 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		return n
 	}
 
-	// Five resources across three classes sit in each bucket.
+	// Five resources across three classes, each in the lease bucket its
+	// class is written to: seats and presence in the seat lease bucket, the
+	// duty in the duty bucket. The epochs bucket holds all five whichever
+	// lease bucket the lease itself is in, which is what keeps a duty's
+	// counter monotonic across the move between them.
 	for _, c := range []struct {
+		lane  *lane
 		class coord.Class
 		want  int
-	}{{coord.ClassSeat, 3}, {coord.ClassWorker, 1}, {coord.ClassNode, 1}} {
-		if got := count(s.leases, c.class); got != c.want {
+	}{
+		{s.leases, coord.ClassSeat, 3},
+		{s.leases, coord.ClassNode, 1},
+		{s.duties, coord.ClassWorker, 1},
+	} {
+		if got := count(c.lane.kv, c.class); got != c.want {
 			t.Errorf("the %s lease walk was handed %d records for the %d it wanted; "+
 				"the broker is not filtering and the membership read is moving "+
 				"every seat in the fleet", c.class, got, c.want)
@@ -600,6 +612,14 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 				"that bucket has no TTL, so an unnarrowed read here grows with "+
 				"the deployment's whole history", c.class, got, c.want)
 		}
+	}
+
+	// AND THE SEAT LEASE BUCKET CARRIES NO DUTY OF THIS BUILD'S, which is
+	// the other half of what keeps the membership read cheap: a class the
+	// bucket does not hold is a bucket the read never opens at all.
+	if got := count(s.leases.kv, coord.ClassWorker); got != 0 {
+		t.Errorf("the seat lease bucket holds %d duty records; this build writes "+
+			"every duty it claims to the duty bucket", got)
 	}
 
 	// And the answers are still right, which is the half a narrowing bug
@@ -655,7 +675,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	}
 
 	// AND THE BUCKET ITSELF IS UNCHANGED — the second node wrote nothing.
-	status, err := second.leases.Status(context.Background())
+	status, err := second.leases.kv.Status(context.Background())
 	if err != nil {
 		t.Fatalf("read the lease bucket's status: %v", err)
 	}

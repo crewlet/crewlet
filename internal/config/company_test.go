@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -245,7 +246,7 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			"a seat with no name",
 			"name: Acme\nroles:\n  - goal: ship\n",
-			"roles[0].name", ErrMissing,
+			"roles[0].name", org.ErrMissingName,
 		},
 		// The hosted code host's own rules, which run now that it is
 		// served.
@@ -345,7 +346,7 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			"a unit with no name",
 			"name: Acme\nunits:\n  - lead: CEO\n",
-			"units[0].name", ErrMissing,
+			"units[0].name", org.ErrMissingName,
 		},
 	}
 
@@ -518,6 +519,18 @@ roles:
 	t.Run("two seats resolving to one handle", func(t *testing.T) {
 		t.Parallel()
 		rejects(t, "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n", "duplicate handle")
+	})
+
+	t.Run("two seats sharing a name on distinct handles", func(t *testing.T) {
+		t.Parallel()
+		rejects(t, "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n",
+			"duplicate seat name")
+	})
+
+	t.Run("two units sharing a name in different branches", func(t *testing.T) {
+		t.Parallel()
+		rejects(t, "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n"+
+			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit name")
 	})
 
 	t.Run("a malformed explicit handle", func(t *testing.T) {
@@ -730,9 +743,9 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 			t.Parallel()
 			var err error
 			if tc.in.Jira != nil {
-				err = tc.in.Jira.validate(tc.path, false)
+				err = tc.in.Jira.validate(field(tc.path), false)
 			} else {
-				err = tc.in.Confluence.validate(tc.path, false)
+				err = tc.in.Confluence.validate(field(tc.path), false)
 			}
 			if err == nil {
 				t.Fatal("a block naming no instance was accepted")
@@ -758,7 +771,7 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://jira.example.com", Token: "${JIRA_TOKEN}"}
-	err := jira.validate("integrations.jira", false)
+	err := jira.validate(field("integrations.jira"), false)
 	if err == nil || !strings.Contains(err.Error(), "required for a Data Center instance") {
 		t.Fatalf("a Data Center instance was not asked for a signing secret: %v", err)
 	}
@@ -768,7 +781,7 @@ func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 func TestACloudSiteIsNotAskedForASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://acme.atlassian.net", Token: "${JIRA_TOKEN}"}
-	if err := jira.validate("integrations.jira", false); err != nil {
+	if err := jira.validate(field("integrations.jira"), false); err != nil {
 		t.Fatalf("a Cloud site was refused: %v", err)
 	}
 }
@@ -793,7 +806,7 @@ func TestConnectingAtlassianOnCloudIsNotRefusedForAnUndiscoveredSite(t *testing.
 		Jira:       &Jira{Email: "ops@example.com", Token: "${ATLASSIAN_TOKEN}"},
 		Confluence: &Confluence{Email: "ops@example.com", Token: "${ATLASSIAN_TOKEN}"},
 	}
-	if err := in.validate("integrations"); err != nil {
+	if err := in.validate(field("integrations")); err != nil {
 		t.Fatalf("connecting Atlassian on Cloud was refused: %v", err)
 	}
 }
@@ -808,7 +821,7 @@ func TestAConfluenceBlockWithNoOrganizationStillNeedsASite(t *testing.T) {
 	in := Integrations{
 		Confluence: &Confluence{Email: "ops@example.com", Token: "${CONFLUENCE_TOKEN}"},
 	}
-	err := in.validate("integrations")
+	err := in.validate(field("integrations"))
 	if err == nil || !strings.Contains(err.Error(), "nowhere to search") {
 		t.Fatalf("a Confluence block nothing can locate was accepted: %v", err)
 	}

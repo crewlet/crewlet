@@ -31,8 +31,8 @@ var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 
 // brokenRevision is well-formed JSON that cannot be built: a seat naming a
 // provider the document does not configure. The provider block is non-empty
-// deliberately — a company with no models at all is a supported authoring
-// state, so an empty one would exercise a different refusal.
+// deliberately: a company with no models at all is a supported authoring
+// state, and an empty one would not be refused at all (see nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
   "roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`)
@@ -75,7 +75,13 @@ type applied struct {
 
 func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
 	t.Helper()
-	e := newEngine(t, engine.Options{})
+	return planeFor(t, newEngine(t, engine.Options{}), opts...)
+}
+
+// planeFor puts the reconciler in front of an engine the caller built, for a
+// case whose subject needs a company or a dispatcher of its own.
+func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOptions)) *plane {
+	t.Helper()
 	p := &plane{engine: e, store: e.Backends().Store, fleet: e.Backends().Fleet}
 
 	options := engine.ReconcilerOptions{
@@ -316,6 +322,92 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
+// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
+//
+// A node's active revision is what its GET /config serves, what it boots on,
+// and what it offers the whole fleet at its next start whenever it is newer
+// than the pointer. One that is not the fleet's, left there after the node
+// applied the fleet's epoch, is a node serving a company the fleet is not
+// running, and republishing it one restart later over the one that is.
+func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
+	t.Parallel()
+	activeID := func(t *testing.T, p *plane) string {
+		t.Helper()
+		active, found, err := p.store.Configs().Active(t.Context())
+		if err != nil || !found {
+			t.Fatalf("this node has no active revision (found=%v err=%v)", found, err)
+		}
+		return active.ID
+	}
+
+	// A revision marked active on this node AFTER it applied the fleet's:
+	// a write that lost a race and marked itself anyway, or one whose
+	// local activation landed after this node adopted a newer revision.
+	t.Run("a stray revision marked active after the apply", func(t *testing.T) {
+		t.Parallel()
+		p := newPlane(t)
+		p.activate(t.Context(), t, grownCompanyDoc)
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		target, _, err := p.fleet.Target(t.Context())
+		if err != nil {
+			t.Fatalf("Target: %v", err)
+		}
+		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+			Source: "test", CreatedBy: "operator", Summary: "stray",
+			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("store the stray revision: %v", err)
+		}
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if got := activeID(t, p); got != target.RevisionID {
+			t.Errorf("this node's active revision is %s, want the fleet's %s rather than the stray %s",
+				got, target.RevisionID, stray)
+		}
+		// Realigned, not re-applied: the epoch was already this node's.
+		if len(p.applies) != 1 {
+			t.Errorf("%d applies, want the one", len(p.applies))
+		}
+	})
+
+	// A fleet revision this node HOLDS and never marked active: an API write
+	// whose own local activation failed after the fleet took it.
+	t.Run("a held revision the fleet took and this node never marked", func(t *testing.T) {
+		t.Parallel()
+		p := newPlane(t)
+		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+			Source: "test", CreatedBy: "operator", Summary: "before",
+			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
+		})
+		if err != nil {
+			t.Fatalf("store the previous revision: %v", err)
+		}
+		document := yamlToJSON(t, grownCompanyDoc)
+		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
+			ParentID: previous, Source: "api", CreatedBy: "operator", Summary: "written",
+			Payload: document, CreatedAt: pinnedNow,
+		})
+		if err != nil {
+			t.Fatalf("store the written revision: %v", err)
+		}
+		if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+			RevisionID: held, Summary: "written", Payload: document, At: pinnedNow,
+		}); err != nil {
+			t.Fatalf("activate: %v", err)
+		}
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if got := activeID(t, p); got != held {
+			t.Errorf("this node's active revision is %s, want the one the fleet took, %s", got, held)
+		}
+	})
+}
+
 func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	t.Parallel()
 	// error, not degraded: the build touches nothing, so this node still
@@ -326,9 +418,9 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	before := p.engine.Company()
 	// A seat naming a provider the document does not configure:
 	// well-formed JSON, and refused at build. The provider block is
-	// non-empty on purpose — a company with NO models is a documented
-	// authoring state, so an empty one would be a different fault from
-	// the one under test.
+	// non-empty on purpose: a company with NO models is a documented
+	// authoring state, which applies cleanly and so could not stand for
+	// a revision that cannot be built.
 	p.activatePayload(t, "broken", brokenRevision)
 	err := p.recon.Tick(t.Context())
 	if err == nil {
@@ -659,6 +751,14 @@ func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	}
 	if !slices.Contains(got.AppliedSubsystems, "epoch") {
 		t.Errorf("subsystems = %v, want the epoch publish among them", got.AppliedSubsystems)
+	}
+	// The background learning passes are handed over AFTER the swap: their
+	// loops walk the current company's seats, and handed over before it a
+	// later refusal would leave them on a revision this node never served.
+	if at, swap := slices.Index(got.AppliedSubsystems, "learning_passes"),
+		slices.Index(got.AppliedSubsystems, "epoch"); at < swap {
+		t.Errorf("subsystems = %v, want learning_passes after the epoch swap",
+			got.AppliedSubsystems)
 	}
 }
 

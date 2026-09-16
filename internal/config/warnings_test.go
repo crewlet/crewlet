@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -87,6 +88,22 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			if !strings.Contains(found.Message, tc.says) {
 				t.Errorf("warning = %q, want it to say %q", found.Message, tc.says)
 			}
+			if found.Kind != config.WarningAdvisory {
+				t.Errorf("kind = %q, want %q", found.Kind, config.WarningAdvisory)
+			}
+			// AND IT NAMES NO REFERENCE. An advisory is about a setting,
+			// so the three fields a dangling reference fills are empty,
+			// which is what a consumer branching on Ref reads.
+			if found.Ref != "" || found.From != "" || found.To != "" {
+				t.Errorf("advisory = %+v, want ref, from and to empty", *found)
+			}
+			// AND IT CARRIES ITS PATH TAKEN APART. A rendered path is what
+			// an operator reads; the segments are what a form marks the
+			// field with, and a warning with only the first is one no
+			// editor can jump to.
+			if found.Segments == nil || found.Segments.String() != found.Path {
+				t.Errorf("segments = %v, want the segments of %q", found.Segments, found.Path)
+			}
 		})
 	}
 }
@@ -162,16 +179,51 @@ func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one about the unit", warnings)
 	}
-	for _, want := range []string{"no `id`", "renaming it moves", "re-onboarding"} {
+	for _, want := range []string{"unit \"Platform\"", "no `id`", "renaming it moves", "re-onboarding"} {
 		if !strings.Contains(warnings[0].Message, want) {
 			t.Errorf("warning does not say %q: %q", want, warnings[0].Message)
 		}
+	}
+	// AND IT IS PLACED AT THE FIELD THEY WOULD ADD, not at the unit in
+	// prose: `units[0].id` is the line an editor opens and the node a
+	// dashboard marks, and the unit is named for a reader with no document
+	// in front of them.
+	if w := warnings[0]; w.Kind != config.WarningAdvisory || w.Path != "units[0].id" ||
+		!reflect.DeepEqual(w.Segments, config.Path{"units", 0, "id"}) || w.Unit != "Platform" {
+		t.Errorf("warning = %+v, want an advisory at units[0].id naming the unit", w)
 	}
 
 	// AND AN ID SILENCES IT.
 	c.Units[0].ID = "platform"
 	if got := c.Warnings(); len(got) != 0 {
 		t.Errorf("a unit with an id still warned: %v", got)
+	}
+}
+
+// AND A NESTED UNIT IS REPORTED WHERE IT WAS WRITTEN. The index is the half
+// a rendered path cannot be rebuilt from: a document full of units with no
+// id raises this once per unit, and a path that named them all the same
+// place would point an editor at one line for every one of them.
+func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
+	t.Parallel()
+	c := &config.Company{
+		Name: "Acme",
+		Units: []config.Unit{
+			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
+			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
+				{Name: "Platform", Roles: []config.Role{{Name: "SWE", Handle: "swe"}}},
+			}},
+		},
+	}
+	warnings := c.Warnings()
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %+v, want one about the child unit alone", warnings)
+	}
+	if w := warnings[0]; w.Kind != config.WarningAdvisory ||
+		w.Path != "units[1].children[0].id" ||
+		!reflect.DeepEqual(w.Segments, config.Path{"units", 1, "children", 0, "id"}) ||
+		w.Unit != "Platform" {
+		t.Errorf("warning = %+v, want an advisory at units[1].children[0].id", w)
 	}
 }
 

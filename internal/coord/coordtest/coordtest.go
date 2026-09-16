@@ -270,6 +270,13 @@ const (
 	// none may send one: exactly one case deliberately asks for more, to
 	// certify that a store refuses rather than clamps, and it accepts a
 	// refusal as the correct answer.
+	//
+	// Duties are the one exception, and the exception belongs to the
+	// contract rather than to this suite: coord.MaxDutyTTL is a ceiling
+	// every backend must honour for a `worker:` lease whatever TTL it sizes
+	// its seat leases from, so the duty cases claim at it and depend on the
+	// answer. A backend sizing its duty retention from this constant would
+	// be wrong, and those cases say so.
 	LongTTL = 5 * time.Minute
 
 	// ShortTTL is the TTL for a lease a case intends to lapse, and it is
@@ -367,6 +374,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) coord.Backend) {
 		{"protocol", protocolCases},
 		{"tristate", tristateCases},
 		{"concurrency", concurrencyCases},
+		{"duty", dutyCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {

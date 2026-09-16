@@ -38,28 +38,31 @@ const integrationDutyName = "integration-reconcile"
 //
 // A lease two builds share is a peer contract, so raising a TTL under an
 // unchanged name looks like exactly the kind of change that needs a new key.
-// It is the opposite here, in both directions.
+// It is the opposite here.
 //
 // A claim WRITES ITS EXPIRY: [coord.Lease.ExpiresAt] is the store's own
 // deadline, and every reader honours the record rather than recomputing from
-// its own constant — a heartbeat takes its next tick from it. So a 45-second
-// claim by an old node and a four-and-a-half-minute claim by a new one are two
-// hold durations and never two opinions about who holds it. Neither build can
-// see a lease the other holds as free.
+// its own constant. So two builds claiming with two TTLs hold for two
+// durations and never disagree about who holds the duty.
 //
 // And a SECOND NAME is the failure this is accused of. Two names are two
 // locks: the old build would claim the old one, the new build the new one,
 // both would hold, and both would sweep every surface for the whole length of
-// the upgrade — which is the overlap, arrived at deliberately, rather than
-// the one the shared name is supposed to cause.
+// the upgrade.
 //
-// What actually bounds the overlap is neither number. [integration.Worker]
+// What a rename cannot reach, the coordination store handles instead. On the
+// embedded KV this TTL was REFUSED for as long as duties shared the seat
+// lease bucket (a 45 s age), so no fleet ran this loop at all; duties now live
+// in a bucket of their own, and a build that predates that bucket locks the
+// duty somewhere a newer build cannot see. The store therefore refuses every
+// duty claim on a newer node while a node of the older build is live, which is
+// the rolling-upgrade rule the coord package doc states. This constant needs
+// nothing further for it.
+//
+// What bounds a single holder's work is neither number. [integration.Worker]
 // re-claims before every surface it visits, and a claim by the owner that
 // already holds it doubles as a renew, so the TTL only ever has to cover ONE
-// pass rather than a whole sweep. An old node's 45 seconds is short for that
-// and its sweep can lapse mid-pass — which is the bug this constant fixes, and
-// it is the old build's to fix by being replaced, not something a rename
-// reaches.
+// pass rather than a whole sweep.
 const integrationDutyTTL = setup.PassDeadline + 2*integration.Interval
 
 // startIntegrations arms the reconcile loop.

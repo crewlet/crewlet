@@ -1,0 +1,516 @@
+/**
+ * What the design system draws, asked of the design system.
+ *
+ * A screen's claim is the PROP it passes: `variant="danger"` on a tag, a
+ * dashed avatar for a human seat. The name of the class that paints it belongs
+ * to uilet, changes on a bump, and is invisible to a reader; a test that
+ * spells one is a test of the package rather than of the screen, and it goes
+ * green again the moment the package renames it.
+ *
+ * So a case that has to reach for an element uilet drew renders a REFERENCE of
+ * the same component here and compares against that. The assertion then says
+ * "this is the element uilet draws for danger" without saying what uilet calls
+ * it, which is the only form of that claim a screen suite is entitled to make.
+ *
+ * Only a suite imports this. It ships in no bundle: nothing under `app/`,
+ * `routes/` or `components/` reaches for it.
+ */
+
+import { fireEvent, render, screen } from "@testing-library/react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import type { ComponentProps, ElementType } from "react";
+import {
+  OrgTable,
+  OrgTableActions,
+  OrgTableAdd,
+  OrgNodeLabel,
+  OrgTableName,
+  TreeCanvas,
+  type TreeCardContext,
+} from "@crewlethq/ui";
+
+/**
+ * Pick an option, which is how every choice in this product is made.
+ *
+ * Every dropdown is the design system's listbox rather than the platform's
+ * own, so a choice is a press on the trigger and a press on a row, not a
+ * `change` event carrying a value. The row is named by its LABEL, because
+ * that is the only thing a reader ever sees; a suite that reached for the
+ * stored value was reaching past the control.
+ */
+export function pick(control: HTMLElement, option: string | RegExp): void {
+  fireEvent.click(control);
+  fireEvent.mouseDown(screen.getByRole("option", { name: option }));
+}
+
+/** The class list uilet draws one component with, for these props. */
+export function drawnClasses<T extends ElementType>(
+  component: T,
+  props: ComponentProps<T>,
+): string[] {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  act(() => {
+    root.render(createElement(component, props));
+  });
+  const classes = [...(host.firstElementChild?.classList ?? [])];
+  act(() => {
+    root.unmount();
+  });
+  return classes;
+}
+
+/**
+ * The classes that tell one set of props from another: what `variant="danger"`
+ * adds over the default. The shared geometry drops out, so a match is about
+ * the state and nothing else.
+ */
+export function distinguishing<T extends ElementType>(
+  component: T,
+  props: ComponentProps<T>,
+  base: ComponentProps<T>,
+): string[] {
+  const plain = drawnClasses(component, base);
+  const marks = drawnClasses(component, props).filter((name) => !plain.includes(name));
+  if (marks.length === 0) {
+    throw new Error("these props draw the same element as the default, so nothing can be asserted");
+  }
+  return marks;
+}
+
+/** Whether an element carries every class the design system draws for those props. */
+export function isDrawnAs<T extends ElementType>(
+  element: Element,
+  component: T,
+  props: ComponentProps<T>,
+  base: ComponentProps<T>,
+): boolean {
+  return distinguishing(component, props, base).every((name) => element.classList.contains(name));
+}
+
+/**
+ * The parts of the design system's tree canvas, asked of the design system.
+ *
+ * A CHART SUITE HAS TO REACH FOR THREE ELEMENTS THE PACKAGE DRAWS, and no prop
+ * and no role names any of them: the CARD a node is drawn in (which a jsdom
+ * harness has to report a size for, because jsdom has no layout), the probe the
+ * gaps are measured from, and the drawing of the connectors. Spelling their
+ * classes in a screen suite is what this file exists to prevent, so the names
+ * are taken from a reference chart rendered here instead: one place that knows
+ * them, and it learns them from the component rather than from a comment.
+ *
+ * MEASURED, with an observer this file installs for the length of the render.
+ * It used to be rendered with no ResizeObserver at all, on the reasoning that
+ * an unmeasured chart still draws a class on every part: it does not. The
+ * connectors are drawn only once there is a layout to draw them from, so with
+ * nothing measured the chart has no connector element, `querySelector("svg")`
+ * found the first glyph of the canvas's own zoom bar instead, and every suite
+ * reaching for the connectors got that glyph. Nothing said so, because the one
+ * assertion over them compared the element with itself across a push.
+ */
+export function treeCanvasParts(): {
+  card: string;
+  gap: string;
+  /** The space the chart keeps around itself, which the layout also measures. */
+  margin: string;
+  links: string;
+  /** What a card gains when it stands for somebody outside the system. */
+  outlined: string;
+} {
+  const plain = referenceChart(false);
+  const marked = referenceChart(true);
+  const names = {
+    ...plain,
+    outlined: marked.cardClasses.filter((name) => !plain.cardClasses.includes(name))[0] ?? "",
+  };
+  for (const [part, name] of Object.entries(names)) {
+    if (typeof name === "string" && !name) {
+      throw new Error(`the tree canvas draws no ${part} this harness can find`);
+    }
+  }
+  return names;
+}
+
+/** One chart rendered to be read: what it calls each part it draws. */
+function referenceChart(outline: boolean): {
+  card: string;
+  gap: string;
+  margin: string;
+  links: string;
+  cardClasses: string[];
+} {
+  // RENDERED THE WAY EVERY SUITE RENDERS, into the document, because this one
+  // is a whole chart rather than a single element: it holds a layer host that
+  // portals into a node it has to be able to find, and a viewport whose layout
+  // effects read the element they are on. And MEASURED, so the chart has a
+  // layout and therefore connectors to name: see the doc above.
+  const stop = measuring();
+  const { container: host, unmount } = render(
+    createElement(TreeCanvas, {
+      label: "Reference chart",
+      nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
+      cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
+      cardOf: (id: string) => id,
+      cardOutline: () => outline,
+      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
+    }),
+  );
+  stop();
+  const item = host.querySelector("[role='treeitem']");
+  const tree = host.querySelector("[role='tree']");
+  // THE CONNECTORS ARE THE CHART'S OWN SVG, which is a child of the element
+  // the cards are placed in rather than merely the first svg in the document:
+  // the canvas draws a zoom bar of glyphs, and each of those is an svg too.
+  const svg =
+    [...(tree?.parentElement?.children ?? [])].find((el) => el.tagName.toLowerCase() === "svg") ??
+    null;
+  // The treeitem is the caller's own element here, drawn with no class, so the
+  // card is simply what holds it.
+  const card = item?.parentElement ?? null;
+  // The probes are the elements the tree's own parent holds that are neither
+  // the tree nor the connectors: each has no content and no role, by design.
+  // There are two and the chart draws them in the order the layout reads them,
+  // the gaps between cards and then the space around the whole chart; a third
+  // one, or one fewer, is a package this harness no longer understands.
+  const probes = [...(tree?.parentElement?.children ?? [])].filter(
+    (el) => el !== tree && el !== svg,
+  );
+  if (probes.length !== 2) {
+    throw new Error(`the tree canvas draws ${probes.length} measuring probes, not two`);
+  }
+  const read = {
+    card: className(card),
+    gap: className(probes[0] ?? null),
+    margin: className(probes[1] ?? null),
+    links: className(svg),
+    cardClasses: [...(card?.classList ?? [])],
+  };
+  unmount();
+  return read;
+}
+
+/**
+ * A ResizeObserver that answers at once, for the length of one render.
+ *
+ * The reference chart has to be MEASURED to draw its connectors, and it is
+ * rendered before any suite's own observer is installed. Every box gets one
+ * size, which is all a chart of two cards needs to have a layout at all.
+ */
+function measuring(): () => void {
+  const real = globalThis.ResizeObserver;
+  class Immediate {
+    constructor(private readonly report: ResizeObserverCallback) {}
+    observe(el: Element): void {
+      const box = { width: 100, height: 40 };
+      this.report(
+        [
+          {
+            target: el,
+            contentRect: box,
+            borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
+          },
+        ] as unknown as ResizeObserverEntry[],
+        this as unknown as ResizeObserver,
+      );
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = Immediate as unknown as typeof ResizeObserver;
+  return () => {
+    globalThis.ResizeObserver = real;
+  };
+}
+
+/** An element's first class, or "" when it has none. */
+function className(el: Element | null | undefined): string {
+  const first = el?.classList[0];
+  return first ?? "";
+}
+
+/**
+ * The parts of the design system's org table, asked of the design system.
+ *
+ * THE SAME PROBLEM THE CHART HAS, one screen over: a table suite has to reach
+ * for elements the package draws and no prop and no role names any of them.
+ * The name group a row's own handle rides on, the zone its mark sits in, the
+ * caption line under the name, the strip that stays quiet until the row is
+ * reached and the slot the add splits open in are all read off a reference
+ * table rendered here, so one place knows them and it learns them from the
+ * component rather than from a comment.
+ */
+export function orgTableParts(): {
+  /** The two-line name group: mark, name, caption, trailing slot. */
+  node: string;
+  /** The zone the row's mark sits in. */
+  icon: string;
+  /** The second line, which the caption and its marks ride. */
+  caption: string;
+  /** The strip of controls that acts on the row, quiet until it is reached. */
+  actions: string;
+  /** The slot the add pill splits open in. */
+  add: string;
+} {
+  const { container, unmount } = render(
+    createElement(OrgTable, {
+      label: "Reference table",
+      controls: false,
+      columns: [
+        { key: "name", header: "Name" },
+        { key: "actions", header: "Actions", headerHidden: true },
+      ],
+      rows: [{ id: "a", label: "A" }],
+      renderCell: (id: string, column: number) =>
+        column === 1
+          ? createElement(OrgTableName, {
+              icon: createElement("svg"),
+              name: "A",
+              caption: REFERENCE_CAPTION,
+              trailing: createElement("span", null, "state"),
+            })
+          : createElement(
+              "span",
+              null,
+              createElement(OrgTableAdd, {
+                label: "Add to A",
+                sections: [
+                  { key: "one", label: "Add one", icon: createElement("svg"), onSelect: () => {} },
+                ],
+              }),
+              createElement(
+                OrgTableActions,
+                null,
+                createElement("button", { type: "button" }, "Edit A"),
+              ),
+            ),
+    }),
+  );
+  const cells = [...container.querySelectorAll("[role='gridcell']")];
+  const name = cells[0];
+  const controls = cells[1];
+  // The caption is what holds the word for what kind of thing the row is; the
+  // group is the cell's own last child, since the wires are drawn before it.
+  const kind = [...(name?.querySelectorAll("*") ?? [])].find(
+    (el) => el.children.length === 0 && el.textContent === REFERENCE_CAPTION,
+  );
+  const names = {
+    node: className(name?.lastElementChild),
+    icon: className(name?.lastElementChild?.firstElementChild),
+    caption: className(kind?.parentElement),
+    add: className(childHolding(controls, "Add to A")),
+    actions: className(childHolding(controls, "Edit A")),
+  };
+  unmount();
+  for (const [part, found] of Object.entries(names)) {
+    if (!found) throw new Error(`the org table draws no ${part} this harness can find`);
+  }
+  return names;
+}
+
+/**
+ * The parts of a chart NODE, asked of the design system, so the same claim can
+ * be made about a card and about the row that names it.
+ *
+ * `orgTableParts` answers for the table and this for the chart; the two are
+ * separate because the components are, and the pair exists so a suite can hold
+ * one node to reading the same way on both views without naming a package
+ * class anywhere.
+ */
+export function orgNodeParts(): {
+  /** The zone the card's mark sits in. */
+  icon: string;
+  /** The line under the name, which the caption and its marks ride. */
+  caption: string;
+} {
+  const { container, unmount } = render(
+    createElement(OrgNodeLabel, {
+      icon: createElement("svg"),
+      name: "A",
+      caption: REFERENCE_CAPTION,
+    }),
+  );
+  const kind = [...container.querySelectorAll("*")].find(
+    (el) => el.children.length === 0 && el.textContent === REFERENCE_CAPTION,
+  );
+  const names = {
+    // The label is a FRAGMENT: the zone, the text block and whatever else the
+    // card was given sit beside each other, so the mark's zone is the first
+    // element of the render rather than the first child of a wrapper.
+    icon: className(container.firstElementChild),
+    caption: className(kind?.parentElement),
+  };
+  unmount();
+  for (const [part, found] of Object.entries(names)) {
+    if (!found) throw new Error(`an org node draws no ${part} this harness can find`);
+  }
+  return names;
+}
+
+/**
+ * The element inside `root` that the design system drew as `part`, where
+ * `part` came from a reference render above.
+ *
+ * `getElementsByClassName` rather than a selector built from the name: a
+ * selector spelled into a template literal reads, to the suite that polices
+ * this, exactly like a package class written out by hand.
+ */
+export function drawnPart(root: Element | Document, part: string): HTMLElement | null {
+  return (root.getElementsByClassName(part)[0] as HTMLElement | undefined) ?? null;
+}
+
+/** Whether `element` sits inside the part named: `closest`, without the selector. */
+export function insidePart(element: Element, part: string): boolean {
+  for (let at: Element | null = element; at !== null; at = at.parentElement) {
+    if (at.classList.contains(part)) return true;
+  }
+  return false;
+}
+
+/** The word the reference row writes under its name, which finds its caption. */
+const REFERENCE_CAPTION = "Unit";
+
+/**
+ * The direct child of `cell` that holds the control named `label`, which is
+ * the slot the package wraps that control in.
+ */
+function childHolding(cell: Element | undefined, label: string): Element | null {
+  const control = [...(cell?.querySelectorAll("button") ?? [])].find(
+    (button) => button.getAttribute("aria-label") === label || button.textContent === label,
+  );
+  let part: Element | null = control ?? null;
+  // The caller's own wrapper is the cell's child; the package's slot is inside
+  // it, which is the element this is looking for.
+  while (part?.parentElement && part.parentElement.parentElement !== cell) {
+    part = part.parentElement;
+  }
+  return part;
+}
+
+/**
+ * Narrow a list screen the way a reader does: open the Filter menu, pick the
+ * axis, then pick the answer from the editor the chip opens with.
+ *
+ * The editor opens by itself the moment an axis is added, which is the whole
+ * reason the chip appears before it has a value; a helper that pressed the
+ * chip again would close it.
+ */
+export function narrow(axis: string, answer: string | RegExp): void {
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: axis }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: answer }));
+}
+
+/**
+ * The layer the notifications are drawn into, found through the live region
+ * every toast host keeps at the foot of its stack.
+ *
+ * THE REGION RATHER THAN A TOAST, because the host is always mounted and a
+ * toast is not: a suite asking "which layer did these get portalled into"
+ * has to be able to ask it of an empty host. A fullscreen surface renders
+ * only its own subtree, so a toast portalled past it is a report nobody sees.
+ *
+ * Where more than one host is mounted (the application's, and the one the
+ * builder nests inside its fullscreen container), the one holding a toast
+ * wins, because that is the one the caller is asking about.
+ */
+export function toastHost(): HTMLElement | null {
+  const hosts = screen
+    .queryAllByRole("status", { name: /notification/i })
+    .map((region) => region.parentElement?.parentElement ?? null)
+    .filter((host): host is HTMLElement => host !== null);
+  return hosts.find((host) => toastsIn(host).length > 0) ?? hosts[0] ?? null;
+}
+
+/**
+ * The notifications a host is showing: its children that carry a control,
+ * which is what tells a toast from the hidden live regions beside it.
+ */
+function toastsIn(host: HTMLElement): HTMLElement[] {
+  return [...host.children].filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && !!child.querySelector("button"),
+  );
+}
+
+export function toasts(): HTMLElement[] {
+  const host = toastHost();
+  return host ? toastsIn(host) : [];
+}
+
+/**
+ * What the notifications SAY, the hidden live regions excluded.
+ *
+ * The same sentence is in the document twice on purpose, drawn and spoken, so
+ * a query over the whole page cannot tell a screen that reported something
+ * once from one that reported it twice.
+ */
+export function toastText(): string {
+  return toasts()
+    .map((toast) => toast.textContent ?? "")
+    .join(" ");
+}
+
+/**
+ * A menu entry's own words, without the keyboard hint drawn beside it.
+ *
+ * The hint is part of the entry's accessible name, which is right: a reader
+ * who cannot see the caps is told the shortcut. A suite comparing two menus
+ * entry for entry is asking a different question, so it takes the words and
+ * leaves the hint, and it does that by finding the caps rather than by naming
+ * the class the design system wraps them in.
+ */
+export function menuEntryLabel(item: HTMLElement): string {
+  const clone = item.cloneNode(true) as HTMLElement;
+  for (const cap of [...clone.querySelectorAll("kbd")]) {
+    let part: HTMLElement | null = cap as HTMLElement;
+    while (part?.parentElement && part.parentElement !== clone) part = part.parentElement;
+    part?.remove();
+  }
+  return (clone.textContent ?? "").trim();
+}
+
+/**
+ * A media query list the suite drives.
+ *
+ * jsdom has no `matchMedia` and the setup file's stub answers "never
+ * matches", which is the wide layout. Crossing the shell's breakpoint is a
+ * state only a controllable one can reach, and it is the state the narrow
+ * layout's drawer lives and dies in.
+ */
+export function installMedia(initial: boolean): {
+  set: (matches: boolean) => void;
+  restore: () => void;
+} {
+  const listeners = new Set<() => void>();
+  let matches = initial;
+  const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+  Object.defineProperty(globalThis, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      get matches() {
+        return matches;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, listener: () => void) => void listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => void listeners.delete(listener),
+      addListener: (listener: () => void) => void listeners.add(listener),
+      removeListener: (listener: () => void) => void listeners.delete(listener),
+      dispatchEvent: () => false,
+    }),
+  });
+  return {
+    set: (next: boolean) => {
+      matches = next;
+      act(() => {
+        for (const listener of [...listeners]) listener();
+      });
+    },
+    restore: () => {
+      if (had) Object.defineProperty(globalThis, "matchMedia", had);
+      else delete (globalThis as Record<string, unknown>).matchMedia;
+    },
+  };
+}

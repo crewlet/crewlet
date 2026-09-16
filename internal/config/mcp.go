@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -82,8 +81,13 @@ type MCPServer struct {
 	ToolPrefix string `yaml:"tool_prefix,omitempty" json:"tool_prefix,omitempty" desc:"Prefix applied to this server's tool names."`
 
 	// The http fields.
+	//
+	// Headers is tagged as a credential for the reason Env is: it is where
+	// an http server's authorization header lives, which is the same token
+	// a stdio server receives through its environment. An untagged map
+	// published that token verbatim on every config read.
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty" desc:"Endpoint of the remote server (http)."`
-	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
+	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
 
 	// ToolAnnotations corrects behavioural hints per TOOL, keyed by bare
 	// tool name.
@@ -155,7 +159,7 @@ func (m *MCPServer) RequestTimeout() time.Duration {
 	return time.Duration(m.RequestTimeoutSeconds * float64(time.Second))
 }
 
-func (m *MCPServer) validate(path string) error {
+func (m *MCPServer) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(m.Name) == "" {
 		p.add(at(path, "name"), ErrMissing,
@@ -275,7 +279,7 @@ func (t *ToolAnnotations) UnmarshalYAML(node *yaml.Node) error {
 		return nil
 	}
 	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: %w: tool annotations must be a mapping of hints", node.Line, ErrShape)
+		return nodeFault(node, "tool annotations must be a mapping of hints")
 	}
 	// Rewriting the aliased keys in a COPY keeps the strict decode: an
 	// unknown key still reaches decodeKnown and is still rejected.

@@ -236,7 +236,7 @@ type E2BSandbox struct {
 	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set: at template build time."`
 }
 
-func (e *E2BSandbox) validate(path string) error {
+func (e *E2BSandbox) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(e.APIKey) == "" {
 		// REQUIRED, and checked here rather than at construction so a
@@ -352,7 +352,7 @@ func (s *SandboxProvider) RunIn() Placement {
 	return ""
 }
 
-func (s *SandboxProvider) validate(path string) error {
+func (s *SandboxProvider) validate(path Path) error {
 	var p problems
 	switch {
 	case !s.Enabled():
@@ -525,7 +525,7 @@ func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
 	}
 }
 
-func (l *LocalSandbox) validate(path string) error {
+func (l *LocalSandbox) validate(path Path) error {
 	var p problems
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
@@ -545,7 +545,12 @@ type SandboxSetupStep struct {
 
 	// Files are written into the box (path -> content) before Commands
 	// run. ${VAR} references here are resolved when the step is loaded.
-	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run."`
+	//
+	// A CREDENTIAL FIELD, because provisioning is what these files are for:
+	// a registry's auth file, a git credential store, a cloud CLI's config.
+	// A file's content is shown on a config read only when it is exactly one
+	// ${VAR} reference, and masked otherwise.
+	Files map[string]string `secret:"true" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run."`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this
@@ -558,7 +563,11 @@ type SandboxSetupStep struct {
 	// of the sandbox env at launch. Resolving it at load as well would
 	// double-resolve and silently mangle any secret whose real value
 	// contains a literal ${...}.
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty" desc:"Env merged into the run; resolved once at launch, not at load."`
+	//
+	// Tagged as a credential like its sibling role.sandbox.env: both are
+	// merged into the same run environment, which is where an external
+	// service token is declared.
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env merged into the run; resolved once at launch, not at load."`
 
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box. Never resolved — it is agent-facing text,
@@ -580,6 +589,17 @@ type SandboxSetupStep struct {
 // actually do.
 const defaultSetupTimeoutSeconds = 300.0
 
+// IdentityKey is the step's name: the handle a failure message and a log line
+// already use for it, and now what its masked credentials are restored by.
+//
+// A step's env and files are credentials, so a list of steps is a collection
+// whose masks must follow the member rather than the slot. Reordering two
+// provisioning steps must never hand one step's registry token to the other.
+//
+// A VALUE receiver, because the redaction walker holds the prior document by
+// value and cannot take an address inside it.
+func (s SandboxSetupStep) IdentityKey() string { return s.Name }
+
 // Timeout is the per-command cap, applying the default.
 func (s *SandboxSetupStep) Timeout() float64 {
 	if s.TimeoutSeconds <= 0 {
@@ -588,7 +608,7 @@ func (s *SandboxSetupStep) Timeout() float64 {
 	return s.TimeoutSeconds
 }
 
-func (s *SandboxSetupStep) validate(path string) error {
+func (s *SandboxSetupStep) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(s.Name) == "" {
 		p.add(at(path, "name"), ErrMissing,
@@ -622,11 +642,13 @@ func (s *SandboxSetupStep) validate(path string) error {
 // would double-resolve a secret whose real value contains a literal
 // ${...}. Brief and Name are never resolved — agent-facing text and an
 // identifier.
+//
+// path is rendered, like [Resolver.Map]'s: it only ever names a log line.
 func (s *SandboxSetupStep) Resolve(path string, r *Resolver) (SandboxSetupStep, []Unresolved) {
 	out := *s
 	var missing []Unresolved
 	if len(s.Files) > 0 {
-		files, m := r.Map(at(path, "files"), s.Files)
+		files, m := r.Map(at(Path{path}, "files").String(), s.Files)
 		out.Files = files
 		missing = append(missing, m...)
 	}
@@ -636,7 +658,7 @@ func (s *SandboxSetupStep) Resolve(path string, r *Resolver) (SandboxSetupStep, 
 			expanded, names := r.Expand(cmd)
 			out.Commands[i] = expanded
 			if len(names) > 0 {
-				missing = append(missing, Unresolved{Path: idx(at(path, "commands"), i), Names: names})
+				missing = append(missing, Unresolved{Path: idx(at(Path{path}, "commands"), i).String(), Names: names})
 			}
 		}
 	}

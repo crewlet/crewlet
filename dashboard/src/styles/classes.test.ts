@@ -127,7 +127,7 @@ describe("every class the dashboard names", () => {
     // exactly what a changed `className=` spelling or a moved source root
     // would do to it. These two are the shapes the tree actually writes.
     expect(all.length).toBeGreaterThan(500);
-    expect(all.some((u) => u.name === "panel-head")).toBe(true);
+    expect(all.some((u) => u.name === "org-builder-toolbar")).toBe(true);
     expect(all.some((u) => u.name === "muted")).toBe(true);
   });
 
@@ -138,25 +138,25 @@ describe("every class the dashboard names", () => {
     expect(strays.map((u) => u.where)).toEqual([]);
   });
 
-  // THE TAB PANEL CARRIES A COLUMN, and nothing else in the suite can see it.
-  //
-  // A screen's switched sections used to be direct children of `.screen-inner`
-  // — a flex column with a gap — and took their vertical rhythm from it.
-  // Giving the tab widget a real `role="tabpanel"` put one plain element
-  // between the column and them, so without these three declarations every
-  // panel on the Seat screen renders with its cards butted together.
-  //
-  // It fails in the one way nothing catches: the markup stays correct, the
-  // roles stay correct, every case in groups.test.tsx stays green, and jsdom
-  // computes no layout to assert against. A reader would find it by opening
-  // the screen. This is a properties assertion rather than a rendered one for
-  // exactly that reason — it is the only place the rule can be checked at all.
-  test("the tab panel keeps the column its children lost", () => {
-    const block = /\.tabpanel\s*\{([^}]*)\}/.exec(stylesheets());
-    expect(block, ".tabpanel is not declared at all").not.toBeNull();
-    const body = block![1]!;
-    expect(body).toMatch(/display:\s*flex/);
-    expect(body).toMatch(/flex-direction:\s*column/);
-    expect(body).toMatch(/gap:\s*var\(--space-\d+\)/);
-  });
+  /*
+   * THE TAB PANEL CARRIES A COLUMN, and that rule is no longer the engine's to
+   * check.
+   *
+   * A screen's switched sections are children of a flex column with a gap and
+   * take their vertical rhythm from it, so giving the tab widget a real
+   * `role="tabpanel"` puts one plain element between the column and them. The
+   * engine used to answer that with a local rule of its own: display flex,
+   * direction column, and a gap chosen to match the column's.
+   *
+   * The design system answers it with `display: contents`, which is the
+   * stronger answer rather than a different one. The panel leaves the box tree
+   * altogether, so its children become children of the original column again
+   * and inherit the real gap instead of a second one kept in step by hand.
+   *
+   * There is no case here any more because there cannot be one: the rule lives
+   * in a package class, and the scan next door forbids this tree from naming a
+   * package class at all, which is the rule that keeps the engine from binding
+   * itself to the design system's private spelling. The guard belongs to the
+   * package's own suite, where the declaration is.
+   */
 });

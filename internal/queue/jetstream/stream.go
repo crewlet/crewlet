@@ -431,19 +431,58 @@ const consumerNameMax = 180
 // collision probability below one in ten million for a company with ten
 // thousand subscriptions, against a real ceiling in the hundreds.
 func consumerName(topic, group string) string {
-	safe := func(s string) string {
-		return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
-	}
 	sum := sha256.Sum256([]byte(group + "\x00" + topic))
-	id := hex.EncodeToString(sum[:6])
+	id := hex.EncodeToString(sum[:consumerDigestBytes])
 
-	readable := safe(group) + "__" + safe(topic)
+	readable := consumerNameSafe(group) + consumerNameSep + consumerNameSafe(topic)
 	// Truncation cannot reintroduce an alias: the digest is over the full
 	// pair and is appended after it.
-	if max := consumerNameMax - len(id) - 2; len(readable) > max {
+	if max := consumerNameMax - len(id) - len(consumerNameSep); len(readable) > max {
 		readable = readable[:max]
 	}
-	return readable + "__" + id
+	return readable + consumerNameSep + id
+}
+
+// consumerDigestBytes is how much of the pair's digest ends a durable name, and
+// consumerNameSep what joins the three parts.
+const (
+	consumerDigestBytes = 6
+	consumerNameSep     = "__"
+)
+
+// consumerNameSafe is the lossy rewrite that makes a name part legal in a
+// durable consumer name.
+func consumerNameSafe(s string) string {
+	return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
+}
+
+// pairFromConsumerName recovers the (topic, group) pair a durable consumer was
+// created for from its name and its filter subject, for a consumer made before
+// consumers carried the pair in their metadata (see subscriptionMetadata).
+//
+// Recovered only when it can be PROVEN. The topic is the filter subject
+// verbatim; the group is what the name holds before the rewritten topic, and
+// the candidate counts only if it rebuilds the very name, digest included. That
+// refuses exactly the two cases the name cannot answer: a group whose rewrite
+// was lossy (a dot, a space or a wildcard became an underscore) and a name
+// whose readable part was truncated. Every group the engine creates is a
+// plain seat or service name, so neither arises for its own consumers; a guess
+// in either case would list a subscription under a pair nothing can address,
+// and a caller deleting it would delete nothing.
+func pairFromConsumerName(name, topic string) (group string, ok bool) {
+	if topic == "" {
+		return "", false
+	}
+	idLen := len(consumerNameSep) + 2*consumerDigestBytes
+	if len(name) <= idLen {
+		return "", false
+	}
+	readable := name[:len(name)-idLen]
+	group, ok = strings.CutSuffix(readable, consumerNameSep+consumerNameSafe(topic))
+	if !ok || group == "" || consumerName(topic, group) != name {
+		return "", false
+	}
+	return group, true
 }
 
 // DomainStream is the stream a statelog domain declares, in the vocabulary a

@@ -12,15 +12,25 @@
  * cursor several times a second while a turn ran.
  */
 
-import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useId, useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
-import { SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Segmented, SearchInput } from "~/ui/primitives.tsx";
+import { SeatCard } from "~/components/common.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
+import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import {
+  AutoGrid,
+  EmptyState,
+  Input,
+  PageHeader,
+  Section,
+  SegmentedControl,
+  TabPanel,
+  Tag,
+  Toolbar,
+} from "@crewlethq/ui";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -54,6 +64,7 @@ export function People() {
   const sandboxes = useSandboxes();
   const org = useOrg();
   const [group, setGroup] = useParam("group", "state", "section");
+  const panel = useId();
   const [q, setQ] = useParam("q", "");
 
   const index = useMemo(() => indexOrg(org), [org]);
@@ -99,70 +110,76 @@ export function People() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="People"
-        sub="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
+        description="Every seat in the company, the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
         badges={
           <>
-            <Badge outline>{plural(agentSeats, "agent seat")}</Badge>
+            <Tag appearance="outline">{plural(agentSeats, "agent seat")}</Tag>
             {index.seats.length - agentSeats > 0 && (
-              <Badge outline>{plural(index.seats.length - agentSeats, "human")}</Badge>
+              <Tag appearance="outline">{plural(index.seats.length - agentSeats, "human")}</Tag>
             )}
           </>
         }
       />
 
-      <div className="toolbar">
-        <div style={{ maxWidth: 320, flex: 1 }}>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            ariaLabel="Filter seats"
-            placeholder="Filter by name, handle, goal or unit"
-          />
-        </div>
+      <Toolbar label="Seat filters" mode="group" sticky>
+        <Input
+          type="search"
+          width="md"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          onClear={() => setQ("")}
+          aria-label="Filter seats"
+          placeholder="Filter by name, handle, goal or unit"
+          leading={<SearchGlyph size="sm" />}
+        />
         <span className="spacer" />
-        <Segmented<Grouping>
-          ariaLabel="Grouping"
+        <SegmentedControl<Grouping>
+          label="Grouping"
+          semantics="tabs"
+          panelId={panel}
           value={group as Grouping}
-          onChange={setGroup}
+          onValueChange={setGroup}
           options={[
             { value: "state", label: "By state" },
             { value: "unit", label: "By unit" },
             { value: "flat", label: "Flat" },
           ]}
         />
-      </div>
+      </Toolbar>
 
-      {!groups.length && (
-        <Empty
-          icon="users"
-          title={q ? `No seat matches “${q}”` : "This company has no seats"}
-          hint={
-            q
-              ? "The filter matches a seat's name, handle, goal or unit."
-              : "Roles are defined in the company configuration. Import one to spawn seats."
-          }
-        />
-      )}
+      <TabPanel id={panel} value={group}>
+        {!groups.length && (
+          <EmptyState
+            icon={<GroupGlyph />}
+            title={q ? `No seat matches “${q}”` : "This company has no seats"}
+            description={
+              q
+                ? "The filter matches a seat's name, handle, goal or unit."
+                : "Roles are defined in the company configuration. Import one to spawn seats."
+            }
+          />
+        )}
 
-      {groups.map((g) =>
-        g.label ? (
-          <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
-            <div className="seat-grid">
+        {groups.map((g) =>
+          g.label ? (
+            <Section key={g.key} title={g.label} description={`${g.rows.length}`}>
+              <AutoGrid min="lg" gap={3}>
+                {g.rows.map(({ seat, agent }) => (
+                  <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
+                ))}
+              </AutoGrid>
+            </Section>
+          ) : (
+            <AutoGrid min="lg" gap={3} key={g.key}>
               {g.rows.map(({ seat, agent }) => (
-                <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
+                <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
-            </div>
-          </Section>
-        ) : (
-          <div className="seat-grid" key={g.key}>
-            {g.rows.map(({ seat, agent }) => (
-              <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
-            ))}
-          </div>
-        ),
-      )}
+            </AutoGrid>
+          ),
+        )}
+      </TabPanel>
     </>
   );
 }

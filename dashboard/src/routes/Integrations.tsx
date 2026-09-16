@@ -22,49 +22,75 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
-import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
+import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useRest } from "~/lib/useRest.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
+import { requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
-
-type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
+import {
+  type GlyphProps,
+  CableGlyph,
+  ChatGlyph,
+  CodeGlyph,
+  KeyGlyph,
+  KeyboardArrowDownGlyph,
+  LinkGlyph,
+  SettingsGlyph,
+  TargetGlyph,
+  TimelineGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+import {
+  Avatar,
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  InlineCode,
+  PageHeader,
+  Skeleton,
+  Tag,
+} from "@crewlethq/ui";
+import type { Tone } from "@crewlethq/ui";
 
 /**
  * What agents need in order to work, in the order the console asks about
  * them. Each tool answers exactly one capability.
  */
-const CAPABILITIES: { id: string; title: string; icon: IconName; description: string }[] = [
+const CAPABILITIES: {
+  id: string;
+  title: string;
+  icon: ComponentType<GlyphProps>;
+  description: string;
+}[] = [
   {
     id: "messaging",
     title: "Messaging",
-    icon: "message",
+    icon: ChatGlyph,
     description: "Where agents talk with you and with each other.",
   },
   {
     id: "tasks",
     title: "Task management",
-    icon: "target",
+    icon: TargetGlyph,
     description: "Where work is planned, assigned and tracked.",
   },
   {
     id: "code",
     title: "Code",
-    icon: "gitBranch",
+    icon: CodeGlyph,
     description: "Where agents commit, review and ship.",
   },
   {
     id: "observability",
     title: "Observability",
-    icon: "activity",
+    icon: TimelineGlyph,
     description: "Where agents watch production and respond.",
   },
 ];
@@ -174,11 +200,11 @@ export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating"
 export function phaseTone(phase: string): Tone {
   switch (phase) {
     case "ready":
-      return "positive";
+      return "success";
     case "degraded":
-      return "caution";
+      return "warning";
     case "unconfigured":
-      return "critical";
+      return "danger";
     // IN PROGRESS IS NOT NEUTRAL. Every one of these is an integration
     // that does not work YET — setting up agents, waiting for the provider,
     // waiting for a person, being taken away — and neutral is the tone this
@@ -189,7 +215,7 @@ export function phaseTone(phase: string): Tone {
     case "provisioning":
     case "activating":
     case "disconnecting":
-      return "caution";
+      return "warning";
     default:
       // A phase a newer node wrote. Rendered as-is in a neutral tone
       // rather than guessed at: claiming a surface is fine on the
@@ -380,7 +406,7 @@ export function rollUp(
     // engine is still working through, where telling a person to act would be
     // asking them to interrupt it.
     if (ingress && phase === "ready") {
-      return { tag: "Action needed", tone: "caution", outline: false };
+      return { tag: "Action needed", tone: "warning", outline: false };
     }
     return {
       // The ENGINE's word for the phase, not this screen's. `phase_label`
@@ -423,8 +449,8 @@ export function rollUp(
   // anything else is.
   if (tools.length > 0 && !tools.some((t) => t.can_provision)) {
     return ingress
-      ? { tag: "Action needed", tone: "caution", outline: false }
-      : { tag: "Connected", tone: "positive", outline: false };
+      ? { tag: "Action needed", tone: "warning", outline: false }
+      : { tag: "Connected", tone: "success", outline: false };
   }
   // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
   // reconcile interval after connecting, not a resting state, so the word is
@@ -439,7 +465,7 @@ export function rollUp(
     tag: "Connecting",
     // Amber for the same reason every in-progress phase is: this is the
     // window before the loop's first report, and it is not yet working.
-    tone: "caution",
+    tone: "warning",
     outline: true,
     busy: true,
   };
@@ -799,33 +825,33 @@ function SurfaceRow({
 
       <div className="int-row-badges">
         {row.secret_usable === false && (
-          <Badge
-            tone="caution"
-            outline
+          <Tag
+            variant="warning"
+            appearance="outline"
             title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
           >
             secret unresolved
-          </Badge>
+          </Tag>
         )}
         {row.routes === false && (
-          <Badge
-            tone="caution"
-            outline
+          <Tag
+            variant="warning"
+            appearance="outline"
             title="deliveries are verified and stored, and no parser turns them into work for a seat"
           >
             routes nowhere
-          </Badge>
+          </Tag>
         )}
         {row.endpoint_current === false && (
-          <Badge
-            tone="caution"
-            outline
+          <Tag
+            variant="warning"
+            appearance="outline"
             title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
           >
             address moved
-          </Badge>
+          </Tag>
         )}
-        {row.enabled === false && <Badge outline>paused</Badge>}
+        {row.enabled === false && <Tag appearance="outline">paused</Tag>}
       </div>
       {/* BOTH ADDRESSES, because the fix is to replace one with the other
           at the third-party app and a reader cannot do that from a badge.
@@ -838,10 +864,9 @@ function SurfaceRow({
         <div className="int-row-note">
           <span className="int-row-note-text">
             <span>
-              The event subscription was registered with{" "}
-              <code className="inline">{row.endpoint}</code>, but this engine now listens on{" "}
-              <code className="inline">{base ?? "no public address"}</code>. Update the address in{" "}
-              {surface.name} to keep receiving events.
+              The event subscription was registered with <InlineCode>{row.endpoint}</InlineCode>,
+              but this engine now listens on <InlineCode>{base ?? "no public address"}</InlineCode>.
+              Update the address in {surface.name} to keep receiving events.
             </span>
           </span>
         </div>
@@ -1125,16 +1150,16 @@ export function SeatStep({
       // that build a seat's app and they are the same kind of thing — the one
       // control on the row a person is meant to press — so drawing the second
       // as an ordinary button made the finished half look optional.
-      <a className="btn sm primary" href={seat.action_url} target="_blank" rel="noreferrer">
+      <ButtonLink size="small" variant="primary" href={seat.action_url} external>
         Install on {app}
-      </a>
+      </ButtonLink>
     );
   }
   if (seat.step !== "create_app") return null;
 
   return (
     <>
-      <Button size="sm" variant="primary" disabled={busy} onClick={() => void create()}>
+      <Button size="small" variant="primary" disabled={busy} onClick={() => void create()}>
         {busy ? `Opening ${app}` : `Create app on ${app}`}
       </Button>
       {refused && (
@@ -1240,17 +1265,17 @@ export function EntryRow({
   const actions = (
     <>
       {state.tag !== "" && (
-        <Badge tone={state.tone} outline={state.outline}>
+        <Tag variant={state.tone} appearance="outline">
           {state.tag}
-        </Badge>
+        </Tag>
       )}
       {action && onConnect && (
-        <Button size="sm" variant="primary" onClick={() => onConnect()}>
+        <Button size="small" variant="primary" onClick={() => onConnect()}>
           {action.label}
         </Button>
       )}
       {!absent && onDisconnect && (
-        <Button size="sm" variant="ghost" onClick={onDisconnect}>
+        <Button size="small" variant="tertiary" onClick={onDisconnect}>
           Disconnect
         </Button>
       )}
@@ -1263,7 +1288,7 @@ export function EntryRow({
     return (
       <div className="int-card int-card-absent">
         <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} />
+          <VendorMark vendor={entry.vendor} size="lg" />
         </span>
         <span className="int-heading">
           <span className="int-name">{entry.name}</span>
@@ -1288,7 +1313,7 @@ export function EntryRow({
           onClick={() => setOpen((was) => !was)}
         >
           <span className="int-brand" aria-hidden>
-            <VendorMark vendor={entry.vendor} />
+            <VendorMark vendor={entry.vendor} size="lg" />
           </span>
           <span className="int-heading">
             <span className="int-name">{entry.name}</span>
@@ -1312,7 +1337,7 @@ export function EntryRow({
             aria-label={open ? `Hide ${entry.name} details` : `Show ${entry.name} details`}
             onClick={() => setOpen((was) => !was)}
           >
-            <Icon name="chevronDown" size="sm" />
+            <KeyboardArrowDownGlyph size="sm" />
           </button>
           {/* SETTINGS BESIDE THE DISCLOSURE, as a square the size of the
               chevron. It sat at the foot of the open card, which put an
@@ -1329,7 +1354,7 @@ export function EntryRow({
               title={`${entry.name} settings`}
               onClick={() => onConnect()}
             >
-              <Icon name="gear" size="sm" />
+              <SettingsGlyph size="sm" />
             </button>
           )}
           {actions}
@@ -1361,7 +1386,7 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <Avatar name={seat.name || seat.handle} size="sm" />
+                <Avatar name={seat.name || seat.handle} size="xs" decorative />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}
@@ -1420,7 +1445,7 @@ export function EntryRow({
                     {seat.detail ? (
                       seat.detail
                     ) : seat.inbound_path ? (
-                      <code className="inline">{seat.inbound_path}</code>
+                      <InlineCode>{seat.inbound_path}</InlineCode>
                     ) : (
                       "nothing set up for this agent"
                     )}
@@ -1505,15 +1530,15 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
     // A red agent under a surface saying "nothing has to be done" would be
     // the same contradiction in the other direction.
     return (
-      <Badge tone="caution" outline>
+      <Tag variant="warning" appearance="outline">
         not ready
-      </Badge>
+      </Tag>
     );
   }
   return (
-    <Badge tone={satisfied ? "positive" : "neutral"} outline={!satisfied}>
+    <Tag variant={satisfied ? "success" : "neutral"} appearance="outline">
       {satisfied ? "ready" : "not set up"}
-    </Badge>
+    </Tag>
   );
 }
 
@@ -1549,85 +1574,32 @@ export function useSetup(): {
    * which of the two it is: nothing is known yet.
    */
   loading: boolean;
-  reload: () => void;
+  /** Read again. `quiet` keeps the cards on screen, for a refresh nobody asked for. */
+  reload: (quiet?: boolean) => void;
 } {
-  const [listing, setListing] = useState<SetupListing | null>(null);
-  const [guarded, setGuarded] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  // `quiet` re-reads without the skeleton, for a refresh nobody asked for.
-  // Every re-read a person triggers keeps it, because the two halves of this
-  // screen disagree for a moment either side of a connect and a card drawn
-  // from one of them is wrong; a background refresh has no such moment, and
-  // blanking six cards because somebody came back to the tab would be the
-  // screen reporting an absence that is not there.
-  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST.
-  //
-  // Four things start one — mount, a token change, the tab becoming visible
-  // and useRecheck, which deliberately fires the same read twice 700 ms
-  // apart — so several can be in flight at once. Every answer was written
-  // into state unconditionally, and nothing polls this route, so whichever
-  // landed last is what the screen held until the operator changed tabs or
-  // set a token. A generation counter is what useQuery in this same tree
-  // already uses for exactly this, and it is why its doc argues against a
-  // second hand-rolled loader.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      // An unmounted screen has no state to write into, and a stale
-      // generation is what says so to a read still in flight.
-      generation.current++;
-    },
-    [],
-  );
-
-  const reload = useCallback((quiet = false) => {
-    generation.current++;
-    const mine = generation.current;
-    if (!quiet) setLoading(true);
-    void (async () => {
-      try {
-        const answer = (await rest.get("/setup/integrations")) as SetupListing;
-        if (generation.current !== mine) return;
-        setListing(answer);
-        setGuarded(false);
-      } catch (err) {
-        if (generation.current !== mine) return;
-        // A refusal is not an empty answer. The screen keeps every read it
-        // already has and simply offers no writes.
-        setListing(null);
-        setGuarded(err instanceof RestError && err.unauthorized);
-      } finally {
-        // ANSWERED, not answered WELL. A refusal is a state the screen can
-        // render honestly, with the banner and no buttons; waiting is not.
-        if (generation.current === mine) setLoading(false);
-      }
-    })();
-  }, []);
-
-  useEffect(reload, [reload]);
-  // A refusal here is the one the banner asks the reader to fix, so the fix
-  // has to land on this screen without a reload.
-  useEffect(() => onTokenChanged(reload), [reload]);
-  // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
-  // listing is the only thing that carries the roster: nothing pushes it, and
-  // no answer this screen holds says when a person finished creating an app.
-  // So it is re-read when the tab comes back, which is exactly the moment a
-  // seat that offered Create needs to be offering Install instead.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") reload(true);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [reload]);
+  // ONE LOADER, the dashboard's: the generation counter, the abort of a
+  // superseded read, the re-read on a token change and the quiet re-read when
+  // the tab comes back are all [useRest]'s. That last one is load-bearing
+  // here: AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
+  // listing is the only thing that carries the roster. Nothing pushes it, and
+  // no answer this screen holds says when a person finished creating an app,
+  // so the tab coming back is exactly the moment a seat that offered Create
+  // needs to be offering Install instead.
+  const read = useRest<SetupListing>("/setup/integrations", { refetchOnFocus: true });
+  const listing = read.data;
+  // A refusal is not an empty answer. The screen keeps every read it already
+  // has from the socket and simply offers no writes.
+  const guarded = read.error?.unauthorized ?? false;
+  const byKey = useMemo(() => new Map((listing?.tools ?? []).map((t) => [t.key, t])), [listing]);
 
   return {
-    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
+    byKey,
     base: listing?.public_base_url ?? null,
     guarded,
-    loading,
-    reload,
+    // ANSWERED, not answered WELL. A refusal is a state the screen can render
+    // honestly, with the banner and no buttons; waiting is not.
+    loading: read.loading,
+    reload: read.reload,
   };
 }
 
@@ -1725,13 +1697,13 @@ export function Integrations() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Integrations"
-        sub="The tools the company works in. Each agent acts as itself on these, with its own credentials."
+        description="The tools the company works in. Each agent acts as itself on these, with its own credentials."
         badges={
-          <Badge outline>
+          <Tag appearance="outline">
             {configured.length} of {CATALOG.length} configured
-          </Badge>
+          </Tag>
         }
       />
 
@@ -1739,29 +1711,26 @@ export function Integrations() {
           is one setting, and a screen that asked for it per integration would
           ask the operator to keep seven copies consistent. */}
       {setup.base && !setup.base.present && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>No public address is set, so no third-party app can deliver to this engine.</span>
             <span className="t-caption">
-              Set <code className="inline">{setup.base.config_path}</code> to the HTTPS address
-              third-party apps reach this deployment on. Chat over an outbound socket, Mattermost,
-              is unaffected.
+              Set <InlineCode>{setup.base.config_path}</InlineCode> to the HTTPS address third-party
+              apps reach this deployment on. Chat over an outbound socket, Mattermost, is
+              unaffected.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
       {setup.base?.present && (
-        <div className="banner neutral">
-          <Icon name="link" size="sm" />
+        <Callout variant="neutral" icon={<LinkGlyph size="sm" />}>
           <span>
-            Third-party apps reach this engine at <code className="inline">{setup.base.value}</code>
+            Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
           </span>
-        </div>
+        </Callout>
       )}
       {setup.guarded && (
-        <div className="banner neutral">
-          <Icon name="key" size="sm" />
+        <Callout variant="neutral" icon={<KeyGlyph size="sm" />}>
           <span>
             Setting an integration up needs an operator token. This screen is showing what it can
             read without one.
@@ -1771,10 +1740,15 @@ export function Integrations() {
               anonymous reads allowed the socket is never refused, so a banner
               that only NAMES the missing credential leaves the reader with
               nothing on the page that can supply it. */}
-          <Button size="sm" icon="key" onClick={requestToken}>
+          <Button
+            variant="secondary"
+            size="small"
+            leadingIcon={<KeyGlyph />}
+            onClick={requestToken}
+          >
             Set token
           </Button>
-        </div>
+        </Callout>
       )}
 
       {dropping && (
@@ -1817,7 +1791,9 @@ export function Integrations() {
 
       {/* BOTH HALVES, because a card drawn from one of them is a card with
           no buttons. See [useSetup]'s `loading`. */}
-      {((loading && !data) || setup.loading) && <Skeleton rows={6} />}
+      {((loading && !data) || setup.loading) && (
+        <Skeleton label="Loading the integrations" variant="text" rows={6} />
+      )}
       <QueryState error={error} loading={loading} empty={undefined}>
         {/* WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each half
             alphabetical. One flat list rather than panels: a capability
@@ -1899,10 +1875,10 @@ export function Integrations() {
           </div>
         )}
         {data && configured.length === 0 && (
-          <Empty
-            icon="plug"
+          <EmptyState
+            icon={<CableGlyph />}
             title="No integration is connected yet"
-            hint="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
+            description="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
           />
         )}
       </QueryState>

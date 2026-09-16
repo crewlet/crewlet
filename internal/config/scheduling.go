@@ -81,7 +81,7 @@ func (s *Scheduling) CatchupMax() time.Duration {
 // at or above it can skip a fire entirely rather than merely delaying one.
 const maxTickSeconds = 60
 
-func (s *Scheduling) validate(path string) error {
+func (s *Scheduling) validate(path Path) error {
 	var p problems
 	if s.TickSeconds < 1 || s.TickSeconds > maxTickSeconds {
 		p.add(at(path, "tick_seconds"), ErrOutOfRange,

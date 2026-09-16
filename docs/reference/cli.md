@@ -10,7 +10,7 @@ subcommand below is served by it.
 | Command | Description |
 |---------|-------------|
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
-| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for machine-readable errors); with no positional it checks both tiers via `-config` and `-company` |
+| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
@@ -102,6 +102,12 @@ Reads Tier A bootstrap and starts the agent engine.
 revision the fleet's [activation pointer](../concepts/control-plane.md) names,
 so a Tier B file on this command line is only ever a way of getting a document
 *into* the store — and the two flags above are the two reasons to want that.
+The file is read against the rules a running company depends on, and against
+the [admission rules](../concepts/configuration.md#what-a-stored-revision-is-held-to)
+only when it is actually written as a new revision (`-company` into an empty
+store, `-import-company` over a different company): a file that is already the
+active revision, or a bootstrap the store's own company outranks, starts the
+node even when it carries a duplicate name stored before the rule existed.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the
@@ -176,6 +182,14 @@ node converges with no restart. `-api URL` names a node explicitly, which is
 also how this works from a machine that is not the node at all. This is the
 same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
 store, and for the same reason: both estates live inside the engine's process.
+
+Through a node, the write is a [compare-and-set](api-endpoints.md#concurrent-writes)
+like every other. If another write activated first, the import says so and
+names the revision that won; when the node kept the document as an inactive
+revision it names that too, with the node's own routes that compare it with
+what is live and make it live (`GET /config/revisions/<UUID>/diff` and
+`POST /config/revisions/<UUID>/revert`), because `crewlet config diff` and
+`crewlet config activate` open the store the running engine holds.
 
 With the engine **stopped** it writes to this node's own store and marks the
 revision active there, which the node publishes to the fleet at its next start.
@@ -266,7 +280,7 @@ reader knows what was left out. A terminal has no such budget and does have a
 pager, so this command prints the whole comparison: the reader best equipped
 to read a long diff was the one a shared cap kept it from.
 
-**Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act.
+**Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act. A changed credential still appears: the revisions are compared as stored, so a rotated key is reported at its path as a change from `"__redacted__"` to `"__redacted__"`, never with either value.
 
 ### `crewlet config activate`
 
@@ -390,22 +404,25 @@ the first non-flag token, so a command that took the file and kept going would
 silently validate the defaults instead and print a success line about files it
 never opened.
 
-Validation is **deep** — it builds the `Organization`, so unknown unit
-leads, bad cron expressions, invalid timezones, human seats missing a
-contact identity, and a knowledge scope with no backend behind it all fail here rather
-than at run time. It reads **no environment**: Tier B keeps `${VAR}`
-references verbatim, so a config validates fully before any secret
-exists.
+Validation is **deep**: it builds the `Organization`, so duplicate seat and
+unit names, bad cron expressions, invalid timezones, human seats missing a
+contact identity, and a knowledge scope with no backend behind it all fail here
+rather than at run time. It reads **no environment**: Tier B keeps `${VAR}`
+references verbatim, so a config validates fully before any secret exists.
+For the same reason a company with no `providers.llm` at all validates, and
+its summary reports `0 LLM providers`: every node applies it, and its seats
+hold their work until a provider is added (see
+[A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
 
 | Flag | Description |
 |------|-------------|
-| `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename — the two tiers share no top-level key, so `name`/`agents`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
+| `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename. The two tiers share no top-level key, so `name`/`roles`/`units`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
 | `-json` | Emit a machine-readable result on stdout instead of prose. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
-"errors": [{"path", "type", "message"}], "summary": {...}}` — one record per
-offending field, with its exact path, so an editor, CI job, or [AI authoring
+"problems": [...], "warnings": [...], "summary": {...}}`. Each problem is
+located and classified, so an editor, CI job, or [AI authoring
 loop](../getting-started/ai-authoring.md) can fix everything in one pass:
 
 ```json
@@ -413,17 +430,37 @@ loop](../getting-started/ai-authoring.md) can fix everything in one pass:
   "valid": false,
   "tier": "company",
   "file": "company.yaml",
-  "errors": [
-    { "path": "agents.roles[0].llm", "type": "unknown_value",
-      "message": "no provider named \"nonexistent\" is configured" }
-  ]
+  "problems": [
+    { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
+      "kind": "unknown_value", "seat": "cto",
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" }
+  ],
+  "warnings": []
 }
 ```
 
-`type` is one of `missing`, `out_of_range`, `conflict`, `shape`,
-`unknown_field`, `unknown_value`, or `invalid` for anything this build does
-not classify — a closed set with a fallback, because a consumer branching on
-it must never receive an empty string and read it as a field somebody forgot.
+| Problem field | Meaning |
+|---|---|
+| `path` | The authored path. Empty only for a failure that belongs to no place in the document, such as a file that is not YAML. |
+| `segments` | The same path as an array of keys (strings) and list indexes (numbers). A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is empty. |
+| `kind` | `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`, `unknown_value`, or `invalid` for anything this build does not classify: a closed set with a fallback, because a consumer branching on it must never receive an empty string and read it as a field somebody forgot. |
+| `message` | The full line, exactly as the prose output prints it. |
+| `seat` / `unit` | The handle of the seat, or the name of the unit, it is about. Omitted when neither. |
+| `line` | The line in the file, for a failure the parser found (an unknown key, a value of the wrong shape). Omitted otherwise. |
+
+A rule that several seats or units break together, such as two seats sharing a
+name, is one message and one problem beside each of them, so `problems` can
+hold more entries than the prose output has lines. The prose output prints
+that message once, led by every path it applies to.
+
+Each warning is a reference that resolves to nothing (a unit `lead`, a root
+seat's `unit`, a `manages` entry, a GitLab access level): `{"kind":
+"dangling_reference", "ref": "lead" | "unit" | "manages" |
+"gitlab_access_level", "path", "segments", "seat", "unit", "from", "to",
+"message"}`. The engine runs a company with one, so a warning never fails
+validation; prose output prints each on its own `warning:` line. Warnings are
+reported for any company document that parses, valid or not. Both lists are
+always arrays.
 
 Exit code is `0` when valid and `1` otherwise, **in both output modes**: a
 `-json` run that printed `{"valid": false}` and exited zero would pass every

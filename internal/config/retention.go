@@ -142,21 +142,23 @@ func durationOr(raw string, fallback time.Duration) time.Duration {
 	return d
 }
 
-func (r TrackerRetention) validate(path string) error {
+func (r TrackerRetention) validate(path Path) error {
 	var p problems
-	check := func(field, raw string, lo, hi time.Duration, why string) {
+	// The parameter is `name` rather than `field`, which would shadow the
+	// package's own path constructor for the whole closure.
+	check := func(name, raw string, lo, hi time.Duration, why string) {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			return
 		}
 		d, err := time.ParseDuration(raw)
 		if err != nil {
-			p.add(at(path, field), ErrShape,
-				"%q is not a duration — write it as 24h, 7d is 168h, 30m", raw)
+			p.add(at(path, name), ErrShape,
+				"%q is not a duration, write it as 24h, 7d is 168h, 30m", raw)
 			return
 		}
 		if d < lo || d > hi {
-			p.add(at(path, field), ErrOutOfRange,
+			p.add(at(path, name), ErrOutOfRange,
 				"%s is outside %s..%s: %s", raw, lo, hi, why)
 		}
 	}
@@ -210,12 +212,12 @@ func containsFloor(f BackupFloor) bool {
 }
 
 // bytesInRange refuses a byte ceiling outside its bounds, naming both.
-func bytesInRange(p *problems, path, field string, v, lo, hi int64) {
+func bytesInRange(p *problems, path Path, name string, v, lo, hi int64) {
 	if v == 0 {
 		return
 	}
 	if v < lo || v > hi {
-		p.add(at(path, field), ErrOutOfRange,
+		p.add(at(path, name), ErrOutOfRange,
 			"%d is outside %d..%d bytes", v, lo, hi)
 	}
 }

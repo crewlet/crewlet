@@ -1,0 +1,180 @@
+{
+  "seats": [
+    {
+      "path": "units[0].roles[0]",
+      "handle": "tech-lead",
+      "name": "Tech Lead",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "engineering-manager",
+      "managers": [
+        "engineering-manager"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering"
+      ]
+    },
+    {
+      "path": "units[0].roles[1]",
+      "handle": "engineering-manager",
+      "name": "Engineering Manager",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": [
+        "tech-lead",
+        "developer-a",
+        "developer-b"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering"
+      ]
+    },
+    {
+      "path": "units[0].roles[2]",
+      "handle": "developer-a",
+      "name": "Developer A",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "engineering-manager",
+      "managers": [
+        "engineering-manager"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering"
+      ]
+    },
+    {
+      "path": "units[0].roles[3]",
+      "handle": "developer-b",
+      "name": "Developer B",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "engineering-manager",
+      "managers": [
+        "engineering-manager"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering"
+      ]
+    },
+    {
+      "path": "units[1].roles[0]",
+      "handle": "design-lead",
+      "name": "Design Lead",
+      "kind": "agent",
+      "unit_path": "units[1]",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": [
+        "designer",
+        "researcher"
+      ],
+      "auto_reports": [
+        "designer",
+        "researcher"
+      ],
+      "onboarding_chain": [
+        "Design"
+      ]
+    },
+    {
+      "path": "units[1].roles[1]",
+      "handle": "designer",
+      "name": "Designer",
+      "kind": "agent",
+      "unit_path": "units[1]",
+      "placed_by_ref": false,
+      "manager": "design-lead",
+      "managers": [
+        "design-lead"
+      ],
+      "reports": [
+        "illustrator"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Design"
+      ]
+    },
+    {
+      "path": "units[1].roles[2]",
+      "handle": "illustrator",
+      "name": "Illustrator",
+      "kind": "agent",
+      "unit_path": "units[1]",
+      "placed_by_ref": false,
+      "manager": "designer",
+      "managers": [
+        "designer"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Design"
+      ]
+    },
+    {
+      "path": "units[1].roles[3]",
+      "handle": "researcher",
+      "name": "Researcher",
+      "kind": "agent",
+      "unit_path": "units[1]",
+      "placed_by_ref": false,
+      "manager": "design-lead",
+      "managers": [
+        "design-lead"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Design"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "path": "units[0]",
+      "name": "Engineering",
+      "type": "team",
+      "lead": "tech-lead",
+      "lead_inherited": false,
+      "channel": "",
+      "channel_inherited": false,
+      "seats": [
+        "tech-lead",
+        "engineering-manager",
+        "developer-a",
+        "developer-b"
+      ]
+    },
+    {
+      "path": "units[1]",
+      "name": "Design",
+      "type": "team",
+      "lead": "design-lead",
+      "lead_inherited": false,
+      "channel": "",
+      "channel_inherited": false,
+      "seats": [
+        "design-lead",
+        "designer",
+        "illustrator",
+        "researcher"
+      ]
+    }
+  ]
+}

@@ -126,6 +126,38 @@ func TestAGuardBreachIsItsOwnEventNotJustAFieldOnTheSummary(t *testing.T) {
 	}
 }
 
+// The loop's breach kinds are published by conversion, so each one has to BE
+// the guard kind the event type names. Comparing a published kind against
+// types.GuardKind(turn.BreachX) cannot catch a drift, because both sides move
+// together; comparing it against the event's own constant can. A depth breach
+// once went out as `depth`, a kind the dashboard had no sentence for.
+func TestEveryBreachTheLoopRaisesIsAGuardKindTheEventNames(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		breach turn.BreachKind
+		want   types.GuardKind
+	}{
+		{turn.BreachStall, types.GuardStall},
+		{turn.BreachMaxIterations, types.GuardMaxIter},
+		{turn.BreachDepth, types.GuardDepthCap},
+		{turn.BreachScheduledTimeout, types.GuardScheduledTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.want), func(t *testing.T) {
+			t.Parallel()
+			e, p, tel := failing(t)
+			e.publishFailure(context.Background(), tel, "t-kind", turn.Result{
+				Decision: phase.Failed,
+				Breach:   &turn.Breach{Kind: tc.breach, Detail: "stopped"},
+			}, nil)
+			got := only[*types.TurnGuardBreach](t, p, "turn.guard_breach")
+			if got.Kind != tc.want {
+				t.Errorf("turn.Breach %q published kind %q, want %q", tc.breach, got.Kind, tc.want)
+			}
+		})
+	}
+}
+
 func TestAnExhaustedProviderChainSaysWhatItTried(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)

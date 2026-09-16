@@ -166,8 +166,8 @@ func TestTheBudgetGateProbesWithAZeroCharge(t *testing.T) {
 // `c.Models` reference looks wrong in review — it is the obvious spelling —
 // so this is derived from the source rather than left to a reader.
 //
-// Scoped to the two functions that build learning machinery. Everywhere else
-// in the engine `c.Models` is the correct thing to read; it is only auxiliary
+// Scoped to the functions that build learning machinery. Everywhere else in
+// the engine `c.Models` is the correct thing to read; it is only auxiliary
 // LLM work on a seat's behalf that has to be charged.
 func TestLearningWorkersResolveModelsThroughTheMeter(t *testing.T) {
 	t.Parallel()
@@ -180,6 +180,7 @@ func TestLearningWorkersResolveModelsThroughTheMeter(t *testing.T) {
 
 	metered := map[string]bool{
 		"buildReflectionWorkers": true,
+		"learningPasses":         true,
 		"auxSummarizer":          true,
 	}
 	for _, decl := range parsed.Decls {

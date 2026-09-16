@@ -34,8 +34,19 @@ import (
 // order an operator wrote and no answer at all over a Go map — two seats booted
 // from one config would land on different models, and one seat would change
 // model across a restart. config.Company.ProviderOrder is what preserves it.
+//
+// NO PROVIDERS IS NO REGISTRY, and not an error. A company with an empty
+// providers.llm validates (an org chart written before its credentials exist,
+// and what a company created from the dashboard is until one is added), so
+// refusing it here made every node refuse to apply a revision its own dry run
+// had just called valid. The epoch carries a nil registry instead, which is
+// what [Company.Models] documents and what the dispatcher reads to hold every
+// seat's work until a provider arrives.
 func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
+	if len(order) == 0 {
+		return nil, nil
+	}
 	entries := make([]phase.Entry, 0, len(order))
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]

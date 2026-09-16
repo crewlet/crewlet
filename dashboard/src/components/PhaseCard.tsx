@@ -42,9 +42,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Code, Disclosure, PhaseTag, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
+import { PhaseTag } from "./PhaseTag.tsx";
+import { fmtCount, fmtDateTime, fmtDuration } from "~/lib/format.ts";
 import {
   decisionLabel,
   ledgerOf,
@@ -53,8 +52,27 @@ import {
   type Round,
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
+import {
+  Callout,
+  CodeBlock,
+  cx,
+  Disclosure,
+  EmptyValue,
+  RelativeTime,
+  Tag,
+  useNow,
+  VisuallyHidden,
+} from "@crewlethq/ui";
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import {
+  ChevronRightGlyph,
+  ErrorGlyph,
+  InfoGlyph,
+  KeyboardArrowDownGlyph,
+  TerminalGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 function ToolRow({
   name,
@@ -71,25 +89,47 @@ function ToolRow({
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
         mono
-        // A SIBLING of the name, not part of it. Inside the label it sat in
-        // a truncating single-line span and was the thing that wrapped, so a
-        // failed call showed its alert on its own line above the tool.
-        mark={
-          failed ? <Icon name="alert" size="xs" style={{ color: "var(--critical-ink)" }} /> : null
-        }
-        label={name}
+        title={name}
+        // THE WORD, not a red glyph. A failed call was marked with a glyph
+        // that carried no name at all, so a screen reader was told nothing
+        // about it, and the hue was the only signal a sighted reader got.
+        // Inside the title the mark also wrapped, putting the alert on its
+        // own line above the tool; the design system draws it after the name,
+        // as part of what the control is called.
+        meta={failed ? "failed" : undefined}
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
           {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable
               block announces the name and nothing around it, and half a
               dozen regions called "Arguments" on one round is the same as
-              none. */}
-          <Code plain label={`${name} — arguments`}>
-            {args || "{}"}
-          </Code>
+              none.
+
+              `selectable` is what carries the name: the design system pairs
+              the two in the prop type, because a bounded block is a scroll
+              container a keyboard has to be able to reach, and a region with
+              no accessible name is a tab stop announced as nothing. It also
+              scopes select-all to the block, which is what a reader copying
+              one tool's arguments out of a long round wants. Both blocks are
+              rendered only while the row is open, so this adds no stop to a
+              collapsed card. */}
+          <CodeBlock
+            plain
+            wrap
+            selectable
+            label={`${name}, arguments`}
+            code={args || "{}"}
+            maxHeight={RECORD_MAX_HEIGHT}
+          />
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <Code label={`${name} — ${failed ? "error" : "result"}`}>{result || "(empty)"}</Code>
+          <CodeBlock
+            plain
+            wrap
+            selectable
+            label={`${name}, ${failed ? "error" : "result"}`}
+            code={result || "(empty)"}
+            maxHeight={RECORD_MAX_HEIGHT}
+          />
         </div>
       </Disclosure>
     </div>
@@ -171,7 +211,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             and a reader who cannot see the rail was getting "1", then two
             unrelated-sounding disclosures. Announced here, hidden from the
             node so it is not read twice. */}
-        <span className="sr-only">Round {round.round}</span>
+        <VisuallyHidden>Round {round.round}</VisuallyHidden>
         <span className="round-node t-num" aria-hidden="true">
           {round.round}
         </span>
@@ -185,7 +225,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
-              <Icon name="alert" size="xs" /> this attempt was abandoned mid-answer and retried
+              <WarningGlyph size="xs" /> this attempt was abandoned mid-answer and retried
             </div>
             {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
             {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
@@ -203,7 +243,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
               <p className="prose muted stream">{thinking}</p>
             </div>
           ) : (
-            <Disclosure label="Thinking" count={`${thinking.length} chars`} tone="reasoning">
+            <Disclosure title="Thinking" count={`${thinking.length} chars`} variant="aside">
               <p className="prose muted">{thinking}</p>
             </Disclosure>
           ))}
@@ -258,7 +298,7 @@ export function PhaseCard({
       )}
     >
       <header className="phase-head" onClick={() => setOpen((v) => !v)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+        {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
         <PhaseTag phase={record.phase} />
         {record.iteration > 1 && (
           <span className="t-caption" title="self-iterate round">
@@ -274,14 +314,14 @@ export function PhaseCard({
           </span>
         )}
         {record.worker && (
-          <Badge outline mono title="worker template">
+          <Tag appearance="outline" monospace title="worker template">
             {record.worker}
-          </Badge>
+          </Tag>
         )}
         {!!nested?.length && (
-          <Badge outline title="calls this phase made">
+          <Tag appearance="outline" title="calls this phase made">
             {nested.length} {nested.length === 1 ? "worker" : "workers"}
-          </Badge>
+          </Tag>
         )}
         {showRole && record.role && <span className="t-cell truncate">{record.role}</span>}
 
@@ -290,48 +330,56 @@ export function PhaseCard({
         {/* Everything below is present on BOTH a live and a finished phase, in
             the same order, so the row does not reshape when it completes. */}
         {record.decision && (
-          <Badge tone={record.decision === "self_iterate" ? "caution" : "neutral"}>
+          <Tag variant={record.decision === "self_iterate" ? "warning" : "neutral"}>
             {decisionLabel(record.phase, record.decision)}
-          </Badge>
+          </Tag>
         )}
         {record.exhaustedRounds && (
-          <Badge tone="caution" title="the phase ran out of tool rounds">
+          <Tag variant="warning" title="the phase ran out of tool rounds">
             round cap
-          </Badge>
+          </Tag>
         )}
         {record.emptyAnswerRounds > 0 && (
-          <Badge
-            tone="caution"
-            title="the model answered with nothing — no response and no tool call — and was re-asked"
+          <Tag
+            variant="warning"
+            title="the model answered with nothing (no response and no tool call) and was re-asked"
           >
             {record.emptyAnswerRounds} empty
-          </Badge>
+          </Tag>
         )}
         {record.rescueFired && (
-          <Badge tone="caution" title="the phase did not submit on its first run and was re-asked">
+          <Tag variant="warning" title="the phase did not submit on its first run and was re-asked">
             rescued
-          </Badge>
+          </Tag>
         )}
         {record.backend === "sandbox" && (
-          <Badge tone="info" icon="terminal">
+          <Tag variant="info" leadingIcon={<TerminalGlyph />}>
             {record.codingAgent || "sandbox"}
-          </Badge>
+          </Tag>
         )}
-        {record.failed && <Badge tone="critical">{record.errorKind || "failed"}</Badge>}
+        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
         {record.live && (
-          <Badge tone={stale === "stalled" ? "critical" : stale ? "caution" : "info"} dot>
+          <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {stale === "stalled" ? "no update in 10m" : stale ? "no update in 2m" : "running"}
-          </Badge>
+          </Tag>
         )}
 
-        <span className="phase-meta mono">{record.model || "—"}</span>
+        <span className="phase-meta mono">
+          {record.model || <EmptyValue label="Model not recorded" />}
+        </span>
         <span className="phase-meta t-num" title="tool rounds used">
-          {ledger.length || record.roundNum > 0
-            ? `${Math.max(ledger.length, record.roundNum)}r`
-            : "—"}
+          {ledger.length || record.roundNum > 0 ? (
+            `${Math.max(ledger.length, record.roundNum)}r`
+          ) : (
+            <EmptyValue label="No tool round recorded" />
+          )}
         </span>
         <span className="phase-meta t-num" title="total tokens">
-          {record.totalTokens ? fmtCount(record.totalTokens) : "—"}
+          {record.totalTokens ? (
+            fmtCount(record.totalTokens)
+          ) : (
+            <EmptyValue label="Tokens not reported" />
+          )}
         </span>
         {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
             engine measures the phase where the clock is and puts the answer
@@ -354,23 +402,25 @@ export function PhaseCard({
           dateTime={record.live ? record.startedAt : record.at}
           title={fmtDateTime(record.live ? record.startedAt : record.at)}
         >
-          {record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)}
+          {record.live ? (
+            <RelativeTime mode="elapsed" value={record.startedAt} now={now} />
+          ) : (
+            <RelativeTime value={record.at} now={now} />
+          )}
         </time>
       </header>
 
       {open && (
         <div className="phase-body">
           {record.failed && record.error && (
-            <div className="banner critical">
-              <Icon name="alert" size="sm" />
+            <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
               <span>{record.error}</span>
-            </div>
+            </Callout>
           )}
           {record.notes && (
-            <div className="banner neutral">
-              <Icon name="info" size="sm" />
+            <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
               <span>{record.notes}</span>
-            </div>
+            </Callout>
           )}
 
           {/* The transcript. One block per round — thought, speech, calls —
@@ -380,7 +430,7 @@ export function PhaseCard({
             <section className="col gap-1">
               <div className="t-label">
                 Rounds
-                <span className="faint">
+                <span className="muted">
                   {" · "}
                   what the model thought, said and called, in order
                 </span>
@@ -406,9 +456,9 @@ export function PhaseCard({
             <>
               {legacy.thinking && (
                 <Disclosure
-                  label="Thinking"
+                  title="Thinking"
                   count={`${legacy.thinking.length} chars`}
-                  tone="reasoning"
+                  variant="aside"
                 >
                   <p className="prose muted">{legacy.thinking}</p>
                 </Disclosure>
@@ -417,7 +467,7 @@ export function PhaseCard({
                 <section className="col gap-1">
                   <div className="t-label">
                     Transcript
-                    <span className="faint"> · recorded before rounds were kept apart</span>
+                    <span className="muted"> · recorded before rounds were kept apart</span>
                   </div>
                   <p className="prose">{legacy.answer.trim()}</p>
                 </section>
@@ -441,25 +491,35 @@ export function PhaseCard({
           )}
 
           {(record.systemPrompt || record.userPrompt) && (
-            <Disclosure label="Prompt" count={`${record.phase} phase`}>
+            <Disclosure title="Prompt" count={`${record.phase} phase`}>
               <div className="col gap-3">
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
-                    {/* The tallest block on the page by a wide margin — a
-                        seat's system prompt runs to tens of kilobytes — so
+                    {/* The tallest block on the page by a wide margin: a
+                        seat's system prompt runs to tens of kilobytes, so
                         this is the one that most needed to be reachable. */}
-                    <Code label={`The ${record.phase} phase's system prompt`}>
-                      {record.systemPrompt}
-                    </Code>
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label={`The ${record.phase} phase's system prompt`}
+                      code={record.systemPrompt}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                   </div>
                 )}
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <Code label={`The ${record.phase} phase's user message`}>
-                      {record.userPrompt}
-                    </Code>
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label={`The ${record.phase} phase's user message`}
+                      code={record.userPrompt}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                   </div>
                 )}
               </div>
@@ -468,7 +528,7 @@ export function PhaseCard({
 
           {(record.toolsAvailable.length > 0 || record.toolCatalogue.length > 0) && (
             <Disclosure
-              label="Tool surface"
+              title="Tool surface"
               count={record.toolsAvailable.length + record.toolCatalogue.length}
             >
               <div className="col gap-2">
@@ -476,13 +536,13 @@ export function PhaseCard({
                   <div className="col gap-1">
                     <div className="t-label">
                       Callable this round
-                      <span className="faint"> · full JSON schemas were sent</span>
+                      <span className="muted"> · full JSON schemas were sent</span>
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolsAvailable.map((t) => (
-                        <Badge key={t} mono outline>
+                        <Tag key={t} monospace appearance="outline">
                           {t}
-                        </Badge>
+                        </Tag>
                       ))}
                     </div>
                   </div>
@@ -491,13 +551,13 @@ export function PhaseCard({
                   <div className="col gap-1">
                     <div className="t-label">
                       Offered as prose
-                      <span className="faint"> · discoverable, not yet callable</span>
+                      <span className="muted"> · discoverable, not yet callable</span>
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolCatalogue.map((t) => (
-                        <Badge key={t} mono outline>
+                        <Tag key={t} monospace appearance="outline">
                           {t}
-                        </Badge>
+                        </Tag>
                       ))}
                     </div>
                   </div>
@@ -508,7 +568,7 @@ export function PhaseCard({
 
           {!!nested?.length && (
             <Disclosure
-              label="Delegated to"
+              title="Delegated to"
               count={`${nested.length} · ${fmtCount(
                 nested.reduce((n, r) => n + r.totalTokens, 0),
               )} tokens`}

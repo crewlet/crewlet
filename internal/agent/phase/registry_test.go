@@ -2,7 +2,9 @@ package phase_test
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -179,10 +181,12 @@ func TestEveryPhaseReadsItsOwnField(t *testing.T) {
 
 func TestAnEmptyRegistryIsRefusedAtBuildTime(t *testing.T) {
 	t.Parallel()
-	// Not at the first turn, where it reports as a nil provider deep in a
-	// phase and names neither the seat nor the config.
-	if _, err := phase.NewRegistry(nil); err == nil {
-		t.Error("an empty registry built without error")
+	// A registry holding nothing has no answer to give. The company with no
+	// models is spelled as NO registry, which is the state the epoch holds,
+	// so an empty one would be a second spelling every consumer had to
+	// recognise.
+	if _, err := phase.NewRegistry(nil); !errors.Is(err, phase.ErrNoProviders) {
+		t.Errorf("an empty registry: err = %v, want ErrNoProviders", err)
 	}
 	for name, entries := range map[string][]phase.Entry{
 		"no key":      {{Provider: stub{}}},
@@ -191,6 +195,51 @@ func TestAnEmptyRegistryIsRefusedAtBuildTime(t *testing.T) {
 	} {
 		if _, err := phase.NewRegistry(entries); err == nil {
 			t.Errorf("%s: built without error", name)
+		}
+	}
+}
+
+// A NIL REGISTRY IS THE COMPANY WITH NO MODELS, and it answers rather than
+// panicking. The epoch holds nil for a company whose providers.llm is empty,
+// and a consumer holding it behind an interface cannot see that it is nil:
+// the prefetch's `Models == nil` guard passed exactly that value through, and
+// its first Head would have dereferenced it inside a turn.
+func TestANilRegistryIsTheCompanyWithNoModels(t *testing.T) {
+	t.Parallel()
+	var r *phase.Registry
+	if got := r.Keys(); len(got) != 0 {
+		t.Errorf("Keys = %v, want none", got)
+	}
+	for key := range r.All() {
+		t.Errorf("All yielded %q from a registry with no models", key)
+	}
+	if p, ok := r.Provider("default"); ok || p != nil {
+		t.Errorf("Provider = (%v, %v), want (nil, false)", p, ok)
+	}
+	if r.Has("default") {
+		t.Error("Has reported a key on a registry with no models")
+	}
+
+	role := &org.Role{Name: "CEO"}
+	var models interface {
+		Head(*org.Role, phase.Phase) (chain.Member, error)
+	} = r
+	for name, resolve := range map[string]func() error{
+		"Chain": func() error { _, err := r.Chain(role, phase.Execute); return err },
+		"Head":  func() error { _, err := r.Head(role, phase.Execute); return err },
+		"Head behind an interface": func() error {
+			_, err := models.Head(role, phase.Auxiliary)
+			return err
+		},
+	} {
+		err := resolve()
+		if !errors.Is(err, phase.ErrNoProviders) {
+			t.Errorf("%s: err = %v, want ErrNoProviders", name, err)
+			continue
+		}
+		// The one edit that fixes it, named where an operator reads it.
+		if !strings.Contains(err.Error(), "providers.llm") {
+			t.Errorf("%s: %q does not name providers.llm", name, err)
 		}
 	}
 }

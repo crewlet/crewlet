@@ -1,6 +1,6 @@
 # Overview
 
-Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, task management, agent lifecycle, and knowledge infrastructure needed to operate a network of AI agents modeled after a real corporate structure.
+Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, seat ownership, and knowledge and memory infrastructure needed to operate a network of AI agents modeled after a real corporate structure. Task state lives in a work-item tracker, the engine's own by default or an external one the engine deliberately mirrors none of (see [The Tracker](task-engine.md)).
 
 Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + a web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
 
@@ -34,7 +34,7 @@ Crewlet treats the organizational hierarchy as its primary orchestration structu
 | **Decision model** | The DACI framework (Driver / Approver / Contributor / Informed) |
 | **Lifetime** | A long-running, persistent company |
 | **Config style** | A YAML org chart, versioned in the store and edited live |
-| **Extensibility** | A full extension system — providers, hooks, middleware |
+| **Extensibility** | Out of process: MCP servers for anything an agent calls, and the REST API, the `/ws/stream` socket and OTLP for anything built around the engine. The binary loads no plugins |
 
 The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
 
@@ -44,10 +44,10 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic** — pluggable LLM, storage, tracker, knowledge and embedding backends; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
-- **Extension-oriented** — anything beyond running the company is an extension, not core
-- **Observable** — structured logging, tracing hooks, and metrics from day one
+- **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
+- **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
 
 ---
 
@@ -121,30 +121,32 @@ appears.
 
 ## Provider Layer
 
-All external dependencies are abstracted behind `Protocol` interfaces, enabling pluggable backends and easy testing.
+External dependencies sit behind small Go interfaces, each declared by the package that consumes it, so a backend is swappable and a test runs against a fake rather than a real API.
 
 ### LLM Provider
 
-The `LLMProvider` protocol defines two methods — `complete()` for single-shot completions (with optional tool definitions, temperature, max tokens, and tool choice) and `stream()` for streaming responses — plus a `model: str` attribute that names the model id the provider answers as. Telemetry (phase events, OTel spans, the dashboard's per-model token breakdown) reads `model` directly, so every concrete provider must expose it; `FallbackLLMProvider` surfaces the wrapped provider's value through a property.
+`llm.Provider` (`internal/providers/llm`) has two methods: `Complete(ctx, Request)`, one model call with the messages, optional tool definitions and a tool choice, and `Model()`, the entry's configured model id for log lines and config display. There is no separate streaming method: a caller that sets `Request.OnDelta` asks the backend to stream, and the backend calls it as text arrives while still returning the whole `Completion`. The model that actually served a call is `Completion.Model`, and the per-model token breakdown is built from that field rather than from `Model()`, because a fallback chain shared by concurrent callers has no single answer a method with no arguments could return.
 
-Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), and **`cli-agent`** — a locally installed coding CLI (`claude`, `codex`, `gemini`, `opencode`, …) driven as a headless text model on the operator's *subscription* rather than a metered API key. Different roles can use different providers/models (e.g., executives use Claude, junior agents use GPT-4o-mini).
+A provider does not retry and does not decide what a failure means beyond a coarse `llm.ErrorKind` (`rate_limit`, `auth`, `timeout`, `server`, or fatal). Rotation across keys belongs to the credential pool (`internal/providers/credential`), and falling back to the next model belongs to the seat's chain (`internal/providers/llm/chain`), which tries its members in order and stops at a fatal error.
 
-**Subscription backends.** The `cli-agent` provider is the one built-in that is not an HTTP client: it spawns a local process, so it needs per-seat filesystem isolation (a coding CLI keeps sessions, history and project memory under one home, and one provider instance serves every seat), an in-prompt JSON envelope in place of a native tool-call channel, and its own auth story. All three are covered in [Subscription LLM Backends](subscription-llm-backends.md). A spent subscription window classifies as `RATE_LIMIT`, so the ordinary fallback chain carries a role onto a metered key until it resets.
+Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any OpenAI-compatible endpoint, and **`cli-agent`**: a locally installed coding CLI (`claude`, `codex`, `gemini`, `opencode`, and others) driven on the operator's *subscription* rather than a metered API key. Different roles can use different providers and models (for example, executives on Claude and junior agents on a smaller, cheaper model).
 
-**Prompt caching.** Each call's large static prefix — the per-phase system prompt plus the tool-definition array — is the dominant repeated content of an agent turn: it is re-sent on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy) and is byte-stable across successive turns for the same agent (org config does not change mid-run). Both built-in providers cache it so it is re-read at a fraction of the base input price instead of re-billed in full each round. The Anthropic provider sets explicit `cache_control` breakpoints on the system block and the final tool definition (caching the whole `tools + system` prefix); the OpenAI provider relies on the platform's automatic prefix caching — the static system prompt is already first in the message array, which is what auto-caching requires. This is why the per-phase prompts can carry their full incident-hardened guidance (see [Turn Engine](turn-engine.md)) without the repetition dominating cost.
+**Subscription backends.** The `cli-agent` provider is the one built-in that is not an HTTP client: it spawns a local process, so it needs per-seat filesystem isolation (a coding CLI keeps sessions, history and project memory under one home, and one provider instance serves every seat), an in-prompt JSON envelope in place of a native tool-call channel, and its own auth story. All three are covered in [Subscription LLM Backends](subscription-llm-backends.md). A spent subscription window classifies as `rate_limit`, so the ordinary fallback chain carries a role onto a metered key until it resets.
 
-`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the budget cascade stays correct: Anthropic reports cache reads/writes *separately* from its raw `input_tokens`, so the provider sums all three; OpenAI's `prompt_tokens` already includes the cached portion. `Completion.CacheReadInputTokens` / `cache_creation_input_tokens` break that total down for cost observability and are logged on every `llm_complete` event.
+**Prompt caching.** Each call's large static prefix, the per-phase system prompt plus the tool-definition array, is the dominant repeated content of an agent turn: it is re-sent on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy) and is byte-stable across successive turns for the same agent within an epoch. Both built-in HTTP providers cache it so it is re-read at a fraction of the base input price instead of re-billed in full each round. The Anthropic provider sets explicit cache breakpoints on the system block and the final tool definition (caching the whole tools and system prefix); the OpenAI provider relies on the platform's automatic prefix caching, which works because the static system prompt is already first in the message array. This is why the per-phase prompts can carry their full incident-hardened guidance (see [Turn Engine](turn-engine.md)) without the repetition dominating cost.
+
+`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the token budget stays correct: Anthropic reports cache reads and writes *separately* from its raw input tokens, so the provider sums all three; OpenAI's prompt tokens already include the cached portion. `Completion.CacheRead` and `Completion.CacheWrite` break that total down for cost reporting only, and each tool-loop round records the model, the input and output tokens and the cache reads on its trace span.
 
 ### Embedding Provider
 
-The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and a `dimensions` property. Used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin), **and** by the [knowledge system](knowledge-system.md#semantic-search-two-stages-no-index-no-new-dependency) for the semantic half of a native search — the company's own pages and work items are embedded once by a fleet-singleton duty and applied on every node, so the bill is paid once however many nodes run. A Confluence knowledge base is searched live and embeds nothing. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
+`embeddings.Embedder` (`internal/providers/embeddings`) has two methods: `Embed(ctx, text)`, which returns one vector for one text, and `Width()`, the configured vector width. An embedding error means "no similarity search" to every caller, never a failed turn. It is used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin), **and** by the [knowledge system](knowledge-system.md#semantic-search-two-stages-no-index-no-new-dependency) for the semantic half of a native search: the company's own pages and work items are embedded once by a fleet-singleton duty and applied on every node, so the bill is paid once however many nodes run. A Confluence knowledge base is searched live and embeds nothing. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
 
 ### Database
 
 One local file, opened by Turso — a pure-Go driver over the SQLite file format — and built from a forward-only migration sequence. There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
 
-- **`agent_diary`** (vector-indexed) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is a separate read: on the native backend it is this node's own projection of the company's pages, indexed for BM25 search; on Confluence it is a live query with no local copy at all (see [knowledge system](knowledge-system.md)).
-- **`episodes`** (vector-indexed) — one row per completed turn; raw and LLM-compacted aggregates share the same table.
+- **`agent_diary`** (embedding column): each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is a separate read: on the native backend it is this node's own projection of the company's pages, indexed for BM25 search; on Confluence it is a live query with no local copy at all (see [knowledge system](knowledge-system.md)).
+- **`episodes`** (embedding column): one row per completed turn; raw and LLM-compacted aggregates share the same table.
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
@@ -221,7 +223,7 @@ internal/
 ├── maintenance/          # The retention sweep, behind one singleton duty
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
-├── whsec/                # Webhook signing secrets: minting and verification
+├── whsec/                # Webhook signing secrets: the format, minting and the HMAC key
 ├── jsprovision/          # How long a replicated JetStream create gets, and
 │                         #   what "the cluster is still forming" looks like:
 │                         #   one policy for the streams, the consumers and the
@@ -230,11 +232,14 @@ internal/
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/
+│                         #   auth/, httpjson/, mcpbridge/, and pagepolicy/:
+│                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields
-├── secrets/              # Config encryption at rest + the ${VAR} resolver
+├── secrets/              # The keyring and the sealed envelope: config encryption
+│                         #   at rest and the secret store's values (the ${VAR}
+│                         #   resolver is config.Resolver)
 └── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
 
 dashboard/                # The dashboard's SOURCE — React + TypeScript, built

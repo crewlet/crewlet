@@ -1,0 +1,23 @@
+# A root seat carrying a unit reference is moved into that unit, where its
+# lead auto-manages it; one naming no unit stays at the root. A manages entry
+# naming a unit with no seats, or naming nothing, is no report. A human seat
+# sits in the chart like any other and is auto-managed by its lead.
+name: Acme
+roles:
+  - name: Founder
+    kind: human
+    contact: {slack_user_id: U0FOUNDER}
+    manages: [Product Lead, Hiring, Ghost]
+  - name: Designer
+    unit: Product
+  - name: Wanderer
+    unit: Nowhere
+units:
+  - name: Product
+    lead: Product Lead
+    roles:
+      - name: Product Lead
+      - name: Sarah Chen
+        kind: human
+        contact: {slack_user_id: U0SARAH}
+  - name: Hiring

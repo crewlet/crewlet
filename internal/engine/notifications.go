@@ -53,6 +53,11 @@ type notifications struct {
 	// publishes a new *Company and a new *Registry together under this
 	// mutex, so "the registry I am about to write was built from the
 	// company I resolved against" is a single identity test.
+	//
+	// [Engine.installEpoch] runs that same test in the other direction:
+	// it publishes no epoch whose company the registry does not index,
+	// which is what keeps [Engine.Registry] non-nil for every reader that
+	// found a company through [Engine.Company].
 	registryFor *Company
 
 	admits notify.Admitter
@@ -101,10 +106,18 @@ type notifications struct {
 
 // Registry is the live party registry.
 //
-// NEVER NIL, and structurally so rather than by a guard here: the engine
-// indexes its first company during construction, before it returns and so
-// before anything can ask. A check on the read would suggest a window that
-// does not exist.
+// NEVER NIL WHILE AN EPOCH IS CURRENT, and structurally so rather than by a
+// guard here: [Engine.installEpoch], the one function that makes a company
+// current, indexes it first unless the caller already has. A reader that found
+// a company through [Engine.Company] therefore always finds a registry, and a
+// check on the read would suggest a window that does not exist.
+//
+// The window did exist while the boot path indexed its company in
+// startNotifications, the last step of construction. Every fleet duty is armed
+// before that step, and the integration reconcile loop runs a pass the moment
+// it starts: a pass that re-resolved a code host's or a tracker's seat
+// identities read this as nil and panicked, taking the whole process down on a
+// node that happened to win the duty during boot.
 func (e *Engine) Registry() *notify.Registry {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -243,12 +256,18 @@ func (e *Engine) refreshParties(c *Company) {
 // startNotifications brings up the inbound edge for the applied company.
 //
 // It runs after the node, because the service subscribes to a fleet-wide
-// group and a transport publishes onto this node's queue.
+// group and a transport publishes onto this node's queue. The party registry
+// it registers identities into was built when the company was published (see
+// [Engine.Registry]), not here.
+//
+// A node that boots with no company starts nothing here, and must not: the
+// group is fleet-wide, so a service with no parsers would take deliveries
+// meant for peers that can route them and acknowledge each one as unparsed.
+// Its first company starts the edge instead, through [Engine.startInbound].
 func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if c == nil {
 		return nil
 	}
-	e.refreshParties(c)
 
 	var (
 		parsers []notify.Parser
@@ -369,15 +388,12 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	prompts = append(prompts, nativePrompts...)
 
 	svc, err := notify.New(notify.Options{
-		Queue:    e.backends.Queue,
-		Registry: e.Registry,
-		Prompts:  notify.NewPrompts(prompts...),
-		Parsers:  parsers,
-		Valve:    e.notifyValve(),
-		// Read live off the epoch rather than captured: an apply that
-		// changes the cap must take effect on the next notification,
-		// not on the next restart.
-		RateLimit: func() int { return e.Company().Config.NotificationRateLimit },
+		Queue:     e.backends.Queue,
+		Registry:  e.Registry,
+		Prompts:   notify.NewPrompts(prompts...),
+		Parsers:   parsers,
+		Valve:     e.notifyValve(),
+		RateLimit: e.notificationRateLimit(c),
 		// The config posture, supplied by whoever holds the control
 		// plane. A shedding node PARKS inbound deliveries rather than
 		// routing them against a company it is not sure of — and nil
@@ -395,6 +411,56 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	e.notify.mu.Lock()
 	e.notify.service = svc
 	e.notify.mu.Unlock()
+	return nil
+}
+
+// notificationRateLimit is the per-seat notification cap the inbound edge
+// started for c enforces.
+//
+// Read live off the epoch rather than captured: an apply that changes the cap
+// must take effect on the next notification, not on the next restart. And c,
+// the company the edge was started for, answers until an epoch is current,
+// because a node's first company starts the edge BEFORE publishing the epoch
+// that carries it (see [Engine.startInbound]), and a delivery a peer accepted
+// can reach this node's consumer in between. Read off the epoch alone, that
+// delivery dereferenced a company that did not exist yet.
+func (e *Engine) notificationRateLimit(c *Company) func() int {
+	return func() int {
+		if live := e.Company(); live != nil {
+			return live.Config.NotificationRateLimit
+		}
+		return c.Config.NotificationRateLimit
+	}
+}
+
+// inboundStarted reports whether this node's inbound edge is running.
+func (e *Engine) inboundStarted() bool {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return e.notify.service != nil
+}
+
+// startInbound starts the inbound edge for the first company a node that
+// booted with none is handed.
+//
+// THROUGH THE FUNCTION BOOT RUNS, so the edge a company gets does not depend
+// on whether the node met it at boot or at its first apply. Every reconciler
+// only rebuilds a surface on a running service, and a node that booted
+// unconfigured has none, so before this a company created on a fresh node
+// verified and stored every webhook, chat message and alert and routed none of
+// them to a seat until the process restarted.
+//
+// Called at the integrations stage, BEFORE the epoch is published, so a start
+// that fails can refuse the apply with nothing served. What a failed start
+// brought up is taken down again: a chat transport left running would hold
+// every seat's socket beside the one the retry opens.
+func (e *Engine) startInbound(ctx context.Context, c *Company) error {
+	if err := e.startNotifications(ctx, c); err != nil {
+		e.stopNotifications(ctx)
+		return fmt.Errorf("start the inbound edge: %w", err)
+	}
+	log.InfoContext(ctx, "inbound_started", "company", c.Config.Name,
+		"sources", e.RoutedSources())
 	return nil
 }
 

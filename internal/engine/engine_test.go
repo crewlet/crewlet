@@ -260,21 +260,6 @@ func TestCLIAgentStateDirsAreDerivedPerProviderKey(t *testing.T) {
 	}
 }
 
-func TestACompanyWithNoModelsIsRefusedAtBuild(t *testing.T) {
-	t.Parallel()
-	// The org chart authored before its credentials PARSES — that is a
-	// documented state — but it cannot run a turn, and discovering that
-	// when a seat tries to think reports it as a nil provider deep in a
-	// phase.
-	c, err := config.ParseCompany([]byte("name: Acme\nroles:\n  - name: CEO\n    handle: ceo\n"))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if _, err := engine.NewCompany(c); err == nil {
-		t.Error("a company with no models built an epoch that cannot run a turn")
-	}
-}
-
 // The documented fallback: an entry that names no token still gets one from
 // the profile's own variable, through the resolver — which reads the secret
 // store BEFORE the environment. Without it, every operator would have to wire

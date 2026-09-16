@@ -622,6 +622,54 @@ integrations:
 	}
 }
 
+// integrationBlocks is one configuration block per integration whose parser
+// builds without reaching the network, keyed by the source it routes.
+var integrationBlocks = []struct {
+	source string
+	block  string
+}{
+	{source: "jira", block: `
+integrations:
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: s
+`},
+	{source: "confluence", block: `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: s
+`},
+	{source: "gitlab", block: `
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    token: t
+    signing_secret: whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=
+`},
+	{source: "github", block: `
+integrations:
+  github:
+    enabled: true
+    token: t
+    webhook_secret: s
+`},
+	{source: "datadog", block: `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: EXAMPLEDATADOGTOKEN0000000
+    route_to: ceo
+    provisioning:
+      site: datadoghq.com
+      api_key: dd-api
+      app_key: dd-app
+`},
+}
+
 // EVERY INTEGRATION HAS TO SURVIVE BEING ADDED AFTER BOOT.
 //
 // The parser set is assembled once, in New, so anything that is not rebuilt
@@ -637,51 +685,7 @@ integrations:
 // direction.
 func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		source string
-		block  string
-	}{
-		{source: "jira", block: `
-integrations:
-  jira:
-    url: https://jira.example.com
-    token: t
-    webhook_secret: s
-`},
-		{source: "confluence", block: `
-integrations:
-  confluence:
-    url: https://wiki.example.com
-    token: t
-    webhook_secret: s
-`},
-		{source: "gitlab", block: `
-integrations:
-  gitlab:
-    enabled: true
-    url: https://gitlab.example.com
-    token: t
-    signing_secret: whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=
-`},
-		{source: "github", block: `
-integrations:
-  github:
-    enabled: true
-    token: t
-    webhook_secret: s
-`},
-		{source: "datadog", block: `
-integrations:
-  datadog:
-    enabled: true
-    webhook_token: EXAMPLEDATADOGTOKEN0000000
-    route_to: ceo
-    provisioning:
-      site: datadoghq.com
-      api_key: dd-api
-      app_key: dd-app
-`},
-	} {
+	for _, tc := range integrationBlocks {
 		t.Run(tc.source, func(t *testing.T) {
 			t.Parallel()
 			// BOOTED WITHOUT IT, which is the case that matters: a company
@@ -699,6 +703,39 @@ integrations:
 			}
 			if !slices.Contains(e.RoutedSources(), tc.source) {
 				t.Errorf("%s was connected and does not route: %v", tc.source, e.RoutedSources())
+			}
+		})
+	}
+}
+
+// AND ON A NODE THAT BOOTED WITH NO COMPANY AT ALL, which is how every company
+// created from the dashboard, or by the first PUT /config, begins.
+//
+// The reconcilers above rebuild a running inbound edge; they cannot start one,
+// and each returned early without it. Boot starts the edge only for a company
+// it already has, so the first company such a node was handed verified and
+// stored every delivery and routed none of them to a seat until the process
+// was restarted.
+func TestTheFirstCompanyOnAnUnconfiguredNodeRoutesItsIntegrations(t *testing.T) {
+	t.Parallel()
+	for _, tc := range integrationBlocks {
+		t.Run(tc.source, func(t *testing.T) {
+			t.Parallel()
+			e := unconfiguredEngine(t)
+			if err := e.Start(t.Context()); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			// Nil, not empty: an unconfigured node cannot say what routes.
+			if got := e.RoutedSources(); got != nil {
+				t.Fatalf("an unconfigured node reports routed sources %v", got)
+			}
+
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if !slices.Contains(e.RoutedSources(), tc.source) {
+				t.Errorf("the first company on a fresh node connected %s and routes %v",
+					tc.source, e.RoutedSources())
 			}
 		})
 	}

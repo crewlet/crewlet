@@ -1,0 +1,887 @@
+/**
+ * What the dashboard relies on the design system to do.
+ *
+ * Not a second copy of uilet's own suites. Every case here is a property an
+ * engine screen is built on and would lose SILENTLY on a bump: a menu trigger
+ * that stops forwarding its popup state announces nothing and still renders, a
+ * link that stops withholding its opener still navigates, and an icon control
+ * that loses its name is a button a screen reader calls "button". The package
+ * is a dependency Dependabot moves on its own, so the seam it moves across is
+ * the one place these have to be asserted.
+ *
+ * The first case is also a probe of the build: it fails the moment the inline
+ * rule in `vitest.config.ts` is dropped, because an externalised
+ * `@crewlethq/ui` throws `Unknown file extension ".css"` on its first
+ * side-effect import and takes the rest of the suite with it.
+ */
+
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { createRef, useState } from "react";
+import { afterEach, expect, test, vi } from "vitest";
+import {
+  AddGlyph,
+  ArrowUpwardGlyph,
+  ComputerGlyph,
+  DarkModeGlyph,
+  LightModeGlyph,
+  MoreVertGlyph,
+} from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  ButtonLink,
+  CodeBlock,
+  CopyButton,
+  IconButton,
+  SegmentedControl,
+  TabPanel,
+  Tabs,
+  Tag,
+  tabId,
+} from "@crewlethq/ui";
+import { Announcer, Card, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
+import type { DataTableSortState } from "@crewlethq/ui";
+import { Router } from "~/app/router.tsx";
+import { RecordTable } from "./components/common.tsx";
+import { drawnClasses } from "./testing.tsx";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  // A table's own choices outlive a case otherwise: the URL is the document's
+  // and the storage key is the origin's, and neither is reset by unmounting.
+  localStorage.clear();
+  location.hash = "#/";
+});
+
+test("a uilet component renders, so the packages are inlined rather than externalised", () => {
+  render(<Button>Save</Button>);
+  expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+});
+
+// A menu trigger and a list's Move buttons are built on Button, and each needs
+// something a plain click target does not: a ref to hand focus back to, the
+// popup state a screen reader announces, a way out of the tab order, and a
+// data attribute the canvas reads to find the node a button belongs to.
+test("a button hands a ref, aria and data attributes, tabIndex and keys to its element", () => {
+  const ref = createRef<HTMLButtonElement>();
+  const onKeyDown = vi.fn();
+  render(
+    <Button
+      ref={ref}
+      variant="tertiary"
+      size="small"
+      leadingIcon={<MoreVertGlyph />}
+      title="Actions"
+      aria-haspopup="menu"
+      aria-expanded={false}
+      aria-controls="actions-menu"
+      tabIndex={-1}
+      data-node="seat:ceo"
+      onKeyDown={onKeyDown}
+    />,
+  );
+  const button = screen.getByRole("button", { name: "Actions" });
+  expect(ref.current).toBe(button);
+  expect(button.getAttribute("aria-haspopup")).toBe("menu");
+  expect(button.getAttribute("aria-expanded")).toBe("false");
+  expect(button.getAttribute("aria-controls")).toBe("actions-menu");
+  expect(button.getAttribute("tabindex")).toBe("-1");
+  expect(button.getAttribute("data-node")).toBe("seat:ceo");
+  fireEvent.keyDown(button, { key: "ArrowDown" });
+  expect(onKeyDown).toHaveBeenCalledTimes(1);
+});
+
+test("an icon control is named by its label, and its tooltip says the same thing", () => {
+  render(
+    <>
+      <IconButton label="Move up" icon={<ArrowUpwardGlyph />} />
+      <IconButton label="Move goal 2 of 3 up" title="Move up" icon={<ArrowUpwardGlyph />} />
+      <Button leadingIcon={<AddGlyph />}>Add</Button>
+    </>,
+  );
+  const [plain, named, labelled] = screen.getAllByRole("button");
+  expect(plain!.getAttribute("aria-label")).toBe("Move up");
+  expect(plain!.getAttribute("title")).toBe("Move up");
+  // The name may be longer than the tooltip: "Move goal 2 of 3 up" where the
+  // pointer reader only needs "Move up".
+  expect(named!.getAttribute("aria-label")).toBe("Move goal 2 of 3 up");
+  expect(named!.getAttribute("title")).toBe("Move up");
+  // A button with visible text is named by that text, not by a duplicate.
+  expect(labelled!.getAttribute("aria-label")).toBeNull();
+});
+
+// A control that goes somewhere is a real link, drawn by the same recipe as
+// the button beside it rather than a class list spelled at the call site.
+test("a button link is an anchor wearing exactly the class list its button wears", () => {
+  render(
+    <>
+      <Button variant="primary" size="small" leadingIcon={<AddGlyph />}>
+        Create
+      </Button>
+      <ButtonLink
+        variant="primary"
+        size="small"
+        leadingIcon={<AddGlyph />}
+        href="#/org?lens=builder"
+      >
+        Create
+      </ButtonLink>
+    </>,
+  );
+  const button = screen.getByRole("button", { name: "Create" });
+  const link = screen.getByRole("link", { name: "Create" });
+  expect(link.className).toBe(button.className);
+  expect(link.getAttribute("href")).toBe("#/org?lens=builder");
+  // In the application's own hash routes, it stays in this tab.
+  expect(link.getAttribute("target")).toBeNull();
+});
+
+test("an external link opens a tab without handing over the referrer or the opener", () => {
+  render(
+    <ButtonLink external href="https://example.com/install">
+      Install
+    </ButtonLink>,
+  );
+  const link = screen.getByRole("link", { name: /Install/ });
+  expect(link.getAttribute("target")).toBe("_blank");
+  // `noreferrer` implies `noopener` everywhere it is honoured, so one word
+  // withholds both the referrer and the handle back to this window.
+  expect(link.getAttribute("rel")).toBe("noreferrer");
+});
+
+/** Give the control the Clipboard API, and report what it was handed. */
+function withClipboard(): { written: string[]; fail?: boolean } {
+  const state: { written: string[]; fail?: boolean } = { written: [] };
+  vi.stubGlobal("navigator", {
+    ...globalThis.navigator,
+    clipboard: {
+      writeText: (text: string) => {
+        if (state.fail) return Promise.reject(new Error("refused"));
+        state.written.push(text);
+        return Promise.resolve();
+      },
+    },
+  });
+  return state;
+}
+
+async function press(name: string) {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(name, "i") }));
+  });
+}
+
+// The dashboard is read at http://<node>:8000 as often as at localhost, and
+// the Clipboard API is gated on a secure context, so it is simply undefined
+// there. This is the one screen affordance that fails ONLY on the machine
+// nobody develops on.
+test("a copy control falls back to execCommand where the clipboard API is absent", async () => {
+  vi.stubGlobal("navigator", { ...globalThis.navigator, clipboard: undefined });
+  const copied: string[] = [];
+  const exec = vi.fn(() => {
+    copied.push(document.querySelector("textarea")?.value ?? "");
+    return true;
+  });
+  Object.defineProperty(document, "execCommand", { writable: true, value: exec });
+
+  render(<CopyButton text="fallback text" />);
+  await press("copy");
+
+  expect(exec).toHaveBeenCalledWith("copy");
+  expect(copied).toEqual(["fallback text"]);
+  expect(screen.getByRole("button").textContent).toContain("Copied");
+  // The scratch field is not left behind for the next reader to tab into.
+  expect(document.querySelector("textarea")).toBeNull();
+});
+
+test("a copy control says so when the browser refuses, rather than looking like it worked", async () => {
+  const clipboard = withClipboard();
+  clipboard.fail = true;
+  Object.defineProperty(document, "execCommand", { writable: true, value: () => false });
+
+  render(<CopyButton text="anything" />);
+  await press("copy");
+
+  expect(screen.getByRole("button").textContent).toContain("Copy failed");
+});
+
+// A live turn is pushed twice per tool round, so a string prop would mean a
+// full serialization of the whole record on every push for a control nobody
+// has pressed.
+test("a copy control resolves a thunk on the press, not on every render", async () => {
+  const clipboard = withClipboard();
+  let calls = 0;
+  const produce = () => {
+    calls += 1;
+    return "assembled once";
+  };
+  const { rerender } = render(<CopyButton text={produce} />);
+  rerender(<CopyButton text={produce} />);
+  rerender(<CopyButton text={produce} />);
+  expect(calls).toBe(0);
+
+  await press("copy");
+  expect(calls).toBe(1);
+  expect(clipboard.written).toEqual(["assembled once"]);
+});
+
+test("the copy status is not part of the control's accessible name", async () => {
+  withClipboard();
+  render(<CopyButton text="x" />);
+  await press("copy");
+
+  // getByRole matches on the accessible NAME, so an exact-name query is the
+  // assertion: with the live region inside the button, the control was named
+  // "Copied copied to the clipboard".
+  expect(screen.getByRole("button", { name: "Copied" })).toBeDefined();
+  expect(screen.getByRole("status").textContent).toBe("copied to the clipboard");
+});
+
+// Select-all is a DOCUMENT verb, so on a screen that is mostly one record it
+// took the nav, the stat row and every phase card with it. A record block
+// claims the key while it has focus, and the engine's record screens are
+// built on that.
+test("a selectable record block takes select-all for itself, on any keyboard layout", () => {
+  render(
+    <div>
+      <p>page furniture nobody asked to select</p>
+      <CodeBlock plain selectable label="The turn record, as JSON" code={'{"turn_id":"t-1"}'} />
+    </div>,
+  );
+  const block = screen.getByRole("region", { name: "The turn record, as JSON" });
+
+  // A CYRILLIC LAYOUT: the physical A key reports `key: "ф"`. Browsers resolve
+  // select-all from the key's POSITION, so a handler matching only `key`
+  // declines here and the page-wide select-all happens instead.
+  const event = new KeyboardEvent("keydown", {
+    key: "\u0444",
+    code: "KeyA",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  block.dispatchEvent(event);
+
+  expect(event.defaultPrevented).toBe(true);
+  const selection = window.getSelection();
+  expect(selection?.toString()).toBe('{"turn_id":"t-1"}');
+  expect(selection?.toString()).not.toContain("page furniture");
+});
+
+test("a record block that did not ask for select-all is not a tab stop and takes no keys", () => {
+  // There are dozens of these on one phase card, and a keyboard reader would
+  // have to step through every one.
+  const { container } = render(<CodeBlock plain code="body" />);
+  const block = container.querySelector("pre")!;
+  expect(block.getAttribute("tabindex")).toBeNull();
+
+  const event = new KeyboardEvent("keydown", {
+    key: "a",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  block.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+});
+
+// EB02. The badge this replaces drew a pressed filter as `background:
+// currentColor` with its label still in that same ink, which is 1:1: the
+// Model screen's "4 failed" filter became an unreadable block the moment
+// somebody used it. A press is a state, and a state does not get to repaint
+// the ground a label was measured against.
+test("a filter tag that is on keeps the ground its label was measured on", () => {
+  const off = drawnClasses(Tag, {
+    variant: "danger",
+    onClick: () => {},
+    children: "4 failed",
+  });
+  const on = drawnClasses(Tag, {
+    variant: "danger",
+    onClick: () => {},
+    pressed: true,
+    children: "4 failed",
+  });
+  expect(on).toEqual(off);
+});
+
+test("a filter tag says whether it is on, and still reads as its own label", () => {
+  const { rerender } = render(
+    <Tag variant="danger" pressed onClick={() => {}}>
+      4 failed
+    </Tag>,
+  );
+  const filter = screen.getByRole("button", { name: "4 failed" });
+  expect(filter.getAttribute("aria-pressed")).toBe("true");
+  rerender(
+    <Tag variant="danger" onClick={() => {}}>
+      4 failed
+    </Tag>,
+  );
+  expect(screen.getByRole("button", { name: "4 failed" }).getAttribute("aria-pressed")).toBe(
+    "false",
+  );
+});
+
+// The two rows a screen draws look alike and are NOT alike: one is a set of
+// sections and one is a setting. The engine picks which, and the difference is
+// a history entry per keypress, so it is checked here rather than assumed.
+const LENSES = [
+  { value: "chart", label: "Chart" },
+  { value: "directory", label: "Directory" },
+  { value: "charter", label: "Charter" },
+];
+
+function tabRow(row: "tabs" | "segmented") {
+  const onValueChange = vi.fn();
+  render(
+    <>
+      {row === "tabs" ? (
+        <Tabs
+          ariaLabel="View"
+          value="chart"
+          items={LENSES}
+          onValueChange={onValueChange}
+          panelId="panel"
+        />
+      ) : (
+        <SegmentedControl
+          label="View"
+          value="chart"
+          options={LENSES}
+          onValueChange={onValueChange}
+          semantics="tabs"
+          panelId="panel"
+        />
+      )}
+      <TabPanel id="panel" value="chart">
+        content
+      </TabPanel>
+    </>,
+  );
+  return onValueChange;
+}
+
+test.each(["tabs", "segmented"] as const)("%s: the arrows move focus and select nothing", (row) => {
+  const onValueChange = tabRow(row);
+  const tabs = screen.getAllByRole("tab");
+  tabs[0]!.focus();
+  fireEvent.keyDown(tabs[0]!, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tabs[1]);
+  fireEvent.keyDown(tabs[1]!, { key: "End" });
+  expect(document.activeElement).toBe(tabs[2]);
+  fireEvent.keyDown(tabs[2]!, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tabs[0]);
+  fireEvent.keyDown(tabs[0]!, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(tabs[2]);
+  // A horizontal row of tabs does not move on Up and Down.
+  fireEvent.keyDown(tabs[2]!, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(tabs[2]);
+  // NOTHING SELECTED: each of those would have pushed a history entry.
+  expect(onValueChange).not.toHaveBeenCalled();
+  fireEvent.click(tabs[2]!);
+  expect(onValueChange).toHaveBeenCalledWith("charter");
+});
+
+test.each(["tabs", "segmented"] as const)("%s: one tab stop, and the panel it names", (row) => {
+  tabRow(row);
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+  expect(tabs[0]!.getAttribute("aria-selected")).toBe("true");
+  for (const tab of tabs) expect(tab.getAttribute("aria-controls")).toBe("panel");
+  const panel = screen.getByRole("tabpanel");
+  expect(panel.getAttribute("aria-labelledby")).toBe(tabId("panel", "chart"));
+  expect(document.getElementById(tabId("panel", "chart"))).toBe(tabs[0]);
+  expect(screen.getByRole("tabpanel", { name: "Chart" })).toBe(panel);
+});
+
+test("a setting is a radio group whose arrows select as they move", () => {
+  const onValueChange = vi.fn();
+  render(
+    <SegmentedControl
+      label="Theme"
+      semantics="radio"
+      value="system"
+      options={[
+        { value: "light", label: "", icon: <LightModeGlyph />, title: "Light" },
+        { value: "system", label: "", icon: <ComputerGlyph />, title: "Follow the system" },
+        { value: "dark", label: "", icon: <DarkModeGlyph />, title: "Dark" },
+      ]}
+      onValueChange={onValueChange}
+    />,
+  );
+  const group = screen.getByRole("radiogroup", { name: "Theme" });
+  const radios = within(group).getAllByRole("radio");
+  // Named, although their only visible content is a glyph.
+  expect(screen.getByRole("radio", { name: "Dark" })).toBe(radios[2]);
+  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(radios.map((radio) => radio.tabIndex)).toEqual([-1, 0, -1]);
+  // A setting has no panel, so it is not a tab row and must not say it is.
+  expect(screen.queryByRole("tab")).toBeNull();
+
+  radios[1]!.focus();
+  fireEvent.keyDown(radios[1]!, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(radios[2]);
+  expect(onValueChange).toHaveBeenLastCalledWith("dark");
+  fireEvent.keyDown(radios[2]!, { key: "ArrowUp" });
+  expect(onValueChange).toHaveBeenLastCalledWith("system");
+});
+
+// A checkbox is named by its label, described by its consequence, and toggled
+// from anywhere on its row. All three were hand-rolled twice in this dashboard
+// before, and the row that says what ticking a box DELETES is the one that has
+// to be read aloud after the name rather than as part of it.
+test("a checkbox is named by its label alone, and its consequence describes it", () => {
+  render(
+    <Checkbox
+      framed
+      tone="danger"
+      checked={false}
+      onCheckedChange={() => {}}
+      label="Also remove the accounts Crewlet created"
+      description="Each agent's account at the vendor is deleted."
+    />,
+  );
+  const box = screen.getByRole("checkbox", { name: "Also remove the accounts Crewlet created" });
+  const described = document.getElementById(box.getAttribute("aria-describedby") ?? "");
+  expect(described?.textContent).toBe("Each agent's account at the vendor is deleted.");
+});
+
+test("a press anywhere on a checkbox row toggles it, and reports the new state", () => {
+  const onCheckedChange = vi.fn();
+  render(<Checkbox label="Clear lead" checked={false} onCheckedChange={onCheckedChange} />);
+  fireEvent.click(screen.getByText("Clear lead"));
+  expect(onCheckedChange).toHaveBeenCalledWith(true);
+});
+
+test("a disabled checkbox cannot be ticked from its row either", () => {
+  render(
+    <Checkbox
+      disabled
+      checked={false}
+      onCheckedChange={() => {}}
+      label="Also remove the accounts Crewlet created"
+      description="Each agent's account at the vendor is deleted."
+    />,
+  );
+  const box = screen.getByRole("checkbox") as HTMLInputElement;
+  fireEvent.click(screen.getByText("Also remove the accounts Crewlet created"));
+  expect(box.checked).toBe(false);
+  expect(box.disabled).toBe(true);
+});
+
+// A hint that says Ctrl+Z to somebody on a Mac names a key they do not press,
+// and one that draws the glyphs alone is read aloud as "place of interest sign
+// Z". The builder's toolbar and menus are built on both halves.
+test("Mod is Command on Apple platforms and Control everywhere else", () => {
+  expect(keyGlyph("Mod", true)).toEqual({ glyph: "\u2318", spoken: "Command" });
+  expect(keyGlyph("Mod", false)).toEqual({ glyph: "Ctrl", spoken: "Control" });
+  expect(keyGlyph("Alt", true).spoken).toBe("Option");
+  expect(keyGlyph("Backspace", true)).toEqual({ glyph: "\u232b", spoken: "Delete" });
+  // A letter is printed in capitals, and an unknown key as itself.
+  expect(keyGlyph("z", false)).toEqual({ glyph: "Z", spoken: "Z" });
+  expect(keyGlyph("F10", false)).toEqual({ glyph: "F10", spoken: "F10" });
+});
+
+test("a shortcut's caps are hidden, and one sentence is read instead", () => {
+  const { container } = render(<Kbd keys={["Mod", "Shift", "z"]} apple />);
+  const drawn = container.querySelector("[aria-hidden='true']")!;
+  expect([...drawn.querySelectorAll("kbd")].map((cap) => cap.textContent)).toEqual([
+    "\u2318",
+    "\u21e7",
+    "Z",
+  ]);
+  expect(container.textContent).toContain("Command plus Shift plus Z");
+});
+
+// A seat's responsibilities, a unit's goals and a company's policies are
+// ORDERED lists of sentences, and the order is meaning: the first policy is
+// read first. Each item is its own labelled control, so moving one is a press
+// rather than deleting and retyping it.
+test("an ordered list is a named group whose items are labelled controls", () => {
+  function Goals() {
+    const [value, setValue] = useState(["Ship the beta", "Hire two engineers"]);
+    return <ListInput label="Goals" itemName="goal" value={value} onChange={setValue} />;
+  }
+  render(<Goals />);
+  expect(screen.getByRole("group", { name: "Goals" })).toBeDefined();
+  const second = screen.getByLabelText("Goal 2 of 2") as HTMLInputElement;
+  expect(second.value).toBe("Hire two engineers");
+
+  fireEvent.click(screen.getByRole("button", { name: "Move goal 2 of 2 up" }));
+  expect((screen.getByLabelText("Goal 1 of 2") as HTMLInputElement).value).toBe(
+    "Hire two engineers",
+  );
+});
+
+// ONLY WHAT THE COMPANY HAS. A seat manages a seat or a unit that exists, and
+// a provider chain names providers the company declares: a typed name that
+// matches neither is a dangling reference the engine reports rather than a
+// value this form may invent.
+test("a chip field over options refuses a value the options do not offer", () => {
+  function Manages() {
+    const [value, setValue] = useState<string[]>([]);
+    return (
+      <>
+        <Announcer />
+        <TagsInput
+          aria-label="Manages"
+          label="Managed seats"
+          value={value}
+          onChange={setValue}
+          allowCustom={false}
+          options={[{ value: "SRE", label: "SRE" }]}
+        />
+      </>
+    );
+  }
+  render(<Manages />);
+  const box = screen.getByRole("combobox", { name: "Manages" });
+  fireEvent.change(box, { target: { value: "Nobody" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(screen.queryByRole("button", { name: "Remove Nobody" })).toBeNull();
+
+  fireEvent.change(box, { target: { value: "SR" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(screen.getByRole("button", { name: "Remove SRE" })).toBeDefined();
+});
+
+/*
+ * THE RECORD TABLE. [RecordTable] is the one answer this dashboard gives about
+ * a panel table: the design system draws it, the panel says only what its rows
+ * and columns are, and the reader gets the whole frame: the settings cog, the
+ * page control and the column list, which every one of these tables was drawn
+ * WITHOUT until this change.
+ *
+ * The cases below are the split that came with it. Five choices are facts
+ * about what is on screen (page, page size, sort, which columns, in what
+ * order), so each one is in the URL and travels in a link. Two are facts about
+ * this browser (whether cells wrap, how wide a column was dragged), so those
+ * are under the storage key and only those. Both halves fail silently: a page
+ * kept in `localStorage` is one no link can carry, and a width in the URL is a
+ * pixel count that means nothing on anybody else's screen.
+ */
+
+interface Row {
+  seat: string;
+  spent: number | null;
+}
+
+const ROWS: Row[] = [
+  { seat: "planner", spent: 900 },
+  { seat: "reviewer", spent: 0 },
+  { seat: "unmetered", spent: null },
+];
+
+const ROW_COLUMNS = [
+  { key: "seat", header: "Seat", sortable: true, sortValue: (row: Row) => row.seat },
+  {
+    key: "spent",
+    header: "Spent",
+    align: "right" as const,
+    firstDirection: "desc" as const,
+    sortable: true,
+    sortValue: (row: Row) => row.spent,
+    render: (row: Row) => (row.spent === null ? "Unmetered" : String(row.spent)),
+  },
+];
+
+/**
+ * A panel table as a screen draws one, inside the router it reads its choices
+ * from. Its parameters carry the table's own name, so the two tables a screen
+ * draws never share a page: these are `rows.page`, `rows.per` and so on.
+ */
+function panel(hash = "#/spend", defaultSort: DataTableSortState | null = null) {
+  location.hash = hash;
+  return render(
+    <Router>
+      <RecordTable
+        screen="panel"
+        table="rows"
+        rows={ROWS}
+        columns={ROW_COLUMNS}
+        defaultSort={defaultSort}
+        getRowKey={(row) => row.seat}
+      />
+    </Router>,
+  );
+}
+
+function seatOrder(): string[] {
+  return screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelector("td")?.textContent ?? "");
+}
+
+/** A panel as a screen composes one: a card, its head, and the table under it. */
+function panelInCard(hash = "#/spend") {
+  location.hash = hash;
+  return render(
+    <Router>
+      <Card padding="none">
+        <Card.Header divided count={ROWS.length}>
+          <Card.Title>Rows</Card.Title>
+        </Card.Header>
+        <RecordTable
+          screen="panel"
+          table="rows"
+          rows={ROWS}
+          columns={ROW_COLUMNS}
+          getRowKey={(row) => row.seat}
+        />
+      </Card>
+    </Router>,
+  );
+}
+
+test("a panel draws its own content inside the panel, and a table flush to it", () => {
+  /*
+   * HOW EVERY SCREEN HERE COMPOSES A PANEL: a card, a head, and the content
+   * written straight under it with no body around it. The card is flush the
+   * moment it holds a head, and flush means the card carries no inset of its
+   * own, so content that is not a slot used to be drawn hard against the
+   * border while the title above it sat at the card's inset. It was most of
+   * the panels on these screens, and it is exactly the property this dashboard
+   * would lose in silence on a bump, because nothing at a call site here
+   * mentions a body at all.
+   *
+   * The second half is what a table needs and the first would take away: at
+   * `padding="none"` the rows still reach the card's own edges.
+   *
+   * What a body IS, is asked of the package rather than spelled: a reference
+   * one is rendered here and its classes are what the content is checked
+   * against. See testing.tsx.
+   */
+  const body = drawnClasses(Card.Body, { padding: "md", children: "reference" });
+  expect(body.length).toBeGreaterThan(0);
+  const inABody = (node: Element | null) => {
+    for (let at = node; at !== null; at = at.parentElement) {
+      if (body.every((name) => at!.classList.contains(name))) return true;
+    }
+    return false;
+  };
+
+  render(
+    <Card as="section">
+      <Card.Header icon={<AddGlyph size="sm" />} subtitle="what a panel says beside its name">
+        <Card.Title>By model</Card.Title>
+      </Card.Header>
+      <p className="t-caption">No model calls in this window.</p>
+    </Card>,
+  );
+  expect(inABody(screen.getByText("No model calls in this window."))).toBe(true);
+
+  cleanup();
+  panelInCard();
+  expect(inABody(document.querySelector("table"))).toBe(false);
+});
+
+test("a record table offers the settings frame, the page control and the handles", () => {
+  // The three controls the panel tables did not have. The cog is the way to
+  // the column list and the page size; the chevrons are the pages themselves;
+  // the separator is the column width a reader drags or nudges with a key.
+  panel();
+  expect(screen.getByRole("button", { name: /table settings/i })).toBeDefined();
+  expect(screen.getByRole("button", { name: /next page/i })).toBeDefined();
+  expect(screen.getAllByRole("separator", { name: /resize/i })).not.toHaveLength(0);
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+});
+
+test("the page a reader turns is in the link, and the size is what slices it", () => {
+  // Both halves of one claim: the size in the URL is what the table pages by,
+  // and the page it lands on is written back where a link can carry it. Kept
+  // in this browser instead, page four of a log is a place nobody can send.
+  panel("#/spend?rows.per=1");
+  expect(seatOrder()).toEqual(["planner"]);
+
+  fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+  expect(location.hash).toContain("rows.page=2");
+  expect(seatOrder()).toEqual(["reviewer"]);
+});
+
+test("a page past the end of the rows is pulled back to the last one", () => {
+  // A hand-edited link, or one sent while the list was longer. The table knows
+  // the bound and the screen holds the page, so the correction has to travel
+  // back through the URL or the reader is left looking at nothing.
+  panel("#/spend?rows.per=1&rows.page=9");
+  expect(location.hash).toContain("rows.page=3");
+  expect(seatOrder()).toEqual(["unmetered"]);
+});
+
+test("a hidden column travels in the link rather than in this browser", () => {
+  // THE COG IS THE ONE WAY IN, now that the Columns button beside it is gone:
+  // the frame is where a column is hidden and the only way one comes back. The
+  // choice is the screen's, so where it goes is the link, not this browser.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  const frame = screen.getByRole("dialog");
+  fireEvent.click(within(frame).getByRole("checkbox", { name: /Spent/ }));
+  // Every edit in the frame is a draft until Apply, so the link does not move
+  // under a reader who is still deciding.
+  expect(location.hash).not.toContain("rows.hide=");
+  fireEvent.click(within(frame).getByRole("button", { name: "Apply" }));
+  expect(location.hash).toContain("rows.hide=spent");
+  expect(screen.queryByRole("columnheader", { name: /Spent/ })).toBeNull();
+});
+
+test("a table offers its columns through the cog and through nothing else", () => {
+  // The design system took the Columns button out of a table's chrome, because
+  // the same list is in the settings frame the cog opens. A screen left with
+  // both would be offering one choice in two places, and the panel it drew was
+  // the reason a table with no pager still paid for a toolbar row.
+  panel();
+  expect(screen.queryByRole("button", { name: "Columns" })).toBeNull();
+});
+
+test("the column a table is sorted by is in the link", () => {
+  // A sorted list is an answer somebody sends: "the seats by spend, worst
+  // first" is the whole point of the link, and a sort the URL does not carry
+  // arrives at the reader's end as the default order.
+  panel();
+  fireEvent.click(within(screen.getByRole("columnheader", { name: /Seat/ })).getByRole("button"));
+  expect(location.hash).toContain("rows.sort=seat%3Aasc");
+});
+
+test("the settings frame carries the page sizes and the column list", () => {
+  // What the owner reads on every table in the console and read on none of
+  // these: the row of sizes with All beside it, and the column list they
+  // reorder and untick. Both are gated on the table being offered a page size
+  // and a visible-column pair, which is what the screen now hands it.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  const frame = screen.getByRole("dialog");
+  expect(within(frame).getByText("Items per page")).toBeDefined();
+  expect(within(frame).getByRole("button", { name: "10" })).toBeDefined();
+  // All is a WORD, not the row count, so a table that gains a row does not
+  // quietly start paging behind a reader who chose it.
+  expect(within(frame).getByRole("button", { name: /^All/ })).toBeDefined();
+  expect(within(frame).getByText("Column Order & Visibility")).toBeDefined();
+  expect(within(frame).getByRole("button", { name: "Move Spent up" })).toBeDefined();
+  expect(within(frame).getByRole("button", { name: "Reset to Default" })).toBeDefined();
+});
+
+test("Reset to Default puts the screen's own opening order back", () => {
+  // What a reader means by the button, and what they got instead. The frame
+  // resets to the DESIGN SYSTEM's defaults, so a table whose opening order and
+  // page size are the screen's came back from a reset ordered by nothing and
+  // sized at the package's own ten, and the URL then carried that non-default
+  // through every reload and everybody the link was sent to. Both defaults
+  // travel with the rest of the choices now, so the reset lands on the screen
+  // the reader opened.
+  panel("#/spend", { key: "spent", direction: "desc" });
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+
+  fireEvent.click(within(screen.getByRole("columnheader", { name: /Seat/ })).getByRole("button"));
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+  expect(location.hash).toContain("rows.sort=seat%3Aasc");
+
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to Default" }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+  // And the link is clean again: every parameter's fallback is the value the
+  // screen opens on, so the default order and the default size name themselves
+  // by being absent.
+  expect(location.hash).not.toContain("rows.sort");
+  expect(location.hash).not.toContain("rows.per");
+});
+
+test("wrapping is kept in this browser and never in the link", () => {
+  // The other half of the split, and the one that has to stay out of the URL:
+  // whether a cell wraps is a reading preference at this window width, which
+  // says nothing to whoever the link is sent to. It starts on, so what a
+  // reader does here is turn it off.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Wrap lines/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  expect(localStorage.getItem("crewlet_table_panel_rows_wrapLines")).toBe("false");
+  expect(location.hash).not.toContain("wrap");
+});
+
+test("a blocked store leaves the table drawing its rows", () => {
+  // A throwing store is what a browser with site data blocked hands back, and
+  // it used to arrive from inside a state initialiser, which is a blank page
+  // rather than a missing preference. The table keeps the widths and the
+  // wrapping there, so it has to read one that refuses without losing a row.
+  const refuse = () => {
+    throw new Error("site data is blocked");
+  };
+  vi.stubGlobal("localStorage", { getItem: refuse, setItem: refuse, removeItem: refuse });
+  panel();
+  expect(screen.getAllByRole("row")).toHaveLength(4);
+});
+
+test("a column says which way its first press sorts, and an absent value sorts last", () => {
+  // A cost reads descending first and a name ascending, because the end a
+  // reader came for differs; one blanket direction for a whole table sorted
+  // every name from Z. An absent value is not a small one: a seat with no
+  // meter has not been measured, so it is last in BOTH directions.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+  fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
+  expect(seatOrder()).toEqual(["reviewer", "planner", "unmetered"]);
+});
+
+test("a column is sorted from a button inside its header, and the cell says which way", () => {
+  // A sortable column used to be a click handler on the header cell, which a
+  // keyboard could not reach and a screen reader did not announce as a
+  // control. An unsortable column stays a plain header with nothing to press.
+  panel();
+  const header = screen.getByRole("columnheader", { name: /Seat/ });
+  const button = within(header).getByRole("button", { name: /Seat/ });
+  expect(header.getAttribute("aria-sort")).toBeNull();
+  fireEvent.click(button);
+  expect(header.getAttribute("aria-sort")).toBe("ascending");
+  fireEvent.click(button);
+  expect(header.getAttribute("aria-sort")).toBe("descending");
+});
+
+test("a panel table says nothing about how many rows it holds", () => {
+  // The count line under the rows is gone from the design system, and this
+  // passes nothing to put it back. What it said was the PAGE's share, so on
+  // every panel holding more than ten rows it disagreed with the card head
+  // above it by design: the head counted the panel, the line counted the page.
+  panel("#/spend?rows.per=1");
+  expect(seatOrder()).toEqual(["planner"]);
+  // The two sentences the line drew, in the words it drew them in.
+  expect(screen.queryByText(/^Showing/)).toBeNull();
+  expect(screen.queryByText(/^3 rows$/)).toBeNull();
+  // The one count left is the PAGER's, and it is spoken rather than drawn: it
+  // says where the reader is, which is the question the control they just
+  // pressed asked.
+  const spoken = screen.getByText(/Rows 1 to 1 of 3/);
+  expect(spoken.closest("[aria-live]")).not.toBeNull();
+});
+
+test("a panel table draws its controls on the head of the card it sits in", () => {
+  // The composition the screens here write, unchanged: a card, a head, a
+  // table. The pager and the cog belong to the TABLE, and they are drawn on
+  // the CARD's head, which is something neither component can do on its own
+  // and which the engine passes nothing to arrange.
+  panelInCard("#/spend?rows.per=1");
+  const title = screen.getByRole("heading", { name: "Rows" });
+  const cog = screen.getByRole("button", { name: /table settings/i });
+  const pager = screen.getByRole("button", { name: /next page/i });
+  // The row the title is on holds both, and the rows are not on it.
+  let head: HTMLElement | null = title.parentElement;
+  while (head && !(head.contains(cog) && head.contains(pager))) head = head.parentElement;
+  expect(head).not.toBeNull();
+  expect(head!.querySelector("table")).toBeNull();
+});
+
+test("the cog on a card head opens that table's own frame", () => {
+  // The controls move where they are DRAWN and nowhere else: the frame the cog
+  // opens is still the table's, holding its columns, and the pager still turns
+  // its rows.
+  panelInCard("#/spend?rows.per=1");
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  const frame = screen.getByRole("dialog");
+  expect(within(frame).getByRole("checkbox", { name: /Spent/ })).toBeDefined();
+  fireEvent.click(within(frame).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+  expect(seatOrder()).toEqual(["reviewer"]);
+});

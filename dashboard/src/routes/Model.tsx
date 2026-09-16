@@ -19,16 +19,13 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
-import { DataTable, type Column } from "~/ui/DataTable.tsx";
-import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { QueryState, RecordTable, useTableChoices } from "~/components/common.tsx";
+import { PhaseTag } from "~/components/PhaseTag.tsx";
+import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { eventHistoryLabel, fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
   decisionLabel,
@@ -39,6 +36,23 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import {
+  Card,
+  DataView,
+  type DataViewColumn,
+  EmptyState,
+  EmptyValue,
+  type FilterDef,
+  type FilterValues,
+  NewItemsNotice,
+  PageHeader,
+  RelativeTime,
+  Skeleton,
+  StatusDot,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
+import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
 
@@ -53,6 +67,7 @@ const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary", "jud
 export function ModelActivity() {
   const { socket } = useClient();
   const agents = useAgents();
+  const { data: engine } = useEngineHealth();
   const [phase, setPhase] = useParam("phase", "");
   const [role, setRole] = useParam("role", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
@@ -164,32 +179,37 @@ export function ModelActivity() {
   // Defined here rather than at module scope because two cells need `now` to
   // render an elapsed time, and memoised so the table's own sort does not see
   // a new column set on every push.
-  const columns = useMemo<Column<PhaseRecord>[]>(
+  const columns = useMemo<DataViewColumn<PhaseRecord>[]>(
     () => [
       {
         key: "seat",
         header: "Seat",
-        cell: (r) => (
+        // WHOSE PHASE. The rest of the row is a phase, a model and a count,
+        // and a fleet monitor whose rows name nobody cannot be acted on.
+        hideable: false,
+        render: (r) => (
           <span className="row gap-2">
-            {r.live && <span className="dot info" />}
-            <span className="truncate">{r.role || "—"}</span>
+            {r.live && <StatusDot tone="info" pulse />}
+            <span className="truncate">{r.role || <EmptyValue label="No seat recorded" />}</span>
           </span>
         ),
+        sortable: true,
         sortValue: (r) => r.role,
       },
       {
         key: "phase",
         header: "Phase",
         shrink: true,
-        cell: (r) => <PhaseTag phase={r.phase} />,
+        render: (r) => <PhaseTag phase={r.phase} />,
+        sortable: true,
         sortValue: (r) => r.phase,
       },
       {
         key: "outcome",
         header: "Outcome",
-        cell: (r) =>
+        render: (r) =>
           r.failed ? (
-            <Badge tone="critical">{r.errorKind || "failed"}</Badge>
+            <Tag variant="danger">{r.errorKind || "failed"}</Tag>
           ) : r.live ? (
             <span className="t-caption">running</span>
           ) : r.decision ? (
@@ -197,12 +217,18 @@ export function ModelActivity() {
           ) : (
             <span className="t-caption">done</span>
           ),
+        sortable: true,
         sortValue: (r) => (r.failed ? 0 : r.live ? 1 : 2),
       },
       {
         key: "model",
         header: "Model",
-        cell: (r) => <span className="mono t-caption truncate">{r.model || "—"}</span>,
+        render: (r) => (
+          <span className="mono t-caption truncate">
+            {r.model || <EmptyValue label="No model recorded" />}
+          </span>
+        ),
+        sortable: true,
         sortValue: (r) => r.model,
       },
       {
@@ -210,7 +236,10 @@ export function ModelActivity() {
         header: "Rounds",
         align: "right",
         shrink: true,
-        cell: (r) => Math.max(r.roundsUsed, r.roundNum + 1) || "—",
+        firstDirection: "desc",
+        render: (r) =>
+          Math.max(r.roundsUsed, r.roundNum + 1) || <EmptyValue label="No rounds recorded" />,
+        sortable: true,
         sortValue: (r) => Math.max(r.roundsUsed, r.roundNum + 1),
       },
       {
@@ -218,14 +247,22 @@ export function ModelActivity() {
         header: "Tokens",
         align: "right",
         shrink: true,
-        cell: (r) => (r.totalTokens ? fmtCount(r.totalTokens) : "—"),
+        firstDirection: "desc",
+        render: (r) =>
+          r.totalTokens ? fmtCount(r.totalTokens) : <EmptyValue label="No tokens recorded" />,
+        sortable: true,
         sortValue: (r) => r.totalTokens,
       },
       {
         key: "when",
+        // NOT RIGHT-ALIGNED, though the two columns before it are. Numbers
+        // are set right so a reader can compare them digit by digit down the
+        // column; "2 m ago" and "14:07" are words and a clock, and nothing is
+        // compared by their last character. Set right they also drifted away
+        // from the header above them, which is set left like every other.
         header: "When",
-        align: "right",
         shrink: true,
+        firstDirection: "desc",
         // Elapsed while it runs, and when it landed once it has. Two
         // different questions, and a running phase has no "when" yet.
         //
@@ -233,12 +270,13 @@ export function ModelActivity() {
         // advances on every published round, several times a second while a
         // round streams — the answer was always about zero, so a phase nine
         // rounds deep read "0 ms".
-        cell: (r) =>
+        render: (r) =>
           r.live ? (
-            <span className="t-num">{fmtElapsed(now - tsKey(r.startedAt))}</span>
+            <RelativeTime className="t-num" mode="elapsed" value={r.startedAt} now={now} />
           ) : (
-            <span className="t-caption">{relTime(r.at, now)}</span>
+            <RelativeTime className="t-caption" value={r.at} now={now} />
           ),
+        sortable: true,
         sortValue: (r) => Date.parse(r.at) || 0,
       },
     ],
@@ -249,154 +287,199 @@ export function ModelActivity() {
   const failedCount = merged.filter((r) => r.failed).length;
   const filtering = !!(role || phase || onlyFailed);
 
+  /*
+   * THE SCREEN OWNS THE NARROWING, so every axis is a URL parameter and a
+   * narrowed record is a link. The seat filter is a list of the seats the
+   * company has rather than a text box, because the match is exact on both
+   * sides of the wire, so a typed prefix silently returned nothing while
+   * looking like a search that missed.
+   */
+  const filters = useMemo<FilterDef<PhaseRecord>[]>(
+    () => [
+      {
+        name: "role",
+        label: "Seat",
+        kind: "select",
+        options: [
+          { value: "", label: "Any seat" },
+          ...roles.map((seat) => ({ value: seat, label: seat })),
+        ],
+      },
+      {
+        name: "phase",
+        label: "Phase",
+        kind: "select",
+        options: [
+          { value: "", label: "Any phase" },
+          ...PHASES.map((p) => ({ value: p, label: p })),
+        ],
+      },
+      {
+        name: "failed",
+        label: "Outcome",
+        kind: "select",
+        options: [
+          { value: "", label: "Any outcome" },
+          { value: "1", label: "Failures only" },
+        ],
+      },
+    ],
+    [roles],
+  );
+
+  const values: FilterValues = { role, phase, failed: onlyFailed };
+
+  const onValuesChange = useCallback(
+    (next: FilterValues) => {
+      setRole(String(next.role ?? ""));
+      setPhase(String(next.phase ?? ""));
+      setOnlyFailed(String(next.failed ?? ""));
+    },
+    [setRole, setPhase, setOnlyFailed],
+  );
+
+  /*
+   * THE SETTLED LIST PAGES, and the running one above it does too, so both
+   * name themselves in the URL. Paging on top of the cursor is deliberate:
+   * every "Load older" press appends sixty more rows to the same client-held
+   * list, and the reader was left scrolling one column of hundreds. The pages
+   * are what has been fetched; the footer's button is what fetches more.
+   */
+  const settledChoices = useTableChoices({
+    screen: "model",
+    table: "settled",
+    columns,
+    defaultSort: { key: "when", direction: "desc" },
+    filterKey: `${role}|${phase}|${onlyFailed}`,
+  });
+
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Model activity"
-        sub="Every phase the models ran, one row each. Open a row for the transcript on that seat — reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
+        description="Every phase the models ran, one row each. Open a row for the transcript on that seat: reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
         badges={
           <>
             {liveCount > 0 && (
-              <Badge tone="info" dot>
+              <Tag variant="info" dot>
                 {liveCount} running
-              </Badge>
+              </Tag>
             )}
             {/* The count IS the control. It used to be a stat tile that said
                 "4 failed" and did nothing, next to a separate chip that did
                 the filtering — so a reader who saw the number had to go find
                 the unrelated pill that acted on it. */}
             {failedCount > 0 && (
-              <Badge
-                tone="critical"
+              <Tag
+                variant="danger"
                 onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}
                 pressed={!!onlyFailed}
                 title={onlyFailed ? "show every phase" : "show only failed phases"}
               >
                 {failedCount} failed
-              </Badge>
+              </Tag>
             )}
-            <Badge outline>{plural(filtered.length, "phase")} loaded</Badge>
+            <Tag appearance="outline">{plural(filtered.length, "phase")} loaded</Tag>
+            {/* HOW FAR BACK THE RECORD GOES is a fact about the SCREEN, not
+                about its last row. It used to ride beside the Load older
+                button under the rows, where a reader met it on the way to
+                pressing that button; the button is the table's own now and
+                says only what it does, so the retention note would otherwise
+                be visible only to a reader who had already exhausted the
+                list. */}
+            <Tag appearance="outline">{eventHistoryLabel(engine?.event_history_seconds)}</Tag>
           </>
         }
       />
 
-      {/* ONE row of controls. This screen had eighteen: a segmented control, a
-          free-text box, a chip per seat, a chip per phase and a failures chip
-          — fifteen of them near-identical pills in two different active
-          idioms. The seat filter is a picker rather than a text box because
-          the match is exact on both sides of the wire, so a typed prefix
-          silently returned nothing while looking like a search that missed. */}
-      <div className="toolbar">
-        <Select
-          value={role}
-          onChange={setRole}
-          options={roles}
-          ariaLabel="Filter by seat"
-          anyLabel="Any seat"
-        />
-        <span className="spacer" />
-        {PHASES.map((p) => (
-          <Chip key={p} on={phase === p} onClick={() => setPhase(phase === p ? "" : p)}>
-            {p}
-          </Chip>
-        ))}
-        {filtering && (
-          <Button
-            size="sm"
-            icon="x"
-            onClick={() => {
-              setRole("");
-              setPhase("");
-              setOnlyFailed("");
-            }}
-          >
-            Clear
-          </Button>
-        )}
-      </div>
-
-      {loading && !merged.length && <Skeleton rows={5} height={44} />}
+      {loading && !merged.length && (
+        <Skeleton label="Loading model activity" variant="text" rows={5} rowHeight={44} />
+      )}
       {error && <QueryState error={error} loading={loading} />}
 
-      {!loading && !filtered.length && !error && (
-        <Empty
-          icon="brain"
-          title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
-          hint={
-            filtering
-              ? "Clear them to see every phase the engine has kept."
-              : "A phase is recorded when it completes. If seats are idle and no schedule has fired, there is nothing here yet."
-          }
-        />
-      )}
-
-      {/* RUNNING. Fixed-height rows, sorted on the seat handle — a key that
-          does not move — so a live row updates its cells and nothing around
-          it reflows. Seven seats republishing five times a second turned the
-          card list this replaces into a race; a number changing inside a row
-          of settled height cannot move the page at all. */}
+      {/* RUNNING. Fixed-height rows, sorted on the seat handle, a key that
+          does not move, so a live row updates its cells and nothing around it
+          reflows. Seven seats republishing five times a second turned the card
+          list this replaces into a race; a number changing inside a row of
+          settled height cannot move the page at all. The same filters narrow
+          it: they are the screen's, read from the URL, not the table's. */}
       {running.length > 0 && (
-        <section className="col gap-1">
-          <div className="t-label">
-            Running now
-            <span className="faint"> · {plural(running.length, "phase")} mid-flight</span>
-          </div>
-          <DataTable
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            subtitle={`${plural(running.length, "phase")} mid-flight`}
+            count={running.length}
+          >
+            <Card.Title>Running now</Card.Title>
+          </Card.Header>
+          <RecordTable
+            screen="model"
+            table="running"
             rows={running}
             columns={columns}
-            rowKey={phaseRecordKey}
+            getRowKey={phaseRecordKey}
             onRowClick={openSeat}
-            isFailed={(r) => r.failed}
-            defaultSort={{ key: "seat", dir: "asc" }}
+            rowTone={(r) => (r.failed ? "danger" : null)}
+            defaultSort={{ key: "seat", direction: "asc" }}
+            stableOrder
           />
-        </section>
+        </Card>
       )}
 
       {/* SETTLED. A finished phase never changes again, so this list only
           moves when the reader asks it to. */}
-      {settled.pending > 0 && (
-        <button className="new-rows" onClick={settled.flush}>
-          {plural(settled.pending, "new phase")} finished while you were reading — show
-        </button>
-      )}
+      <NewItemsNotice count={settled.pending} noun="new phase" onShow={settled.flush} />
 
-      {settled.items.length > 0 && (
-        <section className="col gap-1">
-          <div className="t-label">
-            Recent phases
-            <span className="faint"> · newest first · open a row for its transcript</span>
-          </div>
-          <DataTable
-            rows={settled.items}
-            columns={columns}
-            rowKey={phaseRecordKey}
-            onRowClick={openSeat}
-            isFailed={(r) => r.failed}
+      {/* A REFUSED PAGE IS SAID ABOVE THE ROWS, beside the screen's other
+          query failures, rather than in the table's end strip. That strip is
+          drawn only once there is nothing more to load, so a reader who
+          pressed Load older and was refused would be shown nothing and the
+          button they would press again would be gone. */}
+      {pageError && <QueryState error={pageError} loading={false} />}
+
+      <DataView<PhaseRecord>
+        framed
+        {...settledChoices}
+        columns={columns}
+        rows={settled.items}
+        getRowKey={phaseRecordKey}
+        onRowClick={openSeat}
+        rowTone={(r) => (r.failed ? "danger" : null)}
+        filters={filters}
+        filterValues={values}
+        onFilterValuesChange={onValuesChange}
+        emptyMessage={
+          <EmptyState
+            size="compact"
+            icon={<NeurologyGlyph />}
+            title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
+            description={
+              filtering
+                ? "Clear them to see every phase the engine has kept."
+                : "A phase is recorded when it completes. If seats are idle and no schedule has fired, there is nothing here yet."
+            }
           />
-        </section>
-      )}
+        }
+        /* HISTORY PAGING IS THE TABLE'S OWN, drawn under the rows and inside
+           the frame rather than in a strip beneath it. The cursor and the
+           request stay here, because what "older" means is the screen's: it is
+           the engine's phase query, narrowed by the filters the rows are. */
+        hasMore={!exhausted}
+        onLoadMore={() => void loadOlder()}
+        loadingMore={paging}
+        loadMoreLabel={`Load ${PAGE} older phases`}
+        endMessage={<span>That is the beginning of the retained record.</span>}
+      />
 
-      {/* A bare row, not a Panel: one button did not need card chrome. The
-          spend rollup that used to sit BELOW this is gone — it was Spend's
-          panel on Spend's data, and every "load older" click pushed it
-          another sixty cards down a single scroller, so nobody ever reached
-          it. A link goes where the screen does. */}
+      {/* A bare row, not a panel: one link did not need card chrome. The spend
+          rollup that used to sit BELOW this is gone. It was Spend's panel on
+          Spend's data, and every "load older" press pushed it another sixty
+          cards down a single scroller, so nobody ever reached it. A link goes
+          where the screen does. */}
       <div className="row gap-2">
-        {pageError ? (
-          <QueryState error={pageError} loading={false} />
-        ) : exhausted ? (
-          <span className="t-caption">That is the beginning of the retained record.</span>
-        ) : (
-          <>
-            <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
-              {paging ? "Loading…" : `Load ${PAGE} older phases`}
-            </Button>
-            <span className="t-caption">the event store keeps 30 days</span>
-          </>
-        )}
         <span className="spacer" />
         <a className="t-link" href={href(["spend"])}>
-          where the tokens go →
+          where the tokens go
         </a>
       </div>
     </>

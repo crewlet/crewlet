@@ -29,21 +29,24 @@ import (
 // default embed pattern silently skips them, and a stylesheet under one would
 // be missing from the binary with nothing failing until a browser asked for it.
 //
-// THE ICON IS NOT UNDER dashboard/ AND MUST STILL BE NAMED. The shell asks
-// for it at /static/crewlet-icon.svg (the tab icon and the sidebar brand) —
-// one directory above the rest of the app, because it is the product's mark
-// rather than the dashboard's asset. Embedding only `dashboard` left it
-// 404ing from the binary while every module and stylesheet served perfectly,
-// which renders as a page with no logo and a blank tab icon: the kind of
-// break nothing fails on and nobody files. (The raster favicon.ico a browser
-// asks for unprompted lives under dashboard/ and rides the `all:` pattern.)
+// THE PRODUCT'S MARK RIDES THE DASHBOARD TREE, and did not always. It used to
+// sit one directory above the rest of the app and needed a pattern of its own
+// here, because embedding only `dashboard` left it 404ing from the binary
+// while every module and stylesheet served perfectly: a page with no logo and
+// a blank tab icon, the kind of break nothing fails on and nobody files.
 //
-// A NEW TOP-LEVEL ASSET NEEDS A NEW PATTERN HERE, and TestEveryStaticFileIsInTheBinary
-// is what says so — it walks this directory on disk and fails on anything the
-// embed did not take.
+// It is now the design system's asset rather than a file this repository
+// keeps. The dashboard build copies it out of @crewlethq/icons into its own
+// output (see the copy list in dashboard/vite.config.ts), so it is served from
+// /static/dashboard/crewlet-icon.svg, which is where the shell, the GitHub App
+// return page and the dashboard's own document all ask for it, and it rides
+// the `all:` pattern with everything else.
+//
+// A NEW TOP-LEVEL ASSET WOULD STILL NEED A NEW PATTERN HERE, and
+// TestEveryStaticFileIsInTheBinary is what says so: it walks this directory on
+// disk and fails on anything the embed did not take.
 //
 //go:embed all:dashboard
-//go:embed crewlet-icon.svg
 var files embed.FS
 
 // FS is the embedded tree rooted at the dashboard directory's parent, so a

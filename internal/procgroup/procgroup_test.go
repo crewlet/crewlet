@@ -77,6 +77,21 @@ func TestAZeroPidIsRefusedRatherThanSignallingOurselves(t *testing.T) {
 	}
 }
 
+// Pid 1 names no group this package could have made, and -1 is kill(2)'s
+// broadcast address: a signal "to the group led by pid 1" reaches every process
+// the engine user may signal, the engine and this test binary among them.
+//
+// Asserted through Exists, whose probe is the signal-0 form of the very call a
+// Kill would make, so this can fail without a broken guard ever delivering a
+// real signal: kill(-1, 0) succeeds for any caller that can signal itself,
+// which reads as a live group led by init.
+func TestPidOneIsRefusedBecauseKillReadsItAsEveryProcess(t *testing.T) {
+	if Exists(1) {
+		t.Fatal("Exists(1) = true: the probe went out as kill(-1, 0), the broadcast form, " +
+			"so a Kill(1) would have sent SIGKILL to every process this user owns")
+	}
+}
+
 // Terminate must send a catchable termination rather than an uncatchable
 // kill, or a tree gets no chance to flush its work and close its sockets.
 // The child's own exit status is the unambiguous witness: SIGTERM, not

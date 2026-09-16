@@ -251,20 +251,29 @@ func (c *HumanContact) Normalize() {
 // contains a brace, so the broader read costs nothing and catches the near
 // miss.
 func (c *HumanContact) Validate() error {
+	return joinFieldErrors(c.faults())
+}
+
+// faults is [HumanContact.Validate] with each failure attached to the
+// identity field it is about, relative to the seat that carries the contact.
+func (c *HumanContact) faults() []fieldError {
 	if c == nil {
 		return nil
 	}
-	var errs []error
+	var out []fieldError
 	for _, f := range contactFields {
 		v := strings.TrimSpace(*f.value(c))
 		if !strings.Contains(v, "${") {
 			continue
 		}
 		if _, isRef := envref.Whole(v); !isRef {
-			errs = append(errs, fmt.Errorf("contact.%s: %w: %q", f.key, ErrEmbeddedEnvRef, v))
+			out = append(out, fieldError{
+				field: []any{"contact", f.key},
+				err:   fmt.Errorf("contact.%s: %w: %q", f.key, ErrEmbeddedEnvRef, v),
+			})
 		}
 	}
-	return errors.Join(errs...)
+	return out
 }
 
 // IsEmpty reports whether no identity is declared. A ${VAR} reference
@@ -482,10 +491,23 @@ type Role struct {
 	Responsibilities []string `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty"`
 
 	// Manages is the seats this one manages. An entry naming a UNIT
-	// expands to every role in it, including descendants — see
-	// [Organization.Normalize]. Read it after normalisation and it is
-	// always role names.
+	// expands to every seat in it, descendants included, except this seat
+	// itself (see [Organization.Normalize]). Read after normalisation,
+	// every entry is a seat name bar one that named neither a seat nor a
+	// unit: that entry is kept verbatim, because the seat it names may not
+	// have been added yet, and [Organization.DanglingRefs] reports it.
 	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty"`
+
+	// AutoManaged is the seats [Organization.Normalize] added to Manages
+	// because this seat leads their unit and nobody else in it manages them,
+	// in the order they were added. Every one of them is also in Manages.
+	//
+	// Recorded because nothing else can tell them apart afterwards: once
+	// normalized, an entry the operator wrote and one the lead gained read
+	// identically, and a chart that shows a person which reports they wrote
+	// and which the engine derived needs the difference. Not part of the
+	// wire form: it is derived, and a caller building a Role leaves it empty.
+	AutoManaged []string `yaml:"-" json:"-"`
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
@@ -587,7 +609,9 @@ func (r *Role) Handle() string {
 // one of these would be config that looks live and does nothing.
 //
 // The names are the ones an operator WROTE (integrations.jira, not
-// jira_project), because the error's job is to point at a line in a file.
+// jira_project), because the error's job is to point at a line in a file. A
+// seat's chat apps are written under `integrations:` too, and naming them
+// `slack` and `mattermost` sent an operator looking for a key no seat has.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string
@@ -604,8 +628,8 @@ func (r *Role) humanForbidden() []string {
 		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},
-		{"slack", !r.Slack.IsZero()},
-		{"mattermost", !r.Mattermost.IsZero()},
+		{"integrations.slack", !r.Slack.IsZero()},
+		{"integrations.mattermost", !r.Mattermost.IsZero()},
 		{"integrations.jira", r.Project != ""},
 		{"integrations.confluence", r.Space != ""},
 		{"mcp_env", len(r.MCPEnv) > 0},
@@ -620,22 +644,26 @@ func (r *Role) humanForbidden() []string {
 	return out
 }
 
-// Validate reports every rule this seat breaks, joined.
+// Validate reports every rule this seat breaks, joined. Each is a
+// [SeatError] naming this seat and the field the rule is about.
 //
 // It reports ALL of them rather than the first: a config author fixing one
 // field at a time through a validate-edit loop pays a round trip per
 // mistake, and the mistakes here are usually made together.
 func (r *Role) Validate() error {
 	var errs []error
+	add := func(field []any, err error) {
+		errs = append(errs, &SeatError{Seat: r, Field: field, Err: err})
+	}
 	name := strings.TrimSpace(r.Name)
 	if name == "" {
-		errs = append(errs, fmt.Errorf("role: %w", ErrMissingName))
+		add([]any{"name"}, fmt.Errorf("role: %w", ErrMissingName))
 	}
 
 	switch r.Kind {
 	case "", KindAgent, KindHuman:
 	default:
-		errs = append(errs, fmt.Errorf("role %q: %w: %q (want agent or human)", name, ErrUnknownKind, r.Kind))
+		add([]any{"kind"}, fmt.Errorf("role %q: %w: %q (want agent or human)", name, ErrUnknownKind, r.Kind))
 	}
 
 	switch {
@@ -644,26 +672,27 @@ func (r *Role) Validate() error {
 		if suggestion == "" {
 			suggestion = "my-handle"
 		}
-		errs = append(errs, fmt.Errorf(
+		add([]any{"handle"}, fmt.Errorf(
 			"role %q: %w: %q — e.g. %q",
 			name, ErrInvalidHandle, r.DeclaredHandle, suggestion))
 	case name != "" && r.Handle() == "":
 		// A name of nothing but punctuation slugifies to nothing, and a
 		// seat with no handle derives no agent id and owns no inbox — it
 		// would sit in the chart looking fine and never receive anything.
-		errs = append(errs, fmt.Errorf(
+		// Reported at the name, which is what yields nothing.
+		add([]any{"name"}, fmt.Errorf(
 			"role %q: %w: the name yields no handle, so set one explicitly",
 			name, ErrInvalidHandle))
 	}
 
 	if r.IsHuman() {
 		if offending := r.humanForbidden(); len(offending) > 0 {
-			errs = append(errs, fmt.Errorf(
+			add(fieldOf(offending), fmt.Errorf(
 				"role %q: %w: %s",
 				name, ErrHumanSeatField, strings.Join(offending, ", ")))
 		}
 		if r.Contact.IsEmpty() {
-			errs = append(errs, fmt.Errorf("role %q: %w", name, ErrNoContact))
+			add([]any{"contact"}, fmt.Errorf("role %q: %w", name, ErrNoContact))
 		}
 	} else {
 		var humanOnly []string
@@ -674,17 +703,33 @@ func (r *Role) Validate() error {
 			humanOnly = append(humanOnly, "availability")
 		}
 		if len(humanOnly) > 0 {
-			errs = append(errs, fmt.Errorf(
+			add(fieldOf(humanOnly), fmt.Errorf(
 				"role %q: %w: %s (did you mean kind: human?)",
 				name, ErrAgentSeatField, strings.Join(humanOnly, ", ")))
 		}
 	}
 
-	if err := r.Contact.Validate(); err != nil {
-		errs = append(errs, fmt.Errorf("role %q: %w", name, err))
+	for _, f := range r.Contact.faults() {
+		add(f.field, fmt.Errorf("role %q: %w", name, f.err))
 	}
-	if err := validateSchedules(fmt.Sprintf("role %q", name), r.Schedules); err != nil {
-		errs = append(errs, err)
+	for _, f := range validateSchedules(fmt.Sprintf("role %q", name), r.Schedules) {
+		add(f.field, f.err)
 	}
 	return errors.Join(errs...)
+}
+
+// fieldOf is where a rule about these authored fields is reported: at the
+// field itself when there is exactly one, and at the seat when there are
+// several, since one message names them all and belongs to none of them
+// alone. A name is dotted field names (integrations.slack), never a map key.
+func fieldOf(names []string) []any {
+	if len(names) != 1 {
+		return nil
+	}
+	parts := strings.Split(names[0], ".")
+	out := make([]any, len(parts))
+	for i, part := range parts {
+		out[i] = part
+	}
+	return out
 }

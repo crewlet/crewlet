@@ -9,13 +9,12 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
-import { Router } from "./router.tsx";
+import { buildHash, Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ALL_NAV } from "./nav.ts";
-import { buildHash } from "./router.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -98,25 +97,109 @@ describe("the shell", () => {
   });
 });
 
+describe("an engine with no active configuration", () => {
+  test("the banner leads to creating the company, and names the command line", async () => {
+    location.hash = "#/people";
+    const store = new Store();
+    // Connected: the banner below leads only when the socket is up, since an
+    // unreachable engine cannot say whether anything is configured.
+    store.applyHealth({ status: "ok" });
+    const socket = new LiveSocket(store);
+    // The `stream` query is what says whether a company is configured.
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      Promise.resolve(what === "stream" ? { status: "ok", configured: false } : null);
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    const link = await screen.findByRole("link", { name: "Create the company" });
+    // Not the Configuration screen, which reads and cannot create one.
+    expect(link.getAttribute("href")).toBe("#/org?lens=builder");
+    expect(screen.getAllByText("crewlet config import").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A fetch that answers by path, in the Secrets suite's idiom: the REST-backed
+ * screens read over it, and an unstubbed fetch in jsdom is a network error on
+ * some machines and a hang on others, which makes a smoke test measure the
+ * runner rather than the screen.
+ */
+function stubFetch(handler: (path: string) => Response) {
+  const spy = vi.fn((input: RequestInfo | URL) =>
+    Promise.resolve(handler(new URL(String(input), "http://engine.test").pathname)),
+  );
+  vi.stubGlobal("fetch", spy);
+  return spy;
+}
+
+const answer = (status: number, payload: unknown) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
 describe("routing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   // DERIVED FROM THE NAV, not a hand-written list. The list was one, and a
   // hand-written one covers exactly the screens somebody remembered to add to
   // it — so a new nav entry that renders a blank ships green, which is the one
   // failure this test exists to catch.
   test("every nav route renders a screen rather than a blank", () => {
+    // An engine with no company yet: the state a builder's create mode opens
+    // on, and the one every REST read has to render honestly.
+    stubFetch((path) =>
+      path === "/config" ? answer(404, { error: "no_active_revision" }) : answer(200, {}),
+    );
     const visited = ALL_NAV.map((item) => buildHash(item.path));
     // The two newest screens are the reason the list is derived: a hand-written
     // one would not have them.
     expect(visited).toContain(buildHash(["work"]));
     expect(visited).toContain(buildHash(["pages"]));
-    for (const hash of visited) {
+    // The builder is reached from the org chart rather than from the nav, so
+    // no derivation covers it, and it is the lens most likely to blank: it
+    // reads its document over REST before it draws anything.
+    for (const hash of [...visited, buildHash(["org"], { lens: "builder" })]) {
       location.hash = hash;
       const { view } = mount();
-      expect(view.container.querySelector(".screen-inner")?.children.length, hash).toBeGreaterThan(
-        0,
-      );
+      // THE SCREEN'S OWN CONTENT, found through the one scroll container the
+      // router restores a position in: a screen that rendered nothing leaves
+      // it empty, which is what a blank route looks like.
+      const content = document.getElementById("screen-scroll")!.firstElementChild;
+      expect(content?.children.length, hash).toBeGreaterThan(0);
       view.unmount();
     }
+  });
+
+  // THE BUILDER LENS MOUNTS THROUGH THE SHELL. It is the one lens that reads
+  // over REST and checks with a dry run on arrival, so a broken import, a
+  // hook-order violation or a context it cannot find shows up here first.
+  test("the org builder lens opens on the configuration it reads", async () => {
+    const config = { name: "Acme", roles: [{ name: "CEO" }] };
+    const spy = stubFetch((path) =>
+      path === "/config"
+        ? new Response(JSON.stringify(config), {
+            status: 200,
+            headers: { "Content-Type": "application/json", ETag: '"r1"' },
+          })
+        : answer(200, {}),
+    );
+    location.hash = "#/org?lens=builder";
+    mount();
+    expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
+    // And its first check went out as a dry run, never as a write.
+    const calls = () => spy.mock.calls as unknown as [string, RequestInit | undefined][];
+    await vi.waitFor(() => {
+      expect(calls().some(([input]) => String(input).includes("dry_run=true"))).toBe(true);
+    });
+    const writes = calls().filter(([, init]) => init?.method === "PATCH" || init?.method === "PUT");
+    expect(writes.every(([input]) => String(input).includes("dry_run=true"))).toBe(true);
   });
 
   test("an unknown screen says so instead of rendering nothing", () => {
@@ -254,7 +337,7 @@ describe("a turn watched to its end", () => {
     // the settled list admits everything anyway, so an assertion taken there
     // passes whether the rule holds or not.
     const { store, redraw } = seatView();
-    const scroller = document.querySelector(".screen");
+    const scroller = document.getElementById("screen-scroll");
     if (!scroller) throw new Error("no scroller to scroll: the shell's layout moved");
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     store.applyAgents([

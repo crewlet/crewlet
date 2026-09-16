@@ -21,6 +21,26 @@ version: 2
 
 project_name: crewlet
 
+# THE NOTICES THE BINARY OWES, written before anything is built.
+#
+# The binary redistributes every Go module it links, and most of their
+# licenses (Apache-2.0 for the NATS server and OpenTelemetry, BSD for the Go
+# toolchain and golang.org/x) require their notices to travel with it. The
+# generator copies each linked module's own license and notice files; see
+# scripts/notices for why that set is `go list -deps` over the release targets
+# rather than the module graph, and why a module with no license stops the
+# release.
+#
+# -targets MUST NAME EVERY goos/goarch PAIR THE BUILD BELOW PRODUCES. A package
+# imported on one platform only is still in that platform's archive, and a
+# target left out here is one whose notices can be incomplete with nothing
+# failing. The output lands under build/, which is ignored, so the tree stays
+# clean for goreleaser's own checks; dist/ is not used because goreleaser owns
+# and cleans it.
+before:
+  hooks:
+    - go run ./scripts/notices -out build/notices/THIRD_PARTY_NOTICES.txt -main ./cmd/crewlet -targets linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+
 builds:
   - id: crewlet
     main: ./cmd/crewlet
@@ -93,6 +113,9 @@ builds:
     # was already the one that refused `providers.sandbox: {type: local}`.
     # internal/store/platform.go turns a build for any
     # platform off this list into a compile error that says why.
+    #
+    # The notices hook at the top of this file names the same four targets;
+    # change both together.
     goos: [linux, darwin]
     goarch: [amd64, arm64]
 
@@ -104,9 +127,19 @@ archives:
     # tar.gz everywhere. The zip override existed for Windows and went with
     # it; linux and darwin both want a tarball.
     formats: [tar.gz]
+    # Both notices files, beside LICENSE: the Go modules and toolchain the
+    # binary links at the archive root, and the dashboard's bundled packages,
+    # fonts and icon paths under dashboard/. The second is the file the binary
+    # also serves; it is taken from the committed bundle, which CI keeps equal
+    # to what the dashboard source builds.
     files:
       - LICENSE
       - README.md
+      - src: build/notices/THIRD_PARTY_NOTICES.txt
+        strip_parent: true
+      - src: static/dashboard/THIRD_PARTY_NOTICES.txt
+        dst: dashboard
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
@@ -186,6 +219,13 @@ dockers_v2:
       # GitHub's "Latest".
       - "{{ if not .Prerelease }}latest{{ end }}"
     dockerfile: Dockerfile
+    # The image is a redistribution too, so it carries the same license and
+    # notices the archives do. Each keeps its path in the build context,
+    # which is how the Dockerfile names it.
+    extra_files:
+      - LICENSE
+      - build/notices/THIRD_PARTY_NOTICES.txt
+      - static/dashboard/THIRD_PARTY_NOTICES.txt
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.version: "{{ .Version }}"

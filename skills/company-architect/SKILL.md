@@ -48,9 +48,17 @@ Use the best rung available to you:
 crewlet validate company.yaml --json
 ```
 
-Returns `{"valid": …, "tier": …, "errors": [{"path", "message", "type"}], "summary": {…}}`
-— every offending field with its exact path, all at once. Fix every
-`path` and re-run.
+Returns `{"valid": …, "tier": …, "problems": [{"path", "segments", "kind", "message", "seat", "unit", "line"}], "warnings": [{"kind", "ref", "path", "segments", "seat", "unit", "from", "to", "message"}], "summary": {…}}`:
+every offending field with its exact path, all at once. Fix every problem's
+`path` and re-run. `segments` is the same path as keys and indexes (read it
+rather than splitting `path`, since a map key can contain a dot), `kind` is
+one of `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`,
+`unknown_value` or `invalid`, and `seat`, `unit` and `line` are present when
+the problem is about a seat, a unit, or a line the parser pointed at. Two
+seats sharing a name are one problem beside each seat. A **warning** never
+fails validation, but it is a reference that resolves to nothing (a `lead`,
+a `unit:`, a `manages` entry, a GitLab access level): fix every one before you
+report the company finished, since nothing else will ever point at it.
 
 **2. No `crewlet`, but you can run code** (catches nearly everything):
 validate the parsed YAML against the fetched schema with any JSON Schema
@@ -177,6 +185,14 @@ onboarding markers, and counterparty profiles. Its memory is gone.
 Settle `name` and each `handle` before the company runs, and warn the
 founder explicitly if they later ask to rename either.
 
+**Seat names and unit names are unique across the whole company.** A
+`lead` and a `manages` entry name a seat, a `manages` entry and a root
+seat's `unit:` name a unit, and each resolves to the first match anywhere
+in the tree. Two teams called `Platform` under different departments, or
+two seats called `Software Engineer` with different handles, are refused by
+`crewlet validate` and by every config write. Give each its own name
+(`Payments Platform`, `Software Engineer 2`).
+
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 `.env`. Never write a token, key, or webhook secret into a config file,
@@ -219,13 +235,15 @@ which is what every backend accepts, and never use the reserved `TS` or
 
 **`mcp_env` is per-agent tool credentials, keyed by MCP server name** —
 env vars for `stdio` servers, HTTP headers for `http` ones. A unit's
-`mcp_env` is inherited by its direct roles, with the role's own value
-winning per key.
+`mcp_env` is inherited by its direct agent roles, with the role's own value
+winning per key. Human seats inherit none and may not declare one.
 
 **`manages` accepts unit names as well as role names.** A unit name
 expands to every role in it and its descendants. If a name matches both,
-the role wins. Unit leads auto-manage otherwise-unmanaged direct
-members, and a child unit with no `lead` inherits its parent's.
+the role wins. A unit lead auto-manages every direct member that no other
+direct member of that unit already manages (a unit name in a member's
+`manages` counts for every seat it reaches), and a child unit with no
+`lead` inherits its parent's.
 
 **Put the founder in the chart.** A human seat at the root, above the
 top agent, so escalation terminates at a person and agents recognise

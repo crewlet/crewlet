@@ -23,12 +23,8 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
-import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
-import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { AttentionRow, EventRow, SeatCard } from "~/components/common.tsx";
 import {
   useAgents,
   useEvents,
@@ -42,8 +38,40 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { phaseColor } from "~/lib/phases.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
+import {
+  ActivityStrip,
+  AutoGrid,
+  BarList,
+  Button,
+  Card,
+  EmptyState,
+  Legend,
+  Meter,
+  PageHeader,
+  Section,
+  Stack,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  BoltGlyph,
+  Book2Glyph,
+  CheckGlyph,
+  FlagGlyph,
+  GroupGlyph,
+  LinkGlyph,
+  MoreVertGlyph,
+  NeurologyGlyph,
+  ScheduleGlyph,
+  TerminalGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** How far back the activity strip reaches, and how finely it is cut. */
 const STRIP_MINUTES = 60;
@@ -120,6 +148,7 @@ export function Overview() {
     () =>
       (tokens?.by_phase ?? [])
         .map((p) => ({
+          id: p.phase,
           label: p.phase,
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
@@ -137,34 +166,43 @@ export function Overview() {
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .slice(0, 6)
         .map((a) => ({
+          id: a.agent_id || a.role,
           label: a.role,
           value: a.total_tokens,
           display: fmtCount(a.total_tokens),
-          onClick: () => nav.to(["seats", a.handle || a.role]),
+          href: href(["seats", a.handle || a.role]),
         })),
-    [tokens, nav],
+    [tokens],
   );
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title={org?.name || "Your company"}
-        sub={
+        description={
           org?.mission ||
           "The engine is running. This screen answers what needs a person, what the company is doing, and what it has cost."
         }
         badges={
           <>
-            <Badge outline>{plural(seatCount, "agent seat")}</Badge>
-            {humanCount > 0 && <Badge outline>{plural(humanCount, "human")}</Badge>}
+            <Tag appearance="outline">{plural(seatCount, "agent seat")}</Tag>
+            {humanCount > 0 && <Tag appearance="outline">{plural(humanCount, "human")}</Tag>}
           </>
         }
         actions={
           <>
-            <Button icon="users" onClick={() => nav.to(["people"])}>
+            <Button
+              variant="secondary"
+              leadingIcon={<GroupGlyph />}
+              onClick={() => nav.to(["people"])}
+            >
               People
             </Button>
-            <Button icon="brain" onClick={() => nav.to(["model"])}>
+            <Button
+              variant="secondary"
+              leadingIcon={<NeurologyGlyph />}
+              onClick={() => nav.to(["model"])}
+            >
               Model activity
             </Button>
           </>
@@ -172,237 +210,248 @@ export function Overview() {
       />
 
       {/* 1. What needs a person. Always first, always present. */}
-      <Panel
-        title="Needs a person"
-        icon="flag"
-        count={attention.length}
-        padding="none"
-        actions={
-          attention.length > 0 ? (
-            <span className="t-caption">most costly to ignore first</span>
-          ) : undefined
-        }
-      >
+      <Card as="section" padding="none">
+        <Card.Header
+          divided
+          icon={<FlagGlyph size="sm" />}
+          count={attention.length}
+          actions={
+            attention.length > 0 ? (
+              <span className="t-caption">most costly to ignore first</span>
+            ) : undefined
+          }
+        >
+          <Card.Title>Needs a person</Card.Title>
+        </Card.Header>
         {attention.length ? (
-          <div className="list">
+          <Stack gap={0}>
             {attention.slice(0, 8).map((item) => (
               <AttentionRow key={item.id} item={item} />
             ))}
             {attention.length > 8 && (
               <div className="attention-row" data-severity="info">
                 <span className="attention-icon">
-                  <Icon name="more" size="sm" />
+                  <MoreVertGlyph size="sm" />
                 </span>
                 <span className="t-caption">
-                  and {attention.length - 8} more — every one of them is on the screen it belongs
-                  to.
+                  and {attention.length - 8} more, every one of them on the screen it belongs to.
                 </span>
               </div>
             )}
-          </div>
+          </Stack>
         ) : (
-          <Empty
-            inline
-            icon="check"
+          <EmptyState
+            size="compact"
+            icon={<CheckGlyph />}
             title="Nothing is waiting on you"
-            hint="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
+            description="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
           />
         )}
-      </Panel>
+      </Card>
 
       {/* 2. What the company is doing. */}
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon="zap"
-            label="Working now"
-            value={live.length}
-            sub={
-              live.length
-                ? live.map(({ seat }) => seat.name).join(", ")
-                : `${plural(idle, "seat")} idle and waiting for work`
-            }
-          />
-          <Stat
-            icon="terminal"
-            label="Coding runs"
-            value={sandboxes.length}
-            sub={
-              sandboxes.filter((s) => s.status === "awaiting_input").length
-                ? `${plural(sandboxes.filter((s) => s.status === "awaiting_input").length, "run")} paused on a question`
-                : "detached sandbox runs in flight"
-            }
-          />
-          <Stat
-            icon="activity"
-            label={`Events · last ${STRIP_MINUTES}m`}
-            value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
-            sub={
-              stripTruncated
-                ? "the tab holds the last 400 events, so this hour is partial"
-                : "everything the engine published"
-            }
-          />
-          <Stat
-            icon="coin"
-            label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
-            value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
-            sub={
-              tokens
-                ? `${tokens.totals.calls.toLocaleString()} model calls`
-                : "no spend has been recorded yet"
-            }
-          />
-        </StatRow>
-      </Panel>
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<BoltGlyph />}
+          label="Working now"
+          value={live.length}
+          sub={
+            live.length
+              ? live.map(({ seat }) => seat.name).join(", ")
+              : `${plural(idle, "seat")} idle and waiting for work`
+          }
+        />
+        <StatCard
+          icon={<TerminalGlyph />}
+          label="Coding runs"
+          value={sandboxes.length}
+          sub={
+            sandboxes.filter((s) => s.status === "awaiting_input").length
+              ? `${plural(sandboxes.filter((s) => s.status === "awaiting_input").length, "run")} paused on a question`
+              : "detached sandbox runs in flight"
+          }
+        />
+        <StatCard
+          icon={<TimelineGlyph />}
+          label={`Events · last ${STRIP_MINUTES}m`}
+          value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
+          sub={
+            stripTruncated
+              ? "the tab holds the last 400 events, so this hour is partial"
+              : "everything the engine published"
+          }
+        />
+        <StatCard
+          icon={<TokenGlyph />}
+          label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
+          loading={!tokens}
+          loadingLabel="Loading the token total"
+          value={tokens ? fmtCount(tokens.totals.total_tokens) : null}
+          sub={
+            tokens
+              ? `${tokens.totals.calls.toLocaleString()} model calls`
+              : "no spend has been recorded yet"
+          }
+        />
+      </StatGroup>
 
       <div className="grid grid-auto-lg">
-        <Panel
-          title="Live seats"
-          icon="users"
-          count={live.length}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["people"])}>
-              All seats
-            </Button>
-          }
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<GroupGlyph size="sm" />}
+            count={live.length}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["people"])}>
+                All seats
+              </Button>
+            }
+          >
+            <Card.Title>Live seats</Card.Title>
+          </Card.Header>
           {live.length ? (
-            <div className="seat-grid">
+            <AutoGrid min="lg" gap={3}>
               {live.map(({ seat, agent }) => (
-                <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
+                <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
-            </div>
+            </AutoGrid>
           ) : (
-            <Empty
-              inline
-              icon="clock"
+            <EmptyState
+              size="compact"
+              icon={<ScheduleGlyph />}
               title="No seat is mid-turn"
-              hint={
+              description={
                 seatCount
                   ? "Every seat is attached to its mailbox and waiting. Work arrives from a webhook, a schedule, or a colleague."
                   : "No agent seats are defined. Import a company configuration to spawn some."
               }
             />
           )}
-        </Panel>
+        </Card>
 
-        <Panel
-          title={`Activity · last ${STRIP_MINUTES} minutes`}
-          icon="activity"
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
-              Event log
-            </Button>
-          }
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<TimelineGlyph size="sm" />}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["activity"])}>
+                Event log
+              </Button>
+            }
+          >
+            <Card.Title>{`Activity · last ${STRIP_MINUTES} minutes`}</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <ActivityStrip
               buckets={strip}
-              title={(b) =>
-                `${new Date(b.t).toLocaleTimeString()} — ${b.v} event${b.v === 1 ? "" : "s"}`
-              }
+              label={`Events published in the last ${STRIP_MINUTES} minutes`}
             />
             {stripTruncated && (
               <span className="t-caption">
                 This tab keeps the last {MAX_EVENTS} events, matching the engine's own feed
-                retention — the earliest minutes here are cut off rather than quiet.
+                retention, so the earliest minutes here are cut off rather than quiet.
               </span>
             )}
-            <div className="list">
+            <Stack gap={0}>
               {events.slice(0, 7).map((ev) => (
                 <EventRow key={ev.id} event={ev} />
               ))}
               {!events.length && (
-                <Empty
-                  inline
-                  icon="activity"
+                <EmptyState
+                  size="compact"
+                  icon={<TimelineGlyph />}
                   title="Nothing has happened yet"
-                  hint="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
+                  description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
                 />
               )}
-            </div>
+            </Stack>
           </div>
-        </Panel>
+        </Card>
       </div>
 
       <div className="grid grid-auto-lg">
-        <Panel
-          title="Spend by phase"
-          icon="coin"
-          subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
-              Spend
-            </Button>
-          }
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<TokenGlyph size="sm" />}
+            subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["spend"])}>
+                Spend
+              </Button>
+            }
+          >
+            <Card.Title>Spend by phase</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <BarList data={phaseSpend} emptyLabel="No model calls in this window." />
             {phaseSpend.length > 0 && (
-              <Legend items={phaseSpend.map((p) => ({ label: p.label, color: p.color }))} />
+              <Legend
+                items={phaseSpend.map((p) => ({ id: p.id, label: p.label, color: p.color }))}
+              />
             )}
             {orgMeter && orgMeter.max > 0 && (
               <Meter
-                used={orgMeter.used}
+                value={orgMeter.used}
                 max={orgMeter.max}
-                ariaLabel="Company budget meter"
+                // The LEGEND is the accessible name: `label` is linked to the
+                // bar, so the words here are what a screen reader announces
+                // the meter as, and the figures ride the value text beside it.
                 label={
-                  <span title="a process-lifetime meter — not comparable to the spend window above">
+                  <span title="a process-lifetime meter, not comparable to the spend window above">
                     Company budget meter
                   </span>
                 }
-                right={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
+                valueText={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
               />
             )}
           </div>
-        </Panel>
+        </Card>
 
-        <Panel
-          title="Top seats by spend"
-          icon="users"
-          subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<GroupGlyph size="sm" />}
+            subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
+          >
+            <Card.Title>Top seats by spend</Card.Title>
+          </Card.Header>
           <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
-        </Panel>
+        </Card>
       </div>
 
       <Section
         title="Getting more out of this"
-        hint="every one of these is a real screen backed by a real answer"
+        description="every one of these is a real screen backed by a real answer"
       >
         <div className="grid grid-auto">
           {[
             {
-              icon: "brain" as const,
+              icon: NeurologyGlyph,
               title: "Model activity",
               body: "Every phase the models ran, round by round, with the tools each round called and the prompts they saw.",
               path: ["model"],
             },
             {
-              icon: "link" as const,
+              icon: LinkGlyph,
               title: "Agent-to-agent",
               body: "The private channels seats opened with each other: one ask, one answer, then closed.",
               path: ["conversations"],
             },
             {
-              icon: "book" as const,
+              icon: Book2Glyph,
               title: "Knowledge",
               body: "Search the company knowledge base the way an agent does, and read what each seat has learned for itself.",
               path: ["knowledge"],
             },
           ].map((card) => (
-            <a key={card.title} className="seat-card" href={href(card.path)}>
-              <div className="row">
-                <span className="attention-icon" data-severity="info">
-                  <Icon name={card.icon} size="sm" />
-                </span>
-                <strong className="t-body">{card.title}</strong>
-                <span className="spacer" />
-                <Icon name="arrowRight" size="sm" />
-              </div>
-              <span className="t-caption">{card.body}</span>
-            </a>
+            <Card key={card.title} variant="subtle" href={href(card.path)}>
+              <Stack gap={2}>
+                <div className="row">
+                  <card.icon size="sm" />
+                  <strong className="t-body">{card.title}</strong>
+                  <span className="spacer" />
+                  <ArrowForwardGlyph size="sm" />
+                </div>
+                <span className="t-caption">{card.body}</span>
+              </Stack>
+            </Card>
           ))}
         </div>
       </Section>

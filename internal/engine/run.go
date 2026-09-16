@@ -89,6 +89,10 @@ type Engine struct {
 	// survive a restart, which is the opposite property to incarnation's.
 	id string
 
+	// duties names every fleet duty this engine claims, so a graceful stop
+	// can give each one back. See [Engine.releaseDuties].
+	duties claimedDuties
+
 	// startedAt is when THIS engine started, which on a split deployment
 	// is a different process on a different clock from the API's own
 	// start. Carried on the presence heartbeat so a peer can tell a node
@@ -115,6 +119,17 @@ type Engine struct {
 	// dispatch turns one inbox partition into one turn. Held so a test can
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
+
+	// modelHolds is every seat inbox this node paused because its company
+	// had no model, which the apply that brings one releases. See
+	// nomodels.go.
+	modelHolds modelHolds
+
+	// applying serialises [Engine.Apply] against [Engine.Stop], and stopped,
+	// which it guards, is what refuses an apply once Stop has begun. See
+	// [Engine.Apply].
+	applying sync.Mutex
+	stopped  bool
 
 	// watchdog ends this process when the seat host's heartbeat stops
 	// turning past the lease TTL.
@@ -160,14 +175,16 @@ type Engine struct {
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
 
-	// leaseTTL is the coordination bucket's own age, resolved once from
-	// Tier A.
+	// leaseTTL is the seat lease TTL, which is also the seat lease bucket's
+	// own age, resolved once from Tier A.
 	//
-	// Held because it is a CEILING, not just this node's seat setting: the
-	// KV's expiry is bucket-wide, so it refuses any lease asked to outlive
-	// it, and a worker duty derived from its own cadence has to be clamped
-	// against it rather than hope the two numbers agree. They did agree,
-	// by one strictly-greater comparison, until somebody lowered this.
+	// Held because it is a CEILING for every SEAT claim this engine makes
+	// outside the seat host: the KV's expiry is bucket-wide, so it refuses a
+	// seat lease asked to outlive it, and the mailbox retirement claims a
+	// removed seat's lease with exactly this TTL. Duties are NOT bounded by
+	// it: they live in a bucket of their own whose ceiling is
+	// coord.MaxDutyTTL, and a duty clamped to this value lapsed between two
+	// of its own ticks.
 	leaseTTL time.Duration
 
 	// memory carries a seat's memory between the nodes that run it.
@@ -252,10 +269,12 @@ type Engine struct {
 	// duty.go for why the lease alone is not the whole answer.
 	profile placement.NodeProfile
 
-	// learning is the two background passes no turn drives: episode
-	// compaction and skill ageing. On the ENGINE for the same reason the
-	// sandbox waiter is — they are loops this PROCESS runs, and rebuilding
-	// them on an apply would start a second one against the same rows.
+	// learning is the loops of the background passes no turn drives:
+	// episode compaction, skill ageing, clustered synthesis and promotion.
+	// On the ENGINE for the same reason the sandbox waiter is: they are
+	// loops this PROCESS runs, and rebuilding them on an apply would restart
+	// their clocks. What they run is the applied revision's, handed over by
+	// every apply. See [Engine.startLearningBackground].
 	learning *learning.Background
 
 	// notify is this node's inbound edge: the party registry, the
@@ -313,6 +332,19 @@ type Engine struct {
 	// second one against the same rows.
 	maintenance  *maintenance.Worker
 	integrations *integration.Worker
+
+	// mailboxes registers each seat's mailbox with the fleet and retires
+	// the mailbox of a seat that has left the company. Built BEFORE the
+	// node, which registers through it, and swept by the maintenance duty.
+	// Nil on an engine with no fleet store, where nothing is registered
+	// and nothing retired.
+	mailboxes *maintenance.Mailboxes
+
+	// reconciler is the loop converging this engine on the activation
+	// pointer, recorded by [Engine.NewReconciler]. The mailbox sweep reads
+	// which activation this engine's epoch came from through it, because
+	// nothing else knows: an apply is handed a document, not an epoch.
+	reconciler atomic.Pointer[Reconciler]
 
 	// rewired remembers what the last seat-identity retry resolved on each
 	// surface, so the recovery is logged on the TRANSITION rather than on
@@ -425,16 +457,6 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 }
-
-// pauseReasonNoTurnEngine is the hold name the no-turn-engine park takes on a
-// seat's inbox.
-//
-// A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
-// two subsystems gating one inbox cannot release each other's hold, which
-// means the pause and the eventual resume must spell it identically. Deriving
-// it from the human-readable reason would make an edit to a log message
-// silently strand every seat that was parked under the old wording.
-const pauseReasonNoTurnEngine = "no_turn_engine"
 
 // New assembles an engine.
 //
@@ -685,9 +707,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// a peer's presence row back through.
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
+	// BEFORE the node, which registers every seat's mailbox through it on
+	// its first walk, and AFTER the lease TTL, which a retirement claims a
+	// seat for.
+	if e.mailboxes, err = e.buildMailboxes(backends, nodeID); err != nil {
+		return nil, fmt.Errorf("engine: seat mailboxes: %w", err)
+	}
 	n, err := node.New(node.Config{
-		Queue: backends.Queue,
-		Coord: backends.Coord,
+		Queue:     backends.Queue,
+		Coord:     backends.Coord,
+		Mailboxes: e.mailboxRegistry(),
 		// The node ID is STABLE across restarts; the owner is this
 		// INCARNATION. A restarted process that reused its owner id would
 		// be indistinguishable from the one that died, and would inherit
@@ -849,8 +878,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.startReflection(ctx); err != nil {
 		return nil, err
 	}
-	// The two background passes, after the node exists: both are fleet
-	// singletons claimed under its own incarnation.
+	// The background passes, after the node exists: each is a fleet
+	// singleton claimed under its own incarnation.
 	e.startLearningBackground(ctx)
 	// BEFORE notifications, because a feed publishes onto the same inbound
 	// edge the service consumes: started after, the changes committed in
@@ -1043,6 +1072,22 @@ func (e *Engine) Stop(ctx context.Context) {
 	if e.watchdog != nil {
 		e.watchdog.Stop()
 	}
+	// NO APPLY RUNS ON A NODE THAT IS STOPPING. The reconcile loop can be
+	// mid-tick when the process is told to stop, and an apply that went on
+	// past this point would start again what the teardown below ends: the
+	// scheduler re-armed after its loop was stopped and its duty given
+	// back, the background passes handed to loops that are gone, and on a
+	// node's first company the inbound edge started on a node that is
+	// leaving. So Stop waits out an apply already running, which returns
+	// quickly on the cancelled context that asked for the stop, and every
+	// later one is refused.
+	//
+	// FIRST, so the company the line below names is the one this node
+	// actually stops on: past the gate no apply can install another.
+	e.applying.Lock()
+	e.stopped = true
+	e.applying.Unlock()
+
 	// BEFORE THE DRAIN, because the drain is what closes the broker
 	// connection this publishes over: announced afterwards, the line
 	// would be written on a queue that is already gone, every time.
@@ -1111,6 +1156,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// paid summarisation against a closed database.
 	e.stopLearning()
 	e.stopScheduler()
+	// AFTER every duty loop above has stopped and waited out its tick, so no
+	// tick of this node runs once a peer can take the duty.
+	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
@@ -1179,19 +1227,18 @@ func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Even
 func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Conditions {
 	return func(handle string) inbox.Conditions {
 		_, owned := e.node.Host().MayStart(handle)
+		company := e.Company()
 		return inbox.Conditions{
 			// FRESHNESS, not membership: a renew at t proves exclusivity
 			// through t+ttl, and a membership snapshot can be a full TTL
 			// stale — which is exactly the window this check exists to
 			// close.
 			Owned: owned,
-			// Read off the EPOCH rather than asserted true. NewCompany
-			// refuses a company with no models today, so this cannot be
-			// false yet; stating the actual rule means it stops being
-			// true on its own when the config-apply path can hand a node
-			// an epoch that has none, instead of a constant quietly
-			// outliving the reason for it.
-			TurnEngineReady: e.Company().Models != nil,
+			// Read off the EPOCH rather than asserted true: a company
+			// with no providers.llm is applied with no model registry,
+			// and every delivery to its seats is held on the inbox until
+			// an apply brings one. See nomodels.go.
+			TurnEngineReady: company != nil && company.Models != nil,
 			AwaitingSandbox: awaiting != nil && awaiting(handle),
 			// The SAME gate the inbound edge and the scheduler read, so
 			// a shedding node refuses at every trigger admission rather
@@ -1221,17 +1268,6 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 		}
 	}
 	return nil
-}
-
-// pause stops delivery on a seat's inbox before a park, so the requeued copies
-// buffer on the queue rather than looping straight back.
-func (e *Engine) pause(ctx context.Context, handle, reason string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
-	}
-	log.InfoContext(ctx, "seat_inbox_paused", "handle", handle, "reason", reason)
-	return e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
 }
 
 // turnInputFor renders a dispatched [Request] as the loop's own [turn.Input].

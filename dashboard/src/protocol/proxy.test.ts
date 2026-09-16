@@ -39,28 +39,40 @@ function sources(dir: string): string[] {
 }
 
 /**
- * The first path segment of every absolute path the dashboard fetches.
+ * The first path segment of every absolute path one source text fetches.
  *
- * Three shapes, because all three are in the tree: a `rest.*` call, a bare
+ * Five shapes, because all five are in the tree: a `rest.*` body wrapper, a
+ * `rest.request` with its method first, a `useRest` read, a bare
  * `fetch(location.origin + "/…")`, and a module constant the socket dials.
+ * The two that name a method or a hook are the ones a scanner written for the
+ * first shape was blind to, and they are what the configuration writes and
+ * the guarded reads use.
  */
-function fetched(): Set<string> {
+function pathsIn(text: string): Set<string> {
   const found = new Set<string>();
   const patterns = [
-    /rest\.(?:get|post|put|patch|del)\(\s*[`"'](\/[a-z][a-z0-9/_-]*)/g,
+    /rest\.(?:get|post|put|putText|patch|del)\(\s*[`"'](\/[a-z][a-z0-9/_-]*)/g,
+    /rest\.request\(\s*["'`][A-Z]+["'`]\s*,\s*[`"'](\/[a-z][a-z0-9/_-]*)/g,
+    /useRest(?:<[^>(]*>)?\(\s*[`"'](\/[a-z][a-z0-9/_-]*)/g,
     /fetch\(\s*(?:location\.origin\s*\+\s*)?[`"'](\/[a-z][a-z0-9/_-]*)/g,
     /=\s*["'](\/(?:ws\/)?[a-z][a-z0-9/_-]*)["']\s*;/g,
   ];
-  for (const file of sources(src)) {
-    const text = readFileSync(file, "utf8");
-    for (const pattern of patterns) {
-      for (const match of text.matchAll(pattern)) {
-        const path = match[1]!;
-        // The socket's own path is two segments and is proxied as both, so
-        // keep it whole; everything else joins on its first segment.
-        found.add(path.startsWith("/ws/") ? "/ws/stream" : "/" + path.split("/")[1]);
-      }
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const path = match[1]!;
+      // The socket's own path is two segments and is proxied as both, so
+      // keep it whole; everything else joins on its first segment.
+      found.add(path.startsWith("/ws/") ? "/ws/stream" : "/" + path.split("/")[1]);
     }
+  }
+  return found;
+}
+
+/** Every path the dashboard's sources fetch. */
+function fetched(): Set<string> {
+  const found = new Set<string>();
+  for (const file of sources(src)) {
+    for (const path of pathsIn(readFileSync(file, "utf8"))) found.add(path);
   }
   return found;
 }
@@ -86,5 +98,21 @@ describe("the dev server proxy", () => {
     expect(paths.has("/secrets")).toBe(true);
     expect(paths.has("/stream")).toBe(true);
     expect(paths.has("/ws/stream")).toBe(true);
+    expect(paths.has("/config")).toBe(true);
+  });
+
+  it("recognises every call shape it claims to", () => {
+    // Each shape on its own, so a pattern that stops matching fails here by
+    // name rather than passing on whichever other call still reaches the same
+    // prefix.
+    expect([...pathsIn('rest.patch("/setup/x", {})')]).toEqual(["/setup"]);
+    expect([...pathsIn('rest.putText("/secrets/" + name, value)')]).toEqual(["/secrets"]);
+    expect([...pathsIn('rest.request("PATCH", "/config", { body })')]).toEqual(["/config"]);
+    expect([...pathsIn("rest.request(\n  'PUT',\n  `/config/roles/${id}`,\n)")]).toEqual([
+      "/config",
+    ]);
+    expect([...pathsIn('useRest<SetupListing>("/setup/integrations")')]).toEqual(["/setup"]);
+    expect([...pathsIn('useRest("/org")')]).toEqual(["/org"]);
+    expect([...pathsIn('fetch(location.origin + "/stream")')]).toEqual(["/stream"]);
   });
 });

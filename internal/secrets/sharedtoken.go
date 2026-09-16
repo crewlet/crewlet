@@ -71,14 +71,20 @@ func CheckSharedToken(token string) error {
 			"verbatim in a header or a URL, and a space there is a value the " +
 			"provider never sends back the same way")
 	}
-	if n := len([]rune(token)); n < MinSharedTokenChars {
+	// THE FLOOR IS NAMED AND THE LENGTH GIVEN IS NOT. This message reaches
+	// places the token must never reach: a config refusal's detail and its
+	// problems, answered to whoever submitted a document whose masked
+	// credentials were restored from the stored revision, and a log line.
+	// A value's length is a fact about the value, and it narrows a guess at
+	// exactly the credential this rule calls too short to be safe.
+	if len([]rune(token)) < MinSharedTokenChars {
 		return fmt.Errorf(
-			"a shared token must be at least %d characters and this one is %d: "+
-				"it is the whole authentication for this route, because the "+
-				"provider signs nothing, so anything short enough to guess is "+
-				"a way to wake a seat with content somebody else chose. "+
-				"The dashboard mints one of exactly %d",
-			MinSharedTokenChars, n, MinSharedTokenChars)
+			"a shared token must be at least %d characters: it is the whole "+
+				"authentication for this route, because the provider signs "+
+				"nothing, so anything short enough to guess is a way to wake "+
+				"a seat with content somebody else chose. The dashboard mints "+
+				"one of exactly %d",
+			MinSharedTokenChars, MinSharedTokenChars)
 	}
 	return nil
 }

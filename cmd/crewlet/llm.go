@@ -179,7 +179,7 @@ type cliAgentProvider struct {
 // from the environment alone would report a provider as having no token while
 // the running engine used one.
 func loadCLIAgents(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) ([]cliAgentProvider, func(), error) {
-	company, err := config.LoadCompany(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -63,7 +63,11 @@ func (k *ProviderKeys) UnmarshalYAML(node *yaml.Node) error {
 		*k = compactKeys(many)
 		return nil
 	default:
-		return fmt.Errorf("line %d: %w", node.Line, ErrProviderKeysShape)
+		// A TypeError, in yaml's own "line N: ..." form, because it is the
+		// one error a decoder collects and keeps going after: any other
+		// error returned from here aborts the whole document's decode, and
+		// every other failure in it goes unreported.
+		return &yaml.TypeError{Errors: []string{fmt.Sprintf("line %d: %s", node.Line, ErrProviderKeysShape)}}
 	}
 }
 

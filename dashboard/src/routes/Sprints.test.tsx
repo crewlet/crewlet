@@ -6,12 +6,17 @@
  * is "nobody has said" is the failure mode a screen has and a log does not:
  * a velocity of 0 reads as a team that delivers nothing, and a capacity of 0
  * puts everybody permanently over.
+ *
+ * Where a case has to reach for an element the design system drew, it asks the
+ * design system what it draws rather than spelling a class. See `testing.tsx`.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
+import { Tag } from "@crewlethq/ui";
 import { SprintPanel } from "./Sprints.tsx";
 import { describeChange, ProjectOverview } from "./Work.tsx";
+import { drawnClasses, isDrawnAs } from "~/testing.tsx";
 import type { WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -38,10 +43,30 @@ const sprint = (over: Partial<WorkSprintRow> = {}): WorkSprintRow => ({
   ...over,
 });
 
-// AN UNDECLARED CAPACITY IS A DASH, never a zero. A policy that names nobody
-// would otherwise render every assignee as over capacity, which is a finding
-// a lead reorganises a sprint around.
-test("an assignee with no declared capacity renders an em-dash", () => {
+/**
+ * The tag the design system drew around this text, found by walking out of it.
+ *
+ * The label is a child of the pill rather than the pill itself, and which
+ * element carries the tone is the package's business: the base class comes
+ * from a reference render, so nothing here spells one.
+ */
+function tagAround(text: string): HTMLElement {
+  const base = drawnClasses(Tag, { children: text })[0]!;
+  for (let at: HTMLElement | null = screen.getByText(text); at; at = at.parentElement) {
+    if (at.classList.contains(base)) return at;
+  }
+  throw new Error(`no tag holds ${text}`);
+}
+
+// AN UNDECLARED CAPACITY IS A MARKED ABSENCE, never a zero. A policy that
+// names nobody would otherwise render every assignee as over capacity, which
+// is a finding a lead reorganises a sprint around.
+//
+// The mark is the design system's, which reads its own meaning aloud rather
+// than leaving a screen reader to announce a punctuation character: the
+// absence is asserted by what it SAYS, which is the only half of it a reader
+// ever gets.
+test("an assignee with no declared capacity renders a marked absence", () => {
   render(
     <SprintPanel
       sprint={sprint({
@@ -49,11 +74,11 @@ test("an assignee with no declared capacity renders an em-dash", () => {
       })}
     />,
   );
-  expect(screen.getByText("—")).toBeTruthy();
+  expect(screen.getByText("Not declared")).toBeTruthy();
 });
 
 test("a declared capacity somebody is over is marked as such", () => {
-  const { container } = render(
+  render(
     <SprintPanel
       sprint={sprint({
         by_assignee: [
@@ -71,17 +96,17 @@ test("a declared capacity somebody is over is marked as such", () => {
       })}
     />,
   );
-  // THE BADGE'S TONE IS THE SIGNAL. The number alone says nothing about
-  // whether it has been exceeded, and a capacity column that renders the
-  // same either way is a column nobody reads.
-  const badge = [...container.querySelectorAll(".badge")].find((el) => el.textContent === "21");
-  expect(badge).toBeTruthy();
-  expect(badge?.className).toMatch(/caution/);
-  expect(screen.queryByText("—")).toBeNull();
+  // THE TAG'S TONE IS THE SIGNAL. The number alone says nothing about whether
+  // it has been exceeded, and a capacity column that renders the same either
+  // way is a column nobody reads.
+  expect(
+    isDrawnAs(tagAround("21"), Tag, { variant: "warning", children: "21" }, { children: "21" }),
+  ).toBe(true);
+  expect(screen.queryByText("Not declared")).toBeNull();
 });
 
 // THE MEASURE IS RENDERED, because a bare "20" is points to one team and
-// minutes to another — and a sprint report read in the wrong unit is worse
+// minutes to another, and a sprint report read in the wrong unit is worse
 // than no report.
 test("a sprint in minutes says minutes, not points", () => {
   render(
@@ -202,9 +227,14 @@ test("a change with deltas renders them", () => {
   ).toBe("status: todo → in_progress");
 });
 
-// AN EMPTY SIDE RENDERS AS AN EM-DASH rather than as nothing: "assignee:  →
-// ada" reads as a rendering bug, where "assignee: — → ada" reads as an
+// AN EMPTY SIDE RENDERS AS A DASH rather than as nothing: "assignee:  → ada"
+// reads as a rendering bug, where a dash on the empty side reads as an
 // assignment.
+//
+// THE CHARACTER IS `describeChange`'s OWN, and these three cases pin it. It is
+// currently U+2014, which is neither the mark the design system draws for an
+// absent value nor a character this product's copy otherwise uses, so if the
+// board screen moves it these assertions move with it.
 test("an empty side of a delta renders as a dash", () => {
   expect(
     describeChange({
@@ -223,9 +253,9 @@ test("an empty side of a delta renders as a dash", () => {
   ).toBe("assignee: — → ada");
 });
 
-// A REMOVAL RENDERS AS A DASH ON THE OTHER SIDE TOO — "assignee: ada → " is
-// the same rendering bug read from the other end, where "ada → —" is somebody
-// being taken off a task.
+// A REMOVAL RENDERS AS A DASH ON THE OTHER SIDE TOO. "assignee: ada → " is the
+// same rendering bug read from the other end, where a dash on the right is
+// somebody being taken off a task.
 test("a cleared value renders as a dash", () => {
   expect(
     describeChange({
@@ -245,7 +275,7 @@ test("a cleared value renders as a dash", () => {
 });
 
 // A COMMENT HAS NO DELTAS AND IS THE THING MOST WORTH READING, so the excerpt
-// is what a feed shows for it — the kind alone says only that somebody spoke.
+// is what a feed shows for it: the kind alone says only that somebody spoke.
 test("a change with no deltas renders its excerpt", () => {
   expect(
     describeChange({
@@ -265,8 +295,8 @@ test("a change with no deltas renders its excerpt", () => {
 });
 
 // AND A CHANGE WITH NEITHER DELTAS NOR AN EXCERPT IS STILL A CHANGE. Rendered
-// blank it would look like a rendering bug where it is a real commit — a
-// watcher added, a rank moved — so the kind is the last resort.
+// blank it would look like a rendering bug where it is a real commit, a
+// watcher added or a rank moved, so the kind is the last resort.
 test("a change with nothing to show falls back to its kind", () => {
   expect(
     describeChange({

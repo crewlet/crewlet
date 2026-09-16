@@ -2,7 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -30,6 +34,12 @@ providers:
     type: openai
     model: text-embedding-3-small
     api_key: sk-embeddings-literal
+  sandbox:
+    fake: true
+    setup:
+      - name: registry
+        files: {"/root/.npmrc": "//registry.example.com/:_authToken=setup-file-literal"}
+        env: {REGISTRY_TOKEN: setup-env-literal}
 integrations:
   mattermost:
     enabled: true
@@ -49,6 +59,11 @@ mcp_servers:
     command: notion-mcp
     env:
       NOTION_TOKEN: literal-notion-token
+  - name: tracker
+    transport: http
+    url: https://tracker.example.com/mcp
+    headers:
+      Authorization: "Bearer header-literal-token"
 roles:
   - name: CEO
     handle: ceo
@@ -83,7 +98,8 @@ func TestNoLiteralCredentialSurvivesRedaction(t *testing.T) {
 	for _, literal := range []string{
 		"sk-literal-key", "sk-embeddings-literal", "pl-literal-secret",
 		"gl-literal-pat", "literal-notion-token", "per-seat-literal",
-		"mm-literal-bot-token",
+		"mm-literal-bot-token", "header-literal-token", "setup-file-literal",
+		"setup-env-literal",
 	} {
 		if strings.Contains(string(blob), literal) {
 			t.Errorf("the redacted config still carries %q", literal)
@@ -125,6 +141,96 @@ func TestRedactionLeavesEverythingElseAlone(t *testing.T) {
 	}
 	if !reflect.DeepEqual(redacted.Providers.LLMOrder, original.Providers.LLMOrder) {
 		t.Errorf("the provider order changed: %v", redacted.Providers.LLMOrder)
+	}
+}
+
+// A TOGGLE SURVIVES REDACTION, SET TO WHAT THE OPERATOR SET IT TO.
+//
+// A toggle keeps its state unexported, and the redacting copy once walked
+// exported fields only, so every explicit toggle read as unset: a schedule
+// kept in config with `enabled: false` came back from GET /config as a
+// schedule that fires, and sending that document back enabled it. Each value
+// here is the NON-default one, because a toggle that read as unset would
+// otherwise resolve to the same answer and prove nothing.
+func TestRedactionKeepsEveryToggle(t *testing.T) {
+	t.Parallel()
+	original, err := ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu: {type: anthropic, model: claude-sonnet-5, api_keys: ["sk-literal-key"]}
+turn_engine:
+  extension_enabled: false
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    learning_enabled: false
+    schedules:
+      - {name: standup, cron: "0 9 * * 1-5", task: "Post the standup", enabled: false, catchup: false}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	redacted := original.Redact()
+
+	for name, toggle := range map[string]Toggle{
+		"turn_engine.extension_enabled": redacted.TurnEngine.ExtensionEnabled,
+		"mcp_servers[0].shared":         redacted.MCPServers[0].Shared,
+		"roles[0].learning_enabled":     redacted.Roles[0].LearningEnabled,
+		"roles[0].schedules[0].enabled": redacted.Roles[0].Schedules[0].Enabled,
+		"roles[0].schedules[0].catchup": redacted.Roles[0].Schedules[0].Catchup,
+	} {
+		if !toggle.IsSet() || toggle.Or(true) {
+			t.Errorf("%s read as %+v after redaction, want explicitly false", name, toggle)
+		}
+	}
+}
+
+// A REDACTED DOCUMENT SENT BACK IS THE DOCUMENT THAT WAS STORED.
+//
+// The property every GET-edit-PUT depends on, asserted over the shipped
+// example companies, which set more of the schema than any fixture written
+// for one test: masking and restoring must between them change nothing at
+// all. A field the redacting copy drops, like the toggles above, fails here
+// whichever type it lives on, including a type added after this test.
+func TestARedactedExampleRoundTripsExactly(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.company.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("found %d example companies, want at least 2: %v", len(files), files)
+	}
+	for _, file := range files {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := ParseCompanyDocument(data)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			want, err := json.Marshal(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sentBack := original.Redact()
+			sentBack.RestoreRedacted(original)
+			got, err := json.Marshal(sentBack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("a redacted document restored against its own revision "+
+					"differs from it:\n got %s\nwant %s", got, want)
+			}
+		})
 	}
 }
 
@@ -184,6 +290,72 @@ func TestAMaskedConfigCanBeSentBack(t *testing.T) {
 	}
 	if got := edited.MCPServers[0].Env["NOTION_TOKEN"]; got != "literal-notion-token" {
 		t.Errorf("mcp server env = %q", got)
+	}
+	if got := edited.MCPServers[1].Headers["Authorization"]; got != "Bearer header-literal-token" {
+		t.Errorf("mcp server header = %q", got)
+	}
+	step := edited.Providers.Sandbox.Setup[0]
+	if got := step.Env["REGISTRY_TOKEN"]; got != "setup-env-literal" {
+		t.Errorf("setup step env = %q", got)
+	}
+	if got := step.Files["/root/.npmrc"]; !strings.Contains(got, "setup-file-literal") {
+		t.Errorf("setup step file = %q", got)
+	}
+}
+
+// ONLY A WHOLE REFERENCE IS SHOWN.
+//
+// A value that embeds a reference beside literal text is a credential with a
+// pointer in it, and the literal half is what leaks. The resolver expands an
+// embedded reference, so these values are legitimate configuration rather
+// than typos, which is exactly why they reach a read surface.
+func TestOnlyAWholeReferenceSurvivesRedaction(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, value string
+		shown       bool
+	}{
+		{"a whole reference", "${TRACKER_TOKEN}", true},
+		{"a whole reference with surrounding space", "  ${TRACKER_TOKEN} ", true},
+		{"a reference embedded after a literal", "sk-live-SECRET-${SUFFIX}", false},
+		{"a prefixed reference", "Bearer ${TRACKER_TOKEN}", false},
+		{"two references side by side", "${USER}:${PASSWORD}", false},
+		{"a shell expansion the resolver ignores", "secret-${line#host=}", false},
+		{"a numeric name the resolver never substitutes", "${1}", false},
+		{"an unclosed brace", "sk-${UNCLOSED", false},
+		{"a plain literal", "sk-literal", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mask(tc.value, true)
+			switch {
+			case tc.shown && got != tc.value:
+				t.Errorf("mask(%q) = %q, want the reference shown", tc.value, got)
+			case !tc.shown && got != Redacted:
+				t.Errorf("mask(%q) = %q, want the mask", tc.value, got)
+			}
+		})
+	}
+}
+
+// AN EMBEDDED REFERENCE STILL ROUND-TRIPS.
+//
+// Masking a value the operator can partly read is only safe if sending the
+// document back restores it: otherwise a GET-edit-PUT would replace the
+// header with the marker, and validation would refuse an edit that touched
+// something else entirely.
+func TestAnEmbeddedReferenceIsMaskedAndRestored(t *testing.T) {
+	t.Parallel()
+	original := credentialCompany(t)
+	original.MCPServers[1].Headers["Authorization"] = "Bearer ${TRACKER_TOKEN}"
+
+	edited := original.Redact()
+	if got := edited.MCPServers[1].Headers["Authorization"]; got != Redacted {
+		t.Fatalf("header on the read = %q, want the mask", got)
+	}
+	edited.RestoreRedacted(original)
+	if got := edited.MCPServers[1].Headers["Authorization"]; got != "Bearer ${TRACKER_TOKEN}" {
+		t.Errorf("header after the restore = %q, want the stored value", got)
 	}
 }
 
@@ -341,6 +513,30 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"ForgeAppID": true,
 	}
 
+	// THE TYPE RULE, beside the name rule. A map named Env, Headers or Files
+	// is where a process's credentials are handed to it, and its NAME says
+	// nothing credential-like: MCPServer.Headers (an authorization header)
+	// and SandboxSetupStep.Env and .Files (a registry token, an auth file)
+	// all passed the name rule untagged and were published verbatim. Every
+	// such map is tagged unless it is exempted here, by Type.Field, with the
+	// reason it holds no credential.
+	credentialMaps := map[string]bool{"Env": true, "Headers": true, "Files": true}
+	exemptMaps := map[string]string{
+		// None today. An entry is a decision somebody wrote down, e.g.
+		// "Thing.Env": "names of variables only; the values live elsewhere".
+	}
+	// By SHAPE, not by type identity: a named `type EnvMap map[string]string`
+	// or a pointer to one carries a process's credentials exactly as the
+	// bare map does, and comparing against map[string]string itself would
+	// wave both through.
+	stringMap := func(rt reflect.Type) bool {
+		for rt.Kind() == reflect.Pointer {
+			rt = rt.Elem()
+		}
+		return rt.Kind() == reflect.Map && rt.Key().Kind() == reflect.String &&
+			rt.Elem().Kind() == reflect.String
+	}
+
 	var walk func(t reflect.Type, path string, seen map[reflect.Type]bool)
 	walk = func(rt reflect.Type, path string, seen map[reflect.Type]bool) {
 		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice ||
@@ -358,6 +554,16 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			}
 			name := strings.ToLower(field.Name)
 			tagged := field.Tag.Get(secretTag) == "true"
+			if stringMap(field.Type) && credentialMaps[field.Name] && !tagged {
+				if _, ok := exemptMaps[rt.Name()+"."+field.Name]; !ok {
+					t.Errorf("%s.%s is a map[string]string named %s and is not "+
+						"tagged secret:\"true\": a process's credentials are "+
+						"handed to it through exactly this shape, so the config "+
+						"read surface publishes them. Tag it, or exempt it with "+
+						"the reason it holds none",
+						path+rt.Name(), field.Name, field.Name)
+				}
+			}
 			for _, needle := range credential {
 				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] {
 					t.Errorf("%s.%s looks like a credential and is not tagged "+
@@ -495,12 +701,14 @@ func TestAnAddedSeatDoesNotStrandTheOtherSeatsCredentials(t *testing.T) {
 	}
 }
 
-// A MEMBER THAT CANNOT NAME ITSELF IS NOT MATCHED BY NAME.
+// A DUPLICATED IDENTITY IS MATCHED TO NOTHING, NEITHER BY NAME NOR BY SLOT.
 //
-// The fallback matters as much as the matching: identity is only safe while
-// it is unique, so a document carrying the same handle twice must not have
-// one seat's credentials resolved against the other's.
-func TestADuplicateIdentityFallsBackRatherThanPickingOne(t *testing.T) {
+// Identity is only safe while it is unique, so a document carrying the same
+// handle twice must not have one seat's credentials resolved against the
+// other's. Falling back to POSITION, as the restore once did, is the one
+// correspondence certain to be wrong after a reorder: the CEO's slot held the
+// CTO's token. Both masks stay standing instead, and validation names them.
+func TestADuplicatedIdentityIsMatchedToNothing(t *testing.T) {
 	t.Parallel()
 	original := rosterCompany(t)
 	original.Roles[1].Handle = "ceo" // two seats, one identity
@@ -508,11 +716,298 @@ func TestADuplicateIdentityFallsBackRatherThanPickingOne(t *testing.T) {
 	edited.Roles[0], edited.Roles[1] = edited.Roles[1], edited.Roles[0]
 	edited.RestoreRedacted(original)
 
-	// Positional matching is what a non-identity earns, so the reorder is
-	// resolved against the wrong slot — but the ambiguity is the document's,
-	// and [Company.Validate] is what refuses a roster with two of one handle.
-	if got := edited.Roles[0].MCPEnv["tracker"]["TOKEN"]; got != "ceo-literal" {
-		t.Errorf("a duplicated identity was matched by name anyway: %q", got)
+	for i := range edited.Roles {
+		if got := edited.Roles[i].MCPEnv["tracker"]["TOKEN"]; got != Redacted {
+			t.Errorf("roles[%d] holds %q, want the mask left standing for a "+
+				"duplicated identity", i, got)
+		}
+	}
+	assertUnresolved(t, edited, "roles[0].mcp_env.tracker.TOKEN", "roles[1].mcp_env.tracker.TOKEN")
+}
+
+// AN IDENTIFIED LIST INSIDE A MEMBER NEVER FALLS BACK TO POSITION EITHER.
+//
+// Sandbox setup steps are matched by name within their list. A submitted
+// document is refused for two steps of one name, but a stored revision from
+// before that rule can still hold them, and it is the prior a write restores
+// from. A reorder must not trade their registry tokens.
+func TestDuplicateStepNamesAreMatchedToNothing(t *testing.T) {
+	t.Parallel()
+	original := credentialCompany(t)
+	original.Providers.Sandbox.Setup = []SandboxSetupStep{
+		{Name: "registry", Env: map[string]string{"TOKEN": "first-registry-literal"}},
+		{Name: "registry", Env: map[string]string{"TOKEN": "second-registry-literal"}},
+	}
+	edited := original.Redact()
+	steps := edited.Providers.Sandbox.Setup
+	steps[0], steps[1] = steps[1], steps[0]
+	edited.RestoreRedacted(original)
+
+	for i, step := range edited.Providers.Sandbox.Setup {
+		if got := step.Env["TOKEN"]; got != Redacted {
+			t.Errorf("setup[%d] holds %q, want the mask left standing", i, got)
+		}
+	}
+}
+
+// movingDoc is a company whose every seat and unit holds a credential of its
+// own, named after its owner, so any restore that matched the wrong member is
+// visible in the value it produced.
+const movingDoc = `
+name: Acme
+providers:
+  llm:
+    zulu: {type: anthropic, model: claude-sonnet-5, api_keys: ["sk-literal-key"]}
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    mcp_env: {tracker: {TOKEN: ceo-literal}}
+units:
+  - name: Engineering
+    mcp_env: {tracker: {TOKEN: engineering-literal}}
+    roles:
+      - {name: CTO, handle: cto, llm: zulu, mcp_env: {tracker: {TOKEN: cto-literal}}}
+    children:
+      - name: Platform
+        mcp_env: {tracker: {TOKEN: platform-literal}}
+        roles:
+          - {name: SRE, handle: sre, llm: zulu, mcp_env: {tracker: {TOKEN: sre-literal}}}
+  - name: Product
+    roles:
+      - {name: PM, handle: pm, llm: zulu, mcp_env: {tracker: {TOKEN: pm-literal}}}
+`
+
+// seatTokens reads each seat's tracker token by handle, wherever it sits.
+func seatTokens(c *Company) map[string]string {
+	out := map[string]string{}
+	for role := range c.EachRole() {
+		out[role.IdentityKey()] = role.MCPEnv["tracker"]["TOKEN"]
+	}
+	return out
+}
+
+// unitTokens reads each unit's tracker token by name, wherever it sits.
+func unitTokens(c *Company) map[string]string {
+	out := map[string]string{}
+	var walk func(units []Unit)
+	walk = func(units []Unit) {
+		for i := range units {
+			if token, ok := units[i].MCPEnv["tracker"]["TOKEN"]; ok {
+				out[units[i].Name] = token
+			}
+			walk(units[i].Children)
+		}
+	}
+	walk(c.Units)
+	return out
+}
+
+// assertUnresolved fails unless exactly these paths still hold the mask.
+func assertUnresolved(t *testing.T, c *Company, want ...string) {
+	t.Helper()
+	var got []string
+	for _, path := range c.UnresolvedMasks() {
+		got = append(got, path.String())
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("unresolved masks = %v, want %v", got, want)
+	}
+}
+
+// A CREDENTIAL FOLLOWS ITS SEAT OR UNIT WHEREVER IT MOVES.
+//
+// Matching inside one list only restored a member that stayed in the list it
+// had been in. Moving a seat into a unit, or a team under another department,
+// left its masks standing, so the builder's most ordinary edit was refused
+// with a redaction error on credentials the operator never touched.
+func TestACredentialFollowsItsMemberAcrossAMove(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		edit func(c *Company)
+	}{
+		{"a root seat moves into a unit", func(c *Company) {
+			c.Units[1].Roles = append(c.Units[1].Roles, c.Roles[0])
+			c.Roles = nil
+		}},
+		{"a seat moves from one unit to another", func(c *Company) {
+			c.Units[1].Roles = append(c.Units[1].Roles, c.Units[0].Roles[0])
+			c.Units[0].Roles = nil
+		}},
+		{"a unit seat moves to the root", func(c *Company) {
+			c.Roles = append(c.Roles, c.Units[1].Roles[0])
+			c.Units[1].Roles = nil
+		}},
+		{"a unit moves under another unit", func(c *Company) {
+			c.Units[1].Children = append(c.Units[1].Children, c.Units[0].Children[0])
+			c.Units[0].Children = nil
+		}},
+		{"a child unit moves to the top level", func(c *Company) {
+			c.Units = append(c.Units, c.Units[0].Children[0])
+			c.Units[0].Children = nil
+		}},
+		{"units and seats are reordered", func(c *Company) {
+			c.Units[0], c.Units[1] = c.Units[1], c.Units[0]
+			c.Roles = append(c.Roles, c.Units[0].Roles[0])
+			c.Roles[0], c.Roles[1] = c.Roles[1], c.Roles[0]
+			c.Units[0].Roles = nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			original, err := ParseCompany([]byte(movingDoc))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			edited := original.Redact()
+			tc.edit(edited)
+			edited.RestoreRedacted(original)
+
+			if got, want := seatTokens(edited), seatTokens(original); !maps.Equal(got, want) {
+				t.Errorf("seat credentials after the edit = %v, want %v", got, want)
+			}
+			if got, want := unitTokens(edited), unitTokens(original); !maps.Equal(got, want) {
+				t.Errorf("unit credentials after the edit = %v, want %v", got, want)
+			}
+			assertUnresolved(t, edited)
+			if err := edited.Validate(); err != nil {
+				t.Errorf("the moved company does not validate: %v", err)
+			}
+		})
+	}
+}
+
+// A RENAME IS A NEW IDENTITY, AND ITS MASKS ARE REFUSED RATHER THAN GUESSED.
+//
+// A seat's identity is its handle, so a new display name over a declared
+// handle keeps its credentials, while a new handle has no prior value of its
+// own. A renamed unit loses its own credentials the same way, and the seats
+// inside it, whose identities did not change, keep theirs.
+func TestARenameIsRefusedAndOnlyTheRenamedMemberLosesItsMask(t *testing.T) {
+	t.Parallel()
+	original, err := ParseCompany([]byte(movingDoc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	edited := original.Redact()
+	edited.Units[0].Roles[0].Name = "Chief Technology Officer" // handle cto is declared, so kept
+	edited.Units[1].Roles[0].Handle = "product-manager"        // a new identity
+	edited.Units[0].Name = "Eng"                               // a new unit identity
+	edited.RestoreRedacted(original)
+
+	tokens := seatTokens(edited)
+	if tokens["cto"] != "cto-literal" || tokens["sre"] != "sre-literal" {
+		t.Errorf("seats whose identity did not change lost their credentials: %v", tokens)
+	}
+	assertUnresolved(t, edited,
+		"units[0].mcp_env.tracker.TOKEN",
+		"units[1].roles[0].mcp_env.tracker.TOKEN")
+	err = edited.Validate()
+	if err == nil || !strings.Contains(err.Error(), "units[1].roles[0].mcp_env.tracker.TOKEN") {
+		t.Errorf("validation does not name the renamed seat's credential: %v", err)
+	}
+}
+
+// AN EMPTY IDENTITY MATCHES NOTHING.
+//
+// A seat whose name derives no handle is refused by validation, but it can sit
+// in a stored revision a write restores from. Every such seat shares the empty
+// identity, so matching on it hands one seat's credentials to another.
+func TestAnEmptyIdentityMatchesNothing(t *testing.T) {
+	t.Parallel()
+	original, err := ParseCompanyDocument([]byte(`
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+roles:
+  - {name: "!!!", mcp_env: {tracker: {TOKEN: punctuation-literal}}}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	edited := original.Redact()
+	edited.RestoreRedacted(original)
+	assertUnresolved(t, edited, "roles[0].mcp_env.tracker.TOKEN")
+}
+
+// THE DUPLICATE SIBLING PROBE: TWO UNITS OF ONE NAME NEVER TRADE CREDENTIALS.
+//
+// A stored revision a build before the name rules admitted can hold two units
+// called "Platform", each with its own team's token. Reordering them, or
+// moving and renaming one, restored through position or through either of the
+// two names hands one team the other's token with no mask left standing to
+// refuse it. The only safe outcome is a mask error on both.
+func TestTheDuplicateSiblingProbeIsAMaskErrorNeverASwap(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+units:
+  - name: Platform
+    mcp_env: {tracker: {TOKEN: secret-A}}
+    roles: [{name: Dev A, handle: dev-a}]
+  - name: Platform
+    mcp_env: {tracker: {TOKEN: secret-B}}
+    roles: [{name: Dev B, handle: dev-b}]
+  - name: Payments
+    roles: [{name: Dev C, handle: dev-c}]
+`
+	for _, tc := range []struct {
+		name       string
+		edit       func(c *Company)
+		unresolved []string
+	}{
+		{
+			"the two are swapped",
+			func(c *Company) { c.Units[0], c.Units[1] = c.Units[1], c.Units[0] },
+			[]string{"units[0].mcp_env.tracker.TOKEN", "units[1].mcp_env.tracker.TOKEN"},
+		},
+		{
+			"one moves under another unit and is renamed",
+			func(c *Company) {
+				moved := c.Units[1]
+				moved.Name = "Payments Platform"
+				c.Units[2].Children = append(c.Units[2].Children, moved)
+				c.Units = []Unit{c.Units[0], c.Units[2]}
+			},
+			[]string{"units[0].mcp_env.tracker.TOKEN", "units[1].children[0].mcp_env.tracker.TOKEN"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			original, err := ParseCompanyDocument([]byte(doc))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			edited := original.Redact()
+			tc.edit(edited)
+			edited.RestoreRedacted(original)
+
+			blob, err := json.Marshal(edited)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, literal := range []string{"secret-A", "secret-B"} {
+				if strings.Contains(string(blob), literal) {
+					t.Errorf("a unit of a duplicated name was restored to %q: %s", literal, blob)
+				}
+			}
+			assertUnresolved(t, edited, tc.unresolved...)
+			if err := edited.Validate(); err == nil || !strings.Contains(err.Error(), Redacted) {
+				t.Errorf("validation does not report the standing masks: %v", err)
+			}
+			// The seats inside still carry nothing to restore and keep
+			// their identities; nothing about the probe touched them.
+			if tokens := seatTokens(edited); len(tokens) != 3 {
+				t.Errorf("seats = %v, want the three seats untouched", tokens)
+			}
+		})
 	}
 }
 
@@ -580,4 +1075,43 @@ func holdsCredential(t reflect.Type, seen map[reflect.Type]bool) bool {
 		}
 	}
 	return false
+}
+
+// A STANDING MASK SAYS EVERY REASON IT COULD NOT BE MATCHED, AND WHAT TO DO.
+//
+// The refusal once named only a new or renamed member and a bare list that
+// changed length. A stored revision with two units called "Platform" leaves
+// masks standing on units nobody created or renamed, and an operator told
+// only those two causes has nothing to act on.
+func TestAStandingMaskNamesEveryCauseAndTheRemedy(t *testing.T) {
+	t.Parallel()
+	original, err := ParseCompanyDocument([]byte(`
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+units:
+  - {name: Platform, mcp_env: {tracker: {TOKEN: secret-A}}, roles: [{name: Dev A, handle: dev-a}]}
+  - {name: Platform, mcp_env: {tracker: {TOKEN: secret-B}}, roles: [{name: Dev B, handle: dev-b}]}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	edited := original.Redact()
+	edited.RestoreRedacted(original)
+
+	err = edited.ValidateRunnable()
+	if err == nil {
+		t.Fatal("a document holding standing masks validated")
+	}
+	for _, want := range []string{
+		"units[0].mcp_env.tracker.TOKEN",
+		"new or was renamed",
+		"more than one member",
+		"changed length",
+		"${VAR} reference",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
 }

@@ -23,11 +23,10 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
-import { Field } from "~/ui/Field.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { ErrorGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
 
 export function SecretDialog({
   /** The name being edited, or "" to store a new one. */
@@ -75,16 +74,18 @@ export function SecretDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={editing ? `Edit ${editing}` : "Store a secret"}
-      icon="key"
+      icon={<KeyGlyph />}
       onClose={onClose}
       dismissable={!busy}
-      width={520}
+      size="md"
       onSubmit={() => void submit()}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>
@@ -95,11 +96,11 @@ export function SecretDialog({
     >
       {editing ? (
         <p className="t-body secondary" style={{ margin: 0 }}>
-          The value replaces what the fleet holds under <code className="inline">{editing}</code>.
-          Every node reads the same row, so nothing has to be copied anywhere.
+          The value replaces what the fleet holds under <InlineCode>{editing}</InlineCode>. Every
+          node reads the same row, so nothing has to be copied anywhere.
         </p>
       ) : (
-        <Field
+        <ConfigField
           label="Name"
           value={name}
           onChange={setName}
@@ -109,7 +110,7 @@ export function SecretDialog({
         />
       )}
 
-      <Field
+      <ConfigField
         label={editing ? "New value" : "Value"}
         kind="secret"
         value={value}
@@ -119,8 +120,7 @@ export function SecretDialog({
       />
 
       {editing && readers.length > 0 && (
-        <div className="banner neutral">
-          <Icon name="info" size="sm" />
+        <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>
               {readers.length === 1
@@ -131,20 +131,19 @@ export function SecretDialog({
             {/* WHEN it takes effect, because a rotation that appears to
                 succeed and quietly does not is the failure the store exists
                 to remove. A provider holds the value it was built with. */}
-            <span className="t-caption faint">
+            <span className="t-caption">
               A running seat keeps the value it was built with until the configuration is
               re-activated or the node restarts.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
 
       {error && (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert" icon={<ErrorGlyph size="sm" />}>
           <span>{error}</span>
-        </div>
+        </Callout>
       )}
-    </Dialog>
+    </Modal>
   );
 }

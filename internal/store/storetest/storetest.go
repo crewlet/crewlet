@@ -74,6 +74,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"FollowPurgeKeepsTheLiveOnes", testFollowPurgeKeepsTheLiveOnes},
 		{"FollowRefusesAnIncompleteIdentity", testFollowRefusesAnIncompleteIdentity},
 		{"OnlyOneRevisionIsActive", testOnlyOneRevisionIsActive},
+		{"AnInsertedRevisionIsHistoryUntilActivated", testAnInsertedRevisionIsHistoryUntilActivated},
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
 		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},

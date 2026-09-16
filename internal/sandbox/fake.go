@@ -77,6 +77,12 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	return strconv.Itoa(len(s.background)), nil
 }
 
+// JobRunning answers through [FakeSandbox.Exec], the way a remote box does,
+// so a test scripts liveness with ExecFunc.
+func (s *FakeSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+	return probeByKill(ctx, s, commandID)
+}
+
 // WriteFile stores the content in memory, where [FakeSandbox.Put] and
 // ReadFile can see it.
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
@@ -179,6 +185,9 @@ type FakeProvider struct {
 	Vanished map[string]bool
 	// Killed records every Kill, in order — the pause reaper's assertion.
 	Killed []string
+	// KillErr, when set, fails every Kill after recording it, standing in
+	// for a provider that could not be reached to reclaim a box.
+	KillErr error
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -236,6 +245,9 @@ func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.Killed = append(p.Killed, sandboxID)
+	if p.KillErr != nil {
+		return p.KillErr
+	}
 	delete(p.boxes, sandboxID)
 	return nil
 }

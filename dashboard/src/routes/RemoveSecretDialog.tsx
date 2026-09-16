@@ -22,10 +22,9 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { CheckGlyph, ErrorGlyph, KeyGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 
 export function RemoveSecretDialog({
   name,
@@ -66,15 +65,17 @@ export function RemoveSecretDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`Remove ${name}`}
-      icon="key"
+      icon={<KeyGlyph />}
       onClose={onClose}
       dismissable={!busy}
-      width={560}
+      size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button
@@ -93,8 +94,7 @@ export function RemoveSecretDialog({
       </p>
 
       {referenced && (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert" icon={<ErrorGlyph size="sm" />}>
           <span className="col" style={{ gap: 6 }}>
             <span>
               {paths.length === 1
@@ -105,63 +105,57 @@ export function RemoveSecretDialog({
             </span>
             <span className="col" style={{ gap: 2 }}>
               {paths.map((path) => (
-                <code className="inline" key={path}>
-                  {path}
-                </code>
+                <InlineCode key={path}>{path}</InlineCode>
               ))}
             </span>
-            <span className="t-caption faint">
+            <span className="t-caption">
               Point those fields somewhere else, or remove them, before removing this.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
 
       {unchecked && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>
               The active configuration could not be read, so it is not known whether anything points
               at this name.
             </span>
-            {unknown && <span className="t-caption faint">{unknown}</span>}
+            {unknown && <span className="t-caption">{unknown}</span>}
           </span>
-        </div>
+        </Callout>
       )}
 
       {!referenced && !unchecked && (
-        <div className="banner neutral">
-          <Icon name="check" size="sm" />
+        <Callout variant="neutral" icon={<CheckGlyph size="sm" />}>
           <span>
             No field in the active configuration names this. Removing it changes nothing the company
             is running.
           </span>
-        </div>
+        </Callout>
       )}
 
       {needsAcknowledgement && (
-        <label className="int-choice">
-          <input
-            type="checkbox"
-            checked={acknowledged}
-            disabled={busy}
-            onChange={(e) => setAcknowledged(e.target.checked)}
-          />
-          <span className="t-body">
-            {referenced
+        <Checkbox
+          framed
+          tone="danger"
+          checked={acknowledged}
+          disabled={busy}
+          onCheckedChange={setAcknowledged}
+          label={
+            referenced
               ? "Remove it anyway, and leave those fields pointing at nothing"
-              : "Remove it without knowing what points at it"}
-          </span>
-        </label>
+              : "Remove it without knowing what points at it"
+          }
+        />
       )}
 
       {error && (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert" icon={<ErrorGlyph size="sm" />}>
           <span>{error}</span>
-        </div>
+        </Callout>
       )}
-    </Dialog>
+    </Modal>
   );
 }

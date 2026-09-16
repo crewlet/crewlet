@@ -10,20 +10,21 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  configValueKind,
   elapsedMs,
+  eventHistoryLabel,
+  formatPhaseLLM,
+  REDACTED,
   fmtCount,
   fmtDuration,
   fmtPct,
   humanize,
-  inTime,
   newestFirst,
   oldestFirst,
   parseUTC,
   plural,
-  relTime,
   splitConversationKey,
   tsKey,
-  fmtElapsed,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -72,30 +73,6 @@ describe("timestamps", () => {
       .sort(newestFirst)
       .map((r) => r.id);
     expect(once).toEqual(twice);
-  });
-});
-
-describe("relative time", () => {
-  const now = Date.parse("2026-01-01T12:00:00Z");
-
-  test("reads the instant it is GIVEN, never the clock", () => {
-    // Every relative time on a screen has to agree with every other, and a
-    // component reading its own clock re-renders on its own schedule and
-    // disagrees with the row above it. It is also what makes these strings
-    // actually advance instead of freezing until an unrelated push lands.
-    expect(relTime("2026-01-01T11:56:00Z", now)).toBe("4m ago");
-    expect(relTime("2026-01-01T12:00:00Z", now)).toBe("just now");
-    expect(relTime("2026-01-01T09:00:00Z", now)).toBe("3h ago");
-  });
-
-  test("a future stamp reads forwards rather than as a negative age", () => {
-    expect(relTime("2026-01-01T12:30:00Z", now)).toBe("in 30m");
-    expect(inTime("2026-01-01T11:00:00Z", now)).toBe("due");
-  });
-
-  test("a missing stamp is an em dash, not the epoch", () => {
-    expect(relTime(undefined, now)).toBe("—");
-    expect(inTime("", now)).toBe("—");
   });
 });
 
@@ -167,31 +144,82 @@ describe("counts and their nouns", () => {
   });
 });
 
-describe("a live counter reads as a clock, not as a glitch", () => {
-  test("whole seconds — never milliseconds or tenths", () => {
-    // The live row churned through "0 ms", "1.4 s", "1.9 s" once a second.
-    expect(fmtElapsed(0)).toBe("0s");
-    expect(fmtElapsed(340)).toBe("0s");
-    expect(fmtElapsed(1400)).toBe("1s");
-    expect(fmtElapsed(1900)).toBe("1s");
-    expect(fmtElapsed(59_000)).toBe("59s");
+describe("a seat's model setting, in all three shapes the engine writes", () => {
+  test("one key and one chain are a single row for every phase", () => {
+    expect(formatPhaseLLM("fast")).toEqual([{ phase: "", chain: "fast" }]);
+    // THE ORDER IS THE MEANING of a chain, so it reads as one, not as a set.
+    expect(formatPhaseLLM(["fast", "backup"])).toEqual([{ phase: "", chain: "fast, then backup" }]);
   });
 
-  test("a clock skew never shows a negative or a future", () => {
-    // A seat's clock and the browser's disagree by a few hundred
-    // milliseconds, and "in 1s" for something already running is the one
-    // reading that is certainly wrong.
-    expect(fmtElapsed(-800)).toBe("0s");
+  test("a per-phase mapping is one row per phase, in the engine's phase order", () => {
+    // Rendered as a React child, this shape threw and blanked the whole page.
+    expect(formatPhaseLLM({ review: "big", default: ["fast", "backup"], judge: "cheap" })).toEqual([
+      { phase: "default", chain: "fast, then backup" },
+      { phase: "review", chain: "big" },
+      { phase: "judge", chain: "cheap" },
+    ]);
   });
 
-  test("minutes and hours", () => {
-    expect(fmtElapsed(72_000)).toBe("1m 12s");
-    expect(fmtElapsed(3_800_000)).toBe("1h 3m");
+  test("a phase this build does not know is kept, after the known ones", () => {
+    expect(formatPhaseLLM({ planner: "big", default: "fast" })).toEqual([
+      { phase: "default", chain: "fast" },
+      { phase: "planner", chain: "big" },
+    ]);
   });
 
-  test("a missing span is a dash, not a zero", () => {
-    expect(fmtElapsed(null)).toBe("—");
-    expect(fmtElapsed(undefined)).toBe("—");
-    expect(fmtElapsed(NaN)).toBe("—");
+  test("nothing configured, or a shape nobody sends, is no rows rather than a throw", () => {
+    expect(formatPhaseLLM(undefined)).toEqual([]);
+    expect(formatPhaseLLM(null)).toEqual([]);
+    expect(formatPhaseLLM("")).toEqual([]);
+    expect(formatPhaseLLM([])).toEqual([]);
+    expect(formatPhaseLLM(42)).toEqual([]);
+    expect(formatPhaseLLM({ default: 7, review: [" ", 3] })).toEqual([]);
+  });
+});
+
+describe("a value read from the redacted document", () => {
+  test("the mask is a literal that is set and hidden, never a value to print", () => {
+    expect(configValueKind(REDACTED)).toBe("hidden");
+  });
+
+  test("only a whole reference is a reference", () => {
+    expect(configValueKind("${SLACK_BOT_TOKEN}")).toBe("reference");
+    expect(configValueKind("Bearer ${TOKEN}")).toBe("literal");
+    expect(configValueKind("${TOKEN}${OTHER}")).toBe("literal");
+    expect(configValueKind("${TOKEN")).toBe("literal");
+  });
+
+  // DEFENCE IN DEPTH. An engine whose redaction let a partial reference
+  // through would otherwise have its literal half printed on this page.
+  test("in a credential field, anything but one whole reference is hidden", () => {
+    expect(configValueKind("Bearer sk-live-${SUFFIX}", { secret: true })).toBe("hidden");
+    expect(configValueKind("plain-token", { secret: true })).toBe("hidden");
+    expect(configValueKind("${TOKEN}", { secret: true })).toBe("reference");
+    expect(configValueKind("", { secret: true })).toBe("empty");
+  });
+
+  test("an unset field is empty, and an identity is a literal", () => {
+    expect(configValueKind("")).toBe("empty");
+    expect(configValueKind(undefined)).toBe("empty");
+    expect(configValueKind("U0FOUNDER")).toBe("literal");
+  });
+});
+
+describe("how far back the log goes", () => {
+  test("the floor is the engine's own, said in days", () => {
+    expect(eventHistoryLabel(30 * 24 * 3600)).toBe("the store keeps 30 days");
+    expect(eventHistoryLabel(24 * 3600)).toBe("the store keeps 1 day");
+    expect(eventHistoryLabel(6 * 3600)).toBe("the store keeps 6 hours");
+  });
+
+  test("an engine that did not report it says so rather than guessing", () => {
+    // An operator told the wrong floor stops paging early, so the honest
+    // answer to "I do not know" is that sentence, never a number this client
+    // picked.
+    for (const absent of [undefined, null, 0, -1, Number.NaN]) {
+      expect(eventHistoryLabel(absent)).toBe(
+        "this engine did not report how far back the log goes",
+      );
+    }
   });
 });

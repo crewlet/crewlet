@@ -31,7 +31,11 @@ func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
 	seen := 0
 
 	b := NewBackground(BackgroundOptions{
-		Cluster: &Synthesizer{}, // never reached: RoleFor answers nil below
+		Passes: BackgroundPasses{
+			Cluster:         &Synthesizer{},
+			ClusterInterval: 5 * time.Millisecond,
+		},
+		// never reached: RoleFor answers nil below
 		RoleFor: func(string) *org.Role {
 			mu.Lock()
 			seen++
@@ -41,8 +45,7 @@ func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		Seats:           func() []string { return []string{"dev"} },
-		ClusterInterval: 5 * time.Millisecond,
+		Seats: func() []string { return []string{"dev"} },
 	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -82,7 +85,9 @@ func TestAnUnresolvableSeatIsSkippedRatherThanRun(t *testing.T) {
 		t.Fatalf("NewSynthesizer: %v", err)
 	}
 	b := NewBackground(BackgroundOptions{
-		Cluster: syn,
+		Passes: BackgroundPasses{
+			Cluster: syn,
+		},
 		RoleFor: func(handle string) *org.Role {
 			if handle == "ghost" {
 				return nil
@@ -91,7 +96,7 @@ func TestAnUnresolvableSeatIsSkippedRatherThanRun(t *testing.T) {
 		},
 		Seats: func() []string { return []string{"ghost", "known"} },
 	})
-	b.clusterPass(t.Context())
+	b.clusterPass(t.Context(), syn)
 
 	if got := models.roles(); len(got) != 1 || got[0] != "Dev" {
 		t.Fatalf("model lookups = %v, want exactly the resolvable seat's role — "+
@@ -105,10 +110,12 @@ func TestAnUnresolvableSeatIsSkippedRatherThanRun(t *testing.T) {
 func TestAClusterPassWithoutARoleResolverIsNotArmed(t *testing.T) {
 	t.Parallel()
 	b := NewBackground(BackgroundOptions{
-		Cluster: &Synthesizer{},
-		Seats:   func() []string { return []string{"dev"} },
+		Passes: BackgroundPasses{
+			Cluster: &Synthesizer{},
+		},
+		Seats: func() []string { return []string{"dev"} },
 	})
-	if b.cluster != nil {
+	if b.passes.Cluster != nil {
 		t.Fatal("a clustering pass was armed with no way to resolve a seat's role")
 	}
 }
@@ -177,13 +184,16 @@ func writeClusterableTurns(t *testing.T, db *store.DB, handle string) {
 func TestEachBackgroundLoopKeepsItsOwnCadence(t *testing.T) {
 	t.Parallel()
 	b := NewBackground(BackgroundOptions{})
-	if b.curatorEvery != CuratorInterval {
-		t.Errorf("curator = %v, want %v", b.curatorEvery, CuratorInterval)
+	if b.passes.CuratorInterval != CuratorInterval {
+		t.Errorf("curator = %v, want %v", b.passes.CuratorInterval, CuratorInterval)
 	}
-	if b.lifecycleEvery != LifecycleInterval {
-		t.Errorf("lifecycle = %v, want %v", b.lifecycleEvery, LifecycleInterval)
+	if b.passes.LifecycleInterval != LifecycleInterval {
+		t.Errorf("lifecycle = %v, want %v", b.passes.LifecycleInterval, LifecycleInterval)
 	}
-	if b.clusterEvery != ClusterInterval {
-		t.Errorf("cluster = %v, want %v", b.clusterEvery, ClusterInterval)
+	if b.passes.ClusterInterval != ClusterInterval {
+		t.Errorf("cluster = %v, want %v", b.passes.ClusterInterval, ClusterInterval)
+	}
+	if b.passes.PromotionInterval != PromotionInterval {
+		t.Errorf("promotion = %v, want %v", b.passes.PromotionInterval, PromotionInterval)
 	}
 }

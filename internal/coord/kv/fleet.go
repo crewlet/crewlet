@@ -83,7 +83,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	defer cancel()
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens fifteen of these in a row and logs nothing between them, so a
+	// opens seventeen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
 	//
@@ -259,7 +259,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why THIRTEEN buckets and not one
+// # Why FOURTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -300,6 +300,11 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream,
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
 //	           against a third-party app it had already agreed with
+//	mailboxes  none at all, for the channels' reason: a record's age cannot
+//	           tell a seat still in the company from one that left, so an
+//	           age would forget a mailbox that still exists and leave it
+//	           retaining mail for a seat nobody runs, with nothing left to
+//	           retire it
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -332,6 +337,7 @@ const (
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
+	mailboxesSuffix    = "_mailboxes"
 	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -442,6 +448,7 @@ type FleetStore struct {
 	fires        jetstream.KeyValue
 	runs         jetstream.KeyValue
 	integrations jetstream.KeyValue
+	mailboxes    jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -483,7 +490,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, thirteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, fourteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -559,6 +566,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 		{&store.integrations, integrationsSuffix,
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
+		{&store.mailboxes, mailboxesSuffix,
+			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
@@ -1077,10 +1086,14 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
 	}
+	if req.Expect != "" && req.ExpectAbsent {
+		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
+			"expect a revision and no revision at once")
+	}
 	// THE EXPECTATION IS RESOLVED FIRST, before anything is written: a
 	// caller that has already lost the race must not leave a payload
 	// behind for a revision the fleet will never point at.
-	seq, err := f.expectedSeq(ctx, req.Expect)
+	seq, err := f.expectedSeq(ctx, req)
 	if err != nil {
 		return coord.Activation{}, err
 	}
@@ -1113,7 +1126,7 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	// between makes this fail rather than overwrite — which is the only
 	// thing standing between two operators editing at once and one of them
 	// losing their change with a 201 in hand.
-	revision, err := f.flip(ctx, req.Expect, seq, raw)
+	revision, err := f.flip(ctx, req, seq, raw)
 	if err != nil {
 		return coord.Activation{}, err
 	}
@@ -1128,9 +1141,11 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 // expectedSeq resolves the caller's expectation to the KV sequence to
 // compare-and-set against, or reports the race.
 //
-// Zero means unconditional — see [coord.ActivationRequest.Expect].
-func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, error) {
-	if expect == "" {
+// Zero means unconditional (see [coord.ActivationRequest.Expect]), and it is
+// also what a create-only write compares against, since there is no entry to
+// take a sequence from.
+func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationRequest) (uint64, error) {
+	if req.Expect == "" && !req.ExpectAbsent {
 		return 0, nil
 	}
 	entry, err := f.config.Get(ctx, activationKey)
@@ -1138,7 +1153,8 @@ func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, er
 		// NOTHING TO HAVE RACED WITH. A node seeded from a file holds a
 		// locally-active revision before it has published anything, and
 		// treating that as a race would refuse every config write on it
-		// until it did. See [coord.ActivationRequest.Expect].
+		// until it did. See [coord.ActivationRequest.Expect]. It is also
+		// exactly what a create-only write is waiting to see.
 		return 0, nil
 	}
 	if err != nil {
@@ -1148,16 +1164,35 @@ func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, er
 	if err = json.Unmarshal(entry.Value(), &record); err != nil {
 		return 0, fmt.Errorf("coord/kv: decode the activation: %w", err)
 	}
-	if record.RevisionID != expect {
+	if req.ExpectAbsent {
+		return 0, fmt.Errorf("%w: expected no activation, the fleet is on %s",
+			coord.ErrActivationRaced, record.RevisionID)
+	}
+	if record.RevisionID != req.Expect {
 		return 0, fmt.Errorf("%w: expected %s, the fleet is on %s",
-			coord.ErrActivationRaced, expect, record.RevisionID)
+			coord.ErrActivationRaced, req.Expect, record.RevisionID)
 	}
 	return entry.Revision(), nil
 }
 
 // flip writes the pointer, conditionally when there was an expectation.
-func (f *FleetStore) flip(ctx context.Context, expect string, seq uint64, raw []byte) (uint64, error) {
-	if expect == "" {
+//
+// A CREATE-ONLY write is a Create rather than an Update: there is no sequence
+// to name, and the store's own "only if this key is absent" is what makes two
+// nodes both convinced the company is theirs to write resolve to one winner.
+func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq uint64, raw []byte) (uint64, error) {
+	switch {
+	case req.ExpectAbsent:
+		revision, err := f.config.Create(ctx, activationKey, raw)
+		if err != nil {
+			if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
+				return 0, fmt.Errorf("%w: an activation was published while this "+
+					"write was being prepared", coord.ErrActivationRaced)
+			}
+			return 0, unavailable("publish the activation", err)
+		}
+		return revision, nil
+	case req.Expect == "":
 		revision, err := f.config.Put(ctx, activationKey, raw)
 		if err != nil {
 			return 0, unavailable("publish the activation", err)
@@ -1171,7 +1206,7 @@ func (f *FleetStore) flip(ctx context.Context, expect string, seq uint64, raw []
 			// race rather than as an unavailable store, because the
 			// caller's fix is to re-read and rebuild rather than retry.
 			return 0, fmt.Errorf("%w: %s was replaced while this write was "+
-				"being prepared", coord.ErrActivationRaced, expect)
+				"being prepared", coord.ErrActivationRaced, req.Expect)
 		}
 		return 0, unavailable("publish the activation", err)
 	}
@@ -1756,6 +1791,13 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 
 // UpdateSandboxRun writes at a version, reporting whether that version held.
 func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if version == 0 {
+		// NO VERSION IS A LOST RACE, never an unconditional write. The
+		// client reads an expected revision of 0 as "the key must not exist
+		// yet", so passing one through CREATED a run for a caller that never
+		// read one, where the contract and the memory twin both refuse.
+		return false, nil
+	}
 	_, err := f.runs.Update(ctx, encodeKey(turnID), value, version)
 	switch {
 	case err == nil:
@@ -1776,6 +1818,12 @@ func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value 
 // a tombstone revision, and a bucket with no TTL keeps every one of them for
 // the life of the deployment.
 func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error) {
+	if version == 0 {
+		// The client drops a LastRevision of 0 and purges unconditionally,
+		// so a caller that never read a version deleted whatever was there:
+		// a live run, and with it the only record that its box exists.
+		return false, nil
+	}
 	err := f.runs.Purge(ctx, encodeKey(turnID), jetstream.LastRevision(version))
 	switch {
 	case err == nil:

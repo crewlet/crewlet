@@ -10,25 +10,49 @@
  * the first, so a run parked on a question with its box gone appeared NOWHERE.
  */
 
-import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useCallback, useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Button, KeyValue, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { QueryState, SeatChip, useTableChoices } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
-import { fmtDateTime, fmtDuration, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
+import {
+  Button,
+  Callout,
+  Card,
+  DataView,
+  type DataViewColumn,
+  DescriptionList,
+  EmptyState,
+  EmptyValue,
+  type FilterDef,
+  type FilterValues,
+  IconButton,
+  InlineCode,
+  PageHeader,
+  RelativeTime,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
+import type { Tone } from "@crewlethq/ui";
+import {
+  CloseGlyph,
+  ErrorGlyph,
+  HelpGlyph,
+  Package2Glyph,
+  TerminalGlyph,
+} from "@crewlethq/icons/glyphs";
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
+const STATUS_TONE: Record<string, Tone> = {
   running: "info",
-  awaiting_input: "caution",
-  succeeded: "positive",
-  completed: "positive",
-  failed: "critical",
+  awaiting_input: "warning",
+  succeeded: "success",
+  completed: "success",
+  failed: "danger",
   cancelled: "neutral",
   reclaimed: "neutral",
 };
@@ -80,170 +104,278 @@ export function Runs() {
   const waiting = rows.filter((r) => r.status === "awaiting_input").length;
   const running = rows.filter((r) => r.status === "running").length;
 
+  /*
+   * THE SCREEN OWNS THE NARROWING, so both axes are URL parameters and a
+   * narrowed record is a link somebody can send. Status is the one a reader
+   * reaches for first, because "what is waiting on a person" is the question
+   * this screen exists to answer.
+   */
+  const [status, setStatus] = useParam("status", "");
+  const [seat, setSeat] = useParam("seat", "");
+
+  const shown = useMemo(() => {
+    const needle = seat.trim().toLowerCase();
+    return rows
+      .filter((r) => !status || r.status === status)
+      .filter(
+        (r) =>
+          !needle ||
+          (r.role || "").toLowerCase().includes(needle) ||
+          (r.agent_handle || "").toLowerCase().includes(needle),
+      );
+  }, [rows, status, seat]);
+
+  const filters = useMemo<FilterDef<SandboxRun>[]>(
+    () => [
+      { name: "seat", label: "Seat", role: "search", placeholder: "Search by seat or handle" },
+      {
+        name: "status",
+        label: "Status",
+        kind: "select",
+        options: [
+          { value: "", label: "Any status" },
+          ...[...new Set(rows.map((r) => r.status))].sort().map((s) => ({
+            value: s,
+            label: s.replace(/_/g, " "),
+          })),
+        ],
+      },
+    ],
+    [rows],
+  );
+
+  const values: FilterValues = { seat, status };
+
+  const onValuesChange = useCallback(
+    (next: FilterValues) => {
+      setSeat(String(next.seat ?? ""));
+      setStatus(String(next.status ?? ""));
+    },
+    [setSeat, setStatus],
+  );
+
+  const columns = useMemo<DataViewColumn<SandboxRun>[]>(
+    () => [
+      {
+        key: "status",
+        header: "Status",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => r.status,
+        render: (r) => (
+          <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
+            {r.status.replace(/_/g, " ")}
+          </Tag>
+        ),
+      },
+      {
+        key: "seat",
+        header: "Seat",
+        sortable: true,
+        // WHOSE RUN. A status, a box and a task with no seat beside them name
+        // work nobody is answerable for.
+        hideable: false,
+        sortValue: (r) => r.role || r.agent_handle,
+        render: (r) => <SeatChip name={r.role || r.agent_handle} handle={r.agent_handle} />,
+      },
+      {
+        key: "task",
+        header: "Task",
+        render: (r) => (
+          <span className="truncate">
+            {r.task_description || <EmptyValue label="No task recorded" />}
+          </span>
+        ),
+      },
+      {
+        key: "agent",
+        header: "Coding agent",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => r.coding_agent,
+        render: (r) =>
+          r.coding_agent ? (
+            <Tag appearance="outline" monospace>
+              {r.coding_agent}
+            </Tag>
+          ) : (
+            <EmptyValue label="Not recorded" />
+          ),
+      },
+      {
+        key: "where",
+        header: "Runs in",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => r.placement,
+        render: (r) =>
+          r.placement ? (
+            <Tag appearance="outline" monospace>
+              {r.placement}
+            </Tag>
+          ) : (
+            <EmptyValue label="Not recorded" />
+          ),
+      },
+      {
+        key: "box",
+        header: "Box",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => (r.box_exists ? 1 : 0),
+        render: (r) =>
+          r.box_exists ? (
+            <span className="t-caption">up</span>
+          ) : (
+            <span
+              className="t-caption"
+              title="the sandbox has been reclaimed; the run's record remains"
+            >
+              reclaimed
+            </span>
+          ),
+      },
+      {
+        key: "updated",
+        header: "Updated",
+        shrink: true,
+        sortable: true,
+        firstDirection: "desc",
+        sortValue: (r) => tsKey(r.updated_at || r.started_at),
+        render: (r) => (
+          <RelativeTime className="t-caption" value={r.updated_at || r.started_at} now={now} />
+        ),
+      },
+    ],
+    [now],
+  );
+
+  // The record pages. The run a reader opened is already a URL parameter, so
+  // the page it sits on belongs beside it rather than in this browser.
+  const choices = useTableChoices({
+    screen: "runs",
+    columns,
+    defaultSort: { key: "updated", direction: "desc" },
+    filterKey: `${seat}|${status}`,
+  });
+
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Coding runs"
-        sub="Each one is an Execute phase that suspended. It resumes when the sandbox reports back — after a restart, or on another node."
+        description="Each one is an Execute phase that suspended. It resumes when the sandbox reports back, after a restart or on another node."
         badges={
           <>
             {running > 0 && (
-              <Badge tone="info" dot>
+              <Tag variant="info" dot>
                 {running} running
-              </Badge>
+              </Tag>
             )}
             {waiting > 0 && (
-              <Badge tone="caution">{plural(waiting, "run")} waiting on a person</Badge>
+              <Tag variant="warning">{plural(waiting, "run")} waiting on a person</Tag>
             )}
           </>
         }
       />
 
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat icon="terminal" label="Running" value={running} sub="a box is up and working" />
-          <Stat
-            icon="help"
-            label="Waiting on an answer"
-            value={waiting}
-            sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
-          />
-          <Stat icon="box" label="In the record" value={rows.length} sub="live and finished" />
-          <Stat
-            icon="alert"
-            label="Failed"
-            value={rows.filter((r) => r.status === "failed").length}
-            sub="in the retained record"
-          />
-        </StatRow>
-      </Panel>
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<TerminalGlyph />}
+          label="Running"
+          value={running}
+          sub="a box is up and working"
+        />
+        <StatCard
+          icon={<HelpGlyph />}
+          label="Waiting on an answer"
+          value={waiting}
+          sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
+        />
+        <StatCard
+          icon={<Package2Glyph />}
+          label="In the record"
+          value={rows.length}
+          sub="live and finished"
+        />
+        <StatCard
+          icon={<ErrorGlyph />}
+          label="Failed"
+          value={rows.filter((r) => r.status === "failed").length}
+          sub="in the retained record"
+        />
+      </StatGroup>
 
-      {loading && !rows.length && <Skeleton rows={4} />}
-      <QueryState
-        error={error}
-        loading={loading}
-        empty={
-          rows.length
-            ? undefined
-            : {
-                title: "No coding runs",
-                hint: "A run starts when a seat calls the sandbox tool. Configure providers.sandbox to give one a place to run.",
-              }
-        }
-      >
-        <Panel padding="none">
-          <DataTable<SandboxRun>
-            rows={rows}
-            rowKey={(r) => r.turn_id}
-            onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
-            isSelected={(r) => r.turn_id === selected}
-            isFailed={(r) => r.status === "failed"}
-            defaultSort={{ key: "updated", dir: "desc" }}
-            columns={[
-              {
-                key: "status",
-                header: "Status",
-                shrink: true,
-                sortValue: (r) => r.status,
-                cell: (r) => (
-                  <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
-                    {r.status.replace(/_/g, " ")}
-                  </Badge>
-                ),
-              },
-              {
-                key: "seat",
-                header: "Seat",
-                sortValue: (r) => r.role || r.agent_handle,
-                cell: (r) => <SeatChip name={r.role || r.agent_handle} handle={r.agent_handle} />,
-              },
-              {
-                key: "task",
-                header: "Task",
-                cell: (r) => <span className="truncate">{r.task_description || "—"}</span>,
-              },
-              {
-                key: "agent",
-                header: "Coding agent",
-                shrink: true,
-                sortValue: (r) => r.coding_agent,
-                cell: (r) => (
-                  <Badge outline mono>
-                    {r.coding_agent || "—"}
-                  </Badge>
-                ),
-              },
-              {
-                key: "where",
-                header: "Runs in",
-                shrink: true,
-                sortValue: (r) => r.placement,
-                cell: (r) => (
-                  <Badge outline mono>
-                    {r.placement || "—"}
-                  </Badge>
-                ),
-              },
-              {
-                key: "box",
-                header: "Box",
-                shrink: true,
-                sortValue: (r) => (r.box_exists ? 1 : 0),
-                cell: (r) =>
-                  r.box_exists ? (
-                    <span className="t-caption">up</span>
-                  ) : (
-                    <span
-                      className="t-caption faint"
-                      title="the sandbox has been reclaimed; the run's record remains"
-                    >
-                      reclaimed
-                    </span>
-                  ),
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => (
-                  <span className="t-caption" title={fmtDateTime(r.updated_at || r.started_at)}>
-                    {relTime(r.updated_at || r.started_at, now)}
-                  </span>
-                ),
-              },
-            ]}
+      {loading && !rows.length && (
+        <Skeleton label="Loading the coding runs" variant="text" rows={4} />
+      )}
+      {error && <QueryState error={error} loading={loading} />}
+
+      <DataView<SandboxRun>
+        framed
+        {...choices}
+        columns={columns}
+        rows={shown}
+        getRowKey={(r) => r.turn_id}
+        onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
+        isSelected={(r) => r.turn_id === selected}
+        rowTone={(r) => (r.status === "failed" ? "danger" : null)}
+        filters={filters}
+        filterValues={values}
+        onFilterValuesChange={onValuesChange}
+        loading={loading && !rows.length}
+        emptyMessage={
+          <EmptyState
+            size="compact"
+            icon={<TerminalGlyph />}
+            title={rows.length ? "No run matches these filters" : "No coding runs"}
+            description={
+              rows.length
+                ? "Clear them to see every run the record holds."
+                : "A run starts when a seat calls the sandbox tool. Configure providers.sandbox to give one a place to run."
+            }
           />
-        </Panel>
-      </QueryState>
+        }
+      />
 
       {detail && (
-        <Panel
-          title={`Run ${detail.turn_id.slice(0, 8)}`}
-          icon="terminal"
-          actions={
-            <>
-              {detail.trace_id && (
-                <Button size="sm" onClick={() => nav.to(["traces", detail.trace_id])}>
-                  Trace
+        <Card as="section">
+          <Card.Header
+            icon={<TerminalGlyph size="sm" />}
+            actions={
+              <>
+                {detail.trace_id && (
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    onClick={() => nav.to(["traces", detail.trace_id])}
+                  >
+                    Trace
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  size="small"
+                  onClick={() => nav.to(["turns", detail.turn_id])}
+                >
+                  Turn
                 </Button>
-              )}
-              <Button size="sm" onClick={() => nav.to(["turns", detail.turn_id])}>
-                Turn
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon="x"
-                onClick={() => setSelected("")}
-                title="Close"
-              />
-            </>
-          }
-        >
+                <IconButton
+                  label="Close"
+                  icon={<CloseGlyph />}
+                  size="sm"
+                  onClick={() => setSelected("")}
+                />
+              </>
+            }
+          >
+            <Card.Title>{`Run ${detail.turn_id.slice(0, 8)}`}</Card.Title>
+          </Card.Header>
           {detail.status === "awaiting_input" && (
-            <div className="banner caution" style={{ marginBottom: "var(--space-3)" }}>
-              <Icon name="help" size="sm" />
+            <Callout
+              variant="warning"
+              style={{ marginBottom: "var(--spacing-3)" }}
+              icon={<HelpGlyph size="sm" />}
+            >
               <span className="col" style={{ gap: 2 }}>
                 <strong>{detail.question || "The run asked a question."}</strong>
                 <span className="t-caption">
@@ -255,9 +387,9 @@ export function Runs() {
                     : ""}
                 </span>
               </span>
-            </div>
+            </Callout>
           )}
-          <KeyValue
+          <DescriptionList
             items={[
               ["Task", detail.task_description || "—"],
               [
@@ -273,26 +405,19 @@ export function Runs() {
               [
                 "Branch",
                 detail.branch ? (
-                  <code key="b" className="inline">
-                    {detail.branch}
-                  </code>
+                  <InlineCode key="b">{detail.branch}</InlineCode>
                 ) : (
-                  "—"
+                  <EmptyValue key="b" label="No branch recorded" />
                 ),
               ],
               ["Owner node", detail.owner || "—"],
               ["Started", fmtDateTime(detail.started_at)],
               ["Updated", fmtDateTime(detail.updated_at)],
               ["Ran for", fmtDuration(tsKey(detail.updated_at) - tsKey(detail.started_at))],
-              [
-                "Turn",
-                <code key="t" className="inline">
-                  {detail.turn_id}
-                </code>,
-              ],
+              ["Turn", <InlineCode key={"t"}>{detail.turn_id}</InlineCode>],
             ]}
           />
-        </Panel>
+        </Card>
       )}
     </>
   );

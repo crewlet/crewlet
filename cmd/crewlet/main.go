@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -291,24 +292,6 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 	}
 }
 
-// load reads both tiers, reporting EVERY problem it can rather than the first.
-//
-// Both, not just the first to fail: an operator fixing a broker URL only to be
-// told about their org chart on the next boot has been made to pay twice for
-// one edit. It is the same rule each tier's own validator follows internally.
-func (c configFlags) load() (*config.Bootstrap, *config.Company, error) {
-	// Environment-only resolution for Tier A, which is not a default but a
-	// rule: Tier A carries the store's address and the keys that open it,
-	// so a resolver reaching the secret store would have Tier A reading
-	// from the store it is describing.
-	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
-	company, companyErr := config.LoadCompany(*c.company)
-	if err := errors.Join(nameTheNeighbour(*c.bootstrap, bootErr), companyErr); err != nil {
-		return nil, nil, err
-	}
-	return boot, company, nil
-}
-
 // companyName is what the boot line calls the company, including when there
 // is not one yet.
 func companyName(c *config.Company) string {
@@ -372,8 +355,11 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 				"store, -import-company replaces what the fleet is running. " +
 				"Pass one")
 	}
+	// THE RUNNABLE RULES ONLY. The node is about to run this file, and most
+	// boots import nothing from it: see [config.LoadCompanyToRun]. Where the
+	// file IS imported, seedCompany holds it to the admission rules first.
 	if named != "" {
-		company, err := config.LoadCompany(named)
+		company, err := config.LoadCompanyToRun(named)
 		if err != nil {
 			return tierBSeed{}, err
 		}
@@ -381,7 +367,7 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 	}
 
 	path := *c.company
-	company, err := config.LoadCompany(path)
+	company, err := config.LoadCompanyToRun(path)
 	if err == nil {
 		return tierBSeed{Path: path, Company: company}, nil
 	}
@@ -510,57 +496,34 @@ func detectTier(raw []byte) (Tier, error) {
 //
 // THE SHAPE IS THE JSON, so the two output modes cannot drift: the text
 // renderer reads this struct too, rather than being a second pass over the
-// same data that eventually disagrees with it.
+// same data that eventually disagrees with it. Problems and warnings are the
+// config package's own [config.Problem] and [config.Warning], the shape the
+// configuration API reports too, so a loop written against one reads the
+// other.
 type validation struct {
-	Valid  bool              `json:"valid"`
-	Tier   Tier              `json:"tier"`
-	File   string            `json:"file,omitempty"`
-	Errors []validationError `json:"errors"`
+	Valid    bool             `json:"valid"`
+	Tier     Tier             `json:"tier"`
+	File     string           `json:"file,omitempty"`
+	Problems []config.Problem `json:"problems"`
 
 	// Warnings are configurations that are VALID and worth knowing about
-	// before applying — a declined fsync's window, a trim that will never
-	// advance, a unit keyed on a name somebody will rename.
+	// before applying: a declined fsync's window, a trim that will never
+	// advance, a reference that resolves to nothing, a unit keyed on a name
+	// somebody will rename.
 	//
-	// THEIR OWN FIELD rather than errors with a flag: the exit code turns
-	// on Errors alone, so a CI step gates on refusals and still prints
+	// THEIR OWN LIST rather than problems with a flag: the exit code turns
+	// on Problems alone, so a CI step gates on refusals and still prints
 	// what its operator should read. A warning that could fail a build is
 	// one somebody suppresses.
-	Warnings []validationWarning `json:"warnings,omitempty"`
+	Warnings []config.Warning `json:"warnings"`
 
 	Summary map[string]any `json:"summary,omitempty"`
 }
 
-// validationWarning is one valid-but-worth-knowing configuration.
-type validationWarning struct {
-	Path    string `json:"path"`
-	Message string `json:"message"`
-}
-
-func warningsOf(ws []config.Warning) []validationWarning {
-	out := make([]validationWarning, 0, len(ws))
-	for _, w := range ws {
-		out = append(out, validationWarning{Path: w.Path, Message: w.Message})
-	}
-	return out
-}
-
-// validationError is one problem, with the parts an authoring loop needs to
-// jump to the field and decide what to do.
-type validationError struct {
-	Path    string `json:"path"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-func faultsOf(err error) []validationError {
-	faults := config.Faults(err)
-	out := make([]validationError, 0, len(faults))
-	for _, f := range faults {
-		out = append(out, validationError{
-			Path: f.Path, Type: f.KindName(), Message: f.Detail,
-		})
-	}
-	return out
+// newValidation is a run with nothing found yet. Both lists are empty rather
+// than null, so a consumer iterates them without a nil check.
+func newValidation(tier Tier, file string) validation {
+	return validation{Tier: tier, File: file, Problems: []config.Problem{}, Warnings: []config.Warning{}}
 }
 
 // validateConfigs is `crewlet validate`.
@@ -584,7 +547,7 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	tier := fs.String("tier", string(TierAuto),
 		"which document a positional file is: auto, company or bootstrap")
 	asJSON := fs.Bool("json", false,
-		"emit {valid, tier, errors:[{path,type,message}], summary} instead of prose")
+		"emit {valid, tier, file, problems, warnings, summary} instead of prose")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -619,16 +582,16 @@ func tierNames() string {
 
 // validateOne checks the single document an operator named.
 func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
-	res := validation{File: file, Tier: tier, Errors: []validationError{}}
+	res := newValidation(tier, file)
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		res.Errors = faultsOf(err)
+		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
 	if tier == TierAuto {
 		detected, detErr := detectTier(raw)
 		if detErr != nil {
-			res.Errors = faultsOf(detErr)
+			res.Problems = config.Problems(detErr)
 			return report(stdout, res, asJSON)
 		}
 		res.Tier = detected
@@ -639,13 +602,23 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		// default but a rule: it carries the store's address and the keys
 		// that open it, so a resolver reaching the secret store would have
 		// Tier A reading from the store it is describing.
-		boot, bootErr := config.LoadBootstrap(file, config.EnvOnly())
+		boot, bootErr := config.ParseBootstrap(raw, config.EnvOnly())
 		if bootErr != nil {
-			res.Errors = faultsOf(bootErr)
+			res.Problems = config.Problems(bootErr)
 			return report(stdout, res, asJSON)
 		}
 		res.Valid = true
-		res.Warnings = warningsOf(boot.Warnings())
+		// TIER A HAS WARNINGS OF ITS OWN: a declined fsync, a trim that
+		// will never advance on its own, an embedded stream with nowhere
+		// to persist. Every one of them describes a correct deployment
+		// for somebody, so none is a refusal, and `crewlet validate` is
+		// the one moment the consequence can still change the decision.
+		//
+		// APPENDED TO THE EMPTY LIST rather than assigned over it:
+		// [config.Bootstrap.Warnings] answers nil when a document has
+		// none, and assigning that would put `null` where the payload
+		// promises an array.
+		res.Warnings = append(res.Warnings, boot.Warnings()...)
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
@@ -653,27 +626,63 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		return report(stdout, res, asJSON)
 	}
 
-	company, companyErr := config.LoadCompany(file)
+	company, warnings, companyErr := checkCompany(raw)
+	res.Warnings = warnings
 	if companyErr != nil {
-		res.Errors = faultsOf(companyErr)
-		return report(stdout, res, asJSON)
-	}
-	// Building the epoch is the rest of the check, and it reaches nothing:
-	// no broker, no store, no provider is dialled. It is what catches the
-	// problems a schema cannot — a seat whose llm names no configured
-	// provider, a role reporting to a unit that does not exist.
-	epoch, epochErr := engine.NewCompany(company)
-	if epochErr != nil {
-		res.Errors = faultsOf(epochErr)
+		res.Problems = config.Problems(companyErr)
 		return report(stdout, res, asJSON)
 	}
 	res.Valid = true
-	res.Warnings = warningsOf(company.Warnings())
 	res.Summary = map[string]any{
-		"company": company.Name, "seats": len(epoch.Seats()),
-		"llm_providers": len(epoch.Models.Keys()),
+		"company": company.Name, "seats": len(company.epoch.Seats()),
+		"llm_providers": len(company.epoch.Models.Keys()),
 	}
 	return report(stdout, res, asJSON)
+}
+
+// checkedCompany is a company document that passed every check, with the
+// epoch built from it.
+type checkedCompany struct {
+	*config.Company
+	epoch *engine.Company
+}
+
+// checkCompany holds a Tier B document to every rule a submitted document is
+// held to, and then builds its epoch.
+//
+// Building the epoch is the rest of the check, and it reaches nothing: no
+// broker, no store, no provider is dialled. It is what catches the problems a
+// schema cannot, such as a seat whose llm names no configured provider.
+//
+// A document that did NOT hold up reports its references alone: they are
+// reported whenever it PARSED, valid or not, because a misspelled lead is
+// worth seeing in the same pass as the problems and fixing the problems will
+// not fix it. The admission half of [config.Company.Warnings] is deliberately
+// not on that path, because this command refuses an admission rule as a
+// PROBLEM, and the same sentence printed twice reads as two findings.
+//
+// Its advisories wait for the same reason the admission half does, from the
+// other side: an advisory describes what a document that RUNS will do, and a
+// paragraph about a unit's id printed beside a refusal is noise at the moment
+// somebody is reading carefully.
+//
+// A document that held up carries the whole set instead: its references, plus
+// every advisory about what it will do that its author should know before
+// applying it.
+func checkCompany(raw []byte) (*checkedCompany, []config.Warning, error) {
+	company, err := config.ParseCompanyDocument(raw)
+	if err != nil {
+		return nil, []config.Warning{}, err
+	}
+	warnings := company.ReferenceWarnings()
+	if err = company.Validate(); err != nil {
+		return nil, warnings, err
+	}
+	epoch, err := engine.NewCompany(company)
+	if err != nil {
+		return nil, warnings, err
+	}
+	return &checkedCompany{Company: company, epoch: epoch}, company.Warnings(), nil
 }
 
 // validateBoth is the two-flag form: check a Tier A and a Tier B together.
@@ -682,34 +691,43 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 // told about their org chart on the next boot has been made to pay twice for
 // one edit. It is the same rule each tier's own validator follows internally.
 func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
-	res := validation{Tier: TierAuto, Errors: []validationError{}}
-	boot, company, err := cfg.load()
-	if err != nil {
-		res.Errors = faultsOf(err)
+	res := newValidation(TierAuto, "")
+	// Environment-only resolution for Tier A: see validateOne.
+	boot, bootErr := config.LoadBootstrap(*cfg.bootstrap, config.EnvOnly())
+	bootErr = nameTheNeighbour(*cfg.bootstrap, bootErr)
+
+	var company *checkedCompany
+	raw, companyErr := os.ReadFile(*cfg.company)
+	if companyErr == nil {
+		company, res.Warnings, companyErr = checkCompany(raw)
+	}
+	if err := errors.Join(bootErr, companyErr); err != nil {
+		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
 	// THE RULES THAT NEED BOTH DOCUMENTS, which is the whole reason this
 	// two-flag form exists: neither tier can see the other, so a
 	// configuration that is valid twice over and unrecoverable together is
 	// only refusable here.
-	//nolint:govet // shadow: scoped to this block, which returns; see .golangci.yml
-	if err := config.CheckTiers(boot, company); err != nil {
-		res.Errors = faultsOf(err)
-		return report(stdout, res, asJSON)
-	}
-	epoch, err := engine.NewCompany(company)
-	if err != nil {
-		res.Errors = faultsOf(err)
+	if err := config.CheckTiers(boot, company.Company); err != nil {
+		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
 	res.Valid = true
-	// BOTH TIERS' WARNINGS, for the reason both tiers' errors are
+	// BOTH TIERS' WARNINGS, for the reason both tiers' problems are
 	// reported: an operator who fixes one file and is told about the other
-	// on the next run has been made to pay twice for one edit.
-	res.Warnings = append(warningsOf(boot.Warnings()), warningsOf(company.Warnings())...)
+	// on the next run has been made to pay twice for one edit. The
+	// company's are already here, put there by checkCompany so that a
+	// refused document still reports them, so Tier A's go in FRONT of them
+	// rather than after, which is the order the two files are named in.
+	//
+	// Inserted rather than appended onto Tier A's own list, which is nil
+	// for a document with no warnings at all: the payload promises both
+	// lists are arrays, and `append(nil)` of nothing stays nil.
+	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
 	res.Summary = map[string]any{
-		"company": company.Name, "seats": len(epoch.Seats()),
-		"llm_providers": len(epoch.Models.Keys()),
+		"company": company.Name, "seats": len(company.epoch.Seats()),
+		"llm_providers": len(company.epoch.Models.Keys()),
 		"stream":        boot.Stream.Type, "coordination": boot.Coordination.Type,
 	}
 	return report(stdout, res, asJSON)
@@ -721,6 +739,11 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 // CI step as often as it is a model, and `crewlet validate x.yaml -json ||
 // exit 1` has to be able to fail — a mode that printed {"valid": false} and
 // exited 0 would pass every gate built on it.
+//
+// A WARNING NEVER FAILS IT: the engine runs a document whose reference
+// resolves to nothing, and a gate that refused one would refuse a company
+// being assembled in pieces. In prose, warnings are printed before the
+// outcome, so a reader sees them whichever way it went.
 func report(stdout io.Writer, res validation, asJSON bool) error {
 	if asJSON {
 		raw, err := json.MarshalIndent(res, "", "  ")
@@ -736,25 +759,87 @@ func report(stdout io.Writer, res validation, asJSON bool) error {
 		// unreadable.
 		return errSilent
 	}
-	if !res.Valid {
-		var b strings.Builder
-		for _, e := range res.Errors {
-			if e.Path != "" {
-				b.WriteString("\n  " + e.Path + ": " + e.Message)
-				continue
-			}
-			b.WriteString("\n  " + e.Message)
-		}
-		return errors.New(strings.TrimPrefix(b.String(), "\n  "))
-	}
+	// ON STDOUT WITH THE ANSWER rather than on stderr, and before the
+	// outcome: a warning is part of what the run found rather than a
+	// diagnostic about the run, and a reader sees it whichever way the
+	// validation went.
 	for _, w := range res.Warnings {
-		// ON STDOUT BESIDE THE SUMMARY rather than on stderr: the command
-		// succeeded, and a warning is part of its answer rather than a
-		// diagnostic about it.
-		fmt.Fprintf(stdout, "warning  %s: %s\n", w.Path, w.Message)
+		fmt.Fprintln(stdout, warningLine(w))
+	}
+	if !res.Valid {
+		return errors.New(strings.Join(problemLines(res.Problems), "\n  "))
 	}
 	fmt.Fprintln(stdout, summaryLine(res))
 	return nil
+}
+
+// problemLines is the problems as the lines an operator reads: one per
+// message, led by every path it was placed at. A duplicate is one message and
+// a problem beside each entity sharing the name, and printing that message
+// once per entity would repeat a paragraph to say where the second one is.
+func problemLines(problems []config.Problem) []string {
+	var order []string
+	paths := map[string][]string{}
+	for _, p := range problems {
+		if _, seen := paths[p.Message]; !seen {
+			order = append(order, p.Message)
+		}
+		if p.Path != "" {
+			paths[p.Message] = append(paths[p.Message], p.Path)
+		} else if paths[p.Message] == nil {
+			paths[p.Message] = []string{}
+		}
+	}
+	lines := make([]string, len(order))
+	for i, message := range order {
+		lines[i] = prose(strings.Join(paths[message], ", "), message)
+	}
+	return lines
+}
+
+// prose is a message as a line an operator reads, led by where it is when the
+// message does not already open with that. A rule the org model reports about
+// several seats names them in words, and the paths are what the operator can
+// search their file for.
+func prose(where, message string) string {
+	if where == "" || strings.HasPrefix(message, where+": ") {
+		return message
+	}
+	return where + ": " + message
+}
+
+// warningLine is one warning as an operator reads it, led by WHICH KIND of
+// warning it is.
+//
+// The list holds sentences that ask for different things: a dangling
+// reference is broken and somebody has to correct it, an advisory is a valid
+// choice reporting what it will cost, an admission rule is a stored revision
+// a new write would be refused for. Printed under one undifferentiated
+// `warning:` they all read as one severity, and a healthy document carries
+// more advisories than references, so the broken one is the line that gets
+// skimmed past.
+func warningLine(w config.Warning) string {
+	if kind := warningKind(w.Kind); kind != "" {
+		return "warning (" + kind + "): " + prose(w.Path, w.Message)
+	}
+	return "warning: " + prose(w.Path, w.Message)
+}
+
+// warningKind is a [config.Warning]'s kind as the words an operator reads. A
+// kind this build does not classify renders as its wire value rather than as
+// a blank, because the label is the only thing on the line that says how much
+// the warning matters and an empty pair of brackets says nothing at all.
+func warningKind(kind string) string {
+	switch kind {
+	case config.WarningDanglingReference:
+		return "dangling reference"
+	case config.WarningAdmission:
+		return "admission"
+	case config.WarningAdvisory:
+		return "advisory"
+	default:
+		return kind
+	}
 }
 
 // summaryLine is the one prose line a successful validation prints.
@@ -1166,7 +1251,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	return nil
 }
 
-// httpSurface is the API half of a merged node.
+// httpSurface is the HTTP listener a node binds: the whole API on a node with
+// the ingress role, or only its seats' tool bridge on a node without it. The
+// app and the projector are nil in the second shape.
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
@@ -1189,8 +1276,12 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	// After the listener, so no socket can be reading the projection while
 	// its feed is torn down, and before the engine drains, so the drain's
 	// own turns are not projected onto a page nobody can reach.
-	s.projector.Stop(shutdown)
-	s.app.Stop()
+	if s.projector != nil {
+		s.projector.Stop(shutdown)
+	}
+	if s.app != nil {
+		s.app.Stop()
+	}
 }
 
 // apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS.
@@ -1202,13 +1293,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // supervisor rather than by a constant here.
 const apiShutdownGrace = 5 * time.Second
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
-// companySecrets reads the verification material out of the engine's CURRENT
-// epoch, on every request.
-//
-// Not captured once: a config reload replaces the epoch, and a receiver holding
-// the old one would keep rejecting deliveries signed with a rotated secret —
-// a failure that looks exactly like an attack and resolves only on restart.
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1217,8 +1301,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret, a
+// failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, log *slog.Logger,
@@ -1230,13 +1321,32 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// here rather than from a webhook that never arrives.
 		log.WarnContext(ctx, "api_disabled",
 			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
-				"API and no webhook endpoint; every integration is deaf here")
+				"API, no webhook endpoint and no agent-mode tool bridge; every "+
+				"integration is deaf here")
 		return nil, nil
 	}
 
 	nodeID, err := config.ResolveNodeID(boot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("api: node identity: %w", err)
+	}
+	// THE INGRESS ROLE DECIDES, not only the port. node.roles was validated,
+	// written onto the presence lease and counted by fleet_role_unmanned,
+	// and nothing consulted it here, so a node told to run only seats still
+	// bound api.port and answered webhooks, the dashboard and the REST
+	// surface: a satellite placed on a private host for exactly that reason
+	// opened a listener, and one config file could not serve both shapes.
+	// The port stays the hard off switch above; this is the role saying the
+	// same thing for a node whose file sets a port for its peers' sake.
+	//
+	// Except for the one route that is not ingress's to serve: the tool
+	// bridge. A bridged session is a live tool surface in the process that
+	// opened it, so a seats node running an agent-mode seat is the only node
+	// its box can reach. Gating the bridge on ingress as well took agent mode
+	// away from every node without that role, with the box launching and
+	// every one of its tool calls finding nothing listening.
+	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
+		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER — see runEngine.
@@ -1542,32 +1652,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 
-	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
-	// Through a ListenConfig so a shutdown signal arriving while the bind
-	// is in flight aborts it, rather than leaving a listener nobody will
-	// serve from — the bind can block on a DNS lookup for the host.
-	var listenCfg net.ListenConfig
-	listener, err := listenCfg.Listen(ctx, "tcp", addr)
+	server, addr, err := listenAPI(ctx, boot, app, log)
 	if err != nil {
+		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
-		return nil, fmt.Errorf("api: bind %s: %w", addr, err)
+		return nil, err
 	}
-	server := &http.Server{
-		Handler: app,
-		// A read that never completes holds a connection open forever,
-		// and the listener is the one surface an unauthenticated client
-		// can reach.
-		ReadHeaderTimeout: apiReadHeaderTimeout,
-		IdleTimeout:       apiIdleTimeout,
-		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
-	}
-	go func() {
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.ErrorContext(ctx, "api_serve_failed", "error", err)
-		}
-	}()
 
-	log.InfoContext(ctx, "api_listening", "addr", listener.Addr().String(),
+	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"anonymous_read", app.Guard().AnonymousRead(),
 		"tokens", app.Guard().Tokens(),
 		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
@@ -1603,6 +1695,74 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	})
 
 	return &httpSurface{app: app, server: server, projector: projector}, nil
+}
+
+// serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
+// binds api.port for the node's own tool bridge when there is one to serve,
+// and binds nothing otherwise.
+//
+// The bridge needs a seats node and a bridge URL. A node that runs no seats
+// opens no session, so a listener there would answer every box with 401; and
+// with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either way
+// the node keeps the posture node.roles asked for, and says why.
+func serveBridgeOnly(ctx context.Context, boot *config.Bootstrap, profile placement.NodeProfile,
+	bridge *mcpbridge.Bridge, nodeID string, log *slog.Logger,
+) (*httpSurface, error) {
+	if !profile.RunsSeats() || bridge == nil {
+		log.InfoContext(ctx, "api_not_started", "node", nodeID,
+			"roles", profile.Roles.Names(),
+			"hint", "node.roles does not include ingress, so this node binds no "+
+				"HTTP listener although api.port is set; a peer with the ingress "+
+				"role serves webhooks, the dashboard and the REST API, and a node "+
+				"running seats binds one only to serve its agent-mode tool bridge "+
+				"("+mcpbridge.BaseURLVar+")")
+		return nil, nil
+	}
+	server, addr, err := listenAPI(ctx, boot, api.BridgeOnly(boot, bridge), log)
+	if err != nil {
+		return nil, err
+	}
+	log.InfoContext(ctx, "api_bridge_listening", "addr", addr, "node", nodeID,
+		"roles", profile.Roles.Names(),
+		"hint", "node.roles does not include ingress, so this listener serves only "+
+			"the agent-mode tool bridge ("+mcpbridge.PathPrefix+"{token}) for the "+
+			"seats this node runs; webhooks, the dashboard and the REST API are a "+
+			"peer's with the ingress role")
+	return &httpSurface{server: server}, nil
+}
+
+// listenAPI binds api.port and serves handler on it, in the background.
+//
+// ONE PATH for both shapes a node's listener takes, so the whole API and the
+// bridge-only surface cannot drift apart on the timeouts that bound an
+// unauthenticated client or on how a bind failure is reported.
+func listenAPI(ctx context.Context, boot *config.Bootstrap, handler http.Handler,
+	log *slog.Logger,
+) (*http.Server, string, error) {
+	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
+	// Through a ListenConfig so a shutdown signal arriving while the bind
+	// is in flight aborts it, rather than leaving a listener nobody will
+	// serve from: the bind can block on a DNS lookup for the host.
+	var listenCfg net.ListenConfig
+	listener, err := listenCfg.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, "", fmt.Errorf("api: bind %s: %w", addr, err)
+	}
+	server := &http.Server{
+		Handler: handler,
+		// A read that never completes holds a connection open forever,
+		// and the listener is the one surface an unauthenticated client
+		// can reach.
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		IdleTimeout:       apiIdleTimeout,
+		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
+	}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.ErrorContext(ctx, "api_serve_failed", "error", err)
+		}
+	}()
+	return server, listener.Addr().String(), nil
 }
 
 // apiReadHeaderTimeout bounds how long a client may take to send its request

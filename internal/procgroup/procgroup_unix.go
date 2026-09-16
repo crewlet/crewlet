@@ -8,14 +8,20 @@ import (
 	"syscall"
 )
 
-// The two signals this package sends, named here so the portable file does
-// not have to import syscall.
+// The signals this package sends, named here so the portable file does not
+// have to import syscall.
 const (
 	sigTerm = syscall.SIGTERM
 	sigKill = syscall.SIGKILL
 	sigStop = syscall.SIGSTOP
 	sigCont = syscall.SIGCONT
 )
+
+// errNoProcess is the error a read of a process's record fails with when the
+// process was reaped under it. A variable rather than a direct use of
+// syscall.ESRCH so that [procTable], which is portable, compiles where the
+// syscall package has no such constant.
+var errNoProcess error = syscall.ESRCH
 
 // set makes the child a group leader. A zero Pgid with Setpgid means "your
 // own group", so the group id equals the child's pid and the caller needs no
@@ -28,8 +34,8 @@ func set(cmd *exec.Cmd) {
 }
 
 // detach makes the child a SESSION leader, which implies its own process
-// group. Setsid and Setpgid are mutually exclusive in SysProcAttr — the
-// kernel refuses both — so this sets only the one that subsumes the other.
+// group. Setsid and Setpgid are mutually exclusive in SysProcAttr (the
+// kernel refuses both), so this sets only the one that subsumes the other.
 func detach(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -43,7 +49,7 @@ func detach(cmd *exec.Cmd) {
 // which under a recycled pid is exactly the case a caller checking identity
 // has to handle. Reporting it as dead would be the more dangerous lie.
 func exists(pid int) bool {
-	if pid <= 0 {
+	if !addressable(pid) {
 		return false
 	}
 	err := syscall.Kill(-pid, 0)
@@ -52,7 +58,7 @@ func exists(pid int) bool {
 
 // signal delivers sig to the whole group led by pid.
 func signal(pid int, sig syscall.Signal) error {
-	if pid <= 0 {
+	if !addressable(pid) {
 		return nil
 	}
 	err := syscall.Kill(-pid, sig)

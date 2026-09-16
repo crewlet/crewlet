@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
 // A REAL MCP server, run as a REAL child process.
@@ -117,7 +119,7 @@ func runHelper(mode string) int {
 	case "mute":
 		// Connected, holding both pipes open, saying nothing for ever. This
 		// is the failure the startup deadline exists for: nothing raises.
-		select {}
+		procgrouptest.Hold()
 	case "ignore-term":
 		// A server that ignores the polite signal but still exits when its
 		// stdin closes: the ordinary well-behaved case, kept as a control.
@@ -130,13 +132,13 @@ func runHelper(mode string) int {
 		// every server behind the first one.
 		signal.Ignore(syscall.SIGTERM)
 		serve()
-		select {}
+		procgrouptest.Hold()
 	case "grandchild":
 		// Announce the pid on the INHERITED stderr, then hold it open for
 		// ever. This is the descendant that keeps the pipe from reaching EOF
 		// after its parent is gone.
 		fmt.Fprintf(os.Stderr, "GRANDCHILD %d\n", os.Getpid())
-		select {}
+		procgrouptest.Hold()
 	case "spawn-grandchild":
 		// A stand-in for `uvx`/`npx`: fork something that inherits stderr and
 		// outlives us, then serve normally.
@@ -166,7 +168,7 @@ func runHelper(mode string) int {
 		if err := grandchild.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "grandchild failed:", err)
 		}
-		select {}
+		procgrouptest.Hold()
 	default:
 		serve()
 	}

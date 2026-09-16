@@ -16,6 +16,10 @@ const (
 	sigCont = 0
 )
 
+// errNoProcess matches nothing: there is no process record to read here, so
+// no read can report its process reaped.
+var errNoProcess = errors.New("procgroup: no such process")
+
 // set is a no-op where process groups are not a thing.
 //
 // The consequence is stated rather than hidden: on such a platform a

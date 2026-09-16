@@ -713,7 +713,7 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
-	// THE THIRTEEN VERBS, AT THE TWO POINTS A QUEUE IS NOT LIVE.
+	// THE FOURTEEN VERBS, AT THE TWO POINTS A QUEUE IS NOT LIVE.
 	//
 	// Nine of them had never been sent at either point by any case in this
 	// suite, and both backends were internally inconsistent there. The twin
@@ -727,7 +727,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate —
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all thirteen.
+	// BEFORE START a backend picks its answer and applies it to all fourteen.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -758,7 +758,7 @@ func (s *suite) runCore(t *testing.T) {
 	// running — the incident Stop's own doc exists to prevent, reached from the
 	// other side. It was found by asking at which point in the LIFECYCLE each
 	// verb is sent, rather than what the suite happens to send: after a Stop
-	// the suite sent exactly Start and Publish, and never the other eleven.
+	// the suite sent exactly Start and Publish, and never the other twelve.
 	//
 	// That case then RAN ON NO BACKEND AT ALL — measured from a -json log, a
 	// `skip` record under internal/queue/jetstream (not Restartable) and under
@@ -769,7 +769,7 @@ func (s *suite) runCore(t *testing.T) {
 	//
 	// Deleting it costs nothing, because this case is the GENERAL form of the
 	// same fix and is strictly stronger: it is ungated, it runs on both
-	// backends, and it requires all thirteen verbs — PauseTopic among them — to
+	// backends, and it requires all fourteen verbs — PauseTopic among them — to
 	// refuse with queue.ErrNotLive. A hold that cannot be TAKEN cannot survive
 	// anything, so the window is closed by construction rather than by
 	// observation, and it is closed for every verb rather than for the one
@@ -905,10 +905,13 @@ type verbResult struct {
 // table can hold every shape of the contract's methods in one list.
 func second(_ bool, err error) error { return err }
 
+// listErr is second for the listing's shape.
+func listErr(_ []queue.Subscription, err error) error { return err }
+
 // lifecycleVerbs sends every publish, subscription and attachment verb once
 // and reports what each answered.
 //
-// ALL THIRTEEN, in one list, because the property under test is that they AGREE
+// ALL FOURTEEN, in one list, because the property under test is that they AGREE
 // — a helper that took a subset would be certifying the subset the author
 // happened to think of, which is exactly how nine of them went unsent.
 //
@@ -949,6 +952,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"Detach", second(q.Detach(ctx, topic, "g"))},
 		{"EnsureSubscription", second(q.EnsureSubscription(ctx, topic, "g"))},
 		{"DeleteSubscription", second(q.DeleteSubscription(ctx, topic, "g"))},
+		{"ListSubscriptions", listErr(q.ListSubscriptions(ctx, ns+".>"))},
 		{"SubscribeStream", streamErr},
 		{"PauseTopic", q.PauseTopic(ctx, topic, "g", "test")},
 		{"ResumeTopic", q.ResumeTopic(ctx, topic, "g", "test")},

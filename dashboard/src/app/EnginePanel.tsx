@@ -2,23 +2,39 @@
  * Engine health, as a panel rather than a coloured dot.
  *
  * The dot was the only health surface in the product and it could show three
- * colours; everything behind it — whether a company config is even active,
+ * colours; everything behind it (whether a company config is even active,
  * which node this is, what epoch it has applied, how many turns are in flight,
- * whether the event store is durable — was on the wire and reached no screen.
+ * whether the event store is durable) was on the wire and reached no screen.
  *
  * It also read seven fields that exist on NO server type. The 5-second push
  * carries `{status, in_flight, shutting_down}` and nothing else; the rest comes
  * from the `stream` query, which answers the full `api.Health`. Reading one off
- * the other is how an engine with no active configuration — dropping every
- * inbound webhook — came to render identically to a healthy idle one.
+ * the other is how an engine with no active configuration, dropping every
+ * inbound webhook, came to render identically to a healthy idle one.
+ *
+ * It is a modal on the layer stack (`useModal`), owning its veil the way the
+ * shared `Dialog` does. The shell used to wrap it in a veil of its own and
+ * close it from a window-level Escape listener that ran beside the stack, so
+ * the panel trapped no Tab and returned focus nowhere.
  */
 
-import { Badge, Button, KeyValue } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { useConnection } from "~/lib/store-hooks.ts";
-import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useRef } from "react";
+import { useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
+import { fmtDateTime } from "~/lib/format.ts";
+import {
+  Button,
+  Callout,
+  DescriptionList,
+  EmptyValue,
+  InlineCode,
+  Inline,
+  Modal,
+  RelativeTime,
+  Tag,
+  Text,
+  useNow,
+} from "@crewlethq/ui";
+import { KeyGlyph, PowerSettingsNewGlyph } from "@crewlethq/icons/glyphs";
 
 export function EnginePanel({
   onClose,
@@ -29,113 +45,124 @@ export function EnginePanel({
 }) {
   const { connected, authRejected, health } = useConnection();
   const now = useNow();
-  // The `stream` query is deliberately not named `health`: a query name must
-  // never collide with a push kind. It is polled at the same 5 s cadence the
-  // push ticks at, so the two halves of this panel never disagree by more than
-  // one interval.
-  const { data: engine, error } = useQuery("stream", undefined, { pollMs: 5000 });
+  // ONE read, shared with the rail: `useEngineHealth` polls at the cadence the
+  // push itself ticks at, so the two halves of this panel never disagree by
+  // more than one interval, and neither does the pill that opened it.
+  const { data: engine, error } = useEngineHealth();
 
+  // WHERE FOCUS STARTS. The first control is Close, and a panel that opens
+  // on Close has made leaving the first thing it offers. The one action in
+  // the body (Set token, when the token was refused) is what the reader came
+  // for; without it the panel itself takes focus, so its name is announced
+  // and the readout that follows is read in order.
   return (
-    <div className="dialog" style={{ width: "min(440px, 100%)" }}>
-      <header className="dialog-head">
-        <Icon name="power" size="sm" />
-        <strong style={{ fontSize: "var(--fs-sm)" }}>Engine</strong>
-        <span className="spacer" />
-        <Button icon="x" variant="ghost" size="sm" onClick={onClose} title="Close" />
-      </header>
-      <div className="dialog-body col gap-3">
-        <div className="row">
-          <Badge tone={connected ? "positive" : authRejected ? "critical" : "caution"} dot>
-            {connected ? "connected" : authRejected ? "refused" : "unreachable"}
-          </Badge>
-          {health.shutting_down && <Badge tone="caution">draining</Badge>}
-          {engine?.configured === false && <Badge tone="critical">no active config</Badge>}
-          {engine?.posture && engine.posture !== "serve" && (
-            <Badge tone="caution">posture: {engine.posture}</Badge>
-          )}
-        </div>
+    <Modal
+      open
+      stackBody
+      title="Engine"
+      icon={<PowerSettingsNewGlyph />}
+      size="sm"
+      onClose={onClose}
+    >
+      <Inline gap={2} wrap>
+        <Tag variant={connected ? "success" : authRejected ? "danger" : "warning"} dot>
+          {connected ? "connected" : authRejected ? "refused" : "unreachable"}
+        </Tag>
+        {health.shutting_down && <Tag variant="warning">draining</Tag>}
+        {engine?.configured === false && <Tag variant="danger">no active config</Tag>}
+        {engine?.posture && engine.posture !== "serve" && (
+          <Tag variant="warning">posture: {engine.posture}</Tag>
+        )}
+      </Inline>
 
-        {authRejected && (
-          <div className="banner critical">
-            <Icon name="key" size="sm" />
-            <span style={{ flex: 1 }}>
-              This browser's API token was refused. Reads and writes are both blocked.
-            </span>
-            <Button size="sm" onClick={onSetToken}>
+      {authRejected && (
+        <Callout
+          variant="danger"
+          icon={<KeyGlyph />}
+          action={
+            <Button variant="secondary" size="small" onClick={onSetToken}>
               Set token
             </Button>
-          </div>
-        )}
-        {!connected && !authRejected && (
-          <div className="banner caution">
-            <Icon name="refresh" size="sm" />
-            <span>
-              Reconnecting. The page is showing the last state it received and polling the REST
-              snapshot meanwhile.
-            </span>
-          </div>
-        )}
-        {error && connected && (
-          <div className="banner neutral">
-            <Icon name="info" size="sm" />
-            <span>
-              The engine is reachable but did not answer the health query ({error}). The fields
-              below may be stale.
-            </span>
-          </div>
-        )}
+          }
+        >
+          This browser&apos;s API token was refused. Reads and writes are both blocked.
+        </Callout>
+      )}
+      {!connected && !authRejected && (
+        <Callout variant="warning">
+          Reconnecting. The page is showing the last state it received and polling the REST snapshot
+          meanwhile.
+        </Callout>
+      )}
+      {error && connected && (
+        <Callout variant="info">
+          The engine is reachable but did not answer the health query ({error}). The fields below
+          may be stale.
+        </Callout>
+      )}
 
-        <KeyValue
-          items={[
-            ["Status", engine?.status ?? health.status ?? "unknown"],
-            [
-              "Node",
-              <code key="n" className="inline">
-                {engine?.node || "—"}
-              </code>,
-            ],
-            ["Version", engine?.version || "—"],
-            [
-              "Company config",
-              engine?.configured === false ? (
-                <span style={{ color: "var(--critical-ink)" }}>
-                  none active — every inbound webhook is dropped
-                </span>
-              ) : (
-                "active"
-              ),
-            ],
-            [
-              "Applied epoch",
-              <code key="e" className="inline">
-                {engine?.applied_epoch || "—"}
-              </code>,
-            ],
-            ["Control-plane posture", engine?.posture || "—"],
-            [
-              "Turns in flight",
-              <span key="f" className="t-num">
-                {health.in_flight ?? engine?.in_flight ?? 0}
-              </span>,
-            ],
-            ["Seats held here", engine?.seats?.length ?? "—"],
-            ["Stream", engine?.queue || "—"],
-            ["Dashboard clients", engine?.clients ?? "—"],
-            [
-              "Engine up since",
-              engine?.engine_started_at
-                ? `${fmtDateTime(engine.engine_started_at)} (${relTime(engine.engine_started_at, now)})`
-                : "—",
-            ],
-            [
-              "Process up since",
-              engine?.started_at
-                ? `${fmtDateTime(engine.started_at)} (${relTime(engine.started_at, now)})`
-                : "—",
-            ],
-          ]}
-        />
-      </div>
-    </div>
+      <DescriptionList
+        items={[
+          ["Status", engine?.status ?? health.status ?? "unknown"],
+          [
+            "Node",
+            <InlineCode key="n">{engine?.node || <EmptyValue label="Not reported" />}</InlineCode>,
+          ],
+          ["Version", engine?.version || <EmptyValue label="Not reported" />],
+          [
+            "Company config",
+            engine?.configured === false ? (
+              // A TAG rather than red words: the state is what carries the
+              // colour in this design system, and a paragraph tinted with a
+              // feedback hue is colour spent on something a reader cannot
+              // press, compare or filter by.
+              <Tag key="c" variant="danger">
+                none active, so every inbound webhook is dropped
+              </Tag>
+            ) : (
+              "active"
+            ),
+          ],
+          [
+            "Applied epoch",
+            <InlineCode key="e">
+              {engine?.applied_epoch || <EmptyValue label="Not reported" />}
+            </InlineCode>,
+          ],
+          ["Control-plane posture", engine?.posture || <EmptyValue label="Not reported" />],
+          [
+            "Turns in flight",
+            <Text key="f" numeric>
+              {health.in_flight ?? engine?.in_flight ?? 0}
+            </Text>,
+          ],
+          ["Seats held here", engine?.seats?.length ?? <EmptyValue label="Not reported" />],
+          ["Stream", engine?.queue || <EmptyValue label="Not reported" />],
+          ["Dashboard clients", engine?.clients ?? <EmptyValue label="Not reported" />],
+          [
+            "Engine up since",
+            engine?.engine_started_at ? (
+              <>
+                {fmtDateTime(engine.engine_started_at)} (
+                <RelativeTime value={engine.engine_started_at} now={now} />)
+              </>
+            ) : (
+              <EmptyValue label="Not reported" />
+            ),
+          ],
+          [
+            "Process up since",
+            engine?.started_at ? (
+              <>
+                {fmtDateTime(engine.started_at)} (
+                <RelativeTime value={engine.started_at} now={now} />)
+              </>
+            ) : (
+              <EmptyValue label="Not reported" />
+            ),
+          ],
+        ]}
+      />
+    </Modal>
   );
 }

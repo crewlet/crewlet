@@ -1,0 +1,236 @@
+{
+  "seats": [
+    {
+      "path": "roles[0]",
+      "handle": "jane-founder",
+      "name": "Jane Founder",
+      "kind": "human",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": [
+        "agent-ceo"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": null
+    },
+    {
+      "path": "units[0].children[0].roles[0]",
+      "handle": "agent-ceo",
+      "name": "Agent CEO",
+      "kind": "agent",
+      "unit_path": "units[0].children[0]",
+      "placed_by_ref": false,
+      "manager": "jane-founder",
+      "managers": [
+        "jane-founder"
+      ],
+      "reports": [
+        "agent-cto",
+        "agent-pm"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Leadership",
+        "Executives"
+      ]
+    },
+    {
+      "path": "units[0].children[0].roles[1]",
+      "handle": "agent-cto",
+      "name": "Agent CTO",
+      "kind": "agent",
+      "unit_path": "units[0].children[0]",
+      "placed_by_ref": false,
+      "manager": "agent-ceo",
+      "managers": [
+        "agent-ceo"
+      ],
+      "reports": [
+        "agent-swe",
+        "agent-frontend-swe",
+        "agent-ai-systems-engineer"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Leadership",
+        "Executives"
+      ]
+    },
+    {
+      "path": "units[1].children[0].roles[0]",
+      "handle": "agent-pm",
+      "name": "Agent PM",
+      "kind": "agent",
+      "unit_path": "units[1].children[0]",
+      "placed_by_ref": false,
+      "manager": "agent-ceo",
+      "managers": [
+        "agent-ceo"
+      ],
+      "reports": [
+        "agent-devrel"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Product",
+        "Product Management"
+      ]
+    },
+    {
+      "path": "units[1].children[1].roles[0]",
+      "handle": "agent-devrel",
+      "name": "Agent DevRel",
+      "kind": "agent",
+      "unit_path": "units[1].children[1]",
+      "placed_by_ref": false,
+      "manager": "agent-pm",
+      "managers": [
+        "agent-pm"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Product",
+        "Developer Relations"
+      ]
+    },
+    {
+      "path": "units[2].children[0].roles[0]",
+      "handle": "agent-swe",
+      "name": "Agent SWE",
+      "kind": "agent",
+      "unit_path": "units[2].children[0]",
+      "placed_by_ref": false,
+      "manager": "agent-cto",
+      "managers": [
+        "agent-cto"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Core"
+      ]
+    },
+    {
+      "path": "units[2].children[0].roles[1]",
+      "handle": "agent-frontend-swe",
+      "name": "Agent Frontend SWE",
+      "kind": "agent",
+      "unit_path": "units[2].children[0]",
+      "placed_by_ref": false,
+      "manager": "agent-cto",
+      "managers": [
+        "agent-cto"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Core"
+      ]
+    },
+    {
+      "path": "units[2].children[0].roles[2]",
+      "handle": "agent-ai-systems-engineer",
+      "name": "Agent AI Systems Engineer",
+      "kind": "agent",
+      "unit_path": "units[2].children[0]",
+      "placed_by_ref": false,
+      "manager": "agent-cto",
+      "managers": [
+        "agent-cto"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Engineering",
+        "Core"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "path": "units[0]",
+      "name": "Leadership",
+      "type": "department",
+      "lead": "agent-ceo",
+      "lead_inherited": false,
+      "channel": "town-square",
+      "channel_inherited": false,
+      "seats": null
+    },
+    {
+      "path": "units[0].children[0]",
+      "name": "Executives",
+      "type": "team",
+      "lead": "agent-ceo",
+      "lead_inherited": false,
+      "channel": "town-square",
+      "channel_inherited": true,
+      "seats": [
+        "agent-ceo",
+        "agent-cto"
+      ]
+    },
+    {
+      "path": "units[1]",
+      "name": "Product",
+      "type": "department",
+      "lead": "agent-pm",
+      "lead_inherited": false,
+      "channel": "product",
+      "channel_inherited": false,
+      "seats": null
+    },
+    {
+      "path": "units[1].children[0]",
+      "name": "Product Management",
+      "type": "team",
+      "lead": "agent-pm",
+      "lead_inherited": false,
+      "channel": "product",
+      "channel_inherited": true,
+      "seats": [
+        "agent-pm"
+      ]
+    },
+    {
+      "path": "units[1].children[1]",
+      "name": "Developer Relations",
+      "type": "team",
+      "lead": "agent-pm",
+      "lead_inherited": true,
+      "channel": "product",
+      "channel_inherited": true,
+      "seats": [
+        "agent-devrel"
+      ]
+    },
+    {
+      "path": "units[2]",
+      "name": "Engineering",
+      "type": "department",
+      "lead": "agent-cto",
+      "lead_inherited": false,
+      "channel": "engineering",
+      "channel_inherited": false,
+      "seats": null
+    },
+    {
+      "path": "units[2].children[0]",
+      "name": "Core",
+      "type": "team",
+      "lead": "agent-cto",
+      "lead_inherited": false,
+      "channel": "engineering",
+      "channel_inherited": true,
+      "seats": [
+        "agent-swe",
+        "agent-frontend-swe",
+        "agent-ai-systems-engineer"
+      ]
+    }
+  ]
+}

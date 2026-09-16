@@ -329,3 +329,31 @@ func TestUnitAccessors(t *testing.T) {
 		t.Errorf("Product lead = %q / %v, want none", product.Lead, product.LeadRole())
 	}
 }
+
+// A SEAT'S UNIT IS FOUND BY THE SEAT, NOT BY ITS NAME. A stored revision can
+// still hold two seats of one name, and found by name the second one was given
+// the first one's unit: its prompt named a team it is not in, and its
+// onboarding chain was the other seat's, so moving it re-onboarded nothing.
+func TestTheUnitOfASeatIsFoundByTheSeatItself(t *testing.T) {
+	t.Parallel()
+	first := &Role{Name: "Engineer", DeclaredHandle: "backend-engineer"}
+	second := &Role{Name: "Engineer", DeclaredHandle: "storage-engineer"}
+	o := normalized(&Organization{Name: "T", Units: []*Unit{
+		{Name: "Backend", Roles: []*Role{first}},
+		{Name: "Platform", Children: []*Unit{{Name: "Storage", Roles: []*Role{second}}}},
+	}})
+	if got := o.UnitFor(second); got == nil || got.Name != "Storage" {
+		t.Errorf("UnitFor(second) = %v, want Storage", got)
+	}
+	var chain []string
+	for _, u := range o.UnitChainFor(second) {
+		chain = append(chain, u.Name)
+	}
+	if want := []string{"Platform", "Storage"}; !slices.Equal(chain, want) {
+		t.Errorf("UnitChainFor(second) = %v, want %v", chain, want)
+	}
+	// A seat that is not in this organization is in none of its units.
+	if got := o.UnitFor(&Role{Name: "Engineer"}); got != nil {
+		t.Errorf("UnitFor(a copy) = %v, want nil: a copy is a different seat", got)
+	}
+}

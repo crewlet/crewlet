@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,7 +39,7 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrShape, err)
+		return nil, syntaxFault(err)
 	}
 	if empty(&doc) {
 		// An empty Tier A file is legitimate: every field defaults, and a
@@ -56,7 +55,7 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	LogUnresolved("bootstrap", missing)
 
 	cfg := DefaultBootstrap()
-	if err := decodeKnown(&doc, &cfg); err != nil {
+	if err := decodeDocument(&doc, &cfg); err != nil {
 		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -91,7 +90,7 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 		if u.Path != "logging.file.path" {
 			continue
 		}
-		return fault(u.Path, ErrMissing,
+		return fault(field(u.Path), ErrMissing,
 			"nothing answered for %s, so the log file has no name and this node "+
 				"would start with no durable log at all. Set the variable, or "+
 				"write the path literally — an empty path means \"no file\" and "+
@@ -113,11 +112,39 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 // also what lets `crewlet validate` check a config on a laptop where no
 // credential exists.
 func LoadCompany(path string) (*Company, error) {
+	return loadCompanyFile(path, (*Company).Validate)
+}
+
+// LoadCompanyToRun reads Tier B from a YAML file that is RUN or acted on
+// rather than written into the store, and holds it to the RUNNABLE rules only.
+//
+// Its callers are `crewlet run`'s `-company` and `-import-company` seed, and
+// the vendor commands (`crewlet gitlab provision` and its siblings) that act
+// on the company the file describes. The difference from [LoadCompany] is
+// the admission rules (see [Company.ValidateRunnable]). A company file that
+// ran yesterday and breaks an admission rule added since must still start
+// the node that runs it and still be provisionable, or every upgrade of a
+// file-based deployment carrying an old duplicate is an outage. Most boots
+// never write the file anywhere: it is byte for byte the revision the store
+// already holds, or a bootstrap seed the store's own company outranks. The
+// admission rules apply where the file IS written as a revision, which the
+// seed decides and checks with [Company.ValidateAdmission] before it imports,
+// and `crewlet config import` and `crewlet validate` use [LoadCompany].
+func LoadCompanyToRun(path string) (*Company, error) {
+	return loadCompanyFile(path, (*Company).ValidateRunnable)
+}
+
+// loadCompanyFile reads and parses a Tier B file, then holds it to validate,
+// naming the file in every failure.
+func loadCompanyFile(path string, validate func(*Company) error) (*Company, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("company config %s: %w", path, err)
 	}
-	cfg, err := ParseCompany(data)
+	cfg, err := ParseCompanyDocument(data)
+	if err == nil {
+		err = validate(cfg)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("company config %s: %w", path, err)
 	}
@@ -152,17 +179,32 @@ func ParseCompany(data []byte) (*Company, error) {
 func ParseCompanyDocument(data []byte) (*Company, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrShape, err)
+		return nil, syntaxFault(err)
 	}
-	if empty(&doc) {
-		return nil, fault("", ErrMissing, "the company config is empty; it needs at least a name")
+	return ParseCompanyNode(&doc)
+}
+
+// ParseCompanyNode is [ParseCompanyDocument] over a document already parsed,
+// for a caller that has taken the document apart before handing it on: the
+// write surface lifts a `_summary` key out of a body before the company in it
+// is read.
+//
+// THE NODES KEEP THE LINES THEY WERE PARSED FROM, and every failure is placed
+// at its node, so a failure names the line it has in the text the caller sent.
+// Encoding the edited document again to hand it to [ParseCompanyDocument]
+// renumbered every line: in a YAML body opening with its summary, a typo
+// twenty lines down was reported a line or two above where it was written.
+// doc is only read.
+func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
+	if empty(doc) {
+		return nil, fault(nil, ErrMissing, "the company config is empty; it needs at least a name")
 	}
-	if err := requireMapping(&doc); err != nil {
+	if err := requireMapping(doc); err != nil {
 		return nil, err
 	}
 
 	cfg := DefaultCompany()
-	if err := decodeKnown(&doc, &cfg); err != nil {
+	if err := decodeDocument(doc, &cfg); err != nil {
 		return nil, err
 	}
 	// The declaration order of providers.llm exists only in the document —
@@ -179,9 +221,50 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 	// every provider chain the moment somebody read a config and sent it
 	// back.
 	if len(cfg.Providers.LLMOrder) == 0 {
-		cfg.Providers.LLMOrder = llmKeyOrder(&doc)
+		cfg.Providers.LLMOrder = llmKeyOrder(doc)
 	}
 	return &cfg, nil
+}
+
+// ParseMember reads one member of a company document sent on its own (a
+// seat, a unit, a model provider, an MCP server) into out, by the rules the
+// whole document is read by: unknown keys refused, and every failure a
+// [Fault] with its path inside the member and its line in data.
+//
+// The per-entity write surface is what reads one. It used encoding/json's own
+// strict decoder, whose refusal names a key and no place (`json: unknown field
+// "gaol"`) and classifies as nothing, so the surface a person is most likely to
+// edit by hand was the one whose mistakes could not be put beside the field.
+// ONE READER for a member and for the document holding it, so the two cannot
+// disagree about what a seat may carry.
+//
+// The caller knows where the member sits in the document and places the
+// faults there; a path here starts at the member.
+func ParseMember(data []byte, out any) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return syntaxFault(err)
+	}
+	return ParseMemberNode(&doc, out)
+}
+
+// ParseMemberNode is [ParseMember] over a document already parsed, for the
+// reason [ParseCompanyNode] gives: the failures keep the lines of the text the
+// caller sent. doc is only read.
+func ParseMemberNode(doc *yaml.Node, out any) error {
+	if empty(doc) {
+		return fault(nil, ErrMissing, "the body is empty; send the whole entity, "+
+			"as reading it from the same route answers it")
+	}
+	root := doc
+	if root.Kind == yaml.DocumentNode {
+		root = root.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return fault(nil, ErrShape, "an entity is a mapping of its fields, as "+
+			"reading it from the same route answers it, not a list or a value")
+	}
+	return decodeDocument(doc, out)
 }
 
 // DecodeCompany reads Tier B from its STORED form.
@@ -207,6 +290,26 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 // ${VAR} references stay VERBATIM here as everywhere else: they are resolved
 // where a provider, transport or MCP server is constructed, which is what
 // makes re-activating an unchanged revision pick up a rotated credential.
+//
+// # It does not validate, and every caller decides what to hold it to
+//
+// A stored revision was valid under the rules of the build that WROTE it,
+// which is not necessarily this one: a later build adds a rule, and a peer on
+// an older build keeps activating documents that break it. A reader that
+// validated here made such a revision unreadable to every caller at once,
+// including the ones that could repair it. GET /config answered 500, a PUT
+// and a PATCH failed opening their own merge base, and export refused, so the
+// only way out was stopping the engine.
+//
+// So the decode is only a decode, and the rules live with the question being
+// asked:
+//
+//   - Reading, exporting, diffing, and using a revision as the prior a write
+//     restores its masks from or merges onto: no rules at all. Those readers
+//     never run the company, and refusing them is what locks it out.
+//   - Applying a revision (engine apply, boot, reload, revert): the rules a
+//     running company depends on, before anything is built.
+//   - A document a person submits: every rule, after its masks are restored.
 func DecodeCompany(payload []byte) (*Company, error) {
 	// Onto the DEFAULTS, not onto a zero value. A field the payload omits
 	// must land on the same default the authored path gives it, or the
@@ -214,10 +317,7 @@ func DecodeCompany(payload []byte) (*Company, error) {
 	// through.
 	cfg := DefaultCompany()
 	if err := json.Unmarshal(payload, &cfg); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrShape, err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, &Fault{Kind: ErrShape, Detail: err.Error()}
 	}
 	return &cfg, nil
 }
@@ -238,35 +338,57 @@ func requireMapping(doc *yaml.Node) error {
 		root = root.Content[0]
 	}
 	if root.Kind != yaml.MappingNode {
-		return fault("", ErrShape, "the config file must be a YAML mapping of settings")
+		return fault(nil, ErrShape, "the config file must be a YAML mapping of settings")
 	}
 	return nil
 }
 
-// decodeKnown decodes a node into out with unknown fields rejected.
+// decodeKnown decodes a node into out with unknown fields rejected, for a
+// custom UnmarshalYAML decoding a struct out of the node it was given.
 //
 // yaml.v3 only offers KnownFields on a Decoder, and a custom UnmarshalYAML
 // that reaches for node.Decode gets a fresh decoder without it — which is a
 // hole a typo can hide in. Every decoder in this package that has to decode
-// a STRUCT out of a node re-enters through here, so there is exactly one
-// strict path and no shape that escapes it.
+// a STRUCT out of a node re-enters through here or through [decodeDocument],
+// so there is exactly one strict path and no shape that escapes it.
 //
-// Round-tripping through the encoder is the price. It buys a guarantee that
-// holds for shapes this package has not been written yet, on sub-documents
-// that are a handful of keys wide.
+// Its failures go back to the calling decoder as a TypeError it keeps
+// collecting after, placed in that decoder's text (see [carryFaults]).
 func decodeKnown(node *yaml.Node, out any) error {
+	return carryFaults(decodeNode(node, out))
+}
+
+// decodeDocument decodes a whole parsed document into out with unknown
+// fields rejected, and gives every failure its authored path and its line in
+// the text doc was parsed from.
+func decodeDocument(doc *yaml.Node, out any) error {
+	if err := decodeNode(doc, out); err != nil {
+		return placeInDocument(doc, err)
+	}
+	return nil
+}
+
+// decodeNode is the strict decode both of those share, with its failures as
+// faults on the nodes of the input they are about.
+//
+// Round-tripping through the encoder is the price of the strictness. It buys
+// a guarantee that holds for shapes this package has not been written yet, on
+// sub-documents that are a handful of keys wide. What it costs a failure is
+// its line, which is a line of the encoded buffer: every failure is moved
+// back onto the node it came from before it is returned (see position.go).
+func decodeNode(node *yaml.Node, out any) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
-	if err := enc.Encode(node); err != nil {
-		return fmt.Errorf("%w: %w", ErrShape, err)
+	if err := enc.Encode(blockStyle(node)); err != nil {
+		return &Fault{Kind: ErrShape, Detail: err.Error()}
 	}
 	if err := enc.Close(); err != nil {
-		return fmt.Errorf("%w: %w", ErrShape, err)
+		return &Fault{Kind: ErrShape, Detail: err.Error()}
 	}
-	dec := yaml.NewDecoder(&buf)
+	dec := yaml.NewDecoder(bytes.NewReader(buf.Bytes()))
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
-		return decodeError(err, retiredFor(out))
+		return decodeError(err, retiredFor(out), indexBuffer(buf.Bytes(), node))
 	}
 	return nil
 }
@@ -280,22 +402,23 @@ func decodeKnown(node *yaml.Node, out any) error {
 // COMPANY document with advice about a `logging:` block that does not exist
 // there, sending its author to edit a file they are not in. An unknown key
 // somewhere that never had one is an ordinary typo and has to read like one.
+//
+// A TIER B MEMBER SENT ON ITS OWN IS STILL TIER B, which is why the member
+// types [ParseMember] reads answer the company's table. The tier picks the
+// table; the block inside it is picked one level down by [retiredKey], out of
+// the Go type name yaml puts in its own message. So an `integrations:` on a
+// unit reads the same whether it arrived inside a whole document or as the
+// body of a per-entity write, and the entries that can only ever appear on a
+// seat or a unit stay reachable from the surface most likely to carry them.
 func retiredFor(out any) map[string]string {
 	switch out.(type) {
 	case *Bootstrap:
 		return retiredBootstrapFields
-	case *Company:
+	case *Company, *Role, *Unit, *LLMProvider, *MCPServer:
 		return retiredCompanyFields
 	}
 	return nil
 }
-
-// unknownFieldRE matches yaml.v3's own phrasing for a key the struct does
-// not define. The Go type name in it is meaningless to an operator, so the
-// message is rewritten around the KEY, which is what they can search their
-// file for — but the type is captured all the same, because it is what
-// distinguishes one block's retired key from another's. See retiredKey.
-var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
 
 // retiredKey is how a retired-field table is addressed: the block the key
 // belonged to, then the key. yaml.v3 names the Go type it was decoding
@@ -412,39 +535,23 @@ var retiredCompanyFields = map[string]string{
 		"explicit \"\" turns tool skills off",
 }
 
-// decodeError translates yaml's decode failures into this package's
-// sentinels, so a caller can tell a typo from a wrong shape.
-func decodeError(err error, retired map[string]string) error {
-	// An error from a custom unmarshaler has already been translated —
-	// including by a nested decodeKnown, which is how a typo inside the
-	// per-phase llm mapping or a tool-annotation block gets here. Wrapping
-	// it again would bury the sentinel a caller branches on under a
-	// generic one.
-	for _, sentinel := range []error{ErrUnknownField, ErrShape, ErrMissing, ErrUnknownValue, ErrConflict, ErrOutOfRange} {
-		if errors.Is(err, sentinel) {
-			return err
-		}
-	}
+// decodeError translates yaml's decode failures into faults on the nodes of
+// the input they are about, so a caller can tell a typo from a wrong shape
+// and find either.
+//
+// A yaml.TypeError is every failure the decoder collected, one line each. Any
+// other error stopped the decode inside a custom unmarshaler: a fault that a
+// nested decodeKnown or a custom decoder already built, still placed in this
+// buffer, which is moved onto the input without being wrapped again, since a
+// second wrap would bury the sentinel a caller branches on.
+func decodeError(err error, retired map[string]string, idx *bufferIndex) error {
 	var typeErr *yaml.TypeError
 	if !errors.As(err, &typeErr) {
-		return fmt.Errorf("%w: %w", ErrShape, err)
+		return idx.relocate(err)
 	}
 	var out problems
 	for _, line := range typeErr.Errors {
-		if m := unknownFieldRE.FindStringSubmatch(line); m != nil {
-			// A key that was REMOVED needs its own message. "debug is not
-			// a setting" is true and useless to someone reading a file the
-			// quickstart told them to write: they need the line that
-			// replaced it, not a spelling check.
-			if replacement, gone := retired[retiredKey(m[3], m[2])]; gone {
-				out.add("line "+m[1], ErrUnknownField, "%s", replacement)
-				continue
-			}
-			out.add("line "+m[1], ErrUnknownField,
-				"%q is not a setting: check the spelling, or the block it belongs under", m[2])
-			continue
-		}
-		out.add("", ErrShape, "%s", strings.TrimSpace(line))
+		out = append(out, idx.typeFault(line, retired))
 	}
 	return out.err()
 }

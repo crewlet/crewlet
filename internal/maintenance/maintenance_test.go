@@ -126,12 +126,14 @@ func TestOneFailingJobDoesNotStopTheRest(t *testing.T) {
 	var first, third recorder
 	first.rows, third.rows = 2, 5
 	failing := recorder{err: boom}
+	partial := recorder{rows: 3, err: boom}
 	w := maintenance.New(maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
 			{Name: "first", Horizon: time.Hour, Run: first.run},
 			{Name: "second", Horizon: time.Hour, Run: failing.run},
 			{Name: "third", Horizon: time.Hour, Run: third.run},
+			{Name: "partial", Horizon: time.Hour, Run: partial.run},
 		},
 	})
 
@@ -148,6 +150,11 @@ func TestOneFailingJobDoesNotStopTheRest(t *testing.T) {
 	}
 	if _, reported := swept["second"]; reported {
 		t.Fatal("the failing job reported rows")
+	}
+	// A job that touched rows before it failed keeps them: a retirement
+	// that deleted three mailboxes and failed on a fourth deleted three.
+	if swept["partial"] != 3 {
+		t.Fatalf("a job that failed part-way reported %d rows, want the 3 it touched", swept["partial"])
 	}
 }
 

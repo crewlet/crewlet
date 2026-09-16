@@ -83,7 +83,7 @@ import (
 // exists to prevent, not one it may introduce.
 func (b *Bootstrap) normalize() error {
 	var p problems
-	_, collisions := mapStrings(reflect.ValueOf(b), "", func(_, s string) string {
+	_, collisions := mapStrings(reflect.ValueOf(b), nil, func(_ Path, s string) string {
 		return strings.TrimSpace(s)
 	})
 	for _, path := range collisions {
@@ -119,7 +119,7 @@ func (b *Bootstrap) normalize() error {
 // would make a Tier A field of interface type silently unreachable by the
 // trim, so a test asserts Tier A has none rather than leaving it to be
 // remembered.
-func mapStrings(v reflect.Value, path string, replace func(path, s string) string) (bool, []string) {
+func mapStrings(v reflect.Value, path Path, replace func(path Path, s string) string) (bool, []Path) {
 	if !v.IsValid() {
 		return false, nil
 	}
@@ -140,7 +140,7 @@ func mapStrings(v reflect.Value, path string, replace func(path, s string) strin
 		}
 		return mapStrings(v.Elem(), path, replace)
 	case reflect.Slice, reflect.Array:
-		changed, collisions := false, []string(nil)
+		changed, collisions := false, []Path(nil)
 		for i := range v.Len() {
 			hit, collided := mapStrings(v.Index(i), idx(path, i), replace)
 			changed = hit || changed
@@ -157,7 +157,7 @@ func mapStrings(v reflect.Value, path string, replace func(path, s string) strin
 		// Unexported fields are skipped: reflection cannot read them, and
 		// nothing in a config payload hides a string behind one — the one
 		// type with unexported state (org.Toggle) holds none.
-		changed, collisions := false, []string(nil)
+		changed, collisions := false, []Path(nil)
 		t := v.Type()
 		for i := range v.NumField() {
 			if t.Field(i).PkgPath != "" {
@@ -194,22 +194,27 @@ func mapStrings(v reflect.Value, path string, replace func(path, s string) strin
 // rewrite lands, and finding one abandons the whole map — so it is left
 // exactly as it was, both entries intact, and the caller refusing it is
 // describing something the operator can still see in their own file.
-func mapEntries(v reflect.Value, path string, replace func(path, s string) string) (bool, []string) {
+func mapEntries(v reflect.Value, path Path, replace func(path Path, s string) string) (bool, []Path) {
 	type rewrite struct{ old, key, val reflect.Value }
 	var pending []rewrite
-	var collisions []string
+	var collisions []Path
 
 	iter := v.MapRange()
 	for iter.Next() {
-		entry := at(path, iter.Key().String())
+		// THE KEY IS THE OPERATOR'S OWN TEXT, so it extends the path as
+		// one segment through [entry] rather than through [at]: a
+		// `node.labels` key or an `mcp_env` variable may itself hold a
+		// dot, and splitting it would report the collision at a place
+		// nobody can find in their file.
+		keyPath := entry(path, iter.Key().String())
 
 		key := reflect.New(v.Type().Key()).Elem()
 		key.Set(iter.Key())
-		keyChanged, keyCollided := mapStrings(key, entry, replace)
+		keyChanged, keyCollided := mapStrings(key, keyPath, replace)
 
 		val := reflect.New(v.Type().Elem()).Elem()
 		val.Set(iter.Value())
-		valChanged, valCollided := mapStrings(val, entry, replace)
+		valChanged, valCollided := mapStrings(val, keyPath, replace)
 
 		collisions = append(collisions, keyCollided...)
 		collisions = append(collisions, valCollided...)
@@ -234,7 +239,7 @@ func mapEntries(v reflect.Value, path string, replace func(path, s string) strin
 	// reported through the loop above: a collision two levels down refuses
 	// the config either way, but it is not a reason to abandon a rewrite
 	// here that is perfectly well defined.
-	var own []string
+	var own []Path
 	taken := make(map[any]bool, len(pending))
 	for _, r := range pending {
 		target := r.key.Interface()

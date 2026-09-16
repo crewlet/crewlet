@@ -18,6 +18,7 @@
  */
 
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import { useQuery } from "./useQuery.ts";
 import type {
   Slice,
   StoreState,
@@ -125,3 +126,27 @@ export function useConnection() {
 }
 
 export type { QueryMap, QueryName };
+
+/**
+ * How often the engine's own health is re-read, in milliseconds.
+ *
+ * FIVE SECONDS, because that is the cadence the engine PUSHES at: the socket
+ * ticks `{status, in_flight, shutting_down}` every five seconds, and the query
+ * below fetches the rest of the same body. Read at any other interval the two
+ * halves of one readout disagree by the difference, which is exactly what the
+ * shell and the engine panel used to do at 15 and 5 seconds: the rail said the
+ * engine was configured while the panel open in front of it said it was not,
+ * for as long as ten seconds after a revision applied.
+ */
+export const HEALTH_POLL_MS = 5_000;
+
+/**
+ * The engine's own health: one read, shared by everything that shows it.
+ *
+ * `stream` rather than `health` because a query name may never collide with a
+ * push kind, and the query answers the whole body where the push carries three
+ * fields of it.
+ */
+export function useEngineHealth() {
+  return useQuery("stream", undefined, { pollMs: HEALTH_POLL_MS });
+}

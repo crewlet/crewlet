@@ -5,20 +5,42 @@
  * event id pasted out of a log is a destination.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { eventHistoryLabel, fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
+import {
+  Button,
+  Card,
+  CodeBlock,
+  CopyButton,
+  DescriptionList,
+  EmptyValue,
+  InlineCode,
+  PageHeader,
+  RelativeTime,
+  Skeleton,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
+import {
+  DatabaseGlyph,
+  DescriptionGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  TagGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId });
+  const { data: engine } = useEngineHealth();
 
   // A phase event has a first-class rendering; everything else gets its
   // payload shown honestly rather than being squeezed into a shape it is not.
@@ -26,35 +48,46 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title={data ? data.summary || data.type : "Event"}
-        sub={data ? <code className="inline">{data.type}</code> : eventId}
+        description={data ? <InlineCode>{data.type}</InlineCode> : eventId}
         badges={
           data ? (
             <>
-              <Badge outline>{humanize(data.category) || "system"}</Badge>
-              {data.source && <Badge outline>{data.source}</Badge>}
+              <Tag appearance="outline">{humanize(data.category) || "system"}</Tag>
+              {data.source && <Tag appearance="outline">{data.source}</Tag>}
             </>
           ) : undefined
         }
         actions={
           <>
             {data?.trace_id && (
-              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", data.trace_id])}>
+              <Button
+                variant="secondary"
+
+                leadingIcon={<ForkRightGlyph />}
+                onClick={() => nav.to(["traces", data.trace_id])}
+              >
                 Trace
               </Button>
             )}
             {data?.payload?.turn_id != null && (
               <Button
-                size="sm"
-                icon="layers"
+                variant="secondary"
+
+                leadingIcon={<LayersGlyph />}
                 onClick={() => nav.to(["turns", String(data.payload!.turn_id)])}
               >
                 Turn
               </Button>
             )}
             {data?.actor && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["seats", data.actor])}>
+              <Button
+                variant="secondary"
+
+                leadingIcon={<PersonGlyph />}
+                onClick={() => nav.to(["seats", data.actor])}
+              >
                 {data.actor}
               </Button>
             )}
@@ -62,7 +95,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
         }
       />
 
-      {loading && <Skeleton rows={5} />}
+      {loading && <Skeleton label="Loading the event" variant="text" rows={5} />}
       <QueryState
         error={error === "not_found" ? null : error}
         loading={loading}
@@ -70,50 +103,45 @@ export function EventScreen({ eventId }: { eventId: string }) {
           !loading && !data
             ? {
                 title: "No event with that id",
-                hint: "The event store keeps 30 days. An id older than that, or from a different node's store, will not resolve.",
+                hint: `An id older than the retained record, or from a different node's store, will not resolve: ${eventHistoryLabel(engine?.event_history_seconds)}.`,
               }
             : undefined
         }
       >
         {data && (
           <>
-            <Panel title="Envelope" icon="file">
-              <KeyValue
+            <Card as="section">
+              <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                <Card.Title>Envelope</Card.Title>
+              </Card.Header>
+              <DescriptionList
                 items={[
+                  ["Id", <InlineCode key={"i"}>{data.id}</InlineCode>],
+                  ["Type", <InlineCode key={"t"}>{data.type}</InlineCode>],
                   [
-                    "Id",
-                    <code key="i" className="inline">
-                      {data.id}
-                    </code>,
+                    "When",
+                    <span key="when">
+                      {fmtDateTime(data.timestamp)} ·{" "}
+                      <RelativeTime value={data.timestamp} now={now} />
+                    </span>,
                   ],
-                  [
-                    "Type",
-                    <code key="t" className="inline">
-                      {data.type}
-                    </code>,
-                  ],
-                  ["When", `${fmtDateTime(data.timestamp)} · ${relTime(data.timestamp, now)}`],
-                  ["Actor", data.actor || <span className="faint">the engine itself</span>],
-                  ["Source", data.source || <span className="faint">—</span>],
+                  ["Actor", data.actor || <span className="muted">the engine itself</span>],
+                  ["Source", data.source || <EmptyValue label="Not reported" />],
                   ["Category", humanize(data.category) || "system"],
                   [
                     "Topic",
                     data.topic ? (
-                      <code key="tp" className="inline">
-                        {data.topic}
-                      </code>
+                      <InlineCode key={"tp"}>{data.topic}</InlineCode>
                     ) : (
-                      <span className="faint">—</span>
+                      <EmptyValue label="Not reported" />
                     ),
                   ],
                   [
                     "Trace",
                     data.trace_id ? (
-                      <code key="tr" className="inline">
-                        {data.trace_id}
-                      </code>
+                      <InlineCode key={"tr"}>{data.trace_id}</InlineCode>
                     ) : (
-                      <span className="faint">not traced</span>
+                      <span className="muted">not traced</span>
                     ),
                   ],
                   [
@@ -124,62 +152,76 @@ export function EventScreen({ eventId }: { eventId: string }) {
                         {data.parent_span_id && ` (parent ${data.parent_span_id})`}
                       </span>
                     ) : (
-                      <span className="faint">—</span>
+                      <EmptyValue label="Not reported" />
                     ),
                   ],
                 ]}
               />
-            </Panel>
+            </Card>
 
             {phase && (
-              <Panel title="The phase this event records" icon="brain" padding="tight">
-                <PhaseCard record={phase} defaultOpen showRole />
-              </Panel>
+              <Card as="section">
+                <Card.Header icon={<NeurologyGlyph size="sm" />}>
+                  <Card.Title>The phase this event records</Card.Title>
+                </Card.Header>
+                <Card.Body padding="sm">
+                  <PhaseCard record={phase} defaultOpen showRole />
+                </Card.Body>
+              </Card>
             )}
 
-            <Panel
-              title="Payload"
-              icon="database"
-              subtitle="verbatim, as the engine stored it"
-              actions={
-                data.payload ? (
-                  <CopyButton
-                    text={() => JSON.stringify(data.payload, null, 2)}
-                    title="this event's payload, as JSON"
-                  />
-                ) : undefined
-              }
-            >
+            <Card as="section">
+              <Card.Header
+                icon={<DatabaseGlyph size="sm" />}
+                subtitle="verbatim, as the engine stored it"
+                actions={
+                  data.payload ? (
+                    <CopyButton
+                      variant="secondary"
+                      text={() => JSON.stringify(data.payload, null, 2)}
+                      title="this event's payload, as JSON"
+                    />
+                  ) : undefined
+                }
+              >
+                <Card.Title>Payload</Card.Title>
+              </Card.Header>
               {data.payload ? (
                 // Same treatment as the Turn record: this screen's whole
                 // point is one JSON record, so the record owns select-all
                 // rather than the page taking it.
                 <div className="col gap-1">
-                  <Code plain selectable label="The event payload, as JSON">
-                    {JSON.stringify(data.payload, null, 2)}
-                  </Code>
+                  <CodeBlock
+                    plain
+                    wrap
+                    selectable
+                    label="The event payload, as JSON"
+                    code={JSON.stringify(data.payload, null, 2)}
+                    maxHeight={RECORD_MAX_HEIGHT}
+                  />
                   <span className="t-caption">
                     Click into the payload, and ⌘A / Ctrl+A selects it alone rather than the page.
                   </span>
                 </div>
               ) : (
-                <span className="t-caption faint">
+                <span className="t-caption">
                   This event carries no payload — its type and summary are the whole record.
                 </span>
               )}
-            </Panel>
+            </Card>
 
             {data.tags && Object.keys(data.tags).length > 0 && (
-              <Panel title="Tags" icon="hash">
-                <KeyValue
+              <Card as="section">
+                <Card.Header icon={<TagGlyph size="sm" />}>
+                  <Card.Title>Tags</Card.Title>
+                </Card.Header>
+                <DescriptionList
                   items={Object.entries(data.tags).map(([k, v]) => [
                     k,
-                    <code key={k} className="inline">
-                      {v}
-                    </code>,
+                    <InlineCode key={k}>{v}</InlineCode>,
                   ])}
                 />
-              </Panel>
+              </Card>
             )}
           </>
         )}

@@ -56,9 +56,19 @@ const (
 	MaxPage     = 500
 )
 
+// revisionStore is the node's revision history, as this surface reads and
+// writes it.
+type revisionStore interface {
+	Active(ctx context.Context) (store.Revision, bool, error)
+	Get(ctx context.Context, revisionID string) (store.Revision, bool, error)
+	List(ctx context.Context, limit, offset int) ([]store.Revision, error)
+	Insert(ctx context.Context, r store.Revision) (string, error)
+	Activate(ctx context.Context, revisionID string, at time.Time) (string, error)
+}
+
 // Service is the /config surface.
 type Service struct {
-	configs *store.Configs
+	configs revisionStore
 	plane   coord.Plane
 	queue   queue.Publisher
 	cipher  secrets.Cipher
@@ -125,28 +135,33 @@ func (s *Service) Routes(mux *http.ServeMux) {
 			"hint", "this process has no store, so /config is not served here")
 		return
 	}
-	mux.HandleFunc("GET /config", s.getActive)
-	mux.HandleFunc("PUT /config", s.put)
+	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
+	// written without the Cache-Control below: not a route added later, not
+	// an error path, not the 404 or 405 this mux answers for a path or a
+	// method it does not serve.
+	routes := http.NewServeMux()
+	routes.HandleFunc("GET /config", s.getActive)
+	routes.HandleFunc("PUT /config", s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
-	mux.HandleFunc("OPTIONS /config", s.optionsDocument)
+	routes.HandleFunc("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
-	mux.HandleFunc("PATCH /config", s.patch)
+	routes.HandleFunc("PATCH /config", s.patch)
 	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
 	// rotated SECRET needs and the one thing no other route on this
 	// surface performs: the pointer in the config is already correct, so
 	// there is no patch to make, and with no activation there is no apply
 	// and no refreshed secret snapshot. See [Service.Reload].
-	mux.HandleFunc("POST /config/reload", s.reload)
+	routes.HandleFunc("POST /config/reload", s.reload)
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
-	mux.HandleFunc("GET /config/references", s.references)
-	mux.HandleFunc("GET /config/revisions", s.listRevisions)
-	mux.HandleFunc("GET /config/revisions/{id}", s.getRevision)
-	mux.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
-	mux.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
+	routes.HandleFunc("GET /config/references", s.references)
+	routes.HandleFunc("GET /config/revisions", s.listRevisions)
+	routes.HandleFunc("GET /config/revisions/{id}", s.getRevision)
+	routes.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
+	routes.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
 	// THE ENTITY ROUTES, one per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
@@ -159,9 +174,33 @@ func (s *Service) Routes(mux *http.ServeMux) {
 		// space, answering a {kind, id, entity} envelope that PUT does
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
-		mux.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
-		mux.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
+		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
+	surface := noStore(routes)
+	mux.Handle("/config", surface)
+	mux.Handle("/config/", surface)
+}
+
+// noStore marks every response it wraps as never to be stored.
+//
+// EVERY ONE, reads, refusals and 304s alike. A /config body is the whole company
+// document: its org chart, its contact identities, the ${VAR} name behind every
+// credential and the shape of the rest. Answered with an ETag and no
+// Cache-Control, a browser keeps it in its HTTP disk cache, where it outlives
+// the tab, the session and the operator token that was needed to read it. An
+// error body is included because it can quote the document back (a validation
+// failure names the field and the value it refused).
+//
+// no-store rather than private or no-cache: private still permits the browser's
+// own cache, and no-cache only forces revalidation of what is stored.
+// Conditional reads keep working, because a client that wants a 304 sends
+// If-None-Match itself; nothing here depends on a cache holding the body.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- reads -----------------------------------------------------------------
@@ -377,10 +416,9 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 
 // diff serves GET /config/revisions/{id}/diff?against=<id|active>.
 //
-// Over REDACTED documents on both sides, so a rotated credential shows as a
-// changed mask and never as either value. Comparing the raw documents would
-// put both the old and the new secret in one response — which is strictly
-// worse than the read this surface already refuses to serve.
+// Every value it reports is REDACTED, so a rotated credential shows as a
+// changed mask and never as either value; the comparison itself reads the
+// stored documents, or a rotation would diff to nothing. See [Changes].
 func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	body, err := s.Diff(r.Context(), r.PathValue("id"), r.URL.Query().Get("against"))
 	switch {
@@ -418,12 +456,57 @@ func missingSide(err error) string {
 
 // --- writes ----------------------------------------------------------------
 
+// The machine-readable codes a refused document is answered with.
+const (
+	codeValidationError = httpjson.Code("validation_error")
+	codeInvalidPatch    = httpjson.Code("invalid_patch")
+)
+
+// dryRunOf reads `dry_run` from a write's query, answering the refusal itself.
+// ok is false when the request has been answered.
+//
+// READ BEFORE ANYTHING ELSE the route checks, the body and its summary
+// included, so a caller who mistyped the parameter is told about the
+// parameter: a check misread as a write would be refused for a missing
+// summary, and a write misread as a check would store nothing and say so.
+//
+// Exactly `true` or `false`, or absent. Anything else (`1`, `yes`, an empty
+// value, the parameter twice) is refused rather than guessed, because the two
+// readings of a guess differ by whether the fleet's configuration changes.
+func dryRunOf(w http.ResponseWriter, r *http.Request) (dryRun, ok bool) {
+	values, present := r.URL.Query()["dry_run"]
+	if !present {
+		return false, true
+	}
+	if len(values) == 1 {
+		switch values[0] {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	}
+	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]any{
+		"detail": "dry_run must be true or false, given once",
+		"hint": "dry_run=true validates the write and answers what it would " +
+			"produce without storing or activating anything; leave it out to write",
+	})
+	return false, false
+}
+
 // put serves PUT /config — a full-document replacement.
 //
 // FULL, not a merge: the body is the company from now on. A merge would make
 // deleting a role impossible through this surface, which is the one operation
 // an operator most needs to be sure of.
+//
+// With `dry_run=true` it is the same request, checked in the same order, that
+// stores and activates nothing: see [Service.prepare].
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
+	dryRun, ok := dryRunOf(w, r)
+	if !ok {
+		return
+	}
 	// THE BODY IS READ FIRST, because the summary may be in it. See
 	// [splitSummary]: a caller that cannot set a header can still put a
 	// `_summary` key in the document.
@@ -432,7 +515,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, ok := requireSummary(w, r, body,
+	summary, sent, ok := takeSummary(w, r, body, !dryRun,
 		"PUT /config needs an audit summary: the X-Summary header, "+
 			"or a top-level _summary key in the body. The revision history "+
 			"is the record of who changed what and why")
@@ -440,11 +523,9 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	incoming, err := parseDocument(body)
+	incoming, err := sent.company()
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_body", "detail": err.Error(),
-		})
+		refuseDocument(w, httpjson.CodeInvalidBody, err.Error(), "", &DocumentError{Err: err})
 		return
 	}
 
@@ -453,33 +534,29 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "read the active revision", err)
 		return
 	}
-	if !s.checkPrecondition(w, r, active, found) {
+	createOnly, ok := s.checkPrecondition(w, r, active, found)
+	if !ok {
 		return
 	}
-
+	built := ""
 	if found {
-		prior, err := s.open(active)
-		if err != nil {
-			s.fail(w, "open the active revision", err)
-			return
-		}
-		// The masks the caller was shown come back as the values they
-		// hide. Without this, a reader who fetched the config, changed
-		// one line and sent it back would replace every credential in
-		// the company with the mask.
-		incoming.RestoreRedacted(prior)
+		built = active.ID
 	}
-
-	// VALIDATED AFTER the restore, so a masked credential is judged as the
-	// value it stands for. Validating first would reject a document for
-	// carrying "__redacted__" where the operator changed nothing.
-	if err := incoming.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "validation_error", "detail": err.Error(),
-		})
+	prepared, err := s.prepare(r.Context(), replaceDraft(incoming, built))
+	if err != nil {
+		s.refuseWrite(w, err, createOnly)
 		return
 	}
-	s.store(w, r, incoming, active.ID, summary)
+	if dryRun {
+		writeChecked(w, prepared)
+		return
+	}
+	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	if err != nil {
+		s.refuseWrite(w, err, createOnly)
+		return
+	}
+	writeApplied(w, applied)
 }
 
 // errEmptyPatch is a patch body carrying nothing.
@@ -502,6 +579,10 @@ var errEmptyPatch = errors.New("the patch is empty")
 // nothing to merge onto, and building a company out of one section is not
 // what this route is for — `PUT /config` shows the whole thing.
 func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
+	dryRun, ok := dryRunOf(w, r)
+	if !ok {
+		return
+	}
 	if !s.checkPatchMediaType(w, r) {
 		return
 	}
@@ -510,7 +591,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, ok := requireSummary(w, r, body,
+	summary, sent, ok := takeSummary(w, r, body, !dryRun,
 		"PATCH /config needs an audit summary: the X-Summary "+
 			"header, or a top-level _summary key in the body. A patch is "+
 			"the change least visible in a diff, so the sentence saying "+
@@ -532,22 +613,83 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !s.checkPrecondition(w, r, active, found) {
+	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
 		return
 	}
 
-	applied, err := s.Apply(r.Context(), ApplyRequest{
-		Patch: body, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
-	})
+	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
+		Patch: sent.text, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
+	}, sent.doc))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated,
-		map[string]any{"revision_id": applied.RevisionID, "epoch": applied.Epoch})
+	if dryRun {
+		writeChecked(w, prepared)
+		return
+	}
+	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	if err != nil {
+		s.refuseApply(w, err)
+		return
+	}
+	writeApplied(w, applied)
 }
 
-// refuseApply maps an [Service.Apply] failure onto this surface's answers.
+// writeChecked answers a dry run: the write is valid, what it was checked
+// against, and what it would produce. Nothing was stored.
+//
+// base_revision_id is the revision the check was built on, and empty when
+// nothing was active. A client comparing it with the revision its draft was
+// built on learns about a write that landed between its read and this check
+// without a second request.
+func writeChecked(w http.ResponseWriter, p *prepared) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid": true, "base_revision_id": p.base,
+		"warnings": p.warnings, "derived": p.derived,
+	})
+}
+
+// writeApplied answers a write that stored and activated a revision.
+func writeApplied(w http.ResponseWriter, applied Applied) {
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
+		"warnings": applied.Warnings, "derived": applied.Derived,
+	})
+}
+
+// refuseWrite is [Service.refuseApply] for a write that may have been
+// create-only.
+//
+// A create-only write that finds a revision where it expected none is not a
+// lost edit to re-derive; it is a company that exists, so it is answered as
+// its precondition would have been had the revision been there to see.
+func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool) {
+	var raced *RacedError
+	if createOnly && errors.As(err, &raced) {
+		body := map[string]any{
+			"error": "already_configured",
+			"hint": "If-None-Match asked for this write to land only on a " +
+				"config that is not there; one was activated first",
+		}
+		// NAMED ONLY WHEN KNOWN, as on every other refusal here: the
+		// pointer is re-read after a lost activation, and a read that
+		// failed has no revision to name. An empty id is not "none", and a
+		// client fetching /config/revisions/ to see what won would be
+		// sent to a route that is not there.
+		if raced.Current != "" {
+			body["current_revision_id"] = raced.Current
+		}
+		if raced.Stored != "" {
+			body["stored_revision_id"] = raced.Stored
+		}
+		writeJSON(w, http.StatusPreconditionFailed, body)
+		return
+	}
+	s.refuseApply(w, err)
+}
+
+// refuseApply maps a write's failure onto this surface's answers.
 //
 // ONE MAPPING, so a programmatic caller and an HTTP one cannot disagree about
 // what a stale base, an unreadable patch or an invalid company means.
@@ -571,33 +713,45 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 		})
 	case errors.As(err, &raced):
 		body := map[string]any{
-			"error": "revision_advanced", "your_base": raced.Base,
-			"hint": "another write activated first; this revision was stored " +
-				"but not activated. Re-read /config and send the edit again",
+			"error": "revision_advanced",
+			"hint": "another write activated first; re-read /config and send " +
+				"the edit again",
+		}
+		if raced.Base != "" {
+			body["your_base"] = raced.Base
 		}
 		if raced.Stored != "" {
 			body["stored_revision_id"] = raced.Stored
+			body["hint"] = "another write activated first; this revision was " +
+				"stored but not activated. Re-read /config and send the edit again"
 		}
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
 		}
 		writeJSON(w, http.StatusConflict, body)
 	case errors.As(err, &patchErr):
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_patch", "detail": patchErr.Err.Error(),
-			"hint": "the patched document was refused; an unknown key in a " +
-				"patch is refused here rather than ignored",
-		})
+		refuseDocument(w, codeInvalidPatch, patchErr.Err.Error(),
+			"the patched document was refused; an unknown key in a "+
+				"patch is refused here rather than ignored", err)
 	case errors.As(err, &invalid):
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "validation_error", "detail": invalid.Err.Error(),
-			"hint": "a patch is validated as the WHOLE document it produces, " +
-				"so a section that is fine on its own is still refused when " +
-				"it leaves the company invalid",
-		})
+		refuseDocument(w, codeValidationError, invalid.Err.Error(),
+			"the WHOLE document a write produces is validated, not only "+
+				"the part it changed, so a section that is fine on its own is "+
+				"still refused when the company it leaves is invalid", err)
 	default:
 		s.fail(w, "apply the config", err)
 	}
+}
+
+// refuseDocument answers a refused document with its detail, its hint, and the
+// structured half every surface shares ([RefusalFields]).
+func refuseDocument(w http.ResponseWriter, code httpjson.Code, detail, hint string, err error) {
+	fields := RefusalFields(err)
+	fields["detail"] = detail
+	if hint != "" {
+		fields["hint"] = hint
+	}
+	httpjson.FailWithFields(w, http.StatusBadRequest, code, fields)
 }
 
 // reload serves POST /config/reload.
@@ -615,8 +769,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 		s.refuseApply(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated,
-		map[string]any{"revision_id": applied.RevisionID, "epoch": applied.Epoch})
+	writeApplied(w, applied)
 }
 
 // revert serves POST /config/revisions/{id}/revert.
@@ -633,7 +786,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// OPENED, not copied. A revision sealed under a key no longer in the
 	// keyring cannot be reverted to, and finding that out now beats
 	// activating a document every node will fail to read.
-	company, err := s.open(target)
+	document, company, err := s.openDocument(target)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "unreadable_revision", "detail": err.Error(),
@@ -642,39 +795,53 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	active, found, err := s.configs.Active(r.Context())
-	if err != nil {
-		s.fail(w, "read the active revision", err)
+	prepared, err := s.prepare(r.Context(), draft{
+		// VALIDATED SEPARATELY from the open, so each refusal says what is
+		// true. Opening holds a stored revision to no rule, and a revert is
+		// an apply: an old revision this build can no longer run is refused
+		// naming the field, where the open used to fold it into the keyring
+		// hint above.
+		//
+		// The RUNNABLE rules only, like every apply: an old revision that
+		// breaks an admission rule added since still runs, and reverting to
+		// a working company must not be refused over a rule it predates.
+		// The answer's warnings name each one, and each node warns about
+		// it when it applies the epoch.
+		rules: (*config.Company).ValidateRunnable,
+		// THE TARGET'S BYTES AS THEY WERE STORED. A revert carries the old
+		// document, and this build's struct of it is not that document when
+		// a newer peer wrote it: every field this build cannot represent
+		// would be gone from the revision the fleet reverts to.
+		build: func(base) (*config.Company, []byte, error) {
+			return company, document, nil
+		},
+	})
+	var invalid *ValidationError
+	switch {
+	case errors.As(err, &invalid):
+		refuseDocument(w, codeValidationError, invalid.Err.Error(),
+			"revision "+target.ID+" does not pass this build's "+
+				"validation, so it cannot be re-activated as it stands; send a "+
+				"corrected document with PUT /config instead", err)
+		return
+	case err != nil:
+		s.refuseApply(w, err)
 		return
 	}
-	parent := ""
-	if found {
-		parent = active.ID
-	}
-	// HEADER ONLY, and no [requireSummary]: this route reads no body, so
-	// there is no `_summary` to lift and nothing to refuse for. A revert
-	// also already knows what it did, so an unset header defaults rather
-	// than answering 400 — the one write here that can name itself.
+	// HEADER ONLY, and no [takeSummary]: this route reads no body, so there
+	// is no `_summary` to lift and nothing to refuse for. A revert also
+	// already knows what it did, so an unset header defaults rather than
+	// answering 400, the one write here that can name itself.
 	summary := r.Header.Get("X-Summary")
 	if summary == "" {
 		summary = "revert to " + target.ID
 	}
-	s.store(w, r, company, parent, summary)
-}
-
-// store seals and activates a document, and answers.
-//
-// The HTTP half of [Service.activate]: it owns the status codes and the JSON
-// and nothing about the ordering, which lives in one place beside the
-// programmatic caller.
-func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.Company, parent, summary string) {
-	applied, err := s.activate(r.Context(), company, parent, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated,
-		map[string]any{"revision_id": applied.RevisionID, "epoch": applied.Epoch})
+	writeApplied(w, applied)
 }
 
 // operatorOf is who the guard authenticated on this request, or empty.
@@ -711,14 +878,28 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary, operator strin
 // last-writer-wins race that silently discards the other's change. If-Match
 // turns it into a 409 the loser can see, and the document they need to re-read
 // is named in the answer.
-func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) bool {
+//
+// createOnly reports that the request asked for create-only semantics
+// (`If-None-Match: *`), which a caller needs to answer a revision that appears
+// after this check as the precondition would have. ok is false when the
+// request has been answered.
+func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) (createOnly, ok bool) {
 	// IF-NONE-MATCH FIRST, because `*` on a write is the create-only
-	// precondition (RFC 9110 §13.1.2) — "store this only if the company
-	// has not been configured yet" — and it is the standard spelling of
-	// what this surface documented as `If-Match: none`.
+	// precondition (RFC 9110 §13.1.2): "store this only if the company has
+	// not been configured yet". It is the only spelling of that condition
+	// this surface takes: every If-Match value but `*` is an entity-tag.
 	if none := r.Header.Get("If-None-Match"); none != "" {
+		createOnly = strings.TrimSpace(none) == "*"
 		if !found {
-			return true
+			// THE FLEET'S POINTER TOO, not just this node's store. A node
+			// that has joined a fleet and not reconciled yet, or whose
+			// best-effort copy of the pointer failed, has an empty store
+			// while the fleet runs a company. "Only if nothing is
+			// configured" asked of the local store alone would let the
+			// dashboard's create flow replace that company outright:
+			// renaming it changes every seat id derived from the name, and
+			// orphans all of their memory.
+			return createOnly, !createOnly || s.checkFleetAbsent(w, r)
 		}
 		if matchesTag(none, etagOf(active)) {
 			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
@@ -726,9 +907,9 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 				"hint": "If-None-Match asked for this write to land only on a " +
 					"config that is not there; one is active",
 			})
-			return false
+			return createOnly, false
 		}
-		return true
+		return createOnly, true
 	}
 
 	expected := strings.TrimSpace(r.Header.Get("If-Match"))
@@ -737,51 +918,83 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 		// Unconditional, and permitted: a first import has nothing to
 		// match against, and a script that owns the config outright has
 		// no race to lose.
-		return true
-	case expected == "none":
-		// THE PRE-TAG SPELLING of If-None-Match: *, documented and
-		// shipped before this surface had entity-tags, and never
-		// implemented — it fell into the branch below and answered 412
-		// on exactly the unconfigured node it was meant to permit.
-		// Honoured rather than dropped, because the documentation
-		// promised it and a script written against that promise is not
-		// wrong.
-		if found {
-			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-				"error": "already_configured", "current_revision_id": active.ID,
-				"hint": "If-Match: none asked for this write to land only on an " +
-					"unconfigured node; a revision is active",
-			})
-			return false
-		}
-		return true
+		return false, true
 	case !found:
 		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
 			"error": "no_active_revision",
 			"hint": "there is no revision to match against; retry without " +
 				"If-Match, or send If-None-Match: * to require that",
 		})
-		return false
+		return false, false
 	case !matchesTag(expected, etagOf(active)):
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": "revision_advanced", "current_revision_id": active.ID,
 			"your_base": expected,
 		})
-		return false
+		return false, false
 	default:
+		return false, true
+	}
+}
+
+// checkFleetAbsent reports whether the FLEET has no activation, answering the
+// refusal itself when it has one.
+//
+// A plane that is not there is not an answer: this process cannot activate
+// anything, so the write is refused with 503 further on, where that is what
+// the caller needs to hear. A plane that cannot be READ is three-valued and
+// the third value is refused rather than guessed: "the fleet has nothing" and
+// "I could not ask" send a create-only write to opposite outcomes, and
+// guessing the first is the one that overwrites a running company.
+func (s *Service) checkFleetAbsent(w http.ResponseWriter, r *http.Request) bool {
+	if s.plane == nil {
 		return true
 	}
+	target, found, err := s.plane.Target(r.Context())
+	switch {
+	case err != nil:
+		s.fail(w, "read the fleet's activation", err)
+		return false
+	case !found:
+		return true
+	}
+	writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+		"error": "already_configured", "current_revision_id": target.RevisionID,
+		"hint": "If-None-Match asked for this write to land only on a config " +
+			"that is not there; the fleet is running revision " + target.RevisionID +
+			", which this node has not caught up with yet. Read /config again " +
+			"once it has, and edit that",
+	})
+	return false
 }
 
 // --- plumbing --------------------------------------------------------------
 
-// open decrypts a stored revision into a config.
+// open decrypts a stored revision into a config, holding it to NO rule.
+//
+// Every reader on this surface goes through here: GET /config, a revision
+// read, a diff, and the prior a write restores masks from or splices into. A
+// revision that fails validation must stay readable to all of them, or the
+// document an operator needs to see and replace is the one thing the surface
+// refuses to serve. A caller that ACTIVATES what it opened (reload, revert)
+// validates it itself; see [config.DecodeCompany].
 func (s *Service) open(revision store.Revision) (*config.Company, error) {
+	_, company, err := s.openDocument(revision)
+	return company, err
+}
+
+// openDocument is [Service.open] plus the unsealed bytes it decoded, which is
+// what a write that must keep fields this build cannot represent works from.
+func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company, error) {
 	document, err := secrets.Open(s.cipher, revision.Payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return config.DecodeCompany(document)
+	company, err := config.DecodeCompany(document)
+	if err != nil {
+		return nil, nil, err
+	}
+	return document, company, nil
 }
 
 // lookup fetches a revision by id, answering the refusal itself.

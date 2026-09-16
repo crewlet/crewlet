@@ -1,17 +1,40 @@
+import type { ComponentType } from "react";
+import {
+  type GlyphProps,
+  AccountTreeGlyph,
+  Book2Glyph,
+  BuildGlyph,
+  CableGlyph,
+  CalendarClockGlyph,
+  CalendarTodayGlyph,
+  CheckGlyph,
+  DashboardGlyph,
+  DescriptionGlyph,
+  DnsGlyph,
+  GroupGlyph,
+  KeyGlyph,
+  LinkGlyph,
+  ManufacturingGlyph,
+  NeurologyGlyph,
+  TargetGlyph,
+  TerminalGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 /**
  * The information architecture.
  *
  * The sidebar is grouped by WHAT THE READER IS LOOKING AT, in the order the
  * product's own story runs: the company, the work it is doing, the thinking
  * behind that work, what it costs, and the machine underneath. That ordering
- * is the argument — a founder opening this should meet their company first and
+ * is the argument: a founder opening this should meet their company first and
  * the engine last, because the company is the product and the engine is the
  * thing that runs it.
  *
  * It replaces a flat list of nine nouns grouped by the KIND OF DATA each held
  * (Dashboard, Agents, Activity, Tokens, Tools, Schedules, Fleet, Configuration),
- * where the questions an operator actually arrives with — *is anything waiting
- * on me? what is my company doing right now? what is this costing?* — each
+ * where the questions an operator actually arrives with (*is anything waiting
+ * on me? what is my company doing right now? what is this costing?*) each
  * needed three or four screens and a mental join.
  *
  * Every entry resolves to a screen backed by a real answer. Nothing here is a
@@ -19,12 +42,10 @@
  * answered and why it was empty.
  */
 
-import type { IconName } from "~/ui/Icon.tsx";
-
 export interface NavItem {
   key: string;
   label: string;
-  icon: IconName;
+  icon: ComponentType<GlyphProps>;
   path: string[];
   /** Shown under the label in the command palette. */
   hint: string;
@@ -46,7 +67,7 @@ export const NAV: NavGroup[] = [
       {
         key: "overview",
         label: "Overview",
-        icon: "home",
+        icon: DashboardGlyph,
         path: [],
         hint: "What the company is doing, and what needs a person",
       },
@@ -59,14 +80,14 @@ export const NAV: NavGroup[] = [
       {
         key: "people",
         label: "People",
-        icon: "users",
+        icon: GroupGlyph,
         path: ["people"],
         hint: "Every seat, what it is doing, and why it stopped",
       },
       {
         key: "org",
         label: "Org chart",
-        icon: "sitemap",
+        icon: AccountTreeGlyph,
         path: ["org"],
         hint: "The hierarchy, the directory and the charter",
       },
@@ -79,42 +100,42 @@ export const NAV: NavGroup[] = [
       {
         key: "work",
         label: "Work board",
-        icon: "check",
+        icon: CheckGlyph,
         path: ["work"],
         hint: "Every item on the company's own tracker, and what moved it",
       },
       {
         key: "sprints",
         label: "Sprints",
-        icon: "calendar",
+        icon: CalendarTodayGlyph,
         path: ["sprints"],
         hint: "What each sprint took on, and what shipped inside its own window",
       },
       {
         key: "goals",
         label: "Goals",
-        icon: "target",
+        icon: TargetGlyph,
         path: ["goals"],
         hint: "The tier above projects, and what its targets say right now",
       },
       {
         key: "runs",
         label: "Coding runs",
-        icon: "terminal",
+        icon: TerminalGlyph,
         path: ["runs"],
         hint: "Detached sandbox runs, live and finished",
       },
       {
         key: "conversations",
         label: "Agent-to-agent",
-        icon: "link",
+        icon: LinkGlyph,
         path: ["conversations"],
         hint: "The private channels seats opened with each other",
       },
       {
         key: "schedules",
         label: "Schedules",
-        icon: "calendar",
+        icon: CalendarClockGlyph,
         path: ["schedules"],
         hint: "Recurring work, when it next fires and how it last went",
       },
@@ -127,28 +148,28 @@ export const NAV: NavGroup[] = [
       {
         key: "model",
         label: "Model activity",
-        icon: "brain",
+        icon: NeurologyGlyph,
         path: ["model"],
         hint: "Every phase the models ran, round by round",
       },
       {
         key: "activity",
         label: "Event log",
-        icon: "activity",
+        icon: TimelineGlyph,
         path: ["activity"],
         hint: "Everything the engine published, filterable and paged",
       },
       {
         key: "knowledge",
         label: "Knowledge",
-        icon: "book",
+        icon: Book2Glyph,
         path: ["knowledge"],
         hint: "Search the company knowledge base and what seats have learned",
       },
       {
         key: "pages",
         label: "Pages",
-        icon: "file",
+        icon: DescriptionGlyph,
         path: ["pages"],
         hint: "Browse the company's own knowledge base by container and tree",
       },
@@ -161,7 +182,7 @@ export const NAV: NavGroup[] = [
       {
         key: "spend",
         label: "Spend & budgets",
-        icon: "coin",
+        icon: TokenGlyph,
         path: ["spend"],
         hint: "Token spend by seat, model, phase and turn; budget headroom",
       },
@@ -174,28 +195,28 @@ export const NAV: NavGroup[] = [
       {
         key: "fleet",
         label: "Fleet",
-        icon: "server",
+        icon: DnsGlyph,
         path: ["fleet"],
         hint: "Nodes, seat leases and config rollout",
       },
       {
         key: "integrations",
         label: "Integrations",
-        icon: "plug",
+        icon: CableGlyph,
         path: ["integrations"],
         hint: "The surfaces agents work on, and whether traffic is arriving",
       },
       {
         key: "tools",
         label: "Tools",
-        icon: "wrench",
+        icon: BuildGlyph,
         path: ["tools"],
         hint: "Every tool a seat can call, by origin",
       },
       {
         key: "config",
         label: "Configuration",
-        icon: "sliders",
+        icon: ManufacturingGlyph,
         path: ["config"],
         hint: "The active company revision, its history and its diffs",
         guarded: true,
@@ -203,9 +224,9 @@ export const NAV: NavGroup[] = [
       {
         key: "secrets",
         label: "Secrets",
-        icon: "key",
+        icon: KeyGlyph,
         path: ["secrets"],
-        hint: "The company's credentials — names and provenance, never values",
+        hint: "The company's credentials: names and provenance, never values",
         guarded: true,
       },
     ],

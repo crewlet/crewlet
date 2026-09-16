@@ -12,7 +12,7 @@
  * and never rendered against a real answer is a screen nobody has seen.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { ConfigScreen } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
@@ -70,15 +70,43 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount(hash: string, answer: unknown = diff) {
+/** Every question the screen asked, with its parameters. */
+let asked: { what: string; params: Record<string, unknown> | undefined }[] = [];
+
+/**
+ * What the socket answers, where a case needs something the fixtures are not.
+ *
+ * A PROPERTY THAT IS PRESENT AND NULL IS AN ANSWER, which is why the defaults
+ * turn on absence rather than on nullishness: `config` answers null before a
+ * company's first revision, and that is the case the empty state is for.
+ */
+type Answers = { active?: unknown; diff?: unknown };
+
+function mount(hash: string, answers: Answers = {}) {
   location.hash = hash;
+  const active = "active" in answers ? answers.active : {};
+  const comparison = "diff" in answers ? answers.diff : diff;
   const store = new Store();
   const socket = new LiveSocket(store);
   // The screen's only data path. Stubbed rather than driven through a fake
   // server, because what is under test is the rendering of an answer whose
   // shape is already pinned by the Go side.
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(what === "config_audit" ? revisions : what === "config_diff" ? answer : {});
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what, params) => {
+    asked.push({ what, params });
+    return Promise.resolve(
+      what === "config_audit"
+        ? revisions
+        : what === "config_diff"
+          ? comparison
+          : what === "config"
+            ? active
+            : {},
+    );
+  };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -89,6 +117,7 @@ function mount(hash: string, answer: unknown = diff) {
 }
 
 beforeEach(() => {
+  asked = [];
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
 });
 
@@ -130,12 +159,51 @@ test("a diff line carries the kind the server sends", async () => {
 });
 
 test("a cut diff says how many changes there are", async () => {
-  mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001", cutDiff);
+  mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001", { diff: cutDiff });
 
-  // The count is the COMPARISON's, not the listing's — a screen that showed
+  // The count is the COMPARISON's, not the listing's: a screen that showed
   // three would be reporting the response budget as the answer.
   expect(await screen.findByText(/3 of 512 shown/)).toBeDefined();
   // And where the whole thing is: the CLI writes to a terminal, which has no
   // response budget, so it prints every change.
   expect(screen.getByText("crewlet config diff")).toBeDefined();
+});
+
+// NULL IS "NOTHING IS ACTIVE", which is what `queries.configDocument` answers
+// before a company's first revision. The empty state used to name only the
+// command line; the one screen that can create a company is the org chart's
+// builder, and this is the first place an operator looks for one.
+test("with nothing active, the empty state leads to creating the company", async () => {
+  mount("#/config", { active: null });
+  expect(await screen.findByText("No company configuration is active")).toBeDefined();
+  const links = screen.getAllByRole("link", { name: "Create the company" });
+  expect(links[0]?.getAttribute("href")).toBe("#/org?lens=builder");
+  expect(screen.getByText(/crewlet config import or PUT \/config/)).toBeDefined();
+});
+
+/** The side each diff the screen asked for was compared against. */
+const againstAsked = () =>
+  asked.filter((q) => q.what === "config_diff").map((q) => q.params?.against);
+
+// WHAT ONE SAVE CHANGED is its revision against its parent. Against the
+// active revision, a save that is active now is byte-identical to itself, and
+// the builder's "View changes" opened an empty diff.
+test("a link naming the side to compare against reads the diff against it", async () => {
+  mount(
+    "#/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+  );
+  expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
+  expect(againstAsked()).toEqual(["01JCFGBBBB0000000000000002"]);
+  expect(screen.getByText("against revision 01JCFGBBBB")).toBeDefined();
+});
+
+test("a revision picked from the history is compared with the active one again", async () => {
+  mount(
+    "#/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+  );
+  fireEvent.click(await screen.findByText("first import"));
+  await waitFor(() => expect(location.hash).not.toContain("against="));
+  expect(location.hash).toContain("revision=01JCFGBBBB0000000000000002");
+  await waitFor(() => expect(againstAsked().at(-1)).toBe("active"));
+  expect(screen.getByText("against the active revision")).toBeDefined();
 });

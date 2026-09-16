@@ -8,15 +8,32 @@
  * hand-built arrays, so nothing caught it.
  */
 
-import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useMemo, type CSSProperties } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { EventRow, QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import {
+  ChevronRightGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  ScheduleGlyph,
+  TimelineGlyph,
+} from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  Card,
+  EmptyValue,
+  InlineCode,
+  PageHeader,
+  Skeleton,
+  Stack,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -78,23 +95,28 @@ export function TraceScreen({ traceId }: { traceId: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Trace"
-        sub={<code className="inline">{traceId}</code>}
+        description={<InlineCode>{traceId}</InlineCode>}
         badges={
           <>
-            <Badge outline>{events.length} events</Badge>
-            {truncated && <Badge tone="caution">oldest {events.length} shown</Badge>}
+            <Tag appearance="outline">{events.length} events</Tag>
+            {truncated && <Tag variant="warning">oldest {events.length} shown</Tag>}
           </>
         }
         actions={
-          <Button size="sm" icon="activity" onClick={() => nav.to(["activity"], { q: traceId })}>
+          <Button
+            variant="secondary"
+            size="small"
+            leadingIcon={<TimelineGlyph />}
+            onClick={() => nav.to(["activity"], { q: traceId })}
+          >
             In the log
           </Button>
         }
       />
 
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton label="Loading the trace" variant="text" rows={6} />}
       <QueryState
         error={error}
         loading={loading}
@@ -107,79 +129,68 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               }
         }
       >
-        <Panel padding="none">
-          <StatRow cols={3}>
-            <Stat
-              icon="layers"
-              label="Spans"
-              value={events.length}
-              sub="events sharing this trace"
-            />
-            <Stat
-              icon="clock"
-              label="Elapsed"
-              value={to > from ? fmtDuration(to - from) : "—"}
-              sub={
-                from
-                  ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
-                  : ""
-              }
-            />
-            <Stat
-              icon="alert"
-              label="Failures"
-              value={failed}
-              sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
-            />
-          </StatRow>
-        </Panel>
+        <StatGroup columns={3}>
+          <StatCard
+            icon={<LayersGlyph />}
+            label="Spans"
+            value={events.length}
+            sub="events sharing this trace"
+          />
+          <StatCard
+            icon={<ScheduleGlyph />}
+            label="Elapsed"
+            value={to > from ? fmtDuration(to - from) : <EmptyValue label="Not measured" />}
+            sub={
+              from
+                ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
+                : ""
+            }
+          />
+          <StatCard
+            icon={<ErrorGlyph />}
+            label="Failures"
+            value={failed}
+            sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
+          />
+        </StatGroup>
 
-        <Panel title="Spans" icon="gitBranch" padding="none">
-          <div className="list">
+        <Card as="section" padding="none">
+          <Card.Header divided icon={<ForkRightGlyph size="sm" />}>
+            <Card.Title>Spans</Card.Title>
+          </Card.Header>
+          <Stack gap={0}>
             {rows.map(({ event, depth }) => {
               // The bar's offset and width place the span inside the trace's
               // own window, so a long gap between two spans reads as a gap.
               const start = tsKey(event.timestamp);
               const left = to > from ? ((start - from) / (to - from)) * 100 : 0;
               return (
-                <a key={event.id} className="feed-row" href={href(["events", event.id])}>
-                  <time className="feed-time" dateTime={event.timestamp}>
-                    {fmtTime(event.timestamp)}
-                  </time>
-                  <span className="feed-actor truncate" style={{ paddingLeft: depth * 12 }}>
-                    {depth > 0 && <span className="faint">└ </span>}
-                    {event.actor || "engine"}
-                  </span>
-                  <span className="feed-what truncate">
-                    {event.summary || event.type}
+                <EventRow
+                  key={event.id}
+                  // A span row's `failed` is optional on the record and
+                  // required on a feed row: an event nobody marked did not
+                  // fail, which is the only reading that is not a guess.
+                  event={{ ...event, failed: event.failed === true }}
+                  depth={depth}
+                  mark={
                     <span
                       aria-hidden="true"
-                      style={{
-                        display: "block",
-                        height: 2,
-                        marginTop: 4,
-                        marginLeft: `${left}%`,
-                        width: "6px",
-                        minWidth: 6,
-                        background: "var(--accent)",
-                        borderRadius: 2,
-                        opacity: 0.7,
-                      }}
+                      className="feed-span"
+                      style={{ "--feed-span-at": `${left}%` } as CSSProperties}
                     />
-                  </span>
-                  <span className="feed-tail">
-                    <span className="faint">{humanize(event.category)}</span>
-                    <Icon name="chevronRight" size="xs" />
-                  </span>
-                </a>
+                  }
+                />
               );
             })}
-          </div>
-          <footer className="panel-foot">
-            Spans whose parent is not in this trace are shown as roots rather than dropped — a trace
+          </Stack>
+          <Card.Footer
+            variant="meta"
+            style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
+          >
+            Spans whose parent is not in this trace are shown as roots rather than dropped. A trace
             can legitimately begin mid-flight.
-          </footer>
-        </Panel>
+          </Card.Footer>
+        </Card>
 
         {events[0] && (
           <div className="row">

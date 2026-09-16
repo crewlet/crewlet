@@ -7,19 +7,19 @@
  * and therefore has a write OUTCOME, which is three-valued (D134) and which
  * this dialog renders as three visibly different things:
  *
- *   - `applied` — durable at the returned position AND in this node's own
+ *   - `applied`: durable at the returned position AND in this node's own
  *     rows. The confirmation.
- *   - `pending` — durable at the position, NOT applied here yet, so what it
+ *   - `pending`: durable at the position, NOT applied here yet, so what it
  *     produced is unresolved on the node that answered. It is not a failure
  *     and it must not be retried: the record is already on the log. It renders
- *     as an in-flight chip carrying the position, and the panel's next poll is
+ *     as an in-flight state carrying the position, and the panel's next poll is
  *     what clears it.
- *   - `unknown` — no acknowledgement at all, which is the ONE outcome where
+ *   - `unknown`: no acknowledgement at all, which is the ONE outcome where
  *     retrying is correct, so it is the one that renders as a failure and
  *     carries the op id to retry with.
  *
  * **A dialog that rendered `pending` as success would be the browser half of
- * the lie the durable-versus-applied split exists to prevent** — and worse
+ * the lie the durable-versus-applied split exists to prevent**, and worse
  * here than at the tool seam, because a person believes a screen.
  *
  * # Why the eviction is not immediate, and why the dialog says so
@@ -27,16 +27,21 @@
  * The node stays COUNTED for one fence window after the gesture, so a live
  * node is certain to have noticed before the trim stops waiting for it. An
  * operator who does not know that reads the unchanged watermark as a failure
- * and runs the gesture again — which is why the confirmation names the window
+ * and runs the gesture again, which is why the confirmation names the window
  * before the button is pressed rather than after.
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
+import { Button, Callout, FormField, InlineCode, Input, Modal, Stack, Text } from "@crewlethq/ui";
+import {
+  CheckCircleGlyph,
+  DnsGlyph,
+  ErrorGlyph,
+  ScheduleGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export function GateDialog({
   node,
@@ -60,12 +65,17 @@ export function GateDialog({
   const confirmed = typed.trim() === node;
 
   async function submit() {
-    if (busy || !confirmed) return;
+    // A RESULT IS A RECORD ALREADY ON THE LOG, so this refuses to send a
+    // second one. `pending` above all: the outcome below tells the operator
+    // that retrying appends a duplicate for a gesture that already landed, and
+    // the dialog must not be the thing that does it. The frame is a form, so
+    // Enter reaches here from the field as well as the button.
+    if (busy || !confirmed || result) return;
     setBusy(true);
     setError(null);
     try {
       // THE TYPED CONFIRMATION TRAVELS. The server refuses unless
-      // `?confirm=` repeats the node id — checking it only in the
+      // `?confirm=` repeats the node id. Checking it only in the
       // browser made the gesture unreachable from this dashboard for
       // every node, since the request it sent was always a 400.
       const id = encodeURIComponent(node);
@@ -81,28 +91,51 @@ export function GateDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`${verb} ${node}`}
-      icon="server"
+      icon={<DnsGlyph />}
       onClose={onClose}
+      // Escape, the veil and the close control all stop closing while the
+      // request is in flight, so a stray press cannot abandon a write whose
+      // outcome the operator has not seen.
       dismissable={!busy}
-      width={560}
+      size="md"
+      /*
+       * AN ALERT WHEN IT IS THE DESTRUCTIVE ONE. An eviction interrupts to ask
+       * something consequential, so a reader's software is asked to announce
+       * the whole surface rather than its name alone: the name says which node
+       * and the body says what the fleet stops waiting for. A readmission adds
+       * a node back and is an ordinary dialog.
+       */
+      role={evict ? "alertdialog" : "dialog"}
+      onSubmit={() => void submit()}
       footer={
         result ? (
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Close
           </Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose} disabled={busy}>
+            <Button variant="tertiary" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
             <Button
+              type="submit"
               variant={evict ? "danger" : "primary"}
-              onClick={() => void submit()}
-              disabled={busy || !confirmed}
+              // THE NAME HOLDS STILL while the request runs. Swapping the
+              // label for "Evicting" tells a screen reader the button has been
+              // renamed rather than that it is busy; `loading` says the second
+              // thing, with `aria-busy`, and refuses the press either way.
+              loading={busy}
+              // UNAVAILABLE, AND WHY, rather than natively disabled: a
+              // disabled control takes no focus, so the one sentence saying
+              // what would make it pressable is unreachable by exactly the
+              // reader who cannot see the field above it.
+              disabledReason={confirmed ? undefined : `Type ${node} in the field above to confirm.`}
             >
-              {busy ? `${verb}ing` : verb}
+              {verb}
             </Button>
           </>
         )
@@ -110,58 +143,76 @@ export function GateDialog({
     >
       {!result && (
         <>
-          <p className="t-body secondary" style={{ margin: 0 }}>
+          <Text tone="secondary">
             {evict ? (
               <>
-                The trim stops waiting for <code className="inline">{node}</code>, so the log may
-                advance past records that node never applied. It stays COUNTED for one fence window
-                first — about a minute — so a node that is still running is certain to have noticed
-                before its position stops holding the floor.
+                The trim stops waiting for <InlineCode>{node}</InlineCode>, so the log may advance
+                past records that node never applied. It stays COUNTED for one fence window first,
+                about a minute, so a node that is still running is certain to have noticed before
+                its position stops holding the floor.
               </>
             ) : (
               <>
-                <code className="inline">{node}</code> is counted again and the trim waits for it
-                once more. This is refused when the node&apos;s own position is already below the
+                <InlineCode>{node}</InlineCode> is counted again and the trim waits for it once
+                more. This is refused when the node&apos;s own position is already below the
                 published floor: there would be nothing left on the log for it to replay.
               </>
             )}
-          </p>
+          </Text>
 
+          {/* NOT A LIVE REGION. This is part of what the dialog opens saying
+              rather than news, and an alert that was already on screen when
+              the reader arrived is one they are told about as if it had just
+              happened. The alertdialog role above announces it with the rest
+              of the surface, which is the right moment for it. */}
           {evict && (
-            <div className="banner caution" role="alert">
-              <Icon name="alert" size="sm" />
+            <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
               <span>
                 Records this node never applied become deletable. Its disk still holds every row it
-                did apply — an eviction is about what the FLEET waits for, not about that
+                did apply: an eviction is about what the FLEET waits for, not about that
                 machine&apos;s data.
               </span>
-            </div>
+            </Callout>
           )}
 
-          <label className="col" style={{ gap: 6 }}>
-            <span className="t-caption">
-              Type <code className="inline">{node}</code> to confirm
-            </span>
-            <input
-              className="input"
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              autoFocus
-              spellCheck={false}
-            />
-          </label>
+          {/* The field mints its own id, which matters here: the dialog opens
+              over the Fleet screen, and a label pointing at a literal id would
+              name the first element in the document carrying it. */}
+          <FormField
+            label={
+              <>
+                Type <InlineCode>{node}</InlineCode> to confirm
+              </>
+            }
+          >
+            {(field) => (
+              /* The first control in the body, so the surface opens on the
+                 control carrying the question it asks. */
+              <Input
+                id={field.id}
+                // A NODE ID IS READ EXACTLY, not as prose: the mono face is
+                // what lets an operator compare what they typed against the
+                // name in the label above it.
+                appearance="reference"
+                value={typed}
+                onChange={(event) => setTyped(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby={field.describedBy}
+              />
+            )}
+          </FormField>
 
           {error && (
-            <div className="banner critical" role="alert">
-              <Icon name="alert" size="sm" />
+            <Callout variant="danger" role="alert" icon={<ErrorGlyph size="sm" />}>
               <span>{error}</span>
-            </div>
+            </Callout>
           )}
         </>
       )}
 
       {result && <GateOutcome result={result} evict={evict} />}
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -174,51 +225,55 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
   switch (result.outcome) {
     case "applied":
       return (
-        <div className="banner positive" role="status">
-          <Icon name="check" size="sm" />
+        <Callout variant="success" role="status" icon={<CheckCircleGlyph size="sm" />}>
           <span>
-            <code className="inline">{result.node}</code> is {evict ? "evicted" : "readmitted"},
-            durable{at != null && <> at sequence {at}</>} and in this node&apos;s own rows.
+            <InlineCode tone="inherit">{result.node}</InlineCode> is{" "}
+            {evict ? "evicted" : "readmitted"}, durable
+            {at != null && <> at sequence {at}</>} and in this node&apos;s own rows.
           </span>
-        </div>
+        </Callout>
       );
     case "pending":
       return (
-        <div className="banner caution" role="status">
-          <Icon name="clock" size="sm" />
-          <span className="col" style={{ gap: 6 }}>
+        <Callout variant="warning" role="status" icon={<ScheduleGlyph size="sm" />}>
+          {/* A STEP ON THE SCALE, not a number of pixels: the spacing tokens
+              carry the reader's density setting, which a literal gap does not.
+              It is the shape the Retention screen's own callouts take. */}
+          <Stack gap={2}>
             <span>
               <strong>Durable, not yet applied here.</strong> The record is on the log
-              {at != null && <> at sequence {at}</>} and nothing about it needs retrying — this node
-              has simply not caught up to it. The panel behind this dialog clears the chip when it
-              has.
+              {at != null && <> at sequence {at}</>} and nothing about it needs retrying: this node
+              has simply not caught up to it. The panel behind this dialog clears it when it has.
             </span>
-            <span className="t-caption faint">
+            {/* THE ASIDE, in the caption register and its quieter ink: it is
+                the instruction that follows from the message rather than the
+                message, and it is how the two dialogs beside this one spell a
+                second line inside a callout. */}
+            <span className="t-caption">
               Retrying would append a second record for a gesture that already landed.
             </span>
-          </span>
-        </div>
+          </Stack>
+        </Callout>
       );
     default:
       // THE ONE OUTCOME WHERE RETRYING IS CORRECT, so it is the one that
-      // renders as a failure — and it carries the op id, because retrying
+      // renders as a failure, and it carries the op id, because retrying
       // with the same one is what makes the retry idempotent.
       return (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
-          <span className="col" style={{ gap: 6 }}>
+        <Callout variant="danger" role="alert" icon={<ErrorGlyph size="sm" />}>
+          <Stack gap={2}>
             <span>
-              <strong>No acknowledgement.</strong> Nothing can be established about this gesture —
-              it may have landed and it may not. This is the case to retry.
+              <strong>No acknowledgement.</strong> Nothing can be established about this gesture: it
+              may have landed and it may not. This is the case to retry.
             </span>
             {result.op_id && (
-              <span className="t-caption faint">
+              <span className="t-caption">
                 Retry with the same operation id so a landed record is not duplicated:{" "}
-                <code className="inline">{result.op_id}</code>
+                <InlineCode tone="inherit">{result.op_id}</InlineCode>
               </span>
             )}
-          </span>
-        </div>
+          </Stack>
+        </Callout>
       );
   }
 }

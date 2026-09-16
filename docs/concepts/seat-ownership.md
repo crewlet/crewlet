@@ -18,7 +18,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 
 ## The lease
 
-Ownership is a row in the `leases` table (`internal/coord`) with a TTL and a monotonic `epoch`:
+Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract.
 
 ```
 seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
@@ -27,7 +27,7 @@ seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=nod
 Three properties carry everything above it:
 
 - **The owner is a process incarnation, not a machine.** `{node_id}:{random}`, minted fresh at boot. A live lease is renewable by its own owner string, so two processes sharing an identity would both hold the seat at the same epoch — and the default node id is the shared constant `node-0`. The *stable* node id goes in `preferred`, where restart-stability is what you actually want.
-- **The epoch is a fencing token, monotonic for the resource's lifetime.** Releasing expires the row in place rather than deleting it: a deleted row would restart the counter at 1 and hand the next owner a token its predecessor is still using.
+- **The epoch is a fencing token, monotonic for the resource's lifetime.** It is kept apart from the lease record, in a bucket with no age limit, because a KV deletes a key when it expires: a counter stored on the lease would restart at 1 and hand the next owner a token its predecessor is still using.
 - **A lapsed lease cannot be renewed, only re-acquired** — and re-acquiring bumps the epoch even for the same owner, because during the gap that owner's in-flight work was unprotected and must be fenced against its own past self.
 
 ## Placement
@@ -35,8 +35,8 @@ Three properties carry everything above it:
 Placement is deliberately dumb, and lives in `internal/seat`:
 
 - Every node holds a `node:{id}` presence lease, renewed on the same heartbeat as its seats. Counting the live ones is how a node learns the fleet size. It cannot be inferred from seat ownership: a fleet where nobody has claimed anything yet would read as zero nodes, and every node would then take every seat.
-- A node claims up to `ceil(seats / live nodes)` — its **fair share** — trying `preferred`-hinted seats first for stickiness, and never more than `SEAT_CLAIM_LIMIT_PER_SWEEP` per pass, because each takeover costs an MCP spawn.
-- A node holding **more** than its share hands the excess back, at most `SEAT_RELEASE_LIMIT_PER_SWEEP` per pass. Claiming alone converges only for a fleet that shrinks: a node that booted alone holds every seat, and a peer joining later computes a share it can never reach. Without the give-back, scaling out does nothing until something dies.
+- A node claims up to `ceil(seats / live nodes)`, its **fair share**, trying `preferred`-hinted seats first for stickiness, and never more than `seat.ClaimLimitPerSweep` (4) per pass, because each takeover costs an MCP spawn.
+- A node holding **more** than its share hands the excess back, at most `seat.ReleaseLimitPerSweep` (2) per pass. Claiming alone converges only for a fleet that shrinks: a node that booted alone holds every seat, and a peer joining later computes a share it can never reach. Without the give-back, scaling out does nothing until something dies.
 
 The share is a ceiling, so shares sum to at least the seat count and a node at its share has no room to re-claim what it just released. Rebalancing converges rather than oscillating.
 
@@ -49,7 +49,7 @@ sequenceDiagram
     A->>L: acquire seat:ceo, seat:eng, seat:ops
     Note over A: alone — share is 3
     B->>L: acquire node:node-b
-    A->>L: list_live("node:") → 2
+    A->>L: ListLive("node:") → 2
     Note over A: share is now 2
     A->>A: release seat:ceo (voluntary)
     A->>L: expire seat:ceo in place
@@ -59,18 +59,18 @@ sequenceDiagram
 
 ## Establishing a seat, and giving it back
 
-The acquire hook establishes the seat in a known state and attaches the consumer **last**: agent instance, budget cap, per-role MCP children, interrupted sandbox-run recovery, *then* the inbox and control subscriptions. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
+The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prepareSeat`) establishes the seat in a known state and attaches the inbox consumer **last**: the per-role MCP children, the seat's memory hydrated from the changelog, the sandbox control subscription and the interrupted sandbox-run recovery, *then* the inbox. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 Releasing has **two modes**, because losing a lease and choosing to let go are opposites:
 
 | Mode | When | What happens |
 |---|---|---|
 | **Voluntary** | drain, capacity rebalance, role decommissioned | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
-| **Fenced** | renew returned `False`, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
+| **Fenced** | renew returned false, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
 
 Fenced release never republishes. A peer may already be running the seat, and a republished event is a **new message**: a second copy of work the successor is already doing, carrying none of the identity the completion ledger's idempotency and the batch layer's aging both key on — so nothing downstream can collapse the two. Handing the delivery back unacked keeps that identity, and the successor gets exactly what this node never finished.
 
-**A teardown that cannot be proven does not release the lease.** A lease held too long costs latency; one released too early costs correctness. So a seat whose `on_release` hook raises goes *undead*: out of the held set, so this node starts nothing new on it, and still renewed, so no peer can take a seat this process may still be consuming.
+**A teardown that cannot be proven does not release the lease.** A lease held too long costs latency; one released too early costs correctness. So a seat whose release hook fails (`on_release` returns an error or panics) goes *undead*: out of the held set, so this node starts nothing new on it, and still renewed, so no peer can take a seat this process may still be consuming.
 
 Undead is a state, not a grave. The teardown is retried on **every heartbeat**, and the lease is released the instant one succeeds — the usual causes are transient (a consumer mid-delivery, an MCP child that has not finished dying), and the retry is what returns the seat to the fleet. A retry that keeps failing keeps the seat, and re-raises its alarm every twenty heartbeats with the elapsed time, because the failure itself is not news but *still failing* is.
 
@@ -78,7 +78,7 @@ Only a restart of that process can free a seat whose teardown never succeeds —
 
 ## Deferring a delivery
 
-A handler has two ordinary outcomes: return (ack) or raise (negative-ack, which asks for the message back and goes on consuming). Seat handoff needs a third, so the queue protocol has one:
+A handler has two ordinary outcomes: `queue.Ack` or `queue.Nak` (which asks for the message back and goes on consuming). Seat handoff needs a third, so the queue protocol has one:
 
 ```go
 return queue.Defer(fmt.Sprintf("seat %q is not owned here", handle))
@@ -92,7 +92,7 @@ Three paths use it, and they are the three ways this node can be the wrong one t
 
 "Do I hold this seat?" is a question about a local snapshot refreshed on a 15-second heartbeat against a 45-second TTL, so the honest answer can be a full TTL stale — precisely the window an ownership check exists to close. A membership check cannot meet its own exit criterion.
 
-What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `seat.Host.MayStart` returns the epoch only when the last successful renew is inside one heartbeat interval, and `None` otherwise. Every turn that starts is then certified owned for at least `ttl - heartbeat`.
+What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `seat.Host.MayStart` returns the epoch only when the last successful renew is inside one heartbeat interval, and reports false otherwise (`seat_admission_stale`). Every turn that starts is then certified owned for at least `ttl - heartbeat`.
 
 That also gives the right answer during a database blip. The lease row is untouched by an unreachable store, so the seat is **kept** — shedding on a two-second outage would tear a healthy company down — but new turns stop at the first failed renew. The consumer is quiesced, and un-quiesced when a renew succeeds again. Both edges matter: without the second one the node comes back healthy, still owning the seat, still attached to it, and never reads from it again.
 
@@ -106,7 +106,7 @@ It is **not** on every seat-scoped write, and the honest inventory is narrower t
 |---|---|
 | `episodes` | **Collapsed** against the reader that matters. One row per unit of work in the node's own store, which is the only one its recall reads — see [Keying a write on the work](#keying-a-write-on-the-work) below |
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
-| `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
+| `agent_onboarding_markers` | Upsert *plus* `learning.Onboarding.Claim`, a cross-process single-flight claim: already exclusive |
 | `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
 
 The last one is deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's.
@@ -156,10 +156,10 @@ value for a subject is by construction the value its current owner wrote.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
-That is skipped rather than raised, and the distinction matters more than one
-row: hydration runs inside seat acquisition, so a raise refuses the seat, and
-a single duplicated episode would make a seat unplaceable across the whole
-fleet.
+That is skipped rather than returned as an error, and the distinction matters
+more than one row: hydration runs inside seat acquisition, so an error refuses
+the seat, and a single duplicated episode would make a seat unplaceable across
+the whole fleet.
 
 **Deletes are deliberately not replicated.** The learning lifecycle drops rows
 constantly, and carrying a tombstone for each would double the protocol to
@@ -190,12 +190,12 @@ It is deliberately **not** a claim, and the absences are the design:
 
 Two notes on coverage:
 
-- **Only trigger types that run a turn are consulted.** Everything else that reaches a seat's inbox — an observability event, a wake already answered — is logged and dropped, so recording it would be bookkeeping about nothing.
+- **Only trigger types that run a turn are consulted** (`inbox.Ledgered`: `task_assigned`, `external_notification`, and the two A2A wakes `a2a_request` and `a2a_message`). Everything else that reaches a seat's inbox, an observability event or a wake already answered, is logged and dropped, so recording it would be bookkeeping about nothing. The set is closed: a type outside it contributes nothing to the work key and is never recorded, so its redeliveries re-run, which is why a new trigger type is added there rather than merely published.
 - **A suspended sandbox turn IS recorded, at the suspend.** Past that point the pending run's own at-most-once flip is the authority for the rest of the work, and the trigger itself is finished with.
 
-[A2A](event-system.md#ephemeral-a2a-channels-crewleta2a) was exempt while its content rode a process-local queue that `_handle_a2a` drained destructively — a re-run found an empty channel whatever the ledger said, so neither branch of the choice could be honoured. The content rides the durable wake event now, and the exemption is gone. The hop that carries the **answer back** is the one that needs it: the responder is guarded twice over (it replies and closes, and a closed channel refuses a second answer), but the reply reaching the asker lands on a channel that is already closed by design, so the ledger is the only thing between a redelivery and a second turn spent acting on the same answer.
+[A2A](event-system.md#ephemeral-a2a-channels-internala2a) was exempt while its content rode a process-local queue that the old A2A inbox handler drained destructively: a re-run found an empty channel whatever the ledger said, so neither branch of the choice could be honoured. The content rides the durable wake event now, and the exemption is gone. The hop that carries the **answer back** is the one that needs it: the responder is guarded twice over (it replies and closes, and a closed channel refuses a second answer), but the reply reaching the asker lands on a channel that is already closed by design, so the ledger is the only thing between a redelivery and a second turn spent acting on the same answer.
 
-A short-circuited trigger publishes `TurnTriggerSkipped`. Without it, "the agent never answered" and "the agent already answered, on a node that has since died" are the same observation.
+A short-circuited trigger publishes `turn_trigger_skipped`. Without it, "the agent never answered" and "the agent already answered, on a node that has since died" are the same observation.
 
 ### A turn that broke halfway
 
@@ -259,13 +259,48 @@ It does, because the **durable subscription** is what retains messages, and the 
 
 - Every seat's subscription is created at boot, by **every node**, at the **earliest** message — and for every seat in the company rather than this node's share, because a mailbox is a fact about the company and the node that ends up serving a seat may not be this one. Creating one is a plain client call that attaches nothing (1.7 ms, idempotent), so it can neither take a share of a peer's live traffic the way creating one by *subscribing* would, nor cost anything when a peer got there first. A config apply that adds a role runs the same walk again.
 - Detach is non-destructive: the subscription and its cursor survive, so unacked messages return to whoever attaches next.
-- Deleting one is explicit (`delete_subscription`) and reserved for a decommissioned role, whose inbox must not accumulate undeliverable events forever.
+- Deleting one is explicit (`delete_subscription`) and reserved for a seat that has left the company, whose mailbox must not accumulate undeliverable events for ever. The maintenance duty does it, after a grace period: see [The removed seat](#the-removed-seat).
 
 > **Creation is a boot step because the alternative is a silent drop, not a slow one.**
 >
 > The agent and notification streams retain by **interest**: a message is kept while a durable consumer that has not acked it exists, and a message published to a subject no subscription covers is discarded at the publish. That is the queue contract's stated behaviour rather than a broker surprise, and it is the same rule that makes an unowned seat's mail safe — the subscription, not a consumer, is what holds it.
 >
-> So the window that loses mail is the one *before* a seat's subscription exists, which is why every node creates every seat's mailbox at boot and why the cost of doing so had to be a millisecond. Once it exists nothing reaps it: a durable consumer carries no inactivity threshold, so a seat can stay unowned for as long as a rebalance, a failed teardown or an operator takes.
+> So the window that loses mail is the one *before* a seat's subscription exists, which is why every node creates every seat's mailbox at boot and why the cost of doing so had to be a millisecond. While the seat is in the company nothing reaps it: a durable consumer carries no inactivity threshold, so a seat can stay unowned for as long as a rebalance, a failed teardown or an operator takes.
+
+## The removed seat
+
+A seat that leaves the company, because its role was deleted, renamed to a new handle or changed to a human seat, leaves its mailbox behind. Nothing consumes it again, and an interest-retained subscription keeps every event still addressed to the handle. Left alone, that mail is retained for the life of the deployment, and a seat later added under the same handle attaches to the old backlog and works it under a role definition that never wrote it.
+
+So the mailbox is **retired**: once the seat has been absent from the active revision for **24 hours**, the maintenance duty deletes its inbox and its sandbox control subscription, and the mail they hold with them.
+
+| What a removed seat had | What happens to it |
+|---|---|
+| Its mailbox (the inbox and the sandbox control subscription) | Kept, with its mail, for 24 hours after a sweep first sees the seat missing, then deleted |
+| Its [coding runs](code-sandbox.md) (running, parked on a question, re-seeding, or mid-resume) | Kept for the same 24 hours, then ended as part of the retirement and before the mailbox is deleted: each box is reclaimed, each loss is announced as a `sandbox_run_failed` event with reason `seat_removed`, and each run's record is deleted |
+| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept. Memory is keyed by the handle or by the agent id derived from the company name and the handle, so a seat added again under the same handle reattaches to it |
+| Its seat lease | Released by the node that held it, on that node's next placement sweep after it applies the revision (`seat_released_role_gone`) |
+
+**Why a grace period rather than deleting on the apply.** A delete is the one change here that cannot be undone, and seats are removed by mistake: an edit that is reverted, a builder operation that is undone, an import of an older file. Twenty-four hours is long enough for a seat restored within a working day to come back to the mail it was sent while it was gone, and short enough that mail for a seat nobody runs is not kept for more than a day. The clock starts when a sweep first observes the absence, so a retirement is never early: at worst it is one maintenance tick (15 minutes) late, and later still while no node that runs worker duties has applied the current revision.
+
+**How the fleet knows a mailbox exists.** A mailbox's name is derived from its handle, so nothing needs to remember it while the seat is in the company. A removed handle is gone from the org, though, so every node records each seat in the coordination store's `mailboxes` bucket **before** it creates the subscription. That record carries what the retirement runs on: when the seat was first seen missing, whether a retirement is in flight, and the version every write is conditional on. A registration that fails is logged as `seat_mailbox_unregistered` and the mailbox is created anyway, because a seat in the company losing mail is worse than a mailbox the next sweep registers.
+
+**The broker is the backstop.** A mailbox can exist with no record: a node's registration failed, or the seat was removed before the registry existed. So every sweep also asks the broker which seat mailboxes it holds (the queue contract's subscription listing), and registers each one belonging to a seat that is neither in the active revision nor in the registry, logged as `seat_mailbox_discovered`. Its absence is stamped on the tick that finds it, so it is retired 24 hours later like any other removed seat's. Only a subscription the mailbox grammar produces counts (the seat's inbox under its inbox group, or its control subject under its control group); a consumer on a seat's inbox under any other group is somebody else's and is left alone. A listing that fails only postpones the discovery; the registry's own records are judged regardless.
+
+**The sweep, one tick at a time.** For each record:
+
+- The seat is in the active revision: an absence recorded earlier is cleared (`seat_mailbox_returned`), and a seat that returns and is removed again starts a new 24 hours.
+- The seat is missing and no absence is recorded: the sweep stamps one (`seat_mailbox_absent`, naming when the mailbox will be retired).
+- The absence is older than the grace period: the mailbox is retired (`seat_mailbox_retired`).
+
+A seat in the active revision with no record at all, a mailbox created by a node whose registration failed, is registered by the sweep so it can be retired if the seat is ever removed. A seat outside the active revision with no record, whose mailbox only the broker's listing still finds, is registered and stamped absent in the same tick.
+
+**Unknown is never absent.** The roster is the agent seats of the revision the fleet's activation pointer names, read on a node that has **applied that revision**. A pointer that cannot be read, a node still converging on the current epoch, a registry or a seat lease that cannot be read: each makes the tick stamp nothing and retire nothing, and the error is logged as the reason. A node that is behind must not be able to judge a seat absent that the fleet has just added back.
+
+**A seat still held is kept, and a seat being retired cannot be claimed.** The seat host releases a seat whose role is gone, so a live lease on a removed seat is a node still serving an older revision, still attached to the mailbox. The retirement waits until that lease is released, and says so as `seat_mailbox_retirement_held`; the same line covers a claim refused during a rolling upgrade, while a node of an older build still holds a lease in the fleet. To retire, the maintenance duty **claims the seat's lease itself**, under an owner of its own, and holds it until the subscriptions and the record are gone. A node that installs a revision adding the seat back claims seats from that revision without consulting the mailbox record, and attaching the seat's consumer creates the very subscriptions the retirement is deleting; the lease is the one thing that node's claim loses to. While it is held the fleet view shows the seat's lease owned by the node running the duty, normally for the few milliseconds a retirement takes on a healthy broker. A retirement never acts for longer than half the lease TTL, so its last delete lands while the claim still excludes every node, and the lease is released the moment it finishes.
+
+**A retirement ends the seat's coding runs first.** A detached run's completion is routed to the seat's control subscription and a parked question's answer arrives on its inbox, so once those are deleted nothing can ever reach the run again, and its record would sit in the fleet's run store for good. So after the mark and before any subscription is deleted, the duty ends every run the seat still has, under the seat lease it holds: a node adding the seat back cannot claim it and recover a run while the run is being ended. The runs are kept through the grace for the reason the mail is, so a seat restored within a day comes back to its parked questions and its running jobs. A run that cannot be ended (a box that cannot be reached within the retirement's budget, a run record that cannot be read) unmarks the retirement, which is retried on the next tick with the runs already ended gone. A node that runs no sandbox coordinator, because its company configured no `providers.sandbox` when it started, cannot reach a box, so it refuses to retire a seat whose runs are still recorded and leaves that seat to a node that can.
+
+**Every write is a compare-and-set, and a retirement is marked before it deletes.** Two sweeps can overlap while the duty moves between nodes; they read the same record, and exactly one wins the mark that starts the retirement. A node that adds the seat back while the retirement is deleting its subscriptions finds the mark and waits for the retirement to finish before it creates the new inbox, so the delete cannot land on it; the new mailbox starts empty. If the retirement does not finish within twice its 30-second budget, the node takes the record over (`seat_mailbox_retirement_taken_over`), and the retiring sweep, finding its record changed, restores the inbox in case its delete landed after the node's create. A sweep that dies after marking leaves a mark a later sweep resumes once it is 15 minutes old (`seat_mailbox_retirement_resumed`), and a retirement that cannot delete a subscription is unmarked and retried on the next tick.
 
 ## The wedged node, and why it leaves
 
@@ -293,9 +328,9 @@ Single node or fleet, it is armed the same way. With one node no peer is waiting
 
 A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
 
-It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused, and a completion riding it would queue behind the very pause it exists to lift.
+It cannot ride the inbox itself: while a run holds the seat, every inbox delivery is parked (requeued and acked), and a completion riding the inbox would be parked behind the very busy state it exists to clear.
 
-The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
+The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside the acquire hook. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 
 ## Routing is org-derived, never instance-derived
 
@@ -318,14 +353,15 @@ agent here?", and a miss means "not on this node", never "does not exist".
 
 Some work belongs to the company rather than to a seat. Running it on every node is not merely wasteful, it races — N reapers deciding independently to expire the same paused sandbox, N clustering passes writing N sets of near-identical auto-drafted skills.
 
-Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so a node that dies mid-duty releases it by lapsing and a peer picks it up on its next tick with no handoff protocol. There are four:
+Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so there is no handoff protocol: a node that stops gracefully gives every duty back once its duty loops have finished their last tick (`duty_released`), and a peer takes it on its next tick; a node that dies releases it by lapsing, and a peer takes it on the first tick after the lease runs out. A duty's TTL is sized from its own work rather than from the seat heartbeat (most outlive three of their own ticks, so one slow claim never moves them, and the integration reconcile's outlives one whole pass), which makes it anything from 30 seconds to three hours, and duty leases live in a [bucket of their own](coordination.md#duties-have-a-bucket-of-their-own) for that reason: the seat lease TTL does not bound them. During a rolling upgrade from a build that kept duties with the seat leases, newer nodes run no duties until the last older node has stopped. There are five:
 
 | Duty | What it does | Why once |
 |---|---|---|
 | `sandbox-waiter` | Polls live sandbox boxes, keeps them alive, reaps expired pauses | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
 | `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
-| `skill-curator` | All three learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, and episode compaction | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all three because they run on one loop — and the name stays the curator's, since renaming it would split a rolling upgrade across two coordination keys with a node on each believing it held *the* duty |
-| `maintenance` | Retention sweeps for every short-horizon table in the node's own database — `events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows` — plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. The channel record is the one *shared* thing swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+| `skill-curator` | All four learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, episode compaction, and cross-agent promotion | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all four because they run on one loop, and the name stays the curator's, since renaming it would split a rolling upgrade across two coordination keys with a node on each believing it held *the* duty |
+| `integration-reconcile` | Runs every connected third-party app's [reconcile pass](integration-reconcile.md) on its own cadence | N nodes would each sweep every surface on every tick. What stops two writers at one third-party app is a different lease, `worker:setup-provision-<kind>`, which every writer at a surface holds around one pass and gives back when it ends, so it is mutual exclusion rather than a duty; this one keeps the sweep itself on one node |
+| `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows`, the expired and over-cap `agent_diary` rows, `counterparty_profiles`), plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat) and its coding runs once the seat has been absent for 24 hours. The channel and mailbox records are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record and claims the seat's own lease while it deletes, rather than relying on the duty's lease |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
@@ -345,6 +381,8 @@ Two consequences worth stating plainly:
 - **A downgrade across a protocol bump needs a full drain.** An older build has no protocol check at all, so it will happily take over a newer node's expired leases. Stop the whole fleet before rolling back.
 - **The wait is an outage window, and it is the point.** New nodes claim *nothing* until the last old lease lapses or is released — at the shipped 45-second TTL plus however long the old nodes take to drain. Plan the rollout for it rather than being surprised by it: the alternative is two builds disagreeing about what a lease obliges them to do, which is silent and unbounded rather than visible and finite.
 
+**Duties have a second, narrower rule.** Fleet duties moved out of the seat lease bucket into a [bucket of their own](coordination.md#duties-have-a-bucket-of-their-own), which an older build cannot see. So while any node of a build that still keeps duties with the seat leases is live, newer nodes claim no duty at all (seats are unaffected), logging `coord_kv_duties_wait_for_older_build` once when the wait starts and `coord_kv_duties_resumed` when it ends. The older nodes run the duties they can until they stop. Rolling back across that change needs every newer node stopped first.
+
 The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
 
 - **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
@@ -352,20 +390,15 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 ## What ownership looks like from outside
 
-`GET /health` reports a `seats` block per node: seats held, the computed capacity, the live node count, the last claim, the last loss, and the protocol floor when an older peer is blocking claims. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
+`GET /health` lists the seats this node holds (`seats`). The **Fleet** screen and the `fleet` query (`GET /query/fleet`) show every live node with the seats it holds, its roles and labels, its lease protocol and when its presence expires. The log carries the rest: `seat_sweep` reports each pass's held count against the computed capacity, `seat_claimed` and `seat_attached` / `seat_detached` carry the seat and the epoch (a detach also carries its reason), `seats_unplaceable` names seats no live node can run, and `seat_claims_blocked_by_older_protocol` names the protocol floor an older peer is imposing.
 
-`unproven_seconds` is the number to watch — a map of seat to how long its teardown has been failing. Alert on the **duration**, not on `unproven` itself: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running.
+`seat_still_unproven` is the line to alert on: it names a seat whose teardown keeps failing, with `stranded_seconds` and the attempt count, and repeats every twenty heartbeats while the seat stays stranded. Alert on the **duration**, not on the first `seat_release_unproven`: a teardown that fails once and succeeds on the next heartbeat retry is a working system (`seat_release_recovered`), while a seat still stranded minutes later is a seat nothing in the fleet is running.
 
 ## Single node
 
-Everything above runs unchanged on one node — it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, so the engine says so at boot:
+Everything above runs unchanged on one node: it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, which is why the Tier A file refuses the combination at load: `local` coordination beside a clustered embedded stream or an external NATS stream fails validation on `coordination.type`, naming `embedded-kv` as the fix.
 
-```
-seat_placement_is_process_local  node=node-0
-  hint=coordination.type is local, so seat leases are held in this process only…
-```
-
-A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share — a clustered embedded server or an external NATS. The two go together by construction: the coordination KV rides the stream's own connection, and Tier A refuses `local` coordination beside a clustered or external stream rather than letting the halves drift apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
+A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share, either a clustered embedded server or an external NATS. The two go together by construction: the coordination KV rides the stream's own connection, so refusing the mixed pairing keeps the halves from drifting apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
 
 ---
 

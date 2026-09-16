@@ -88,47 +88,6 @@ export function fmtDate(ts: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
 }
 
-/**
- * "4m ago", "2h ago", "just now".
- *
- * `now` is a REQUIRED argument rather than a call to the clock inside. Every
- * relative time on a screen has to agree with every other, and a component
- * that read the clock itself would re-render on its own schedule and disagree
- * with the row above it. The shell ticks one clock (see `lib/clock.ts`) and
- * passes the instant down — which is also what makes these strings actually
- * advance, instead of freezing at whatever they were when an unrelated push
- * last happened to re-render them.
- */
-export function relTime(ts: string | null | undefined, now: number): string {
-  const at = tsKey(ts);
-  if (!at) return "—";
-  const secs = Math.round((now - at) / 1000);
-  if (secs < 0) return inTime(ts, now);
-  if (secs < 5) return "just now";
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return fmtDate(ts);
-}
-
-/** "in 4m" — the same rules, forward. */
-export function inTime(ts: string | null | undefined, now: number): string {
-  const at = tsKey(ts);
-  if (!at) return "—";
-  const secs = Math.round((at - now) / 1000);
-  if (secs <= 0) return "due";
-  if (secs < 60) return `in ${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `in ${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `in ${hours}h`;
-  return `in ${Math.floor(hours / 24)}d`;
-}
-
 /** A duration in ms as the shortest honest string. */
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
@@ -138,27 +97,6 @@ export function fmtDuration(ms: number | null | undefined): string {
   const m = Math.floor(s / 60);
   const rem = Math.round(s % 60);
   if (m < 60) return `${m}m ${rem}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
-/**
- * How long something has been running, for a clock that reruns every second.
- *
- * Distinct from [fmtDuration], which measures a FINISHED span and is free to
- * be precise: sub-second milliseconds and a tenth of a second are meaningful
- * for a call that took 340 ms. On a live counter they are noise — the number
- * churns through "0 ms", "1.4 s", "1.9 s" and reads as a glitch rather than a
- * clock. Whole seconds from the first tick, and never below zero, because a
- * seat's clock and the browser's disagree by a few hundred milliseconds and a
- * "-1 s" or an "in 1s" is the one reading that is certainly wrong.
- */
-export function fmtElapsed(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
 }
@@ -249,4 +187,120 @@ export function splitConversationKey(key: string): { source: string; local: stri
  */
 export function plural(n: number, one: string, many?: string): string {
   return `${n.toLocaleString()} ${n === 1 ? one : (many ?? `${one}s`)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Configuration values
+// ---------------------------------------------------------------------------
+
+/**
+ * The order the engine declares a seat's per-phase chains in
+ * (`config.PhaseLLM`), so a mapping renders in the order its reader wrote it
+ * against rather than in whatever order a JSON object happened to arrive.
+ */
+const PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
+
+/** One row of a seat's model setting: which phase, and the chain it runs on. */
+export interface PhaseChain {
+  /** The mapping key, or "" when one chain covers every phase. */
+  phase: string;
+  /** The provider keys, first choice first, joined for reading. */
+  chain: string;
+}
+
+/**
+ * A seat's `llm:` field as rows a person reads.
+ *
+ * THREE SHAPES, ONE READING. A key and a chain are one row covering every
+ * phase; a per-phase mapping is one row per phase it names. The seat screen
+ * used to render the field as a React child, which drew a chain as its keys
+ * glued together and threw on the mapping, taking the whole page with it.
+ *
+ * A fallback chain reads as "first, then second": the order is the whole
+ * meaning of a chain, and a bare comma list reads as a set.
+ *
+ * `unknown` in, because this is the one reader standing between a field a
+ * newer engine may shape differently and a render that must not throw.
+ */
+export function formatPhaseLLM(llm: unknown): PhaseChain[] {
+  const chain = (keys: unknown): string => {
+    if (typeof keys === "string") return keys.trim();
+    if (!Array.isArray(keys)) return "";
+    return keys
+      .filter((k): k is string => typeof k === "string" && k.trim() !== "")
+      .map((k) => k.trim())
+      .join(", then ");
+  };
+  if (typeof llm === "string" || Array.isArray(llm)) {
+    const only = chain(llm);
+    return only ? [{ phase: "", chain: only }] : [];
+  }
+  if (!llm || typeof llm !== "object") return [];
+  const rank = (phase: string) => {
+    const at = PHASE_ORDER.indexOf(phase);
+    return at < 0 ? PHASE_ORDER.length : at;
+  };
+  return Object.entries(llm as Record<string, unknown>)
+    .map(([phase, keys], i) => ({ phase, chain: chain(keys), i }))
+    .filter((row) => row.chain !== "")
+    .sort((a, b) => rank(a.phase) - rank(b.phase) || a.i - b.i)
+    .map(({ phase, chain: joined }) => ({ phase, chain: joined }));
+}
+
+/**
+ * The mask the engine writes in place of a credential it will not send.
+ *
+ * `config.Redacted` in Go. A redacted document carries this in every
+ * credential field that holds a literal; a field holding one whole `${VAR}`
+ * reference carries the reference, which names a secret rather than being one.
+ */
+export const REDACTED = "__redacted__";
+
+/** How a value read from the redacted document may be shown. */
+export type ConfigValueKind = "empty" | "hidden" | "reference" | "literal";
+
+/**
+ * What a value read from the redacted document is, for rendering.
+ *
+ * `hidden` is the mask: a literal is set and its value is not on the wire. A
+ * `reference` is ONE whole `${NAME}`, the only form the engine sends unmasked
+ * in a credential field. Anything else is a `literal`.
+ *
+ * `secret` says the value comes from a CREDENTIAL field, and there a literal
+ * is `hidden` as well. The engine is meant never to send one, but its
+ * redaction once treated any value containing `${` as a reference, so
+ * `Bearer sk-live-${SUFFIX}` reached the wire with its literal half intact.
+ * What this page prints must not depend on every engine it talks to having
+ * got that right: a credential field shows a whole reference or nothing.
+ */
+export function configValueKind(
+  value: string | null | undefined,
+  { secret = false }: { secret?: boolean } = {},
+): ConfigValueKind {
+  if (value == null || value === "") return "empty";
+  if (value === REDACTED) return "hidden";
+  // The grammar and the trim are `envref.Whole`'s, so what this calls a
+  // reference is exactly what the engine resolves as one.
+  if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
+  return secret ? "hidden" : "literal";
+}
+
+/**
+ * How far back the event log can be read, as a sentence, from what the engine
+ * reported.
+ *
+ * NOT A LITERAL. Three screens said "the store keeps 30 days" in their own
+ * copy while `store.EventHistory` was the only thing that decided it, so a
+ * change to the retention would have left all three lying with nothing to
+ * catch it. An engine that did not report the floor says so rather than
+ * guessing: an operator told the wrong floor stops paging early.
+ */
+export function eventHistoryLabel(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) {
+    return "this engine did not report how far back the log goes";
+  }
+  const days = Math.round(seconds / 86_400);
+  if (days >= 1) return `the store keeps ${plural(days, "day")}`;
+  const hours = Math.max(1, Math.round(seconds / 3_600));
+  return `the store keeps ${plural(hours, "hour")}`;
 }

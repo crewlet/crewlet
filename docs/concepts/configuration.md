@@ -88,8 +88,8 @@ node:
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
-| `seats` | Claims seat leases and runs agents | Every trigger queues up unread |
-| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, skill clustering and curation, seat-subscription creation | Nothing fires on a schedule, no sandbox run is collected, no table is swept |
+| `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -226,13 +226,56 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `GET /ready` | `503 {"ready": false, "configured": false}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
-| `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |
+| `PUT /config` | Accepted, and creates the first active revision, as long as the FLEET has no activation either: a node that has not caught up with its fleet answers `412 already_configured` (with `If-None-Match: *`) or `409 revision_advanced`, naming the revision the fleet is on. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so it answers `412 no_active_revision` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
 | Per-entity routes (`PUT /config/roles/{handle}`, etc.) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — a caution banner saying inbound webhooks are being dropped, an engine pill that says so, and the first row of the overview's attention queue — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including the reflect dispatcher and the inbound edge that boot starts only for a company it already has (see the `learning` and `integrations` stages below) → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being dropped, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
+
+---
+
+## A Company With No Model Provider
+
+An empty `providers.llm` is a valid company: an org chart written before its
+credentials exist, and what a company created in the dashboard's
+[org builder](../guides/org-builder.md#creating-the-company) is until somebody
+adds a provider. `crewlet validate` accepts it (reporting `0 LLM providers`),
+`PUT /config` and its dry run accept it, and every node applies it like any
+other revision: the fleet view reports `ok`, the agent seats are placed, and
+their mailboxes attach and keep what arrives.
+
+What no seat can do is take a turn, and each node handles that the same way:
+
+- It logs `company_has_no_models` when the revision becomes current, naming
+  `providers.llm`. This is the line to look for on a company nobody has
+  messaged yet.
+- It holds every delivery to a seat on that seat's inbox. The inbox is paused
+  and the delivery requeued, never consumed, and the node logs
+  `seat_inbox_paused` for the seat, naming `providers.llm` again.
+- The apply that adds a provider releases every inbox the node paused
+  (`seat_inbox_resumed`), and the held work runs on the new provider. Nothing
+  sent to a seat in the meantime is lost.
+
+Schedules do not fire while the company has no provider: a fire is work on a
+seat's inbox, so firing through the wait would stack every missed standup
+behind the hold and run the backlog all at once. The scheduler stays disarmed
+and each node logs `schedules_waiting_for_a_model`; the apply that adds a
+provider arms it, and its first tick catches up at most the most recent missed
+fire ([Scheduling](scheduling.md#when-the-loop-runs)).
+
+The learning work that calls a model is not built for such a company: the
+persist decider, the skill synthesizer and refiner and the counterparty
+profiler that run after each turn, and the background compaction, clustering
+and promotion passes. The apply that adds a provider builds all of them. The
+skill curator calls no model and runs as usual.
+
+A delivery is held rather than failed on purpose. A turn that cannot build its
+runner proves nothing reached outside the engine, so the dispatcher would hand
+it back to the broker, which would redeliver it until its delivery budget ran
+out and then drop it: every message sent before the provider arrived would be
+retried pointlessly and then lost.
 
 ---
 
@@ -240,7 +283,7 @@ Transition out of unconfigured: the first activation moves the pointer → the r
 
 When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
 
-The two steps are **not one transaction**, and they span two stores — the node's own database and the coordination KV. That ordering is deliberate: a crash between them leaves a revision nothing points at, which is inert and replaced by the next activation, where the other order would point the fleet at bytes no node had stored.
+The two steps are **not one transaction**, and they span two stores: the node's own database and the coordination KV. That ordering is deliberate: a crash between them leaves a revision nothing points at, which is inert and replaced by the next activation, where the other order would point the fleet at bytes no node had stored. The revision is stored as history and becomes the writing node's own active revision only after the pointer has moved, so a write the fleet refused is never what that node serves or republishes; see [Control Plane](control-plane.md#the-design).
 
 There is **no leader**, so any node's API may write. What keeps two operators from silently overwriting each other is that the flip is a **compare-and-set** against the revision the write was derived from: the loser gets a `409` naming what won, rather than a `201` for a change the fleet never took. See [Concurrent writes](../reference/api-endpoints.md#concurrent-writes).
 
@@ -255,52 +298,67 @@ in a fixed order, and names each stage it got through:
 
 1. **`secrets`** — re-read the secret store and install a fresh resolver snapshot. **First**, because re-activating an unchanged revision is the documented [rotation gesture](secret-store.md): the payload has not moved, so the only thing that can have is what its `${VAR}` references resolve to.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
+   A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).
 3. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
-4. **`learning`** — rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting.
+4. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage attaches it, and an attach that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy).
 5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
 6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
-7. **`integrations`** — rebuild the four trackers against the new epoch, so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** — its block removed, or `enabled: false` for GitHub and GitLab — has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org — space and project key to unit lead — which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+7. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+   On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
 8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
-9. **`mailboxes`** — ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. **Conditional:** only where the engine has a node — `crewlet validate` applies to nothing.
-10. **`seat_tools`** — rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched — they belong to the seat's lease, not to the epoch (see below) — so what is rebuilt is the catalogue a turn is built against, never a process. **Conditional:** absent where this node holds no seat with per-role children.
-11. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
+9. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
+10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
+11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
+12. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
-Then `crewlet.config.revision_applied` is published with `status`, the
-`applied_subsystems` list and any error.
+Then a `config_revision_applied` event is published on
+`crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
+and any error.
 
 **A failure is reported by how far it got, not undone.** Every refusal above
 happens before the epoch swap, so it leaves the previous epoch current and
 serving — that, rather than a rollback, is what makes a failed apply safe. The
 returned list is the stages that *did* complete, in the order they completed,
 so "secrets, company" names both what was rebuilt and where the refusal landed.
-It travels on `ConfigRevisionApplied` into the audit event log, where it
+It travels on `config_revision_applied` into the audit event log, where it
 outlives the fleet view's one-minute bucket. The fleet view carries each node's
 epoch, revision, status and failure text but *not* the stage list, so that
 detail lives on the event rather than on the operator surfaces reading the
 bucket. The active row stays active either way; the control plane records
 the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-**Read that list by name, never by number.** Three of the eleven stages are
-conditional, so a successful apply on a node that booted without a sandbox and
-holds no seat with per-role children reports eight names and the swap is the
-sixth of them. The numbering above is the order the code runs, not an index
+**Read that list by name, never by number.** Two of the twelve stages are
+conditional, so a successful apply on a node that booted without a sandbox
+reports eleven names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
 into what a node reports.
+
+**A stopping node applies nothing.** Stopping waits for an apply already
+running, which returns quickly on the cancelled context that asked for the
+stop, and refuses every later one with `error`. An apply that ran on past the
+teardown would start again what it had just ended: the scheduler, the
+background learning passes, and on a node's first company the inbound edge.
 
 > **"No rollback" is not "no mutation".** What the build-first ordering buys is
 > that a revision which cannot be *built* changes nothing: `NewCompany`
 > validates, resolves the org and constructs the providers without reaching the
 > network, so stage 2 is the cheapest place to refuse and the one that costs
-> nothing at all. Past it the guarantee narrows. **Stage 5 is the last stage
-> that can refuse** — stages 6 and 7 return no error, and stage 8 is the swap —
-> and by the time it runs, three things are already mutated: the resolver
-> snapshot (stage 1), any shared MCP child whose spec moved plus the skill
-> variables (stage 3), and the reflection workers (stage 4). So a sandbox-build
-> refusal leaves this node's tool surface and learning workers on the new
-> company while it still *serves* the previous epoch, and reports `error`. The
-> party index and the trackers are not among them: they are rebuilt after the
-> last failure point, which is why they are ordered there. Widening that window
-> is what would make `degraded` reachable, which is why everything an apply
-> cannot un-apply stays behind the swap.
+> nothing at all. Past it the guarantee narrows. On a node that already serves
+> a company, **stage 5 is the last stage that can refuse**: stages 6 and 7
+> return no error there, and stage 8 is the swap. By the time it runs, three
+> things are already mutated: the resolver snapshot (stage 1), any shared MCP
+> child whose spec moved plus the skill variables (stage 3), and the reflection
+> workers (stage 4). So a sandbox-build refusal leaves this node's tool surface
+> and learning workers on the new company while it still *serves* the previous
+> epoch, and reports `error`. The party index and the trackers are not among
+> them: they are rebuilt after the last failure point, which is why they are
+> ordered there. A node's **first** company is the one exception, on both sides
+> of stage 5: stage 4 refuses it when the reflect dispatcher cannot attach, and
+> stage 7 when the inbound edge cannot start. Neither refusal has a previous
+> epoch to protect, so what it leaves behind (the shared MCP children, an
+> attached dispatcher, the party index) serves nothing until the retry the
+> refusal earns rebuilds it. Widening that window is what would make `degraded`
+> reachable, which is why everything an apply cannot un-apply stays behind the
+> swap.
 
 Two knobs are refused rather than applied live, because applying them would
 corrupt data rather than merely disrupt it:
@@ -411,6 +469,16 @@ retired and the types are unchanged, because they were never the narrow part.
 
 A revert creates a *new* revision whose payload equals a prior one — the audit chain stays intact via `parent_revision_id`.
 
+### What a stored revision is held to
+
+A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: a later build can add a rule, and during a rolling upgrade an older peer keeps activating documents that break it. So reading a revision and running one are held to different standards.
+
+- **Reading holds a revision to no rule.** `GET /config`, a revision read, the diff, the reference index, the entity reads, `crewlet config show`, `export` and `diff`, and the prior a write restores its masks from or merges onto all decode the stored document as it is. A revision this build would refuse is exactly the one an operator needs to see and replace, so none of these may refuse it.
+- **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
+- **A written document is held to every rule.** `PUT`, `PATCH`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it.
+
+The difference between the last two is the **admission rules**: rules added after companies already existed, which a stored company can break and still run exactly as it did before them. Today they are [unique seat names and unique unit names](organization-model.md#names-and-handles-are-unique), and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. A written document is refused for breaking one. A stored revision that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
+
 ---
 
 ## Auth
@@ -443,16 +511,17 @@ token when the engine refuses it — including a banner that says *refused*
 rather than *disconnected*, since a rejected credential is not an outage that
 resolves itself.
 
-The API states which posture it took at startup, on `api_anonymous_read_enabled`
-— at `WARNING` when `api.host` is not loopback, at `INFO` when it is. A laptop
-and an internet-facing bind are not the same decision, and a warning that fires
-identically for both is one nobody reads by the third deployment.
+The API states which posture it took at startup: `api_listening` carries
+`anonymous_read` and the token count, and an open read posture on an `api.host`
+that is not loopback adds an `api_anonymous_read_on_a_reachable_bind` warning.
+A laptop and an internet-facing bind are not the same decision, and a warning
+that fires identically for both is one nobody reads by the third deployment.
 
 **The guard is mounted whether or not `api.auth` is configured.** It applies one
-rule — `requires_token` — and what Tier A supplies is the *posture*, not the
+rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
 existence of a check. An API built with no Tier A at all therefore has no token
-that can match, which means reads serve and every write plus the whole `/config`
-surface answers `401`. That is the only safe reading of "an app was built
+that can match, which means reads serve and every write plus the whole `/config`,
+`/secrets` and `/setup` surfaces answer `401`. That is the only safe reading of "an app was built
 without being told who may write to it", and it removes the possibility of a
 process that serves `/config` writes with nothing in front of them.
 
@@ -464,8 +533,8 @@ means or must be reachable to obtain one:
 | `/health`, `/ready` | Probes. An orchestrator has no token, and a liveness check that 401s is a liveness check that fails. A single trailing slash is tolerated (`/health/`), because the guard runs before routing — so the router's redirect to the canonical path only happens if the request gets past the guard first, and a slash must never be the difference between healthy and evicted |
 | `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
 | | **A route whose secret is unset has nothing to verify with, so it fails closed**: `503` + `Retry-After`, never an accepted delivery. The sender retries and the delivery flows once the secret is configured — a deployment that has not set one is stalled, not damaged, and nothing unsigned is ever recorded, published, or shown on the dashboard |
-| `/otlp/*` | The signed per-run token in the path *is* the credential |
-| `/`, `/dashboard`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch |
+| `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where the API's own token must never go |
+| `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
 
 `/ws/stream` follows the same rule as every other read. When reads are closed it
 needs a credential like anything else — and browsers can't set headers on a
@@ -476,7 +545,7 @@ in proxy access logs.
 | Setting | Effect |
 |---------|--------|
 | `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
-| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config` serve without a token; writes and the whole `/config` surface still require one |
+| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets` and `/setup` serve without a token; writes and those three surfaces still require one |
 | `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
 | `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
 
@@ -513,9 +582,9 @@ request would never be sent. Only `Authorization` and `Content-Type` are
 permitted as request headers, and a preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
-The auth middleware uses `hmac.compare_digest` for constant-time comparison.
-Failed attempts log at WARNING (never the candidate token value); successes log
-at DEBUG with `operator_id` + `route`.
+The auth middleware compares tokens in constant time (`crypto/subtle`).
+Failed attempts log `api_auth_failed` at WARNING (never the candidate token
+value); successes log `api_auth_ok` at DEBUG with `operator_id` and `route`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 
@@ -547,7 +616,7 @@ secrets:
 The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
-- **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`load_config`) into the plaintext structure before use — the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
+- **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
@@ -587,22 +656,30 @@ If you also use the [secret store](secret-store.md), run `crewlet secrets rekey`
 
 ### Reads and export
 
-Every HTTP read path **redacts** secrets behind a `{"encrypted": true, "key_id": null}` marker — `GET /config` (JSON + YAML), revision reads, the revision diff, the entity reads (`GET /config/roles/{handle}`, `/config/units/{name}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`, and the `config_entities` query that backs the dashboard), and the dashboard `/org` view. The read path decrypts the whole document, then masks every secret leaf, so the caller sees the config's shape but never a secret value — no ciphertext or plaintext egresses. Without the keyring these paths return an opaque `{"__encrypted__": {"encrypted": true}}` rather than leaking.
+Every configuration read **redacts** credentials: `GET /config` (JSON and `?format=yaml`), `GET /config/revisions/{id}`, the revision diff, the entity reads (`GET /config/roles/{handle}`, `/config/units/{name}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`), the dashboard's `config` and `config_entities` queries, `crewlet config show` and `crewlet config diff`. The read path opens the whole document, then replaces every credential value with the literal marker `"__redacted__"`, so the caller sees the config's shape and never a credential. The anonymous `/org` view needs no masking because it carries no credential field at all: it is an explicit public projection of the charter and the organization tree (see [API endpoints](../reference/api-endpoints.md#get-org)). A revision sealed under a key the node does not hold is refused rather than served.
 
-What counts as a secret leaf: LLM `api_keys`, embeddings / sandbox `api_key`, Jira/Confluence/GitHub/GitLab tokens + webhook/signing secrets, every per-agent `mcp_env` value and per-role Slack cred, and — for the shared `mcp_servers[].env` / `.headers` dicts — any value whose key name signals a secret (a `*_TOKEN` env var, an `Authorization` header). (Org-level `integrations.slack` carries no secrets — it is an empty enable-marker.) Non-secret structure (URLs, hosts, ports, flags, model names) stays visible. The key-name match errs toward **over**-masking — a non-secret key that happens to contain `token`/`authorization` (e.g. `max_tokens`) is masked too — deliberately, so a real secret is never missed. A value that is still a `${VAR}` reference is left **visible** on reads: it is an inert pointer (the real secret lives in the environment or the encrypted [secret store](secret-store.md), never in this payload), so it is neither ciphertext nor a secret-at-rest — masking it would hide the useful variable name and falsely flag it as encrypted. "Is a reference" uses the engine's own grammar (`internal/envref`), i.e. *substitution would actually change this value*; a literal secret merely containing brace syntax the resolver ignores (`${line#host=}`) is a literal, and is masked.
+**What counts as a credential is structural.** A field is a credential because its Go type carries a `secret:"true"` tag, never because of how its value or its key reads, and a tag on a list or a map covers every element. The tagged fields today: LLM `api_keys`, the embeddings and sandbox `api_key`, a `cli-agent` provider's `cli.auth.token`, `cli.auth.credential_bundle` and `cli.env`, the integration tokens, admin tokens, API and app keys, webhook and signing secrets, a seat's `integrations.slack` bot token and signing secret, `integrations.mattermost.bot_token` and GitHub App private key and webhook secret, every `mcp_env` value on a seat or a unit, `mcp_servers[].env` and `mcp_servers[].headers`, `role.sandbox.env`, and each sandbox setup step's `env` and `files` (under `providers.sandbox.setup` and `role.sandbox.setup`). Everything else (URLs, hosts, flags, model names, the org chart) is served exactly as stored, including every toggle an operator set explicitly: a schedule kept with `enabled: false` reads as disabled, so sending the read back never re-enables it. A test fails the build when a field whose name reads like a credential, or a `map[string]string` named `env`, `headers` or `files`, is added without the tag, so a new credential field is masked by declaring it rather than by remembering to.
 
-A redacted `GET` → edit a field → full-doc `PUT` round-trips safely: the write path swaps each marker back to the currently-stored (decrypted) value before validating (keep-existing), so a round-trip never clobbers or exposes a secret. To *change* a secret, supply the new value (or a `${VAR}`) at that field.
+**Only a whole `${VAR}` reference is shown.** A credential field whose value is exactly one reference (`"${TRACKER_TOKEN}"`) is left visible: it names a credential and carries none, since the value it points at lives in the environment or the [secret store](secret-store.md) and never in this document. Every other non-empty value is masked, including one that embeds a reference beside literal text. `"Bearer sk-live-${SUFFIX}"` and `"sk-live-SECRET-${ROTATION}"` are legitimate (the resolver expands embedded references), and their literal half is a credential. A value using brace syntax the resolver ignores (`${line#host=}`, `${1}`, an unclosed `${`) is not a reference at all and is masked too. "Is a reference" is the engine's own grammar (`internal/envref`). The variable names an embedded reference carries are still listed, with their paths, by `GET /config/references`, which reads the unredacted document and answers names only.
 
-**Members are matched by identity, not by position.** A seat's masks resolve against the seat with that handle in the stored revision, a unit's against that name, an MCP server's against that name — so reordering the roster, or adding a seat, restores every other member's credentials correctly. It has to be identity: matching by position meant a pure reorder handed each seat its neighbour's credentials, silently, since the lengths still agreed and no marker was left standing to refuse. A list of **bare** credentials (`api_keys`) has no identity to match on and stays positional; change its length and the masks in it are refused rather than guessed, and validation names the field.
+A redacted `GET`, an edited field and a full-document `PUT` round-trip safely: the write path swaps each marker back to the currently stored value before validating, so a round trip never clobbers or exposes a credential. To *change* one, supply the new value (or a `${VAR}`) at that field.
 
-What counts as a secret leaf is structural, and it covers the untyped surfaces too — `mcp_servers[].env` and `.headers`, and a `cli-agent` provider's `cli.auth.token` / `cli.auth.credential_bundle` / `cli.env`. On those, only keys whose *name* signals a credential are masked, so a host, a region or a URL beside the token stays readable in the config view. A field carrying a credential as a literal rather than a `${VAR}` is masked exactly the same way — `${VAR}` is the convention, not what makes redaction work.
+**Members are matched by identity, not by position.** Matching by position meant a pure reorder handed each seat its neighbour's credentials, silently, since the lengths still agreed and no marker was left standing to refuse. So every member that can name itself is matched by that name:
 
-`crewlet config export` runs on the host (you already hold the key) and emits the stored payload verbatim — a plaintext `${VAR}` config when unencrypted, or the inert `{"__encrypted__": "enc:v1:…"}` document blob when encrypted (DR-friendly and round-trippable: re-importing decrypts and re-stores it). `crewlet config export --redact` decrypts the structure but masks every secret for a share-safe dump.
+- **A seat by its handle, and a unit by its name, anywhere in the document.** One index covers the whole stored revision, so a seat moved from the root into a unit, from one unit to another, or back to the root keeps its credentials, and so does a unit moved under another unit. Reordering the roster, or adding a seat, restores every other member's credentials.
+- **An MCP server, and a sandbox setup step, by name within its own list.** Both names are unique within their list: two MCP servers of one name are refused outright, and two setup steps of one name are refused on every write (an [admission rule](#what-a-stored-revision-is-held-to)).
+- **A list of bare credentials (`api_keys`) by position**, because it has no identity to match on. Change its length and the masks in it are refused rather than guessed.
+
+**An identity that does not name exactly one member matches nothing.** A renamed seat (a new handle) or a renamed unit carries no prior value of its own. An identity that is empty, or that the stored revision holds twice (two units called `Platform` in a revision written before [names had to be unique](organization-model.md#names-and-handles-are-unique)), is left out of the match entirely: picking either member, or falling back to position, would hand one member's credentials to another. In every one of these cases the mask stays standing and the write is refused with a validation error naming the field, so the caller writes the real value, or a `${VAR}`, there.
+
+The untyped maps (`mcp_servers[].env` and `.headers`, `cli.env`, a sandbox step's `env` and `files`) are masked whole, every value in them, whatever its key is called. A host or a region set beside a token in one of those maps is masked with it; write it as a separate, untagged setting where one exists, or as a `${VAR}`.
+
+`crewlet config export` runs on the host, where the keyring already is, and prints the revision as YAML with its credentials in the clear: it opens a sealed revision and renders the document, so the output is importable as it stands. That is what a restore or a migration needs, and it is the one command that prints credentials. `crewlet config export -redact` masks exactly what the reads above mask, for a dump that is safe to share.
 
 ---
 
 ## One company per engine
 
-An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no `tenant_id` column and no row-level scoping — the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
+An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no tenant column and no row-level scoping: the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
 
 To run a second company, run a second engine with its own database.

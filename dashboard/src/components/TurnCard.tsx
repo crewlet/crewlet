@@ -13,13 +13,13 @@
  */
 
 import { useState } from "react";
-import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { PhaseTag } from "./PhaseTag.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
+import { Button, EmptyValue, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
+import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 export function TurnCard({
   group,
@@ -48,7 +48,7 @@ export function TurnCard({
   return (
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="sm" />
+        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="row gap-1">
             {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
@@ -75,18 +75,22 @@ export function TurnCard({
             rather than hunt a row — and a source is exactly the kind of thing
             somebody scans down. */}
         {trigger?.integration && (
-          <Badge outline mono title="where this turn's trigger came from">
+          <Tag appearance="outline" monospace title="where this turn's trigger came from">
             {trigger.integration}
-          </Badge>
+          </Tag>
         )}
         {group.live && (
-          <Badge tone="info" dot>
+          <Tag variant="info" dot>
             running
-          </Badge>
+          </Tag>
         )}
-        {group.failed && <Badge tone="critical">failed</Badge>}
+        {group.failed && <Tag variant="danger">failed</Tag>}
         <span className="phase-meta t-num" title="tokens across every phase of this turn">
-          {group.totalTokens ? fmtCount(group.totalTokens) : "—"}
+          {group.totalTokens ? (
+            fmtCount(group.totalTokens)
+          ) : (
+            <EmptyValue label="Tokens not reported" />
+          )}
         </span>
         {span != null && (
           <span className="phase-meta t-num" title="from the first phase to the last">
@@ -101,7 +105,11 @@ export function TurnCard({
           dateTime={group.live ? group.startedAt : group.at}
           title={fmtDateTime(group.live ? group.startedAt : group.at)}
         >
-          {group.live ? fmtElapsed(now - tsKey(group.startedAt)) : relTime(group.at, now)}
+          {group.live ? (
+            <RelativeTime mode="elapsed" value={group.startedAt} now={now} />
+          ) : (
+            <RelativeTime value={group.at} now={now} />
+          )}
         </time>
       </header>
 
@@ -123,15 +131,16 @@ export function TurnCard({
               read as its label. */}
           <footer className="phase-foot">
             <Button
-              size="sm"
-              icon="layers"
+              variant="secondary"
+              size="small"
+              leadingIcon={<LayersGlyph />}
               onClick={() => nav.to(["turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >
               Open the whole turn
             </Button>
             <span className="t-caption">
-              what woke it, what it was given, and what it learned — the events no phase carries
+              what woke it, what it was given, and what it learned: the events no phase carries
             </span>
             <span className="spacer" />
           </footer>

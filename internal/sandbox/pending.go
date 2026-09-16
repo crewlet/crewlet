@@ -16,6 +16,16 @@ import (
 // The run's state machine. Small on purpose: every state below is one a
 // RECOVERY pass has to be able to act on, and a state nobody recovers from is
 // a state that leaks a box.
+//
+// A RUN THAT IS OVER HAS NO STATE, BECAUSE IT HAS NO RECORD. Settling a run,
+// done or failed, deletes its record ([PendingStore.Finish]) once its box is
+// reclaimed. The record lives in an ageless bucket, since a parked run can
+// wait days and a bucket age would reap the only thing that knows a billed box
+// exists, and every completion poll and seat recovery reads the whole bucket.
+// A terminal status kept there would be read on every one of those passes for
+// the life of the deployment by readers that all skip it, while what a run
+// ended as is already on the record that outlives it: the phase events of the
+// resumed turn, or its sandbox_run_failed announcement.
 const (
 	// StatusLaunching — the job has been started, but the turn has not yet
 	// written the conversation a resume re-enters. The seat is BUSY and a
@@ -50,9 +60,6 @@ const (
 	// StatusResumed — the tail has been claimed. THE AT-MOST-ONCE GATE.
 	StatusResumed = "resumed"
 
-	StatusDone   = "done"
-	StatusFailed = "failed"
-
 	// StatusReseed — a paused box was reaped past its pause TTL. The run is
 	// NOT over: the answer can still arrive, and the work re-seeds from the
 	// pushed branch rather than from a snapshot that no longer exists.
@@ -82,18 +89,16 @@ var Holding = []string{StatusLaunching, StatusRunning, StatusResumed}
 // by conversation.
 var Awaiting = []string{StatusAwaiting, StatusReseed}
 
-// allStatuses is the closed set [PendingStore.SetStatus] accepts.
-//
-// Asserted rather than assumed: a status nothing recovers from is a status
-// that leaks a box, so a typo has to be refused at the write instead of
-// becoming a row no recovery pass matches.
-var allStatuses = []string{
-	StatusLaunching, StatusRunning, StatusAwaiting, StatusResumed,
-	StatusDone, StatusFailed, StatusReseed,
-}
-
 // Active are the statuses that still own engine-side state — a seat, a box, or
 // a pending tail — and so must survive a restart.
+//
+// It is also every status a record can hold, since an ended run has no record,
+// so it is the closed set [PendingStore.SetStatus] accepts as well as the one
+// every listing matches. Asserted at the write rather than assumed: a status
+// nothing recovers from is a status that leaks a box, so a typo has to be
+// refused instead of becoming a record no recovery pass matches. And matched
+// at the read, so a record carrying a status this build does not know is never
+// mistaken for live work.
 //
 // RESUMED IS HERE, which looks wrong and is not: boot recovery has to be able
 // to SEE a tail that died mid-flight with the previous engine. Nothing else
@@ -309,8 +314,23 @@ type PendingStore interface {
 	// A run whose epoch is already higher is not stolen.
 	ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error)
 
-	// SetStatus moves the run, fenced on the epoch.
+	// SetStatus moves a run between the live states, fenced on the epoch.
+	// Ending a run is not a status; see Finish.
 	SetStatus(ctx context.Context, turnID, status string, fence Fence) error
+
+	// Finish ends a run by deleting its record, unless a newer lease
+	// outranks the fence, reporting whether THIS call deleted it.
+	//
+	// The caller reclaims the box FIRST. A record naming a box that is
+	// already gone is harmless (recovery reaps it and a kill of a gone box
+	// is a no-op), while a live box whose record was deleted is named by
+	// nothing and billed until its provider's TTL.
+	//
+	// Conditional on the version it read and re-decided on a lost race, so
+	// a delete racing a write sees that write before it deletes. FALSE IS
+	// NOT AN ERROR: the run is already gone, which is the ordinary shape of
+	// two parties reaching the end of one run, or a newer lease owns it.
+	Finish(ctx context.Context, turnID string, fence Fence) (bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
 	// clears its box record, reporting whether THIS call won.
@@ -382,12 +402,6 @@ type PendingStore interface {
 	// FindAwaitingByConversation matches a person's answer back to the run
 	// that asked.
 	FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error)
-
-	// ListPausedBefore returns paused runs whose snapshot is older than the
-	// cutoff, for the reaper.
-	ListPausedBefore(ctx context.Context, cutoff time.Time) ([]PendingRun, error)
-
-	Delete(ctx context.Context, turnID string) error
 }
 
 // Clarification is what a parked run is waiting for.

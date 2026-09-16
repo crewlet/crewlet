@@ -3,7 +3,6 @@ package config
 import (
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -54,7 +53,9 @@ type Role struct {
 	// Unit is a home-unit reference for a ROOT-level seat, resolved into
 	// that unit's members before anything else runs. It is what
 	// PUT /config/roles/{handle} writes; a hand-authored config normally nests the
-	// seat under its unit directly.
+	// seat under its unit directly. On a seat nested inside a unit it moves
+	// nothing, and one naming a different unit is refused on admission
+	// (org.ErrMisplacedUnitRef).
 	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"Home unit for a root-level seat; the seat is moved into it."`
 
 	Goal             string   `yaml:"goal,omitempty" json:"goal,omitempty" desc:"What this seat is for; reaches its prompt."`
@@ -238,7 +239,7 @@ type RoleSandboxMCP struct {
 // IsZero lets an unset scope drop out of a round trip.
 func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
-func (s *RoleSandbox) validate(path string) error {
+func (s *RoleSandbox) validate(path Path) error {
 	var p problems
 	if s.RunIn != "" && !slices.Contains(Placements, s.RunIn) {
 		// Only the SPELLING is checked here. Whether the cell is actually
@@ -366,7 +367,7 @@ func (g *RoleGitHub) Held() bool {
 // can be wrong in a way worth refusing. Everything else is written by the
 // engine after GitHub has answered, and refusing a half-built record would
 // refuse the document between the two clicks that build it.
-func (g *RoleGitHub) validate(path string) error {
+func (g *RoleGitHub) validate(path Path) error {
 	var p problems
 	if tier := normalTier(g.Tier); tier != "" && !slices.Contains(CodeAccessTiers, tier) {
 		p.add(at(path, "tier"), ErrUnknownValue,
@@ -377,7 +378,7 @@ func (g *RoleGitHub) validate(path string) error {
 	}
 	for i, repo := range g.Repos {
 		if name := strings.TrimSpace(repo); name == "" || !strings.Contains(name, "/") {
-			p.add(at(path, "repos["+strconv.Itoa(i)+"]"), ErrUnknownValue,
+			p.add(idx(at(path, "repos"), i), ErrUnknownValue,
 				"%q is not a repository; give it as owner/name, which is how "+
 					"GitHub addresses one and how an installation lists them",
 				repo)
@@ -447,7 +448,7 @@ type RoleSlack struct {
 // answer; without a signing secret its route answers 503 to every delivery
 // while the app's own settings page reports a healthy request URL. So
 // declaring the block at all means declaring both.
-func (s *RoleSlack) validate(path string) error {
+func (s *RoleSlack) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(s.BotToken) == "" {
 		p.add(at(path, "bot_token"), ErrMissing,
@@ -490,7 +491,7 @@ type RoleMattermost struct {
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Channel this seat's bot is added to at provisioning, on top of provisioning.channels."`
 }
 
-func (m *RoleMattermost) validate(path string) error {
+func (m *RoleMattermost) validate(path Path) error {
 	if m.Username == "" || envref.Has(m.Username) {
 		// A reference resolves later; rejecting the unresolved form would
 		// forbid configuring the username from the environment.
@@ -504,11 +505,8 @@ func (m *RoleMattermost) validate(path string) error {
 	return nil
 }
 
-func (r *Role) validate(path string) error {
+func (r *Role) validate(path Path) error {
 	var p problems
-	if strings.TrimSpace(r.Name) == "" {
-		p.add(at(path, "name"), ErrMissing, "every seat needs a name")
-	}
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -521,10 +519,12 @@ func (r *Role) validate(path string) error {
 	if r.Sandbox != nil {
 		p.wrap(r.Sandbox.validate(at(path, "sandbox")))
 	}
-	// The seat's own rules — kind, handle shape, human-versus-agent
-	// fields, schedule shape — belong to the org model and are checked
-	// there, on the transformed seat, so there is one definition of what a
-	// seat may be rather than two that drift.
+	// The seat's own rules (a name, its kind, its handle's shape, the
+	// human-versus-agent fields, its schedules' shape) belong to the org
+	// model and are checked there, on the transformed seat, so there is one
+	// definition of what a seat may be rather than two that drift. The name
+	// was checked here as well once, and every nameless seat was reported
+	// twice.
 	return p.err()
 }
 
@@ -613,6 +613,11 @@ func (r *Role) Seat() *org.Role {
 // value and cannot take an address inside it.
 func (r Role) IdentityKey() string { return r.Seat().Handle() }
 
+// identityIsDocumentWide marks the handle as unique across the whole company,
+// so a seat's masked credentials follow it when it moves between the root and
+// a unit, or between units. See documentIdentified.
+func (Role) identityIsDocumentWide() {}
+
 // Unit is the AUTHORED shape of one `units:` entry, nesting to any depth.
 type Unit struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name; also what a manages entry can reference."`
@@ -633,10 +638,10 @@ type Unit struct {
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty" desc:"What this unit is for."`
 
-	// Lead names the seat that leads this unit — routing work within it,
+	// Lead names the seat that leads this unit: routing work within it,
 	// acting as its point of contact, and auto-managing any direct member
-	// nobody else manages. A unit with no lead of its own inherits its
-	// parent's, cascading to any depth.
+	// that no direct member of this unit already manages. A unit with no
+	// lead of its own inherits its parent's, cascading to any depth.
 	Lead string `yaml:"lead,omitempty" json:"lead,omitempty" desc:"Seat leading this unit; inherited from the parent when empty."`
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty" desc:"What this unit is working toward."`
@@ -655,10 +660,12 @@ type Unit struct {
 	// read scope — org-wide read scope is the knowledge block.
 	Knowledge []string `yaml:"knowledge,omitempty" json:"knowledge,omitempty" desc:"Free-text knowledge references. Not a read scope."`
 
-	// MCPEnv is the tool credentials this unit's DIRECT members share,
-	// with each member's own values winning per VARIABLE — a seat that
-	// overrides one header must not silently drop the token beside it.
-	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct members."`
+	// MCPEnv is the tool credentials this unit's DIRECT AGENT members share,
+	// with each member's own values winning per VARIABLE, because a seat
+	// that overrides one header must not silently drop the token beside it.
+	// Human members inherit none: they run no tools and may not carry an
+	// mcp_env at all.
+	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct agent members."`
 
 	// Project and Space are the unit's tracker and knowledge IDENTITY: the
 	// project it files work in, and the container it writes pages in.
@@ -685,15 +692,20 @@ type Unit struct {
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work owned by this unit."`
 }
 
-// IdentityKey is the unit's name, which is what every `manages:`, `lead:` and
-// `unit:` reference addresses it by.
+// IdentityKey is the unit's name, which is what a `manages:` entry and a root
+// seat's `unit:` reference address it by. A `lead:` is not one of them: it is
+// written on a unit and names a seat, by the seat's name.
 func (u Unit) IdentityKey() string { return u.Name }
 
-func (u *Unit) validate(path string) error {
+// identityIsDocumentWide marks the name as unique across the whole tree, so a
+// unit's masked credentials follow it when it moves under another unit. See
+// documentIdentified.
+func (Unit) identityIsDocumentWide() {}
+
+// validate walks the unit's seats and children, and its id. A unit's own
+// rules (its name, its schedules) are the org model's, like a seat's.
+func (u *Unit) validate(path Path) error {
 	var p problems
-	if strings.TrimSpace(u.Name) == "" {
-		p.add(at(path, "name"), ErrMissing, "every unit needs a name")
-	}
 	if id := strings.TrimSpace(u.ID); id != "" && !unitID.MatchString(id) {
 		p.add(at(path, "id"), ErrShape,
 			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+

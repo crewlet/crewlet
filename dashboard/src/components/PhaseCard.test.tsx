@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
@@ -116,9 +116,11 @@ describe("a round is one block", () => {
     // tech with it — leaving the one thing that ties the blocks below
     // together unannounced, so the thinking and its call were read out as two
     // unrelated collapsed rows.
-    const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
-    const spoken = [...container.querySelectorAll(".round .sr-only")].map((n) => n.textContent);
-    expect(spoken).toEqual(["Round 1", "Round 2"]);
+    render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
+    // Read, not drawn: the numeral a reader sees is the rail's own node, and
+    // the sentence beside it is what a screen reader is given instead.
+    expect(screen.getByText("Round 1")).toBeDefined();
+    expect(screen.getByText("Round 2")).toBeDefined();
   });
 
   test("a round that called a tool and said nothing is still that round's block", () => {
@@ -143,4 +145,44 @@ describe("a round is one block", () => {
     expect(blocks[0]!.textContent).toContain("read_file");
     expect(blocks[0]!.textContent).not.toContain("Done.");
   });
+});
+
+// A FAILED CALL SAYS SO IN WORDS. It was marked with a red glyph carrying no
+// name, so the row a reader most needs to find was announced exactly like the
+// one above it, and the hue was the only signal anybody got.
+test("a failed tool call is named as failed, not coloured as failed", () => {
+  render(
+    <PhaseCard
+      record={phase({
+        roundsUsed: 1,
+        narration: [{ round: 1, reasoning: "", content: "Trying." }],
+        tools: [
+          { name: "read_file", round: 1, args: "{}", result: "no such file", failed: true },
+          { name: "submit_work", round: 1, args: "{}", result: "ok", failed: false },
+        ],
+      })}
+      defaultOpen
+    />,
+  );
+  expect(screen.getByRole("button", { name: /read_file failed/ })).toBeDefined();
+  expect(screen.getByRole("button", { name: "submit_work" })).toBeDefined();
+});
+
+/**
+ * A HEADER FACT THE ENGINE DID NOT REPORT IS A MARKED ABSENCE.
+ *
+ * The three facts in this header that can be missing, the model, the round
+ * count and the token total, each drew a bare em dash: a mark a screen reader
+ * reads as "dash" or skips, and the design system's own absent mark is not
+ * one. A reader on the cell with the least to say heard nothing at all, and
+ * nothing told them whether the phase used no tokens or whether nobody
+ * counted them.
+ */
+test("a header fact the engine did not report says so, rather than drawing a dash", () => {
+  render(<PhaseCard record={phase({ model: "", totalTokens: 0, roundNum: 0 })} />);
+  for (const said of ["Model not recorded", "No tool round recorded", "Tokens not reported"]) {
+    expect(screen.getByText(said)).toBeDefined();
+  }
+  // And the punctuation is the design system's, not this file's idea of one.
+  expect(document.body.textContent).not.toContain("\u2014");
 });
