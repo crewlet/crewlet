@@ -256,7 +256,8 @@ func (r *roundTrip) apply(from, last uint64) {
 			// a snapshot that saw the rows without the anchor
 			// would pair an old decision with a new expectation.
 			if _, err := r.applier.Apply(r.t.Context(), tx, record,
-				statelog.ApplyOptions{Now: wednesday, StoredAt: storedAt}); err != nil {
+				statelog.ApplyOptions{Now: wednesday, StoredAt: storedAt,
+					MaxVariables: r.db.Caps().MaxVariables}); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(r.t.Context(), `

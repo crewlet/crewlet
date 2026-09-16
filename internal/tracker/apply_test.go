@@ -20,6 +20,13 @@ type applyHarness struct {
 	db      *store.DB
 	applier *tracker.Applier
 	seq     uint64
+
+	// maxVariables is what every collection's insert chunks to. It starts
+	// at the estate's own probed limit, which is what the framework hands
+	// a real apply; a case that wants a CHUNK BOUNDARY it can count sets
+	// its own, because the probed 2 000 puts every collection the caps
+	// permit inside one statement.
+	maxVariables int
 }
 
 func newApplyHarness(t *testing.T) *applyHarness {
@@ -34,7 +41,10 @@ func newApplyHarness(t *testing.T) *applyHarness {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	return &applyHarness{t: t, db: db, applier: tracker.NewApplier("node-a")}
+	return &applyHarness{
+		t: t, db: db, applier: tracker.NewApplier("node-a"),
+		maxVariables: db.Caps().MaxVariables,
+	}
 }
 
 // apply runs one record through the applier at the next position.
@@ -82,8 +92,15 @@ func (h *applyHarness) applyAt(rec tracker.MutationRecord, brokerAt time.Time,
 		if gated {
 			return &gateError{reason}
 		}
+		// THE REAL PROBED LIMIT, not a left-out zero. MaxVariables is
+		// what every collection's insert chunks to, and a harness that
+		// passed nothing would exercise only the one-row-per-statement
+		// degradation — which is the shape the applier was CONVERTED
+		// AWAY FROM, so the suite would certify the path production
+		// does not take.
 		n, err := h.applier.Apply(h.t.Context(), tx, record, statelog.ApplyOptions{
 			Now: brokerAt, StoredAt: brokerAt,
+			MaxVariables: h.maxVariables,
 		})
 		rows = n
 		return err
