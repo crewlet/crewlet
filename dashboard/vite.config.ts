@@ -69,6 +69,22 @@ export default defineConfig({
       // The state log's retention document and its two operator gates, which
       // the Fleet screen's replication panels read and write.
       "/work": { target: "http://localhost:8000" },
+      // THE EMBEDDED ASSETS BESIDE THE BUNDLE, and the one rule above that
+      // needs a regex to state. `package static` embeds the whole of
+      // `static/`, so the brand mark the app rail renders lives at
+      // `/static/crewlet-icon.svg` — outside this project's root, which is
+      // `dashboard/`. Vite therefore had no file for it and answered the 404
+      // the comment above warns about: the rail's logo was a broken image in
+      // every dev session while being perfectly fine in the binary.
+      //
+      // NEGATED ON `dashboard/` because that prefix is this server's own
+      // `base`: proxying it would send the dev server's source modules to the
+      // engine, which serves the COMMITTED bundle — so the dev loop would
+      // silently show the last `make dashboard` rather than the file just
+      // saved. A key beginning with `^` is a RegExp to Vite, which is what
+      // makes "everything under /static except the bundle" expressible at
+      // all.
+      "^/static/(?!dashboard/)": { target: "http://localhost:8000" },
     },
   },
 });
