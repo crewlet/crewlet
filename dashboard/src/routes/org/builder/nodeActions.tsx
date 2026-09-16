@@ -361,6 +361,30 @@ export function leadLabel(unit: UnitView): string {
   return unit.lead.inherited ? `${unit.lead.name} (inherited)` : unit.lead.name;
 }
 
+/**
+ * The same, as the CHART's pill writes it: the word and the name together.
+ *
+ * TWO LABELS, BECAUSE TWO SURFACES ASK DIFFERENT QUESTIONS. A table cell sits
+ * under a column already headed "Lead", so the name alone is the answer and a
+ * prefix would write the word twice on one row. A chart node's pill stands on
+ * its own along the bottom edge of a card, with nothing above it saying what
+ * the name IS: the console chart this is drawn from writes "Lead: Ada" there
+ * for exactly that reason, and "Lead" in a pill with nothing in it.
+ *
+ * AND THE THIRD ANSWER IS THIS BUILDER'S OWN. That chart has two states, set
+ * and unset, so its wording covers two; this one has three, because the lead a
+ * unit inherits is derived by the engine and no check of the current draft has
+ * answered yet just after an edit. Written as "Lead" too, a pill would hide a
+ * check still out behind a unit that declares nothing, which are different
+ * facts about the organization. So the two states that chart HAS take its
+ * wording, and the one it has no idea of keeps ours.
+ */
+export function leadChipLabel(unit: UnitView): string {
+  if (unit.lead === undefined) return "Lead after the check";
+  if (unit.lead === null) return "Lead";
+  return `Lead: ${leadLabel(unit)}`;
+}
+
 /** What a unit's treeitem says about its lead to a screen reader: one sentence. */
 export function leadSentence(unit: UnitView): string {
   if (unit.lead === undefined) return "Lead after the check.";
