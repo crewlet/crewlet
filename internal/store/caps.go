@@ -138,10 +138,15 @@ type Capabilities struct {
 	// It is the chunk size for every multi-row INSERT the appliers write:
 	// rows ÷ columns per statement, which is the difference between one
 	// round trip and a thousand on a batch this engine writes constantly.
-	// SQLite has raised this default once already (999 → 32 766 in 3.32),
-	// so a hardcoded 999 is 33× the round trips on the driver actually
-	// pinned here, and a hardcoded 32 766 is a refused statement on any
-	// engine that did not follow. The probe costs one prepare at open.
+	//
+	// WHY IT IS PROBED AND NOT PICKED. The limit is the ENGINE's, not the
+	// dialect's, and the three candidate answers are all wrong somewhere:
+	// SQLite defaulted to 999 before 3.32 and 32 766 after it, and the
+	// driver pinned here reports NEITHER — it probes to 2 000. So a
+	// hardcoded 32 766 is a statement this engine refuses, and a hardcoded
+	// 999 is half the rows per statement that actually fit, which on a
+	// seven-column applier row is 285 rows a chunk against 142. The probe
+	// costs one prepare at open and is right on all three.
 	//
 	// A conservative 999 when the probe cannot tell: too small is slow,
 	// too large is a runtime failure on a statement the caller cannot
