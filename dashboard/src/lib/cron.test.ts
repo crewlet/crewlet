@@ -1,8 +1,8 @@
 import { describe as group, expect, it } from "vitest";
 import { describe, nextFires, parseCron } from "./cron.ts";
 
-function fires(expression: string, from: string, count = 3): string[] {
-  return nextFires(expression, new Date(from), count).map((d) => d.toISOString());
+function fires(expression: string, from: string, count = 3, zone = "UTC"): string[] {
+  return nextFires(expression, new Date(from), zone, count).map((d) => d.toISOString());
 }
 
 group("reading an expression as a sentence", () => {
@@ -108,7 +108,7 @@ group("the instants it fires at", () => {
 
   it("answers nothing at all for an expression it cannot read", () => {
     expect(fires("nonsense", "2026-06-15T00:00:00Z")).toEqual([]);
-    expect(nextFires("0 9 * * *", new Date("2026-06-15T00:00:00Z"), 0)).toEqual([]);
+    expect(nextFires("0 9 * * *", new Date("2026-06-15T00:00:00Z"), "UTC", 0)).toEqual([]);
   });
 
   it("reads a list and a step in one field", () => {
@@ -123,5 +123,65 @@ group("the instants it fires at", () => {
       "2026-06-15T00:25:00.000Z",
       "2026-06-15T00:45:00.000Z",
     ]);
+  });
+});
+
+group("the instants, in the schedule's own zone", () => {
+  // THE STANDING OFFSET, not a twice-a-year drift. The engine evaluates the
+  // expression in the row's timezone, so a UTC reading of `0 9 * * 1-5` in
+  // Tokyo listed 09:00Z against the engine's 00:00Z — nine hours late on
+  // every row of every company that does not run in UTC, for ever.
+  it("matches the LOCAL projection, so a zone's standing offset is not lost", () => {
+    expect(fires("0 9 * * 1-5", "2026-06-14T00:00:00Z", 3, "Asia/Tokyo")).toEqual([
+      "2026-06-15T00:00:00.000Z",
+      "2026-06-16T00:00:00.000Z",
+      "2026-06-17T00:00:00.000Z",
+    ]);
+    // The same expression in UTC is the answer this used to give for both.
+    expect(fires("0 9 * * 1-5", "2026-06-14T00:00:00Z", 3)).toEqual([
+      "2026-06-15T09:00:00.000Z",
+      "2026-06-16T09:00:00.000Z",
+      "2026-06-17T09:00:00.000Z",
+    ]);
+  });
+
+  // NOT EVERY ZONE IS A WHOLE HOUR AHEAD, which is why nothing here skips by
+  // one: Kathmandu is +05:45 and an hour-granular walk lands on :00.
+  it("reads a zone whose offset is not a whole number of hours", () => {
+    expect(fires("0 9 * * *", "2026-06-14T12:00:00Z", 2, "Asia/Kathmandu")).toEqual([
+      "2026-06-15T03:15:00.000Z",
+      "2026-06-16T03:15:00.000Z",
+    ]);
+  });
+
+  // A VANISHED LOCAL HOUR YIELDS NO FIRE. Berlin's clocks go 02:00 → 03:00 on
+  // 29 March 2026, so a daily 02:00 schedule simply does not run that day —
+  // which is what walking UTC and projecting gives for free, and what
+  // constructing local times would have had to invent an answer for.
+  it("skips a daily fire that the spring change deletes", () => {
+    expect(fires("0 2 * * *", "2026-03-27T12:00:00Z", 3, "Europe/Berlin")).toEqual([
+      "2026-03-28T01:00:00.000Z",
+      "2026-03-30T00:00:00.000Z",
+      "2026-03-31T00:00:00.000Z",
+    ]);
+  });
+
+  // AND A REPEATED ONE YIELDS TWO, for the same reason and with the same
+  // authority: `Expr.Next` says every UTC instant has exactly one local
+  // reading, so the hour Berlin lives through twice on 25 October 2026 is two
+  // instants that both match.
+  it("fires twice in the hour the autumn change repeats", () => {
+    expect(fires("0 2 * * *", "2026-10-24T12:00:00Z", 3, "Europe/Berlin")).toEqual([
+      "2026-10-25T00:00:00.000Z",
+      "2026-10-25T01:00:00.000Z",
+      "2026-10-26T01:00:00.000Z",
+    ]);
+  });
+
+  // A ZONE THIS RUNTIME CANNOT READ IS NOT UTC — the same refusal the file
+  // makes for an expression it cannot parse, rather than a list of instants
+  // the engine does not fire at.
+  it("answers nothing at all for a zone it cannot read", () => {
+    expect(fires("0 9 * * *", "2026-06-15T00:00:00Z", 3, "Mars/Olympus_Mons")).toEqual([]);
   });
 });

@@ -298,8 +298,16 @@ function waitingDetail(run: SandboxRun, now: number): string {
   if (!(ttl > 0) || Number.isNaN(parked)) return asked;
   const left = parked + ttl * 1_000 - now;
   if (left <= 0) return `${asked} Its box is past its pause window and may be reclaimed.`;
-  const hours = Math.floor(left / 3_600_000);
-  const minutes = Math.round((left % 3_600_000) / 60_000);
+  // ONE ROUNDED MINUTE TOTAL, split afterwards. Flooring the hours out of
+  // `left` and rounding the remainder independently rounds the same value two
+  // ways: any remainder at or past 59m30s carries into a sixtieth minute the
+  // hour count never sees, and a box reclaimed in 2h 59m 45s read "2h 60m" —
+  // for the thirty seconds before every hour boundary of a countdown that
+  // reruns every second, on the one row whose whole job is saying how long
+  // somebody has to answer. `fmtDuration` avoids it the same way.
+  const total = Math.round(left / 60_000);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
   const when = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   return `${asked} Its box is reclaimed in ${when}.`;
 }

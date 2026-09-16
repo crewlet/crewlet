@@ -254,14 +254,6 @@ export type RunState =
   "working" | "awaiting_sandbox" | "idle" | "afk" | "failed" | "terminated" | "offline" | "human";
 
 /**
- * What a seat is actually doing.
- *
- * A seat with an in-flight detached sandbox run is still busy even though its
- * kick-off turn already completed — which the projection reads as idle. The
- * live sandbox set is folded in here, at read time, so it is right on the
- * first snapshot and on every push after it.
- */
-/**
  * Whether a detached coding run is waiting on a person.
  *
  * THE ENGINE'S OWN TWO WORDS. Six call sites compared against
@@ -280,6 +272,14 @@ export function awaitingPerson(status: string | undefined): boolean {
   return status === "awaiting_clarification" || status === "reseed";
 }
 
+/**
+ * What a seat is actually doing.
+ *
+ * A seat with an in-flight detached sandbox run is still busy even though its
+ * kick-off turn already completed — which the projection reads as idle. The
+ * live sandbox set is folded in here, at read time, so it is right on the
+ * first snapshot and on every push after it.
+ */
 export function runState(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): RunState {
   if (!agent) return "offline";
   const role = agent.role;

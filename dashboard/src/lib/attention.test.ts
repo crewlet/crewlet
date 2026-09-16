@@ -110,6 +110,23 @@ describe("what it surfaces", () => {
     expect(items[0]?.detail).toContain("reclaimed in 1h 0m");
   });
 
+  // NO CLOCK READS SIXTY MINUTES. The hours and the minutes come off one
+  // value, so rounding them apart put a "2h 60m" on the row for the thirty
+  // seconds before every hour boundary of a countdown that reruns every
+  // second — and a bare "60m" through the last hour of one.
+  test("a countdown never carries into a sixtieth minute", () => {
+    // 2h 59m 45s left: parked an hour before `now`, on a window of 14,385s.
+    const nearly = attentionQueue(
+      input({ runs: [parked("awaiting_clarification", { pause_ttl_seconds: 14_385 })] }),
+    );
+    expect(nearly[0]?.detail).toContain("reclaimed in 3h 0m");
+    // And 59m 45s left, where there is no hour to carry into.
+    const under = attentionQueue(
+      input({ runs: [parked("awaiting_clarification", { pause_ttl_seconds: 7_185 })] }),
+    );
+    expect(under[0]?.detail).toContain("reclaimed in 1h 0m");
+  });
+
   // A TTL OF ZERO IS NOT A DEADLINE OF NOW. Zero means the box is not
   // reclaimed on a timer at all, and inventing a countdown for it would be
   // the zero-value-as-a-setting mistake on a screen.

@@ -13,21 +13,15 @@
  * three-day task inside one, and the first thing anybody does with a timeline
  * is look at this week.
  *
- * DAYS ARE LOCAL, matching `lib/work.ts`'s calendar, so a bar and a calendar
- * cell agree about which day a task is due. The engine resolves a bare date in
- * the COMPANY's zone and this buckets in the READER's; the screen says so,
- * exactly as the calendar does.
+ * DAYS ARE LOCAL, through `lib/format.ts`'s [browserDay] — the SAME function
+ * `lib/work.ts`'s calendar keys its cells with, rather than a second copy of
+ * it, so a bar and a calendar cell cannot come to disagree about which day a
+ * task is due. The engine resolves a bare date in the COMPANY's zone and this
+ * buckets in the READER's; the screen says so, exactly as the calendar does.
  */
 
+import { browserDay } from "./format.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
-
-/** A `Date` as the local `YYYY-MM-DD` it falls on. */
-function localKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
 
 /** A local day key back to a `Date` at local midnight, or null. */
 function dayAt(key: string): Date | null {
@@ -40,7 +34,7 @@ function dayAt(key: string): Date | null {
 export function dayOf(ts: string | undefined): string {
   if (!ts) return "";
   const at = new Date(ts);
-  return Number.isNaN(at.getTime()) ? "" : localKey(at);
+  return Number.isNaN(at.getTime()) ? "" : browserDay(at);
 }
 
 /** Whole days from `from` to `to`, negative when `to` is earlier. */
@@ -59,7 +53,7 @@ export function shiftDay(key: string, by: number): string {
   const at = dayAt(key);
   if (!at) return key;
   at.setDate(at.getDate() + by);
-  return localKey(at);
+  return browserDay(at);
 }
 
 /**
@@ -279,7 +273,7 @@ export function timelineOf(rows: WorkSummary[], opts: TimelineOptions): Timeline
     }
   }
 
-  const todayKey = localKey(new Date(opts.now));
+  const todayKey = browserDay(new Date(opts.now));
   const todayColumn = daysBetween(earliest, todayKey);
   return {
     from: earliest,

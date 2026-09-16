@@ -130,11 +130,23 @@ describe("collapsing the unchanged runs", () => {
 
 describe("a document too large to compare", () => {
   it("is reported as a whole-document replacement rather than freezing", () => {
-    // Myers is quadratic on two documents that share nothing, and the honest
-    // failure is to say everything changed — not to stop responding.
+    // The table is quadratic on EVERY pair, however alike, and the honest
+    // failure past the cap is to say everything changed — not to stop
+    // responding.
     const huge = Array.from({ length: MaxDiffLines + 1 }, (_, i) => `l${i}`).join("\n");
     const stat = diffStat(diffLines(huge, "one line"));
     expect(stat.removed).toBe(MaxDiffLines + 1);
     expect(stat.added).toBe(1);
+  });
+
+  // THE CAP IS A MEMORY BUDGET, and this is the arithmetic it was set from —
+  // pinned so the constant cannot drift back up without somebody restating the
+  // reason. `common` allocates (N+1) rows of (M+1) Uint32 entries and fills
+  // every cell on every input, so the worst case is paid by two revisions one
+  // line apart. At 10,000 the table is 382 MB and 1.7 s on the main thread;
+  // this budget is what keeps it a tab-sized 16 MB.
+  it("keeps the table inside the budget the cap was chosen for", () => {
+    const bytes = 4 * (MaxDiffLines + 1) ** 2;
+    expect(bytes).toBeLessThanOrEqual(24 * 1024 * 1024);
   });
 });

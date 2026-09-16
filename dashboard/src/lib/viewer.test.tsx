@@ -6,7 +6,7 @@
  * remedy is a line of company configuration.
  */
 
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useViewer } from "./viewer.ts";
@@ -62,6 +62,31 @@ describe("who the dashboard thinks you are", () => {
     await waitFor(() => expect(result.current.anonymous).toBe(true));
     expect(result.current.unbound).toBe(false);
     expect(result.current.operator).toBe(false);
+  });
+
+  // A FAILED READ IS NOT AN ANSWER, and anonymity is the worst of the three
+  // to guess: it locks the app rail, My work and the inbox for an operator
+  // whose token is valid and every one of whose other queries answered. The
+  // engine reports anonymity as an EMPTY operator id with no error, so a throw
+  // here means only that nothing came back.
+  test("a read that failed is nobody yet, not ANONYMOUS", async () => {
+    // ONE rejected promise, so the test can wait on the very object the hook
+    // awaited: our continuation is attached after the hook's, and microtasks
+    // run in order, so by the time this resumes the hook's catch has already
+    // set its state. Without that ordering the case would pass on a flush
+    // that never happened, which is the failure mode it exists to rule out.
+    const refused = Promise.reject(new Error("timeout"));
+    const query = vi.fn(() => refused);
+    vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    const { result } = renderHook(() => useViewer());
+    await act(async () => {
+      await refused.catch(() => {});
+    });
+    expect(query).toHaveBeenCalled();
+    expect(result.current.anonymous).toBe(false);
+    expect(result.current.unbound).toBe(false);
+    expect(result.current.loading).toBe(true);
   });
 
   // NOT ANONYMOUS WHILE LOADING. Every first paint has no answer yet, and a

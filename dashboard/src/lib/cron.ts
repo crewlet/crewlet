@@ -14,8 +14,10 @@
  * author thought.
  *
  * IN-TREE for the reason the markdown renderer is: cron is a small closed
- * grammar, and a library for it brings a parser, a timezone database and a
- * recurrence engine for the five fields a schedule actually uses.
+ * grammar, and a library for it brings a parser, its OWN timezone database and
+ * a recurrence engine for the five fields a schedule actually uses — where
+ * `Intl` already holds every zone's rules and is the one this file projects
+ * through (`lib/format.ts`'s [zoneOffset]).
  *
  * THE ENGINE REMAINS THE AUTHORITY. `next_run` on a row is the engine's own
  * computation and is what the screen shows as "next"; this is a reading aid
@@ -23,6 +25,8 @@
  * the engine is right, and the disagreement is worth seeing — which is why
  * this is drawn beside the engine's answer rather than instead of it.
  */
+
+import { zoneOffset } from "./format.ts";
 
 /** One parsed field: the set of values it matches, ascending. */
 type Field = number[];
@@ -262,41 +266,130 @@ function list(items: string[]): string {
 /**
  * The next `count` instants this expression fires at, after `from`.
  *
- * IN UTC, which is what the engine evaluates a schedule in unless the row
- * names a timezone — and the caller renders each instant in the reader's own
- * zone, so a schedule written for UTC and read in Berlin says both.
+ * IN THE SCHEDULE'S OWN ZONE, which is a REQUIRED argument because there is no
+ * safe default for it. The engine evaluates a schedule in the zone its row
+ * names (`internal/schedule/entries.go` resolves it, `Expr.FireTimes` takes the
+ * `*time.Location`), so a reading aid that assumed UTC was not merely wrong
+ * across a daylight-saving change — it was wrong by the zone's STANDING offset
+ * on every row of every company that does not run in UTC. `0 9 * * 1-5` in
+ * `Asia/Tokyo` fires at 00:00Z and this listed 09:00Z, nine hours late, for
+ * ever. A parameter with a default would have kept that silent at the one call
+ * site that forgot it, so the type refuses one.
+ *
+ * WALKED IN UTC AND MATCHED ON THE LOCAL PROJECTION, which is the engine's own
+ * direction and its whole DST design ([Expr.Next] states it): every UTC instant
+ * has exactly one local reading, so a repeated local hour yields two fires and
+ * a vanished one yields none, with nothing to invent. Constructing local times
+ * instead — the obvious way to skip whole days — has to answer both of those
+ * cases out of thin air.
  *
  * Minute by minute, capped: cron's own resolution is a minute, and an
  * expression that fires once a year would otherwise walk half a million
  * iterations. The cap returns what it found rather than throwing, and a
  * caller that got fewer than it asked for says so.
  */
-export function nextFires(expression: string, from: Date, count = 5): Date[] {
+export function nextFires(expression: string, from: Date, zone: string, count = 5): Date[] {
   const cron = parseCron(expression);
   if (!cron || count <= 0) return [];
+  const project = projector(zone);
+  if (!project) return [];
   const out: Date[] = [];
   // Start at the next whole minute: a fire at the current minute has either
   // happened or is happening, and neither is "next".
-  const at = new Date(from.getTime());
-  at.setUTCSeconds(0, 0);
-  at.setUTCMinutes(at.getUTCMinutes() + 1);
+  let at = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
+  if (!Number.isFinite(at)) return [];
 
   // Two years of minutes, which covers every expression a schedule can hold
   // — the coarsest is one day of one month.
   const limit = 366 * 2 * 24 * 60;
+  // ONE reused Date for the projection. The walk allocates nothing per minute
+  // that it does not return, because the full horizon is a million of them.
+  const local = new Date(0);
   for (let i = 0; i < limit && out.length < count; i++) {
-    if (matches(cron, at)) out.push(new Date(at.getTime()));
-    at.setUTCMinutes(at.getUTCMinutes() + 1);
+    local.setTime(project(at));
+    if (matches(cron, local)) out.push(new Date(at));
+    at += 60_000;
   }
   return out;
 }
 
-function matches(cron: Cron, at: Date): boolean {
-  if (!cron.minute.includes(at.getUTCMinutes())) return false;
-  if (!cron.hour.includes(at.getUTCHours())) return false;
-  if (!cron.month.includes(at.getUTCMonth() + 1)) return false;
-  const day = cron.day.includes(at.getUTCDate());
-  const weekday = cron.weekday.includes(at.getUTCDay());
+/**
+ * A walked instant's LOCAL reading in `zone`, as an epoch this file can take
+ * `getUTC…` off — or null when the runtime cannot read that zone at all.
+ *
+ * NOT AN `Intl` CALL PER MINUTE. Formatting each of the horizon's 1,054,080
+ * minutes costs seconds, and the horizon is walked in full by exactly the
+ * expression a reader is most likely to have mistyped — `0 0 31 2 *` fires
+ * never. A zone's offset is instead piecewise constant with a handful of
+ * breakpoints a year, so this measures it once per PROBE window and finds the
+ * breakpoint EXACTLY, by bisection, on the rare window that straddles one.
+ *
+ * Six hours is the window because two offset changes inside one would go
+ * unseen, and no zone in the modern database has two: the busiest is Morocco
+ * at four a year, whose closest pair is weeks apart. It is not a guess about
+ * how a zone behaves at a boundary — that is bisected to the minute — only
+ * about how often a government can move a clock.
+ *
+ * Returns a CLOSURE rather than a cache keyed on the zone, because the state
+ * it holds is one walk's position and the next walk starts somewhere else.
+ */
+function projector(zone: string): ((at: number) => number) | null {
+  try {
+    zoneOffset(0, zone);
+  } catch {
+    // A ZONE THIS RUNTIME CANNOT READ IS NOT UTC. Falling back would put a
+    // list of instants on the screen that the engine does not fire at, with
+    // nothing saying so — the same trade [parseCron] already refuses for an
+    // expression it cannot read.
+    return null;
+  }
+  const probe = 6 * 3_600_000;
+  let offset = 0;
+  // The offset is known to hold on [_, until). `-Infinity` makes the first
+  // call measure, whatever instant the walk starts at.
+  let until = -Infinity;
+  return (at) => {
+    if (at >= until) {
+      offset = zoneOffset(at, zone);
+      until = at + probe;
+      if (zoneOffset(until, zone) !== offset) until = changeover(at, until, offset, zone);
+    }
+    return at + offset;
+  };
+}
+
+/**
+ * The first whole minute in `(lo, hi]` whose offset is no longer `offset`.
+ *
+ * Both ends are minute-aligned and the walk is too, so the answer is exactly
+ * the instant the walk must re-measure at — a half-hour zone (`Australia/
+ * Lord_Howe` moves by thirty minutes) is no different from a whole-hour one.
+ */
+function changeover(lo: number, hi: number, offset: number, zone: string): number {
+  while (hi - lo > 60_000) {
+    const mid = Math.floor((lo + hi) / 2 / 60_000) * 60_000;
+    if (mid <= lo || mid >= hi) break;
+    if (zoneOffset(mid, zone) === offset) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/**
+ * Whether `local` — a walked instant already PROJECTED into the schedule's
+ * zone — is one this expression fires at.
+ *
+ * The `getUTC…` readers are how a projection is read back: the projection is
+ * an epoch shifted by the zone's offset, so its UTC fields ARE the schedule's
+ * wall clock. Reading the local ones instead would apply the browser's zone
+ * on top of the schedule's.
+ */
+function matches(cron: Cron, local: Date): boolean {
+  if (!cron.minute.includes(local.getUTCMinutes())) return false;
+  if (!cron.hour.includes(local.getUTCHours())) return false;
+  if (!cron.month.includes(local.getUTCMonth() + 1)) return false;
+  const day = cron.day.includes(local.getUTCDate());
+  const weekday = cron.weekday.includes(local.getUTCDay());
   // THE **OR** AGAIN, and it is the rule this whole file exists to make
   // visible: with both fields restricted a fire needs only one of them.
   if (!cron.anyDay && !cron.anyWeekday) return day || weekday;

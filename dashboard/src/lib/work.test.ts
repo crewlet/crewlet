@@ -28,6 +28,7 @@ import {
   NO_FILTERS,
   projectKeys,
   scopeOf,
+  seededScope,
   shapeOf,
   shiftMonth,
   shownRows,
@@ -162,7 +163,6 @@ const record = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => (
 });
 
 test("a feed change renders its deltas, then its excerpt, then its kind", () => {
-  expect(record({ fields: { status: { from: "todo", to: "in_progress" } } })).toBeTruthy();
   expect(describeChange(record({ fields: { status: { from: "todo", to: "in_progress" } } }))).toBe(
     "status: todo → in_progress",
   );
@@ -486,25 +486,42 @@ test("a view's own status group survives being read into the segment and back", 
 // A VIEW WITH NO GROUP LEAVES THE SEGMENT AT ITS OWN DEFAULT, which is `open`
 // — the tracker opens on unfinished work, and a view that says nothing about
 // status is not a view asking for everything.
+//
+// OVER THE SEEDING ITSELF, because this used to compute `scopeOf(undefined) ||
+// "open"` inside the assertion: it held for any falsy answer and equally for
+// one that returned "open" outright, and the `||` that actually decides it sat
+// in the screen where no test reached it. Deleting it there left this suite
+// green and opened the tracker on every closed task the company has.
 test("a view naming no status group is seeded open rather than empty", () => {
-  expect(scopeOf(undefined) || "open").toBe("open");
-  const params = build({ view: {}, filters: { ...NO_FILTERS, scope: "open" } });
-  expect(params.status_group).toBe("not_started,active");
+  expect(seededScope(undefined)).toBe("open");
+  expect(seededScope("")).toBe("open");
+  // And a group the segments DO express seeds itself, which is the round trip.
+  expect(seededScope("not_started,active")).toBe("open");
+  expect(seededScope("done,closed")).toBe("closed");
 });
 
-// AND A GROUP THE SEGMENTS CANNOT EXPRESS READS AS ALL, which is the one case
-// where the round trip deliberately does NOT preserve the view: three
-// segments cannot name a fourth set. What matters is that the control and the
-// query still AGREE — the segment says everything and the read filters by
-// nothing — rather than the segment naming `open` over rows that are not.
-test("a group outside the three segments widens honestly rather than lying", () => {
-  const seeded = scopeOf("active");
-  expect(seeded).toBe("");
+// AND A GROUP THE SEGMENTS CANNOT EXPRESS STILL OPENS ON UNFINISHED WORK,
+// which is the one case where the round trip cannot preserve the view: three
+// segments cannot name a fourth set, and [buildItemsParams] overwrites
+// `status_group` from the segment whichever one it is. So the only question is
+// which wider set — `open` adds the rest of open work, the empty segment would
+// add every closed task too — and what matters is that the control and the
+// query AGREE about the one on screen.
+//
+// This fed the query `scope: ""` and named the value `seeded`, a state the
+// screen produces for no group at all: it certified a reading the product does
+// not have, over an input only a deliberate click on All can reach.
+test("a group outside the three segments opens wider, and says which", () => {
+  expect(scopeOf("active")).toBe("");
+  const scope = seededScope("active");
+  expect(scope).toBe("open");
   const params = build({
     view: { status_group: "active" },
-    filters: { ...NO_FILTERS, scope: seeded },
+    filters: { ...NO_FILTERS, scope },
   });
-  expect(params.status_group).toBeUndefined();
+  expect(params.status_group).toBe("not_started,active");
+  // The segment says open work, and the query does not quietly add closed.
+  expect(params.show_closed).toBeUndefined();
 });
 
 // ---------------------------------------------------------------------------

@@ -5,12 +5,19 @@
  * "What did this save change" — the question somebody opens a history for —
  * was answerable only by opening two versions and reading both.
  *
- * MYERS, over LINES. The algorithm is the standard one and the shape is the
- * one a prose document wants: a paragraph somebody rewrote is a line replaced,
- * not thirty character edits scattered through it. Word-level refinement
- * inside a changed line is deliberately absent — it makes a small edit
- * prettier and a large one unreadable, and these documents are rewritten in
- * paragraphs.
+ * OVER LINES, by the classic longest-common-subsequence table. The shape is
+ * the one a prose document wants: a paragraph somebody rewrote is a line
+ * replaced, not thirty character edits scattered through it. Word-level
+ * refinement inside a changed line is deliberately absent — it makes a small
+ * edit prettier and a large one unreadable, and these documents are rewritten
+ * in paragraphs.
+ *
+ * THE TABLE RATHER THAN MYERS, and [MaxDiffLines] is what pays for that
+ * choice: Myers is O(ND) and would be cheap on exactly the input a page
+ * history has, where the table is quadratic on every input alike. What the
+ * table buys is thirteen lines anybody can check by reading, against a page of
+ * index arithmetic nobody re-derives; what it costs is a cap low enough that
+ * the quadratic term stays small, and a whole-document replacement past it.
  *
  * PURE, and in `lib/` for the reason the rest of this directory gives: a
  * derivation that can only be exercised by rendering a component is one nobody
@@ -36,15 +43,30 @@ export interface DiffStat {
 }
 
 /**
- * The size past which the quadratic worst case is not worth paying.
+ * The size past which the table is not worth building.
  *
- * Myers is O(ND) — fast on documents that resemble each other, and quadratic
- * on two that share nothing. A page is prose and a save is an edit, so the
- * common case is cheap; this is the guard for the uncommon one, where a reader
- * gets a whole-document replacement rather than a frozen tab. Ten thousand
- * lines is far past any page a person writes.
+ * SIZED FROM THE TABLE'S MEMORY, because that is the quantity that binds and
+ * it is paid on EVERY input: [common] allocates `(N+1)` rows of `(M+1)`
+ * `Uint32` entries and fills every cell with no early exit, so two revisions
+ * differing in one line — the commonest thing a page history holds — cost
+ * exactly as much as two documents sharing nothing. There is no cheap common
+ * case to lean on.
+ *
+ * At two thousand lines that table is 4·(N+1)² ≈ 16 MB and about 60 ms, which
+ * a tab holds without noticing. Measured on the same machine, the ten thousand
+ * this used to be is 382 MB and 1.7 s — on the main thread, inside the
+ * `useMemo` the history pane calls this from, for two revisions one line
+ * apart. That is the frozen tab the cap exists to prevent, let through by a
+ * number picked against an algorithm this file does not contain.
+ *
+ * Two thousand lines is still far past any page a person writes, and well
+ * inside `pages.MaxBody` (512 KiB), so nothing legitimate is newly pushed onto
+ * the whole-document-replacement path. A page longer than that gets that path
+ * — which is honest, and the alternative is not a better diff but an
+ * unresponsive browser. Raising it means replacing the table with Myers or the
+ * Hirschberg refinement first, not raising it.
  */
-export const MaxDiffLines = 10_000;
+export const MaxDiffLines = 2_000;
 
 /**
  * Split a document into the lines a diff compares.
@@ -99,10 +121,15 @@ export function diffStat(diff: DiffLine[]): DiffStat {
 /**
  * The length of the longest common subsequence, as the classic table.
  *
- * The table rather than the linear-space refinement: the cap above bounds it
- * at a size a browser holds without noticing, and the refinement's win is
- * memory on inputs this never sees. What it costs is a page of code nobody
- * can check by reading.
+ * QUADRATIC IN BOTH TIME AND MEMORY, unconditionally — there is no early exit
+ * and no shortcut for two documents that are nearly the same. The cap above is
+ * what bounds it, and is set from this function's allocation rather than from
+ * any notion of how much the two documents have in common; see [MaxDiffLines].
+ *
+ * The table rather than Hirschberg's linear-space refinement: at the cap the
+ * 16 MB is a size a browser holds without noticing, and the refinement costs a
+ * page of code nobody can check by reading. That trade is a function of the
+ * cap — move one and the other has to move with it.
  */
 function common(a: string[], b: string[]): Uint32Array[] {
   const table: Uint32Array[] = [];

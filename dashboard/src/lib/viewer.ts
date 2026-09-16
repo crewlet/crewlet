@@ -23,6 +23,10 @@
  *     rather than reporting a fault.
  *   - ANONYMOUS — no token at all. Every guarded surface is locked, and the
  *     lock says what it needs.
+ *
+ * And a FOURTH that is not one of them: NOBODY SAID YET. The three above are
+ * answers; a query that has not come back is the absence of one, and it is
+ * [ViewerState.loading] rather than a value. See [useViewer].
  */
 
 import { useQuery } from "./useQuery.ts";
@@ -42,6 +46,7 @@ export interface ViewerState {
   unbound: boolean;
   /** No token is presented at all. */
   anonymous: boolean;
+  /** Nobody has said yet — no answer has arrived, or the last read failed. */
   loading: boolean;
 }
 
@@ -53,9 +58,21 @@ export interface ViewerState {
  * poll rather than a push, and the token dialog's own reconnect re-asks it.
  */
 export function useViewer(): ViewerState {
-  const { data, loading } = useQuery("viewer", undefined, { pollMs: 300_000 });
+  const { data, loading, error } = useQuery("viewer", undefined, { pollMs: 300_000 });
   const operatorID = data?.operator_id ?? "";
   const handle = data?.handle ?? "";
+
+  // A FAILED READ IS NOT AN ANSWER, and reading it as one picks the worst of
+  // the three. The engine reports anonymity as `operator_id: ""` with NO error
+  // (`internal/api/queries/viewer.go`), and `viewer` is registered with plain
+  // `Register`, so it is never refused as unauthorized either — an error from
+  // this query therefore means only that nothing came back. It is reachable:
+  // `sendQuery` gives up after ten seconds, and the hub drops the OLDEST
+  // queued envelope under per-client backpressure, so a busy company can evict
+  // this very answer. Folded into ANONYMOUS it locked an authenticated
+  // operator out of the whole app rail, My work and the inbox — for the five
+  // minutes until the next poll, with every other query on the page working.
+  const unknown = loading || (error !== null && data === null);
   return {
     operatorID,
     operator: data?.operator ?? false,
@@ -63,8 +80,8 @@ export function useViewer(): ViewerState {
     name: data?.name ?? "",
     kind: (data?.kind as ViewerState["kind"]) ?? "",
     unbound: operatorID !== "" && handle === "",
-    anonymous: !loading && operatorID === "",
-    loading,
+    anonymous: !unknown && operatorID === "",
+    loading: unknown,
   };
 }
 

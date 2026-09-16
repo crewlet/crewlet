@@ -263,6 +263,46 @@ export function elapsedMs(from?: string | null, to?: string | null): number | nu
 }
 
 // ---------------------------------------------------------------------------
+// Days
+// ---------------------------------------------------------------------------
+
+/**
+ * A `Date` as the `YYYY-MM-DD` it falls on IN THE BROWSER'S OWN CALENDAR.
+ *
+ * ONE DEFINITION. It was written out twice, byte for byte, in `lib/work.ts`
+ * and `lib/timeline.ts` — the calendar's cell keys and the timeline axis's —
+ * which is the shape this repository keeps paying for (`textcut`, `whsec`,
+ * `httpjson`): two copies of one rule, agreeing today, and nothing that
+ * notices the day one of them changes. A bar and a calendar cell disagreeing
+ * about which day a task is due is a silent wrong answer, not a broken screen.
+ *
+ * BROWSER-LOCAL ON PURPOSE, and it is the one thing in this file that does not
+ * go through [zone]. This is a BUCKETING key, not a spelling: `calendarWeeks`
+ * builds its cells with `new Date(y, m, d)` and `timeline`'s axis steps days
+ * with `setDate`, both of which are the browser's calendar, and a key derived
+ * in a different one from the cells it is matched against puts a task in a
+ * cell whose own label disagrees with it. `lib/work.ts`'s `gridRange` says the
+ * same thing from the other end — the engine resolves a bare date in the
+ * COMPANY's zone and these cells bucket in the reader's, which the grid's
+ * bounds absorb.
+ *
+ * It is not a second timezone today: nothing in the product calls `setZone`,
+ * there is no settings route and `crewlet_timezone` is written nowhere, so
+ * [zone] IS the browser's zone for every reader who can exist. THE DAY A ZONE
+ * PICKER SHIPS that stops being true, and the fix is not this function alone —
+ * the cell arithmetic has to move into the chosen zone with it, in one change:
+ * `calendarWeeks`, `gridRange`, `dayKey`, and `dayOf`/`shiftDay`/`daysBetween`
+ * on the timeline. The machinery is already here, in [fromWall]'s two-pass
+ * offset resolution.
+ */
+export function browserDay(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// ---------------------------------------------------------------------------
 // Numbers
 // ---------------------------------------------------------------------------
 
@@ -390,8 +430,14 @@ export function fromWall(wall: string): number | null {
  * Derived by formatting rather than by a table: `Intl` already holds every
  * zone's rules including the ones that changed last year, and a second copy of
  * them here would be wrong the first time a government moved a date.
+ *
+ * EXPORTED for `lib/cron.ts`, which projects a walked UTC instant into a
+ * SCHEDULE's zone rather than into the reader's and so cannot go through
+ * [toWall]/[fromWall]. It throws on a zone `Intl` does not know — the caller
+ * decides what to do about that, and cron's answer is to report that it cannot
+ * read the schedule rather than to quietly evaluate it somewhere else.
  */
-function zoneOffset(at: number, tz: string): number {
+export function zoneOffset(at: number, tz: string): number {
   const p = wallParts(at, tz);
   const asUTC = Date.UTC(
     Number(p.year),

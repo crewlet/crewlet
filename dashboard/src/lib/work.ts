@@ -15,7 +15,7 @@
  * to import a change renderer from the board.
  */
 
-import { fmtDate, fmtDateTime, humanize, parseUTC } from "./format.ts";
+import { browserDay, fmtDate, fmtDateTime, humanize, parseUTC } from "./format.ts";
 import type { IconName } from "~/ui/Icon.tsx";
 import type {
   WorkActivityRecord,
@@ -606,6 +606,29 @@ export function scopeOf(group: string | undefined): string {
   return "";
 }
 
+/**
+ * The segment a view OPENS on, which is the other half of that round trip.
+ *
+ * TWO DIFFERENT ABSENCES land on the same segment for different reasons. A
+ * view naming no `status_group` at all is not a view asking for everything —
+ * the tracker opens on unfinished work — so it seeds `open`. A view naming a
+ * group the three segments cannot express (`active` alone) seeds `open` too,
+ * because [buildItemsParams] overwrites `status_group` from the segment
+ * whichever one it is: there is no reading that answers such a view as saved,
+ * only a choice of which wider set to show. `open` adds the rest of open work;
+ * the empty segment would add every closed task as well. Both are honest —
+ * the control and the query agree about which set is on screen — and `open`
+ * is the one nearer to what the view's author asked for.
+ *
+ * HERE RATHER THAN AT THE CALL SITE so it can be asserted over. Spelled
+ * `scopeOf(group) || "open"` inside the screen, it was the one step of the
+ * round trip no test could reach: deleting it left every suite green while the
+ * tracker opened on every closed task the company has.
+ */
+export function seededScope(group: string | undefined): string {
+  return scopeOf(group) || "open";
+}
+
 // ---------------------------------------------------------------------------
 // The calendar
 // ---------------------------------------------------------------------------
@@ -618,23 +641,15 @@ export interface CalendarCell {
   today: boolean;
 }
 
-/** A `Date` as the local `YYYY-MM-DD` it falls on. */
-function localKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 /** The month an instant falls in, locally, as `YYYY-MM`. */
 export function monthOf(now: number): string {
-  return localKey(new Date(now)).slice(0, 7);
+  return browserDay(new Date(now)).slice(0, 7);
 }
 
 export function shiftMonth(month: string, by: number): string {
   const [y, m] = month.split("-").map(Number);
   const at = new Date(y ?? 1970, (m ?? 1) - 1 + by, 1);
-  return localKey(at).slice(0, 7);
+  return browserDay(at).slice(0, 7);
 }
 
 export function monthLabel(month: string): string {
@@ -672,7 +687,7 @@ export function calendarWeeks(month: string, todayKey: string): CalendarCell[][]
   const weeks: CalendarCell[][] = [];
   for (let i = 0; i < cells; i++) {
     const at = new Date(year, index, 1 - lead + i);
-    const key = localKey(at);
+    const key = browserDay(at);
     if (i % 7 === 0) weeks.push([]);
     weeks[weeks.length - 1]?.push({
       key,
@@ -700,13 +715,13 @@ export function gridRange(weeks: CalendarCell[][]): { from: string; to: string }
   const last = lastRow?.[lastRow.length - 1]?.key ?? "";
   const after = new Date(`${last}T00:00:00`);
   after.setDate(after.getDate() + 1);
-  return { from: first, to: localKey(after) };
+  return { from: first, to: browserDay(after) };
 }
 
 /** The local `YYYY-MM-DD` an instant falls on, or empty when it is unreadable. */
 export function dayKey(ts: string | undefined): string {
   const at = parseUTC(ts);
-  return at ? localKey(at) : "";
+  return at ? browserDay(at) : "";
 }
 
 /**
