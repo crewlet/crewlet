@@ -458,8 +458,10 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   // The ghost is a card of the chart, so it is drawn once it is measured.
   act(() => LayoutObserver.settle());
   // Drawn IN the chart, with no dialog over it.
-  screen.getByRole("group", { name: "Add to Tooling" });
+  const form = screen.getByRole("group", { name: "Add to Tooling" });
   expect(screen.queryByRole("dialog")).toBeNull();
+  // The form a reader types into, with the fields the dialog would have had.
+  expect(within(form).getByLabelText("Name")).toBeDefined();
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   const fallback = await screen.findByRole("dialog");

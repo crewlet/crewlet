@@ -1585,11 +1585,13 @@ describe("adding a node in the chart", () => {
     const view = mount();
     item("Engineering").focus();
     view.rerender({ adding: adding(unitKey("Engineering")).request });
-    // The first control a Tab would reach, which in a radio group is the one
-    // that is checked: the kind the Add was opened on.
-    expect(document.activeElement).toBe(
-      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
-    );
+    /*
+     * ON THE NAME, which is the field the reader came to type in. The form
+     * asks for it (`autoFocus` on the name field, as the dialog does), and the
+     * chart leaves a form that is already holding focus alone rather than
+     * pulling it back to the first control in the box.
+     */
+    expect(document.activeElement).toBe(within(ghost("Add to Engineering")).getByLabelText("Name"));
     view.rerender({ adding: null });
     expect(focused()).toBe(unitKey("Engineering"));
   });
