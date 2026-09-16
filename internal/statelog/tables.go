@@ -277,7 +277,8 @@ func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool
 // nothing able to see that it does — so the probe passes, a writer takes the
 // retry-at-zero branch, and the deferred mutation is overwritten with nothing
 // anywhere reporting it.
-func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bool) error {
+func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bool,
+	maxVariables int) error {
 	// A COMPACTED DOMAIN KEYS ON THE SUBJECT and a strict one on the
 	// position. The stream itself keeps one message per subject there, so
 	// a positional retention would keep records the stream has already
@@ -314,13 +315,23 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 		store.EncodeTime(rec.StoredAt)); err != nil {
 		return fmt.Errorf("statelog: retain the record at %s: %w", rec.Position, err)
 	}
-	for _, path := range rec.Scope.Normalised().Paths {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO `+t.scope+` (position, path) VALUES (?, ?)
-			 ON CONFLICT (position, path) DO NOTHING`, key, path); err != nil {
-			return fmt.Errorf("statelog: index the deferred scope %q at %s: %w",
-				path, rec.Position, err)
-		}
+	// THE ONE DATA-DRIVEN COLLECTION IN THIS FILE. A record's scope is the
+	// complete set of object paths its apply may write, stated by the
+	// writer, and the paths NEST — a bulk edit over a project states the
+	// project and every task under it, so this is a collection whose size
+	// is the edit's, not a fixed one.
+	//
+	// THE ERROR NO LONGER NAMES THE PATH, and that is the deliberate cost:
+	// a chunk carries up to a thousand of them, so naming one would be a
+	// guess that reads as a fact. The engine names the offending row in its
+	// own error, which %w carries. Nothing matched on the old text.
+	paths := rec.Scope.Normalised().Paths
+	if _, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO `+t.scope+` (position, path) VALUES`, `(?, ?)`,
+		`ON CONFLICT (position, path) DO NOTHING`,
+		len(paths), func(i int) []any { return []any{key, paths[i]} }); err != nil {
+		return fmt.Errorf("statelog: index the %d-path deferred scope at %s: %w",
+			len(paths), rec.Position, err)
 	}
 	return nil
 }

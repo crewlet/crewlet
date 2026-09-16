@@ -96,6 +96,13 @@ type Estate interface {
 	// an apply loop, and the loop releases it before the estate can be
 	// replaced.
 	Writer(ctx context.Context) (*store.Writer, error)
+
+	// Caps is the CURRENT estate's probed capabilities, and it is here
+	// for the same reason the other three are: an adoption replaces the
+	// file, so a value captured at construction describes a database this
+	// runner is no longer writing to. [ApplyOptions.MaxVariables] is
+	// filled from it once per batch rather than once per process.
+	Caps() store.Capabilities
 }
 
 // RunnerDeps is everything an applier needs that it does not own.
@@ -795,6 +802,7 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		}
 		opts := r.opts
 		opts.Now = r.now()
+		opts.MaxVariables = r.db.Caps().MaxVariables
 		if _, _, err := r.applyOne(ctx, tx, rec, opts); err != nil {
 			return err
 		}
@@ -1002,6 +1010,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		highWater := r.Committed()
 		opts := r.opts
 		opts.Now = txStart
+		opts.MaxVariables = r.db.Caps().MaxVariables
 
 		for i := range run {
 			rec := run[i]
@@ -1040,7 +1049,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 						"the applier halts and its seats move to a node that can",
 						ErrStopped, rec.Kind, rec.Position, rec.V, r.domain.RecordVersion())
 				}
-				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted); err != nil {
+				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
 					return err
 				}
 				hasDeferred = true
@@ -1061,7 +1070,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					if _, hit, err := r.tables.deferredIn(ctx, tx, rec.Scope); err != nil {
 						return err
 					} else if hit {
-						if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted); err != nil {
+						if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
 							return err
 						}
 						blocked = true

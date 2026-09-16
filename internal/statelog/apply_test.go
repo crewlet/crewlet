@@ -1795,6 +1795,7 @@ type flakyEstate struct {
 		Read(context.Context, func(*sql.Tx) error) error
 		Tx(context.Context, func(*sql.Tx) error) error
 		Writer(context.Context) (*store.Writer, error)
+		Caps() store.Capabilities
 	}
 	mu       sync.Mutex
 	refusals int
@@ -1804,6 +1805,8 @@ type flakyEstate struct {
 func (f *flakyEstate) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	return f.inner.Read(ctx, fn)
 }
+
+func (f *flakyEstate) Caps() store.Capabilities { return f.inner.Caps() }
 
 func (f *flakyEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return f.inner.Tx(ctx, fn)

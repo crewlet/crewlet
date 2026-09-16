@@ -187,6 +187,12 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 		Now:             time.Unix(1_700_000_000, 0).UTC(),
 		StoredAt:        time.Unix(1_700_000_000, 0).UTC(),
 		ArbitratedKinds: c.Domain.Stream().ArbitratedKinds,
+
+		// THE PROBED LIMIT, not a fixed one: an applier sizes its
+		// multi-row inserts by this, so a suite that left it zero would
+		// certify every domain writing one row per statement — the one
+		// shape the chunker exists to replace — and agree with itself.
+		MaxVariables: db.Caps().MaxVariables,
 	}
 
 	for i, r := range records {

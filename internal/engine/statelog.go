@@ -257,6 +257,18 @@ func (r replicatedEstate) Writer(ctx context.Context) (*store.Writer, error) {
 	return peer.Writer(ctx)
 }
 
+// Caps answers the CURRENT estate's probe, and the zero value in the window
+// where there is no estate: the caller is sizing a statement, not reading
+// state, and [store.RowsPerInsert] reads a zero limit as one row per
+// statement — the shape every applier had before the chunker was wired in.
+func (r replicatedEstate) Caps() store.Capabilities {
+	peer := r.node.Replicated()
+	if peer == nil {
+		return store.Capabilities{}
+	}
+	return peer.Caps()
+}
+
 // snapshotHeld is the artefact this node holds, and why it holds no current
 // one.
 //
