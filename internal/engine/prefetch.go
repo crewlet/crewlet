@@ -36,7 +36,8 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 		// switch by passing a nil provider pool silently disables the
 		// memory and knowledge filters too — an operator turning off a
 		// summary gets a company with no memory.
-		SummarizeEpisodes: company.Config.Learning.Reflect.SummarizeEpisodes.Or(true),
+		SummarizeEpisodes:  company.Config.Learning.Reflect.SummarizeEpisodes.Or(true),
+		SummarizeMaxTokens: company.Config.Learning.Reflect.SummarizeMaxTokens,
 	}
 	if db := e.backends.Store; db != nil {
 		src.Diary = learning.NewDiary(db)

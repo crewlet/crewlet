@@ -101,20 +101,53 @@ var dutyCases = []testCase{
 		}
 	}},
 
-	{"list_live_finds_duties_under_every_prefix_that_can_name_one", func(h *harness) {
-		// A backend that keeps duties apart from seats has to decide which
-		// store a listing reads from the PREFIX alone, and both directions
-		// can name a duty: a prefix shorter than "worker:" covers every
-		// duty, and one longer than it covers some. Reading only an exact
-		// "worker:" as a duty listing hides a live duty from a narrower
-		// read, which is a dashboard showing a running duty as unheld.
-		h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL, Ungated: true})
-		h.claim(coord.WorkerResource("sandbox-waiter"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL, Ungated: true})
+	{"every_listing_reaches_duties_wherever_a_backend_keeps_them", func(h *harness) {
+		// A backend that keeps duties in a store of its own decides which
+		// stores a listing reads, and both directions of getting that
+		// wrong are live incidents. Reading only the seat store for a duty
+		// listing HIDES a running duty, which is a dashboard reporting it
+		// unheld and a second node starting it. Answering a class with
+		// whatever the STORE it was read out of holds, rather than with
+		// the leases whose own leading segment is that class, hands the
+		// seat listing this fleet's node presence back as a seat, which is
+		// a seat nobody claimed counted into capacity.
+		//
+		// So every assertion below names the class it asked for and the
+		// exact set it must get, on a fleet holding all three at once.
+		//
+		// The duties are claimed at coord.MaxDutyTTL rather than at
+		// LongTTL deliberately. That is the TTL a backend cannot keep
+		// beside its seats, so it is what forces the separate store into
+		// existence at all; inside the seat ceiling a backend is free to
+		// hold everything in one place and this case would certify a
+		// routing decision nothing had to make.
+		duties := coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL, Ungated: true}
+		h.claim(coord.WorkerResource("scheduler"), duties)
+		h.claim(coord.WorkerResource("sandbox-waiter"), duties)
 		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
-		h.requireResources(`ListLive("w")`, h.listLive("w"), "worker:scheduler", "worker:sandbox-waiter")
-		h.requireResources(`ListLive("worker:s")`, h.listLive("worker:s"), "worker:scheduler", "worker:sandbox-waiter")
-		h.requireResources(`ListLive("worker:sch")`, h.listLive("worker:sch"), "worker:scheduler")
-		h.requireResources(`ListLive("seat:")`, h.listLive(coord.SeatPrefix), "seat:ceo")
+		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
+			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
+		})
+
+		// EVERY duty, and no seat. Both halves matter: a listing that
+		// reached the duty store but stopped at the first record would
+		// pass a single-duty case and still leave the second duty unrun.
+		h.requireResources("live duties", h.listLive(coord.ClassWorker),
+			"worker:scheduler", "worker:sandbox-waiter")
+		h.requireResources("live seats", h.listLive(coord.ClassSeat), "seat:ceo")
+		// The membership read, on a fleet where duties outnumber both the
+		// seats and the nodes. It is what a node divides the seats by, so
+		// a duty counted into it is every node believing the fleet is
+		// larger than it is and leaving seats dark.
+		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
+
+		// ListOwned narrows by nothing at all, because the owner is in the
+		// record rather than in the key, so it is the one read that has to
+		// visit every store a backend keeps leases in. A drain watches it
+		// converge to empty: a duty it never listed is a node that reports
+		// itself drained while its duty is still running.
+		h.requireResources("everything node-a:1 holds", h.listOwned("node-a:1"),
+			"node:node-a", "seat:ceo", "worker:scheduler", "worker:sandbox-waiter")
 	}},
 
 	{"a_released_duty_is_free_at_once_and_its_epoch_keeps_climbing", func(h *harness) {

@@ -43,7 +43,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PhaseTag } from "./PhaseTag.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration } from "~/lib/format.ts";
 import {
   decisionLabel,
   ledgerOf,
@@ -100,9 +100,36 @@ function ToolRow({
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
-          <CodeBlock plain wrap code={args || "{}"} maxHeight={RECORD_MAX_HEIGHT} />
+          {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable
+              block announces the name and nothing around it, and half a
+              dozen regions called "Arguments" on one round is the same as
+              none.
+
+              `selectable` is what carries the name: the design system pairs
+              the two in the prop type, because a bounded block is a scroll
+              container a keyboard has to be able to reach, and a region with
+              no accessible name is a tab stop announced as nothing. It also
+              scopes select-all to the block, which is what a reader copying
+              one tool's arguments out of a long round wants. Both blocks are
+              rendered only while the row is open, so this adds no stop to a
+              collapsed card. */}
+          <CodeBlock
+            plain
+            wrap
+            selectable
+            label={`${name}, arguments`}
+            code={args || "{}"}
+            maxHeight={RECORD_MAX_HEIGHT}
+          />
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <CodeBlock plain wrap code={result || "(empty)"} maxHeight={RECORD_MAX_HEIGHT} />
+          <CodeBlock
+            plain
+            wrap
+            selectable
+            label={`${name}, ${failed ? "error" : "result"}`}
+            code={result || "(empty)"}
+            maxHeight={RECORD_MAX_HEIGHT}
+          />
         </div>
       </Disclosure>
     </div>
@@ -354,14 +381,14 @@ export function PhaseCard({
             <EmptyValue label="Tokens not reported" />
           )}
         </span>
-        {/* HOW LONG THIS PHASE TOOK. Only derivable since the phase's own
-            `agent_phase_started` is folded onto its record (see `withStarts`)
-            — `agent_phase_completed` carries the instant it landed and
-            nothing else, so a finished phase had no duration anywhere on this
-            dashboard. On a self-iterating turn that is the number that says
-            WHICH round was expensive, which is the question the token total
-            makes a reader ask and could not answer. Absent on a nested call,
-            which publishes no start. */}
+        {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
+            engine measures the phase where the clock is and puts the answer
+            on the record. On a self-iterating turn that is the number that
+            says WHICH round was expensive, which is the question the token
+            total makes a reader ask and could not answer. Present on a
+            NESTED call too, now: a worker and the round-cap judge publish no
+            start event, so the pairing this replaced could never give one a
+            duration and "which worker was slow" had no answer anywhere. */}
         {took != null && (
           <span className="phase-meta t-num" title="how long this phase took">
             {fmtDuration(took)}
@@ -469,9 +496,14 @@ export function PhaseCard({
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
+                    {/* The tallest block on the page by a wide margin: a
+                        seat's system prompt runs to tens of kilobytes, so
+                        this is the one that most needed to be reachable. */}
                     <CodeBlock
                       plain
                       wrap
+                      selectable
+                      label={`The ${record.phase} phase's system prompt`}
                       code={record.systemPrompt}
                       maxHeight={RECORD_MAX_HEIGHT}
                     />
@@ -480,7 +512,14 @@ export function PhaseCard({
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <CodeBlock plain wrap code={record.userPrompt} maxHeight={RECORD_MAX_HEIGHT} />
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label={`The ${record.phase} phase's user message`}
+                      code={record.userPrompt}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                   </div>
                 )}
               </div>

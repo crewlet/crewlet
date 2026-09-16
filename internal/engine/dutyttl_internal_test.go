@@ -26,12 +26,19 @@ import (
 // and the waiter's interval is refused by Engine.waiterDuty once its duty would
 // exceed the ceiling. The waiter's bound therefore IS the ceiling, so it is
 // marked as not sizing it: counting it would make the ceiling justify itself.
+//
+// Every other entry is a plain CONSTANT, and its longest value is the constant
+// itself: the expression takes no argument, so there is nothing for it to
+// reach. Why each constant is the duration it is stays at its own definition
+// rather than being copied here, where the copy would be free to disagree.
 var dutyTTLs = map[string]struct {
 	longest time.Duration
 	// sizesCeiling is false for a bound derived from coord.MaxDutyTTL.
 	sizesCeiling bool
 }{
 	"maintenanceDutyTTL":      {maintenanceDutyTTL, true},
+	"retentionDutyTTL":        {retentionDutyTTL, true},
+	"embedDutyTTL":            {embedDutyTTL, true},
 	"integrationDutyTTL":      {integrationDutyTTL, true},
 	"learningDutyTTL":         {learningDutyTTL, true},
 	"setup.LeaseTTL":          {setup.LeaseTTL, true},

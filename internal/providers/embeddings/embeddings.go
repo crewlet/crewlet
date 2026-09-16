@@ -43,6 +43,33 @@ type Embedder interface {
 	Width() int
 }
 
+// BatchEmbedder embeds many texts in ONE call, in the order they were given.
+//
+// # Why this is a second interface rather than a wider Embedder
+//
+// The two original callers embed exactly one thing — the turn's task, or an
+// episode's summary — and a batch API would have both build a slice of one.
+// The knowledge corpus is the caller that changed the arithmetic: filling a
+// company's 110 000 sources one at a time is 110 000 round trips, which at a
+// tenth of a second apiece does not fit in the tick it runs on, let alone in
+// the eight hours a cold fill is budgeted at. Batched it is ≈ 860 requests
+// covering the same inputs, billed identically because the provider bills per
+// input TOKEN.
+//
+// Kept apart from [Embedder] so a backend that cannot batch is still a
+// complete embedder: the caller asks for this interface and falls back to the
+// one-at-a-time path, rather than every provider growing a method most of them
+// would implement as a loop.
+type BatchEmbedder interface {
+	Embedder
+
+	// EmbedBatch returns one vector per input, IN ORDER and one-to-one:
+	// a caller matches results to inputs positionally, so a provider that
+	// dropped an empty input would silently re-file every vector after it
+	// onto the wrong document.
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+}
+
 // ErrEmpty reports text with nothing in it.
 //
 // Its own error because the caller's answer differs: an empty task is not a

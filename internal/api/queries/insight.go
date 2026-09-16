@@ -46,13 +46,129 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if records == nil {
-		// A named empty slice, not nil: nil marshals as `null` and the
-		// client reads `.events` off it, which is the exact shape mismatch
-		// that made the Trace screen answer "not found" for every trace.
-		records = []store.EventRecord{}
+	// THE READ STOPPED AT THE CAP, not at the end of the turn. EventLog.Turn
+	// is ordered oldest first, because a turn is read forwards — so the rows
+	// a long turn loses are its ENDING, which is where `agent_turn_completed`
+	// and `turn_completed` are: the two records a reader takes the outcome,
+	// the wall clock and the plan summary from. A turn cut at the cap was
+	// therefore indistinguishable from one that died before finishing, and
+	// the screen said so out loud, printing "no turn record" directly above
+	// the rows it did get.
+	//
+	// So a cut view gets its ENDING BACK and reports the gap in the MIDDLE,
+	// which is the part nothing can stand in for. Two cheap seeks on the same
+	// (turn_id, event_time, event_id) index rather than one, and only on the
+	// turns that need it.
+	//
+	// ASKED, NOT INFERRED. `len(records) == cap` is not "the read stopped
+	// early": a turn of exactly the cap holds every row it has, and the
+	// recovery below widens that misreading rather than narrowing it — a turn
+	// a little past the cap ends up whole on the page, under a banner saying
+	// part of it is missing. The count runs only on a read that filled, which
+	// is the only case where a cut is possible at all.
+	//
+	// THE SECOND READ DEGRADES, it does not fail the first. The rows are
+	// already in hand and they are what the reader came for; discarding a
+	// successful 500-row read because a follow-up count could not be taken
+	// turns the largest turns — the only ones that reach this branch at all,
+	// and the ones most worth opening — into `query_failed`. So a failure
+	// here leaves `truncated` false and logs: the page renders, and the worst
+	// case is a missing caution badge rather than a missing screen.
+	truncated := false
+	if len(records) >= store.MaxTurnEvents {
+		total, err := s.Events.TurnEventCount(ctx, id)
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", err)
+		case total > len(records):
+			closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
+			if err != nil {
+				log.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", err)
+			} else {
+				records = mergeByID(records, closing)
+			}
+			// AFTER the merge, because the merge is what decides it: the
+			// recovered ending closes the gap outright on a turn only a
+			// little past the cap, and leaves one on a turn that is
+			// genuinely long.
+			truncated = total > len(records)
+		}
 	}
-	return map[string]any{"turn_id": id, "events": records}, nil
+	return map[string]any{
+		"turn_id": id,
+		"events":  records,
+		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
+		// client that predates the field is unaffected — and one that has it
+		// can say the gap is the middle rather than warning that the page
+		// cannot answer its own headline question.
+		"truncated": truncated,
+	}, nil
+}
+
+// TurnClosingEvents is how many of a long turn's last rows are recovered
+// beside its opening.
+//
+// Twenty rather than two, because the two records a reader came for are not
+// reliably the last two. A turn ends with its final review phase, then
+// `agent_turn_completed` and `turn_completed` — and then the REFLECTION PASS,
+// which publishes after them: an episode, a persist decision, a counterparty
+// profile, a synthesized, refined or promoted skill, and its own sentinel,
+// each of them a model call that also files its own auxiliary
+// `agent_phase_completed`. Two would be swallowed by that tail on any turn
+// with learning enabled, and the review phase — the one a reader who came for
+// "how did it end" wants beside the words — would go with them.
+//
+// Twenty clears that with headroom while staying small enough that the second
+// read is a seek rather than a scan. The recovered rows replace nothing: they
+// are appended to the head, so a cut view holds MaxTurnEvents opening rows
+// plus at most this many closing ones, which is the same payload budget the
+// cap exists for with a bounded addition.
+const TurnClosingEvents = 20
+
+// mergeByID appends the rows of `tail` that `head` does not already hold.
+//
+// The two reads come from opposite ends of one index, so on a turn that only
+// just reached the cap they OVERLAP — the same rows, read the other way round
+// — and concatenating would render a phase card twice. Order is preserved:
+// head is oldest first and so is tail, so the result stays the sequence a turn
+// is read in, with whatever gap the cap left between them.
+func mergeByID(head, tail []store.EventRecord) []store.EventRecord {
+	if len(tail) == 0 {
+		return head
+	}
+	// KEYED ON THE STORE'S OWN IDENTITY, (event_time, event_id), which is the
+	// events table's PRIMARY KEY — the id alone is indexed but NOT unique, and
+	// the schema says so in as many words. [store.EventLog.ByID] already reads
+	// it as "take the newest match", which is only a meaningful thing to say
+	// because more than one row can carry one id.
+	//
+	// A key narrower than the table's drops a row the two reads legitimately
+	// both carry, and the drop is not where it would be noticed: `truncated`
+	// below is `total > len(records)`, so a wrongly dropped row leaves the
+	// page one short of the count and reports a gap in the middle of a turn
+	// that is whole on the screen.
+	//
+	// Microseconds rather than the time.Time, because a time.Time carries a
+	// monotonic reading and a location and is not a safe map key; micros is
+	// exactly what the column holds.
+	type identity struct {
+		At int64
+		ID string
+	}
+	keyOf := func(r store.EventRecord) identity {
+		return identity{At: store.EncodeTime(r.Time), ID: r.ID}
+	}
+	seen := make(map[identity]struct{}, len(head))
+	for _, r := range head {
+		seen[keyOf(r)] = struct{}{}
+	}
+	for _, r := range tail {
+		if _, dup := seen[keyOf(r)]; dup {
+			continue
+		}
+		head = append(head, r)
+	}
+	return head
 }
 
 // phases answers what the models have been doing, company-wide.
@@ -79,9 +195,6 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	records, err := s.Events.Phases(ctx, p.String("role"), limit, before)
 	if err != nil {
 		return nil, err
-	}
-	if records == nil {
-		records = []store.EventRecord{}
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
@@ -193,10 +306,11 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// A nil searcher is the ANSWER, not a reason to be unregistered: exactly
 	// one backend serves a company, chosen by which integration is
 	// configured, so "none is" is a fact the company establishes on its own.
-	if s.Knowledge == nil {
+	searcher := s.searcher()
+	if searcher == nil {
 		return unavailable(KnowledgeNoBackend, "no knowledge backend is configured for this company")
 	}
-	out["backend"] = s.Knowledge.Backend()
+	out["backend"] = searcher.Backend()
 	// The seam's own pre-gate, and it is free: it answers "could this search
 	// possibly hit anything" with no I/O, which is exactly what a screen with
 	// no results needs in order to say WHY.
@@ -207,13 +321,25 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// to whether a read scope was declared — and an operator told "no backend
 	// is configured" here would go and check the integration they already
 	// configured correctly, instead of the empty field that is the cause.
-	if !s.Knowledge.CanSearch(nil, organization) {
-		return unavailable(KnowledgeNoScope, "the "+s.Knowledge.Backend()+" backend is configured but knowledge.confluence_spaces lists no space, so an org-wide search has nothing to read")
+	if !searcher.CanSearch(nil, organization) {
+		return unavailable(KnowledgeNoScope, "the "+searcher.Backend()+" backend is configured but knowledge.scope lists no container, so an org-wide search has nothing to read")
+	}
+	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
+	// during that window every search answers empty. The optional
+	// interface rather than a method on the seam: a live vendor search has
+	// no index and nothing to report, so requiring it of every backend
+	// would be four implementations of "false".
+	if builder, ok := searcher.(interface {
+		Building(ctx context.Context) bool
+	}); ok && builder.Building(ctx) {
+		return unavailable(KnowledgeBuilding,
+			"this node is still indexing what it has projected, so a search "+
+				"here would answer empty for pages that exist")
 	}
 	if text == "" {
 		return out, nil
 	}
-	hits := s.Knowledge.Search(ctx, knowledge.Query{
+	hits := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
@@ -258,13 +384,29 @@ const (
 	KnowledgeNoBackend KnowledgeReason = "no_backend"
 	// KnowledgeNoScope — a backend is wired, with no org-wide read scope.
 	KnowledgeNoScope KnowledgeReason = "no_scope"
+
+	// KnowledgeBuilding — the backend is wired and its index is still
+	// catching up with what this node has projected.
+	//
+	// SEPARATE FROM AN EMPTY RESULT, and that is the entire reason it
+	// exists: "the company has written nothing down" and "this node has
+	// not finished reading what it wrote" are opposite facts, and the
+	// second is true for the whole first index build on a freshly joined
+	// node. A screen that showed the first for the second would send
+	// somebody looking for a wiki that is right there.
+	//
+	// Only a backend that keeps a local index can report it — a live
+	// vendor search has nothing to build — so it is read through an
+	// optional interface rather than added to [knowledge.Searcher].
+	KnowledgeBuilding KnowledgeReason = "building"
 )
 
 // Valid reports whether r is a reason this package emits, so an unknown value
 // off the wire is a value rather than a panic.
 func (r KnowledgeReason) Valid() bool {
 	switch r {
-	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope:
+	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope,
+		KnowledgeBuilding:
 		return true
 	}
 	return false
@@ -352,4 +494,14 @@ func skillRow(sk learning.Skill) map[string]any {
 		"updated_at": isoOrEmpty(sk.UpdatedAt),
 		"uses":       sk.UseCount,
 	}
+}
+
+// searcher resolves the knowledge backend for this call.
+//
+// Per call rather than per process: see [Sources.Knowledge].
+func (s Sources) searcher() knowledge.Searcher {
+	if s.Knowledge == nil {
+		return nil
+	}
+	return s.Knowledge()
 }

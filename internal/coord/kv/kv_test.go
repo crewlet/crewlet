@@ -50,7 +50,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 	return nc
 }
 
-// bucketSeq gives every store its own pair of buckets.
+// bucketSeq gives every store its own set of buckets.
 var bucketSeq atomic.Int64
 
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
@@ -106,17 +106,17 @@ func TestKeyMappingRoundTrips(t *testing.T) {
 		"plain",
 		"=",
 		".",
-		":",
+		"rollover:a project:7",
 	}
 	seen := map[string]string{}
 	for _, r := range resources {
-		key := encodeKey(r)
+		key := encodeResource(r)
 		if !validKeyForNATS(key) {
-			t.Fatalf("encodeKey(%q) = %q, which NATS KV will not accept", r, key)
+			t.Fatalf("encodeResource(%q) = %q, which NATS KV will not accept", r, key)
 		}
-		back, ok := decodeKey(key)
+		back, ok := decodeResource(key)
 		if !ok {
-			t.Fatalf("decodeKey(%q) (from %q) reported an unreadable key", key, r)
+			t.Fatalf("decodeResource(%q) (from %q) reported an unreadable key", key, r)
 		}
 		if back != r {
 			t.Fatalf("round trip: %q -> %q -> %q", r, key, back)
@@ -195,15 +195,15 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	if len(owned) != 2 {
 		t.Fatalf("ListOwned = %v, want both seats", owned)
 	}
-	live, err := s.ListLive(ctx, coord.SeatPrefix)
+	live, err := s.ListLive(ctx, coord.ClassSeat)
 	if err != nil {
 		t.Fatalf("ListLive: %v", err)
 	}
 	if len(live) != 2 {
 		t.Fatalf("ListLive(%q) = %v, want both seats — the prefix is matched on the "+
-			"RESOURCE, not on the escaped key", coord.SeatPrefix, live)
+			"RESOURCE, not on the escaped key", coord.ClassSeat, live)
 	}
-	hints, err := s.PreferredResources(ctx, coord.SeatPrefix, "node-a")
+	hints, err := s.PreferredResources(ctx, coord.ClassSeat, "node-a")
 	if err != nil {
 		t.Fatalf("PreferredResources: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	if got, err := s.Get(ctx, "seat:ceo"); err != nil || got != nil {
 		t.Fatalf("an unrenewed lease is still readable: (%v, %v)", got, err)
 	}
-	if raw, err := s.leases.kv.Get(ctx, encodeKey("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if raw, err := s.leases.kv.Get(ctx, encodeResource("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Fatalf("the lease KEY survived its bucket TTL: (%v, %v)", raw, err)
 	}
 
@@ -330,7 +330,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	if taken.Preferred != "node-a" {
 		t.Fatalf("placement hint is %q after the lease key expired, want node-a", taken.Preferred)
 	}
-	hints, err := s.PreferredResources(ctx, coord.SeatPrefix, "node-a")
+	hints, err := s.PreferredResources(ctx, coord.ClassSeat, "node-a")
 	if err != nil {
 		t.Fatalf("PreferredResources: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	}
 	// A delete would take the record away; a tombstone leaves it, which is
 	// what keeps the resource's history readable while it is unheld.
-	kve, err := s.leases.kv.Get(ctx, encodeKey("seat:ceo"))
+	kve, err := s.leases.kv.Get(ctx, encodeResource("seat:ceo"))
 	if err != nil {
 		t.Fatalf("the released key was deleted, not expired in place: %v", err)
 	}
@@ -472,5 +472,273 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	// rather than the bucket's.
 	if _, found, err := store.Secret(ctx, "GOOD"); err != nil || !found {
 		t.Fatalf("GOOD: found=%v err=%v", found, err)
+	}
+}
+
+// THE CLASS IS A SUBJECT TOKEN, which is the whole reason a resource key is
+// segmented rather than one escaped blob.
+//
+// Before it was, `seat:alice` became the single token `seat=3Aalice`; a subject
+// wildcard matches whole tokens, so there was no filter that selected the
+// seats and every class listing read the entire bucket and discarded the rest.
+// This asserts the property directly, on the KEY, because it is what the
+// broker matches on and a listing that happened to be correct while the key
+// was one token would prove nothing about the filter.
+func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		resource string
+		want     string
+	}{
+		{"seat:alice", "seat.alice"},
+		{"node:node-0", "node.node-0"},
+		{"worker:scheduler", "worker.scheduler"},
+		// A name carrying the separator is MORE segments, never a class
+		// with a colon in it — the class is the leading one either way.
+		{"rollover:proj:7", "rollover.proj.7"},
+		// And a name carrying a dot keeps it escaped, because an
+		// unescaped one would add a token the grammar never wrote.
+		{"seat:alice.smith", "seat.alice=2Esmith"},
+	}
+	for _, c := range cases {
+		if got := encodeResource(c.resource); got != c.want {
+			t.Errorf("encodeResource(%q) = %q, want %q", c.resource, got, c.want)
+		}
+	}
+
+	// And the filter a class builds selects its own keys and no others —
+	// including the adversarial pair, where one class name is a string
+	// prefix of another. A subject wildcard matches per TOKEN, so `node.>`
+	// does not take `node-pool.x`; a string prefix would.
+	seat := coord.DocumentFilter(string(coord.ClassSeat))
+	for _, c := range []struct {
+		resource string
+		want     bool
+	}{
+		{"seat:alice", true},
+		{"seat:alice.smith", true},
+		{"node:node-0", false},
+		{"worker:seat", false},
+		{"seatbelt:x", false},
+	} {
+		if got := subjectMatches(seat, encodeResource(c.resource)); got != c.want {
+			t.Errorf("filter %q vs %q (key %q) = %v, want %v",
+				seat, c.resource, encodeResource(c.resource), got, c.want)
+		}
+	}
+}
+
+// subjectMatches is NATS subject matching over the two wildcards, written out
+// here because the assertion above is about what the BROKER will do and a test
+// that asked the client's own helper would be asserting nothing the server
+// promises.
+func subjectMatches(filter, subject string) bool {
+	f, s := strings.Split(filter, "."), strings.Split(subject, ".")
+	for i, tok := range f {
+		if tok == ">" {
+			return i <= len(s)
+		}
+		if i >= len(s) {
+			return false
+		}
+		if tok != "*" && tok != s[i] {
+			return false
+		}
+	}
+	return len(f) == len(s)
+}
+
+// THE BROKER NARROWS THE CLASS READS, and this measures it rather than
+// trusting the filter.
+//
+// The two reads it covers are the ones paid on a ticker: the membership read
+// the sweep takes every five seconds, and the placement hints it takes beside
+// them — that one over the epochs bucket, which has NO TTL and therefore holds
+// a record for every resource the deployment has ever leased. Both used to
+// read their whole bucket and discard what they did not want.
+//
+// The count is taken from INSIDE the walk, because the rows it yields were
+// always correct: a filter that did not narrow would return the same leases
+// and simply move everything else over the wire to get there.
+func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
+	nc := embeddedNATS(t)
+	s := openStore(t, nc, time.Minute)
+	ctx := context.Background()
+
+	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler"} {
+		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+			Owner: "node-a", TTL: time.Minute, Preferred: "node-a",
+		}); err != nil {
+			t.Fatalf("claim %s: %v", r, err)
+		}
+	}
+	if _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute, Ungated: true,
+	}); err != nil {
+		t.Fatalf("claim presence: %v", err)
+	}
+
+	count := func(kv jetstream.KeyValue, class coord.Class) int {
+		t.Helper()
+		n := 0
+		if err := s.eachUnder(ctx, kv, class, "the "+string(class)+" records",
+			func(jetstream.KeyValueEntry) error { n++; return nil }); err != nil {
+			t.Fatalf("walk %s: %v", class, err)
+		}
+		return n
+	}
+
+	// Five resources across three classes, each in the lease bucket its
+	// class is written to: seats and presence in the seat lease bucket, the
+	// duty in the duty bucket. The epochs bucket holds all five whichever
+	// lease bucket the lease itself is in, which is what keeps a duty's
+	// counter monotonic across the move between them.
+	for _, c := range []struct {
+		lane  *lane
+		class coord.Class
+		want  int
+	}{
+		{s.leases, coord.ClassSeat, 3},
+		{s.leases, coord.ClassNode, 1},
+		{s.duties, coord.ClassWorker, 1},
+	} {
+		if got := count(c.lane.kv, c.class); got != c.want {
+			t.Errorf("the %s lease walk was handed %d records for the %d it wanted; "+
+				"the broker is not filtering and the membership read is moving "+
+				"every seat in the fleet", c.class, got, c.want)
+		}
+		if got := count(s.epochs, c.class); got != c.want {
+			t.Errorf("the %s epoch walk was handed %d records for the %d it wanted; "+
+				"that bucket has no TTL, so an unnarrowed read here grows with "+
+				"the deployment's whole history", c.class, got, c.want)
+		}
+	}
+
+	// AND THE SEAT LEASE BUCKET CARRIES NO DUTY OF THIS BUILD'S, which is
+	// the other half of what keeps the membership read cheap: a class the
+	// bucket does not hold is a bucket the read never opens at all.
+	if got := count(s.leases.kv, coord.ClassWorker); got != 0 {
+		t.Errorf("the seat lease bucket holds %d duty records; this build writes "+
+			"every duty it claims to the duty bucket", got)
+	}
+
+	// And the answers are still right, which is the half a narrowing bug
+	// would not disturb.
+	live, err := s.ListLive(ctx, coord.ClassNode)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("ListLive(node) = %v, %v; want the one presence lease", live, err)
+	}
+	hints, err := s.PreferredResources(ctx, coord.ClassSeat, "node-a")
+	if err != nil || len(hints) != 3 {
+		t.Fatalf("PreferredResources(seat) = %v, %v; want the three seat hints", hints, err)
+	}
+}
+
+// A SECOND NODE ADOPTS THE LEASE BUCKET RATHER THAN REWRITING IT, and is
+// honest about the TTL that is actually in force.
+//
+// Open used to call CreateOrUpdateKeyValue, which makes every booting node's
+// call a WRITE: the losers of the create race rewrote a configuration they
+// already agreed with against a metadata group that was still electing, which
+// is the shape this package removed from every other bucket. The consequence
+// when the two disagree is worse than the write: whichever node booted LAST
+// silently redefined how long every other node's leases lived.
+//
+// So the bucket is adopted, and the store carries the live TTL. Believing the
+// configured one instead would let validateTTL accept claims the bucket will
+// not honour — a deadline handed back that is a lie about when the lease ends.
+func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+
+	const inForce = 90 * time.Second
+	first, err := Open(context.Background(), nc, Config{TTL: inForce, BucketPrefix: prefix})
+	if err != nil {
+		t.Fatalf("the first Open: %v", err)
+	}
+	if first.TTL() != inForce {
+		t.Fatalf("the node that created the bucket reports %v, want %v",
+			first.TTL(), inForce)
+	}
+
+	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
+	// holding possibly-different Tier A files actually do.
+	second, err := Open(context.Background(), nc, Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	if err != nil {
+		t.Fatalf("a second Open against an existing bucket: %v", err)
+	}
+	if second.TTL() != inForce {
+		t.Errorf("the second node reports a lease TTL of %v; the bucket's is "+
+			"%v, and a store that believes its own config here hands back "+
+			"deadlines the bucket will not honour", second.TTL(), inForce)
+	}
+
+	// AND THE BUCKET ITSELF IS UNCHANGED — the second node wrote nothing.
+	status, err := second.leases.kv.Status(context.Background())
+	if err != nil {
+		t.Fatalf("read the lease bucket's status: %v", err)
+	}
+	if status.TTL() != inForce {
+		t.Errorf("the lease bucket's TTL is now %v: the second node rewrote a "+
+			"configuration it does not own", status.TTL())
+	}
+}
+
+// A BUCKET REPLICATED BELOW WHAT THIS NODE IS CONFIGURED FOR IS REFUSED.
+//
+// # Why this one difference is fatal where the lease TTL is only warned about
+//
+// Because it is the difference with no symptom. Every other way a running
+// bucket can disagree with this node's Tier A changes how the store BEHAVES,
+// and behaviour is observable: a shorter lease TTL hands seats around sooner,
+// and the case above is about reporting the one in force rather than the one
+// configured. Replication changes nothing until a node is lost — and then it
+// changes everything, because the leases, the fencing epochs and the company's
+// secrets were on one disk the whole time while every node reported itself
+// correctly configured for three.
+//
+// An operator who raises stream.replicas on an existing fleet gets a
+// rolling restart in which each node finds its buckets already there, adopts
+// them, and goes on running single-replica coordination. Nothing writes to a
+// bucket that exists — that is the rule openBucket is built on — so the only
+// honest move left is to say so.
+func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+
+	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
+	// deployment or an early cluster actually has.
+	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+		t.Fatalf("the first Open: %v", err)
+	}
+
+	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
+	// one replica, and no node rewrites them.
+	_, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
+	if err == nil {
+		t.Fatal("a node configured for 3 replicas adopted single-replica " +
+			"coordination and reported itself healthy — the leases, the " +
+			"fencing epochs and the company's secrets are on one disk and " +
+			"nothing says so")
+	}
+	// THE COUNTS ARE IN THE MESSAGE, because "replication mismatch" leaves
+	// an operator unable to tell which side is the one to change.
+	// THE FIELD IS stream.replicas, which is the one an operator can grep
+	// their Tier A for: the coordination buckets take their replica count
+	// from it because they live on the same broker, and there is no
+	// coordination.replicas to go and look for.
+	for _, want := range []string{"1x", "3x", "stream.replicas"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+
+	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
+	// node against a replicated fleet's buckets is not locked out.
+	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+		t.Errorf("a node configured for fewer replicas than the bucket has "+
+			"was refused: %v", err)
 	}
 }

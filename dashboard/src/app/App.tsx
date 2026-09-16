@@ -13,10 +13,15 @@ import { Button, CodeBlock, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
+import { Goals } from "~/routes/Goals.tsx";
 import { People } from "~/routes/People.tsx";
 import { SeatScreen } from "~/routes/Seat.tsx";
 import { OrgScreen } from "~/routes/Org.tsx";
 import { Runs } from "~/routes/Runs.tsx";
+import { Work, WorkItem } from "~/routes/Work.tsx";
+import { Sprints } from "~/routes/Sprints.tsx";
+import { MyWork } from "~/routes/MyWork.tsx";
+import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
 import { Schedules } from "~/routes/Schedules.tsx";
 import { ModelActivity } from "~/routes/Model.tsx";
@@ -40,16 +45,45 @@ function Screen() {
   const route = useRoute();
   const [head, id] = route.path;
   switch (head) {
+    // KEYED ON THE SUBJECT, every screen that has one.
+    //
+    // A hash change re-renders this switch rather than remounting it, so
+    // `#/turns/A` → `#/turns/B` reconciles: React keeps the same component
+    // instance and every piece of per-SUBJECT state in it outlives the subject
+    // it describes. The Turn header's controls are where that shows — a
+    // refusal holds until the next click now, so a "Download failed" left over
+    // from turn A greeted the reader of turn B — but the hazard is the shape,
+    // not the control: a disclosure left open, a tab left selected and a filter
+    // left set are all the same bug waiting for someone to notice.
     case undefined:
       return <Overview />;
     case "people":
       return <People />;
     case "seats":
-      return id ? <SeatScreen handle={id} /> : <People />;
+      return id ? <SeatScreen key={id} handle={id} /> : <People />;
     case "org":
       return <OrgScreen />;
     case "runs":
       return <Runs />;
+    // A key or an id BOTH resolve, because the reader has whichever they were
+    // shown: a person pastes ENG-42 out of chat, and every internal link
+    // carries the id. The engine's own Get takes either, so the route does
+    // not have to know which it was handed.
+    case "work":
+      // `me` IS NOT A TASK. Keys are `<PROJECT>-<n>` and ids are uuids, so
+      // neither can collide with it — and `#/work/me` is the address this
+      // screen has had since it was designed.
+      if (id === "me") return <MyWork />;
+      return id ? <WorkItem key={id} id={id} /> : <Work />;
+    case "goals":
+      return <Goals />;
+    // ITS OWN SCREEN rather than a tab of the board, for the reason the view
+    // strip is its own question: a sprint report is about the CONTAINER over
+    // time and the board is about the rows in it now.
+    case "sprints":
+      return <Sprints />;
+    case "pages":
+      return id ? <PageView key={id} id={id} /> : <Pages />;
     case "conversations":
       return <Conversations />;
     case "schedules":
@@ -73,11 +107,11 @@ function Screen() {
     case "secrets":
       return <Secrets />;
     case "traces":
-      return id ? <TraceScreen traceId={id} /> : <NotFound what="a trace id" />;
+      return id ? <TraceScreen key={id} traceId={id} /> : <NotFound what="a trace id" />;
     case "events":
-      return id ? <EventScreen eventId={id} /> : <Activity />;
+      return id ? <EventScreen key={id} eventId={id} /> : <Activity />;
     case "turns":
-      return id ? <TurnScreen turnId={id} /> : <NotFound what="a turn id" />;
+      return id ? <TurnScreen key={id} turnId={id} /> : <NotFound what="a turn id" />;
     default:
       return <NotFound what={`the screen “${head}”`} />;
   }

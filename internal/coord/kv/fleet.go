@@ -9,18 +9,257 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
+
+// A BUCKET IS A STREAM, and provisioning a replicated one has the two hazards
+// [internal/queue/jetstream] documents for the stream side. This is the same
+// fix, because it is the same call underneath — and both sides now take the
+// budgets, the retry cadence and the "still forming" predicate from
+// [internal/jsprovision], so neither can drift away from the other.
+//
+// # The deadline
+//
+// nats.go applies a FIVE-SECOND default API timeout to a context with no
+// deadline of its own. That is right for an ordinary request and wrong for the
+// one that creates a replicated stream: the caller has already waited for the
+// metadata group precisely because that group is slow, and then gives the call
+// depending on it five seconds. On a fleet booting together the symptom is a
+// node that fails with `open crewlet_rate: context deadline exceeded` — a
+// message that names neither the deadline that expired nor the cluster it was
+// waiting for.
+//
+// # The placement retry
+//
+// `No suitable peers` means the metadata leader has not yet seen enough members
+// to place a replicated bucket. It is transient and self-clearing during
+// formation, and it is the one condition worth waiting out — every other error
+// (a bad TTL, a conflicting replica count, an auth failure) clears by nobody
+// waiting, so retrying it would turn a config mistake into a two-minute hang
+// with the same message at the end.
+
+// positionsSuffix is the per-node state-log position bucket.
+const positionsSuffix = "_statelog_positions"
+
+// openBucket creates one bucket when it is absent and OBSERVES it when it is
+// present, waiting out a cluster that is still forming.
+//
+// # Why not CreateOrUpdate
+//
+// Every node of a fleet opens every bucket at boot, so on a fleet starting
+// together N nodes issue the same call for the same bucket at the same moment.
+// `CreateOrUpdate` makes each of those a WRITE — the update half runs whenever
+// the bucket exists — so the losers of the create race go on to rewrite a
+// configuration they agree with, against a metadata group that is still
+// electing. Measured on three members: the request never returns, and the boot
+// fails after its whole deadline with `context deadline exceeded` naming a
+// bucket rather than a cluster.
+//
+// Create-else-observe is the shape [internal/queue/jetstream] already uses for
+// a stream, and the reasoning transfers whole: the create races, the loser
+// gets "bucket exists", and that is not an error but the other node having
+// won. A booting peer then READS what the winner made instead of writing over
+// it — which is also the honest ownership rule, since a bucket's TTL is a
+// deployment-wide fact and not something each node should re-assert.
+//
+// ctx IS THE BOOT'S, and the per-create deadline is derived below rather than
+// taken from the caller, because the read-back at the end runs precisely when
+// that deadline has expired — see [jsprovision.Settle].
+func openBucket(ctx context.Context, js jetstream.JetStream,
+	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+
+	// WithTimeout only ever shortens against the parent, so a caller that
+	// already set a tighter deadline keeps it — which is also what makes
+	// the sequence ceiling [OpenFleet] applies effective: each create here
+	// takes the lesser of its own budget and what is left of that one.
+	createCtx, cancel := context.WithTimeout(ctx,
+		jsprovision.Clustered(clustered).Budget())
+	defer cancel()
+
+	// A BREADCRUMB, because without one this is the silent step. A boot
+	// opens seventeen of these in a row and logs nothing between them, so a
+	// node that hung here emitted nothing at all until its budget expired —
+	// and the log could not say which bucket it was on.
+	//
+	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
+	// the create ends rather than where this function does.
+	//
+	// Both halves were wrong in the same way, at opposite ends. Armed
+	// before the lookup while saying "created", it reported a create that
+	// had not been attempted for a bucket that already existed; left armed
+	// across the replica observation after it, it reported one that had
+	// already finished. Either way it names a step the member is not on,
+	// which is the single thing this line exists to get right.
+	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
+		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
+			"replicas", cfg.Replicas, "waited", after,
+			"detail", "this bucket is still being provisioned — looked up, "+
+				"and created if it was absent; on a fleet that is a metadata "+
+				"group that has not settled, and the next line from this node "+
+				"says whether it got past it")
+	})
+
+	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
+	case err == nil:
+		stop()
+		// ON ctx, NOT createCtx: a slow lookup can leave the per-create
+		// deadline spent, and the observation would then fail on a
+		// bucket it had just found. observeReplicas owns its own term.
+		return bucket, observeReplicas(ctx, bucket, cfg)
+	case !errors.Is(err, jetstream.ErrBucketNotFound):
+		stop()
+		return nil, err
+	}
+	bucket, createErr := createKeyValue(createCtx, js, cfg)
+	stop()
+	if createErr == nil {
+		// THIS NODE MADE IT, at the count it asked for. Nothing to
+		// observe, and no round trip spent observing it.
+		return bucket, nil
+	}
+	if jsprovision.Unplaceable(createErr) {
+		// STILL FORMING and it stayed that way for the whole budget,
+		// which createKeyValue has already waited out. Nothing was
+		// placed, so there is nothing to read back.
+		return nil, createErr
+	}
+	// A PEER MAY HAVE WON THE RACE between the read above and this
+	// create, and it says so in two shapes.
+	//
+	// The tidy one is [jetstream.ErrBucketExists]. The other is a
+	// TIMEOUT, and it is the one a fleet booting together produces: two
+	// members create the same bucket in the same instant, the server
+	// commits one and holds the other while the metadata group settles,
+	// and the held request outlives the deadline. The bucket is there —
+	// the loser never heard so, and reporting that as a failure is a node
+	// refusing to boot because a peer beat it.
+	//
+	// So the question is re-asked rather than assumed, and RE-ASKED while
+	// it answers not-found, because a peer's create is visible to this
+	// member only on its next metadata update — see [jsprovision.Settle].
+	// One lookup answers at an arbitrary instant inside that window and
+	// fails a boot over a bucket that exists. ON ctx AND NOT createCtx,
+	// because createCtx is the deadline that just expired.
+	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
+		var e error
+		bucket, e = js.KeyValue(ctx, cfg.Bucket)
+		return e
+	})
+	if err != nil {
+		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
+		// beside it: the first says what went wrong and the second only
+		// confirms the create really did fail.
+		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+	}
+	// THE PEER MADE IT, so it is the peer's replica count that is in force
+	// and this node has to agree with it — the same question the adopt
+	// path above asks, for the same reason.
+	return bucket, observeReplicas(ctx, bucket, cfg)
+}
+
+// observeReplicas refuses a bucket replicated below what this node is
+// configured for.
+//
+// # Why a booting node refuses rather than resizing
+//
+// Because the durability this store promises is not something whichever node
+// booted last gets to decide, and because a bucket is a stream: this is the
+// rule [internal/queue/jetstream]'s observeStream already applies to one, in
+// the same words — "an acknowledged publish would be proving fewer copies than
+// stream.replicas promises". Nothing here is ever APPLIED to a bucket that
+// exists (see openBucket's doc for what CreateOrUpdate cost), so a mismatch is
+// an operator gesture, not a write.
+//
+// # Why it is the one bucket field worth refusing over
+//
+// The rest are reported instead — the lease TTL in force is warned about in
+// [Open], for the reason recorded there. Replication is different in kind:
+// every other difference changes how this store BEHAVES and is visible in
+// what it does, while this one changes only what survives losing a node, and
+// is visible in nothing at all until that happens. A fleet raised from one
+// replica to three, whose buckets were all made at one, goes on holding every
+// lease, every fencing epoch and the company's SECRETS on a single disk while
+// each node reports itself correctly configured.
+//
+// Equal or higher passes, so a single-replica development node against a
+// three-replica fleet's buckets still starts.
+//
+// ctx IS THE BOOT'S and the term is derived here, for the reason
+// [jsprovision.Settle] gives: the per-create deadline may be spent by the time
+// this runs — a slow lookup is enough — and an observation handed it fails
+// instantly on a bucket that was just found. [jsprovision.ReadBack] rather
+// than a create's budget, because this is an ordinary metadata read against a
+// group that has already answered.
+func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
+	cfg jetstream.KeyValueConfig) error {
+
+	want := max(cfg.Replicas, 1)
+	if want <= 1 {
+		// Nothing to be short of, and no round trip spent asking.
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
+	defer cancel()
+	status, err := bucket.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read %s status: %w", cfg.Bucket, err)
+	}
+	got, ok := status.(*jetstream.KeyValueBucketStatus)
+	if !ok || got.StreamInfo() == nil {
+		return fmt.Errorf("coord/kv: %s reported no backing stream", cfg.Bucket)
+	}
+	if live := got.StreamInfo().Config.Replicas; live < want {
+		return fmt.Errorf(
+			"coord/kv: the running bucket %q is replicated %dx and this node is "+
+				"configured for %dx: it holds leases, fencing epochs and this "+
+				"company's secrets on fewer copies than stream.replicas promises, "+
+				"and losing one node loses them. Nothing is applied to a bucket "+
+				"that already exists, so this is an operator gesture: align "+
+				"stream.replicas across the fleet, or resize this bucket's stream "+
+				"deliberately (a bucket IS a stream: nats stream update --replicas)",
+			cfg.Bucket, live, want)
+	}
+	return nil
+}
+
+// createKeyValue makes the bucket, waiting out a cluster that has not yet seen
+// enough members to place it.
+//
+// THE LOOP IS AROUND THE CREATE ALONE, which is the shape
+// [internal/queue/jetstream]'s createStream already has and the reason
+// [jsprovision] exists: an unplaceable create means nothing was placed, so
+// re-running the lookup that preceded it would re-ask a question whose answer
+// cannot have changed. Written the other way round, the retry re-issued that
+// lookup every 250ms for the whole provisioning budget.
+func createKeyValue(ctx context.Context, js jetstream.JetStream,
+	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+
+	var bucket jetstream.KeyValue
+	err := jsprovision.Place(ctx, func(ctx context.Context) error {
+		var e error
+		bucket, e = js.CreateKeyValue(ctx, cfg)
+		return e
+	}, func() {
+		log.InfoContext(ctx, "coord_kv_bucket_awaiting_peers",
+			"bucket", cfg.Bucket, "replicas", cfg.Replicas,
+			"detail", "the cluster has not yet seen enough members to place "+
+				"this bucket; retrying until the provisioning deadline")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return bucket, nil
+}
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why THIRTEEN buckets and not one
+// # Why FOURTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -66,6 +305,12 @@ import (
 //	           age would forget a mailbox that still exists and leave it
 //	           retaining mail for a seat nobody runs, with nothing left to
 //	           retire it
+//	positions  none at all, and this is the one where an age would be
+//	           worst: a node's position is what the trim reads to decide
+//	           what every other node may delete, and a key that expired
+//	           would read as a node that has applied NOTHING — which
+//	           either pins the trim for ever or, read the other way,
+//	           lets it delete records that node still needs
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -105,7 +350,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the thirteen buckets. Empty means "crewlet", matching
+	// BucketPrefix names every bucket. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -134,8 +379,15 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for every one of them.
+	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
+
+	// Clustered is whether this node's broker has PEERS, which is what the
+	// provisioning budgets branch on. Stated by the caller rather than
+	// inferred from Replicas: a member naming peers at one replica is a
+	// real deployment, and every create on it still waits on the same
+	// metadata group. See [jsprovision.Clustered].
+	Clustered bool
 }
 
 // rateBucketFactor is how many windows the rate bucket keeps.
@@ -198,17 +450,55 @@ type FleetStore struct {
 	integrations jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
 
+	// positions is the register every ageless key class the fleet still
+	// composes shares: a node's log positions, a trim hold, a backup point,
+	// a domain's published floor, a capacity operation, a node's admission
+	// and its maintenance acknowledgement. They are together because none
+	// of them may ever expire — each is read to decide what somebody ELSE
+	// may delete or publish — and every listing over the bucket filters by
+	// class, which is the load-bearing half of sharing it. The document
+	// families that once had buckets beside this one left with the last
+	// projector; only their key grammar outlived them, in coord/keys.go.
+	positions jetstream.KeyValue
+
+	// js is the JetStream context, held so a feed can create the durable
+	// consumer a bucket's own KeyValue handle cannot: a watch is
+	// ephemeral by construction, and a feed's position has to be the
+	// FLEET's rather than this process's.
+	js jetstream.JetStream
+
+	// bucketPrefix names the buckets, so a feed can address the stream
+	// behind one by its conventional name.
+	bucketPrefix string
+
 	rateWindow time.Duration
 	freshness  time.Duration
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the thirteen buckets and returns the backend.
+// OpenFleet creates or adopts every bucket and returns the backend.
 //
-// Idempotent and safe to call from every node at once, like [Open]: creating
-// a bucket that already exists with the same shape is a no-op, and a changed
-// retention is applied as a stream update.
+// Idempotent and safe to call from every node at once, like [Open]: a bucket
+// that already exists is ADOPTED rather than rewritten, which is what keeps N
+// booting nodes from issuing N writes against a metadata group that is still
+// electing. See [openBucket] for why that is create-else-observe rather than
+// CreateOrUpdate, and what a divergent retention therefore means.
+//
+// # One ceiling over the whole sequence
+//
+// The buckets below are opened one after another and each takes its own
+// provisioning budget, so without a ceiling the real bound on this call is the
+// PRODUCT rather than the term: a wedged cluster is rediscovered once per
+// bucket, fourteen buckets in a row, and a boot that nobody meant to allow ten
+// minutes gets it. Nothing declared that number, which is the shape of a limit
+// that is not a decision. [jsprovision.SequenceBudget] is the decision,
+// applied once here.
+//
+// THE COUNT IS SPELLED so the estate gate catches it: this paragraph is the
+// sizing argument, and a sizing argument over the wrong number of buckets is
+// worse than none — see TestEveryBucketHasALifetimeClass, which holds every
+// "N buckets" in this file against the open table below.
 func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")
@@ -221,9 +511,13 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
+	defer cancel()
+
 	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix
-		bucket, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		bucket, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
 		})
 		if err != nil {
@@ -232,7 +526,10 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		return bucket, nil
 	}
 
-	store := &FleetStore{rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness}
+	store := &FleetStore{
+		js: js, bucketPrefix: cfg.BucketPrefix,
+		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+	}
 	for _, bucket := range []struct {
 		into     *jetstream.KeyValue
 		suffix   string
@@ -271,6 +568,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
 		{&store.mailboxes, mailboxesSuffix,
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
+		{&store.positions, positionsSuffix,
+			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -284,6 +583,24 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		"ledger_retention", cfg.LedgerRetention, "cooldown_max", cfg.CooldownMax,
 		"status_freshness", cfg.StatusFreshness)
 	return store, nil
+}
+
+// each walks a whole bucket — see [eachEntry], which is the one implementation
+// and which both backends reach through a method of their own only so that a
+// call site reads as a walk rather than as connection plumbing.
+func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	return eachEntry(ctx, kv, visit)
+}
+
+// eachUnder is [each] narrowed to the keys matching one filter, with `what`
+// naming the listing a failure could not complete — see [eachEntryUnder],
+// which is where both are explained.
+func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys, what string,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	return eachEntryUnder(ctx, kv, keys, what, visit)
 }
 
 // ---- the rate valve ---------------------------------------------------- //
@@ -504,28 +821,27 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 
 // Since returns every cooldown that has not yet lapsed.
 func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.Time, error) {
-	keys, err := f.cooldowns.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the cooldowns", err)
-	}
 	out := map[string]time.Time{}
-	for key := range keys.Keys() {
-		entry, err := f.cooldowns.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read a cooldown", err)
-		}
-		until, err := time.Parse(time.RFC3339Nano, string(entry.Value()))
+	err := f.each(ctx, f.cooldowns, func(kve jetstream.KeyValueEntry) error {
+		until, err := time.Parse(time.RFC3339Nano, string(kve.Value()))
+		//nolint:nilerr // An unreadable cooldown row is SKIPPED, not raised:
+		// this listing answers "which credentials are benched", and one
+		// undecodable row must not bench the whole pool by failing the read.
+		// The conservative direction here is to treat the row as absent —
+		// a key that is not benched is simply tried, and a real failure
+		// benches it again.
 		if err != nil || !until.After(now) {
-			continue
+			return nil
 		}
-		decoded, ok := decodeKey(key)
+		decoded, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
 		out[decoded] = until
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -694,32 +1010,25 @@ func (f *FleetStore) Used(ctx context.Context, scope string) (int, error) {
 
 // Usage returns every counter, org first then seats by scope.
 func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
-	keys, err := f.budgets.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the budgets", err)
-	}
 	var out []coord.Usage
-	for key := range keys.Keys() {
-		entry, err := f.budgets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read the budget", err)
-		}
+	err := f.each(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
 		var record budgetRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			return nil, unavailable("decode the budget", err)
+		if err := json.Unmarshal(kve.Value(), &record); err != nil {
+			return unavailable("decode the budget", err)
 		}
-		scope, ok := decodeKey(key)
+		scope, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at, matching the lease listing: an invented
 			// scope name in the operator's budget view is worse than
 			// a missing one.
-			continue
+			return nil
 		}
 		out = append(out, coord.Usage{Scope: scope, Used: record.Used, UpdatedAt: record.At})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	coord.SortUsage(out)
 	return out, nil
@@ -727,7 +1036,7 @@ func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 
 // Reset zeroes one scope, or every scope when given "".
 //
-// PURGE, not delete: a tombstone would be returned by a later ListKeys as a
+// PURGE, not delete: a tombstone would be returned by a later listing as a
 // key with no value, so an operator who cleared a counter would still see the
 // scope in `crewlet budgets`.
 func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
@@ -740,12 +1049,19 @@ func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
 		}
 		return 1, nil
 	}
-	keys, err := f.budgets.ListKeys(ctx)
-	if err != nil {
-		return 0, unavailable("list the budgets", err)
+	// COLLECTED FIRST, PURGED AFTER. The walk holds a live subscription to
+	// this very bucket, and purging inside it would have the sweep writing
+	// the records its own listing is still delivering. The set is one key
+	// per counted scope, so holding it costs nothing worth the hazard.
+	var keys []string
+	if err := f.each(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
+		keys = append(keys, kve.Key())
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	cleared := 0
-	for key := range keys.Keys() {
+	for _, key := range keys {
 		if err := f.budgets.Purge(ctx, key); err != nil {
 			return cleared, unavailable("reset the budget", err)
 		}
@@ -899,17 +1215,22 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq 
 
 // isWrongLastSequence reports a compare-and-set refusal.
 //
-// MATCHED ON THE MESSAGE, which is not something to do lightly: the client
-// surfaces this as an API error whose typed form is not exported, so there is
-// nothing else to match on. Getting it wrong is not silent — a refusal read as
-// an outage answers 503 instead of 409, which an operator sees immediately —
-// and the conformance suite exercises the real store rather than trusting it.
+// TWO CODES, and the second is not a fallback: the server answers 10071 on a
+// solo stream and 10164 on a REPLICATED one, for the same refusal. So a fleet
+// — the only topology where a compare-and-set race is common — was matching
+// on neither code and reaching the substring test underneath, which is a
+// message this client is free to reword in any release.
+//
+// The message test is gone with it. A refusal read as an outage answers 503
+// where it should answer 409, and the shape of that bug is a conflict an
+// operator retries for ever because the engine called it an unavailable store.
 func isWrongLastSequence(err error) bool {
 	var api *jetstream.APIError
-	if errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence {
-		return true
+	if !errors.As(err, &api) {
+		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "wrong last sequence")
+	return api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
+		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
 }
 
 // payloadRecord is the current revision's sealed body on the wire. The
@@ -1002,31 +1323,29 @@ func (f *FleetStore) RecordApply(ctx context.Context, status coord.NodeApply) er
 
 // Fleet returns every node's last status, freshest first.
 func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
-	keys, err := f.status.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the fleet status", err)
-	}
 	var out []coord.NodeApply
-	for key := range keys.Keys() {
-		entry, err := f.status.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read a node's apply status", err)
-		}
+	err := f.each(ctx, f.status, func(kve jetstream.KeyValueEntry) error {
 		var record applyRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			continue
+		//nolint:nilerr // An undecodable status row is SKIPPED rather than
+		// raised, because this read is what reports the fleet's apply
+		// progress: failing it over one row would blank the whole view,
+		// where dropping the row shows every node that IS readable and
+		// leaves the bad one looking as it does — unreported.
+		if err := json.Unmarshal(kve.Value(), &record); err != nil {
+			return nil
 		}
-		node, ok := decodeKey(key)
+		node, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
 		out = append(out, coord.NodeApply{
 			NodeID: node, Epoch: record.Epoch, RevisionID: record.RevisionID,
 			Status: record.Status, Error: record.Error, UpdatedAt: record.UpdatedAt,
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.NodeApply) int {
 		// NEWEST FIRST, so the negated compare; the node id breaks a tie
@@ -1079,31 +1398,23 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 
 // SecretValues returns every sealed value.
 func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
-	keys, err := f.secrets.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the secrets", err)
-	}
 	var out []coord.SecretRecord
-	for key := range keys.Keys() {
-		if _, ok := decodeKey(key); !ok {
-			continue
+	// RAISED rather than skipped, for the same reason Secret raises and more
+	// sharply: this listing IS the engine's boot snapshot, so a value
+	// silently dropped here becomes an empty ${VAR} everywhere at once.
+	err := f.each(ctx, f.secrets, func(kve jetstream.KeyValueEntry) error {
+		if _, ok := decodeKey(kve.Key()); !ok {
+			return nil
 		}
-		entry, err := f.secrets.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			// RAISED for the same reason Secret raises, and more sharply:
-			// this listing IS the engine's boot snapshot, so a value
-			// silently dropped here becomes an empty ${VAR} everywhere at
-			// once.
-			return nil, unavailable("read a secret", err)
-		}
-		rec, ok := decodeSecret(entry.Value())
+		rec, ok := decodeSecret(kve.Value())
 		if !ok {
-			return nil, fmt.Errorf("coord/kv: a stored secret is not decodable")
+			return fmt.Errorf("coord/kv: a stored secret is not decodable")
 		}
 		out = append(out, rec)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.SecretRecord) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
@@ -1316,30 +1627,23 @@ func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply f
 
 // OpenChannels returns every channel still open, by id.
 func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) {
-	keys, err := f.channels.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the channels", err)
-	}
 	var out []coord.Channel
-	for key := range keys.Keys() {
-		id, ok := decodeKey(key)
+	err := f.each(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
+		id, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
-		entry, err := f.channels.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
+		ch, err := decodeChannel(id, kve.Value())
 		if err != nil {
-			return nil, unavailable("read a channel", err)
-		}
-		ch, err := decodeChannel(id, entry.Value())
-		if err != nil {
-			return nil, err
+			return err
 		}
 		if ch.Open() {
 			out = append(out, ch)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.Channel) int { return cmp.Compare(a.ID, b.ID) })
 	return out, nil
@@ -1351,34 +1655,38 @@ func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) 
 // leaves a tombstone revision, and a bucket with no TTL keeps every one of
 // them for the life of the deployment.
 func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error) {
-	keys, err := f.channels.ListKeys(ctx)
-	if err != nil {
-		return 0, unavailable("list the channels", err)
+	// DECIDED FIRST, PURGED AFTER — the sweep must not write to the bucket
+	// its own listing is still being delivered from. Each candidate carries
+	// the revision it was decided on, so the predicate below is unchanged.
+	type doomed struct {
+		key      string
+		revision uint64
 	}
-	var n int64
-	for key := range keys.Keys() {
-		id, ok := decodeKey(key)
+	var candidates []doomed
+	err := f.each(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
+		id, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
+			return nil
 		}
-		entry, err := f.channels.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
+		ch, err := decodeChannel(id, kve.Value())
 		if err != nil {
-			return n, unavailable("read a channel", err)
-		}
-		ch, err := decodeChannel(id, entry.Value())
-		if err != nil {
-			return n, err
+			return err
 		}
 		if ch.Open() || !ch.ClosedAt.Before(cutoff) {
-			continue
+			return nil
 		}
+		candidates = append(candidates, doomed{key: kve.Key(), revision: kve.Revision()})
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, c := range candidates {
 		// Predicated on the revision we read: a channel somebody
 		// re-opened or counted between the read and the delete is not
 		// the one this sweep decided to drop.
-		if err := f.channels.Purge(ctx, key, jetstream.LastRevision(entry.Revision())); err != nil {
+		if err := f.channels.Purge(ctx, c.key, jetstream.LastRevision(c.revision)); err != nil {
 			if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 				continue
 			}
@@ -1442,30 +1750,23 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 
 // SandboxRuns returns every record, by turn id.
 func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
-	keys, err := f.runs.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the sandbox runs", err)
-	}
+	// A listing that quietly dropped a run would tell the seat's new owner
+	// there is nothing to recover, which abandons a billed box — the exact
+	// failure this bucket exists to end. eachEntry raises on a short answer
+	// rather than returning one, which is what makes that true.
 	var out []coord.Record
-	for key := range keys.Keys() {
-		turnID, ok := decodeKey(key)
+	err := f.each(ctx, f.runs, func(kve jetstream.KeyValueEntry) error {
+		turnID, ok := decodeKey(kve.Key())
 		if !ok {
-			continue
-		}
-		entry, err := f.runs.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			// RAISED, not skipped. A listing that quietly dropped a run
-			// tells the seat's new owner there is nothing to recover,
-			// which abandons a billed box — the exact failure this
-			// bucket exists to end.
-			return nil, unavailable("read a sandbox run", err)
+			return nil
 		}
 		out = append(out, coord.Record{
-			Key: turnID, Value: entry.Value(), Version: entry.Revision(),
+			Key: turnID, Value: bytes.Clone(kve.Value()), Version: kve.Revision(),
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.Record) int { return cmp.Compare(a.Key, b.Key) })
 	return out, nil
@@ -1538,34 +1839,23 @@ func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, versio
 
 // IntegrationStatuses returns every recorded status, keyed by surface.
 func (f *FleetStore) IntegrationStatuses(ctx context.Context) (map[string][]byte, error) {
-	keys, err := f.integrations.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the integration statuses", err)
-	}
 	out := map[string][]byte{}
-	for key := range keys.Keys() {
-		entry, err := f.integrations.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Deleted between the listing and the read, which is the
-			// reconcile loop forgetting a surface whose block has just
-			// left the company document. Skipped rather than raised: it
-			// is the outcome the caller wanted.
-			continue
-		}
-		if err != nil {
-			return nil, unavailable("read an integration status", err)
-		}
-		kind, ok := decodeKey(key)
+	err := f.each(ctx, f.integrations, func(kve jetstream.KeyValueEntry) error {
+		kind, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at, exactly as the fleet listing does: inventing a
 			// surface name would put a row nothing reconciles into an
 			// operator's status page.
-			continue
+			return nil
 		}
 		// COPIED. The entry's buffer belongs to the client and the caller
-		// keeps this past the loop iteration.
-		out[kind] = bytes.Clone(entry.Value())
+		// keeps this past the walk.
+		out[kind] = bytes.Clone(kve.Value())
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

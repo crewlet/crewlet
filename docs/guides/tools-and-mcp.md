@@ -18,13 +18,57 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `refine_skill` | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages (offered to the onboarding pass) |
 | `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
-| `search_knowledge` | Search the company knowledge base on a query the agent writes itself |
+| `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. Registered wherever the company has a knowledge backend at all |
 | `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key |
 | `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md) |
 
-Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content lives in the knowledge backend (Confluence) — written through that backend's own MCP tools and searched live at query time (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-backend pages.
+`delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 
-There are no task-management builtins: agents create, assign and update work items in the external PM tool (Jira, GitLab issues and so on) through its MCP tools. `delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is built per turn for the executor rather than registered here, because it carries that turn's grant.
+### The native tracker and knowledge base
+
+Twenty more, registered **only where the company runs the engine's own backends**
+(`tracker.backend: native` / `knowledge.backend: native`, which are the
+defaults). A company on Jira and Confluence gets none of them, and that is the
+point: a seat offered a tool against a tracker its company does not run would
+reach for it and fail at the call, and a model shown a tool that always fails
+learns to distrust the whole catalogue. The twelve below are the item and page
+tools; the other eight read the catalogue, the projects, the goals and the
+activity feed, and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists
+the tracker's fifteen in full.
+
+| Tool | Description |
+|------|-------------|
+| `list_work_items` | The board, filtered — what you are assigned, what is open in a project, whether something was already filed |
+| `get_work_item` | One item's description, thread, history and links, by key or id |
+| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none |
+| `update_work_item` | Move it — status, assignee, priority, labels, links — with an optional `if_match` that refuses on a concurrent edit |
+| `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
+| `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
+| `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
+| `list_pages` | Browse the knowledge base by container, parent or title |
+| `get_page` | One page's body, breadcrumb, children and history |
+| `write_page` | Create one. Titles are addresses and are unique per container |
+| `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
+| `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
+
+The writes on each side count as a **delivery** for the turn's own
+did-this-reach-anybody gate, and each waits for its own write to reach this
+node's projection before answering — so a turn that files an item and then
+lists the project sees what it just filed.
+
+The same tools are served to **your** AI assistant over
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
+with the writes attributed to your token rather than to a seat, and twelve more
+beside them that no seat is given: the saved views, the goal and catalogue
+writes, a person's own queue and inbox, sprint management, and the trash.
+
+Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
+
+**On a vendor tracker there are still no task builtins.** `create_task`,
+`assign_task`, `update_task` and `list_tasks` are not registered against Jira
+or GitLab issues — an agent works those through the vendor's own MCP tools, so
+the engine mirrors no state it would have to keep in step. See
+[The Tracker](../concepts/task-engine.md).
 
 ### Per-Role MCP Servers (GitHub)
 
@@ -69,12 +113,12 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a third-party app contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The seven third-party apps this
-  build routes are [Mattermost](../integrations/mattermost.md),
-  [Slack](../integrations/slack.md), [Jira](../integrations/jira.md),
-  [Confluence](../integrations/confluence.md), [GitLab](../integrations/gitlab.md),
-  [GitHub](../integrations/github.md) and [Datadog](../integrations/datadog.md),
-  and every one of them routes end to end (see
+  That is a pull request, not a config entry. The eight this build serves are
+  [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
+  [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
+  [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
+  [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay —
+  every one of them routes end to end (see
   [Design Decisions](../reference/design-decisions.md#every-third-party-app-is-served)).
 - **Company-wide periodic work.** An MCP server is called by an agent; it does
   not get a tick of its own. Schedule it as [cron work](../concepts/scheduling.md)
@@ -134,7 +178,7 @@ Each Role names its per-server credentials directly in `mcp_env`, so every agent
 roles:
   - name: Senior Engineer
     integrations:                          # per-agent transport identity (inbound webhook
-      slack:                               #   verification + outbound send() fallback)
+      slack:                               #   verification + the working indicator)
         bot_token: "${ALICE_SLACK_BOT}"
         signing_secret: "${ALICE_SLACK_SIGNING}"
     mcp_env:
@@ -153,16 +197,14 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 
 ### Per-Unit Config
 
-A unit declares its Jira project / Confluence space *identity* under `integrations` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
+A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a native project and container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
 
 ```yaml
 units:
   - name: Backend
     type: team
     lead: Tech Lead
-    integrations:
-      jira:
-        project: "BACK"             # the unit's Jira project (integration identity)
+    project: "BACK"                 # the unit's tracker project (integration identity)
     mcp_env:
       atlassian:
         JIRA_URL: "${JIRA_URL}"     # shared by the whole unit
@@ -175,7 +217,7 @@ units:
           atlassian: { JIRA_API_TOKEN: "${ENG_JIRA_TOKEN}" }
 ```
 
-Inheritance: the unit's `mcp_env` is the base and a seat's own values override it variable by variable, so a seat that sets one variable of a server keeps the unit's other variables for that server. Only the unit's **direct agent** seats inherit it. A child unit inherits nothing (it declares its own block), and a human seat inherits nothing, because a human seat runs no tools and may not carry an `mcp_env`. The unit's `integrations` identity (Jira project / Confluence space) is separate from these credentials.
+Inheritance: the unit's `mcp_env` is the base and a seat's own values override it variable by variable, so a seat that sets one variable of a server keeps the unit's other variables for that server. Only the unit's **direct agent** seats inherit it. A child unit inherits nothing (it declares its own block), and a human seat inherits nothing, because a human seat runs no tools and may not carry an `mcp_env`. The unit's `project` / `space` identity is separate from these credentials.
 
 ---
 

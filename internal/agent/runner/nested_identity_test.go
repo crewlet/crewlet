@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/events"
@@ -75,5 +76,48 @@ func TestASubagentPhaseCarriesTheRoundItRanIn(t *testing.T) {
 		t.Errorf("both rounds published iteration %d, so one worker's record "+
 			"overwrites the other wherever a phase is keyed by identity",
 			iterations[0])
+	}
+}
+
+// A NESTED PHASE PUBLISHES ITS OWN DURATION, because nothing else can give it
+// one.
+//
+// The turn's own phases pair with an `agent_phase_started`; a worker and the
+// round-cap judge publish no start at all — they nest under a host phase that
+// is already showing one. So for as long as a duration was reconstructed from
+// two events, a delegate fan-out of eight had eight records with no wall clock
+// anywhere between them, and "which worker was slow" was unanswerable on every
+// screen in the product. The worker measures itself and this carries it.
+func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	base := emitter{
+		pub:   pub,
+		turn:  Turn{ID: "tn-1", AgentID: "agent-1"},
+		role:  "Lead",
+		tally: &Spend{},
+		mu:    &mu,
+	}
+
+	base.nestedAt(1).subagentCompleted(context.Background(), subagent.Result{
+		ID: "research", Worker: "researcher", Status: subagent.StatusOK,
+		Elapsed: 1500 * time.Millisecond,
+	})
+
+	var found bool
+	for _, ev := range pub.events {
+		done, ok := ev.Data.(*types.AgentPhaseCompleted)
+		if !ok || done.Phase != types.PhaseSubagent {
+			continue
+		}
+		found = true
+		if done.DurationMS != 1500 {
+			t.Errorf("duration_ms = %d, want the 1500 the worker measured",
+				done.DurationMS)
+		}
+	}
+	if !found {
+		t.Fatal("no subagent phase was published")
 	}
 }

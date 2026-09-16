@@ -30,8 +30,8 @@ func TestTypesThatRunNoTurnAreNotLedgered(t *testing.T) {
 	// pass the test above, and it would spend a durable write per
 	// observability event to record that nothing outward-facing happened.
 	for _, kind := range []string{
-		types.TaskCreated{}.EventType(),
-		types.TaskCompleted{}.EventType(),
+		types.OrgStarted{}.EventType(),
+		types.ConfigRevisionApplied{}.EventType(),
 		types.TurnTriggerSkipped{}.EventType(),
 		types.A2AMessageSent{}.EventType(),
 		"",

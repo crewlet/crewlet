@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -30,6 +32,7 @@ import (
 // App is the HTTP surface: the dashboard, the live socket and the REST routes.
 type App struct {
 	guard  *auth.Guard
+	cors   *auth.CORS
 	state  *livestate.LiveState
 	stream *stream.Service
 
@@ -52,6 +55,29 @@ type App struct {
 	// holding neither a store nor a broker, which that route reports
 	// rather than hides.
 	backup backupTaker
+
+	// retention is the fleet's own record of what the log may delete, for
+	// the one gesture that WRITES to it: an operator's backup
+	// acknowledgement. Nil on a standalone API with no coordination store.
+	retention retentionWriter
+
+	// nodes installs and lifts the eviction gate. A RECORD on the log
+	// rather than a coordination write, which is why it is a different
+	// seam from the one above. Nil on a process with no native tracker.
+	nodes NodeGate
+
+	// purger destroys a task, as the operator on the request. Its own
+	// field rather than a third method on the seam above, because it is
+	// the one write here attributed to a PERSON — see [TaskPurger]. Nil
+	// leaves the route absent, which is honest on a build that cannot
+	// serve it: an operator who cannot purge must not be told they can.
+	purger TaskPurger
+
+	// capacity drives a stream's byte ceiling through the maintenance
+	// window. Nil on a process with no state log — and on one that is
+	// publishing, the verb refuses rather than the route being absent,
+	// because "you are in the wrong mode" is the answer an operator needs.
+	capacity capacityRunner
 
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
@@ -133,12 +159,39 @@ type Options struct {
 	// node without the ingress role serves it alone, through [BridgeOnly].
 	Bridge *mcpbridge.Bridge
 
+	// Operator is the company's own tracker and knowledge base, served to
+	// an operator's AI assistant over MCP. Nil serves none and the route
+	// is ABSENT, which is the honest shape for a company on Jira and
+	// Confluence: there is nothing here it could manage.
+	//
+	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
+	// company, and the credential's own name is what lands on each record
+	// as the author.
+	Operator *opsmcp.Server
+
 	// Budgets is the fleet's token counter. Supplied separately from
 	// Sources.Budget, which is the READ half: a reset is an operator
 	// action against a spend ceiling, and giving the read surface a
 	// method that clears one would put it a typo away from every screen
 	// that renders spend.
 	Budgets budgetResetter
+
+	// Retention is the fleet's record of what the log may delete, for the
+	// operator's backup acknowledgement. Nil leaves that route answering
+	// 503 rather than 404 — the route exists on this build.
+	Retention retentionWriter
+
+	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
+	// readmit routes answering 503.
+	Nodes NodeGate
+
+	// Purger destroys a task as the operator who asked. Nil leaves the
+	// purge route unmounted.
+	Purger TaskPurger
+
+	// Capacity drives a stream's byte ceiling. Nil leaves the maintenance
+	// routes answering 503.
+	Capacity capacityRunner
 
 	// Backup copies this node's durable state to a path an operator
 	// names. Nil where there is nothing to copy — a process running
@@ -238,6 +291,8 @@ func New(opts Options) *App {
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
+	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
+	a.capacity = opts.Capacity
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -254,7 +309,22 @@ func New(opts Options) *App {
 	// every seat's memory to a path the caller names is not a read,
 	// whatever the anonymous-read posture allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
+	// The three retention gestures that write. POSTs for the same reason:
+	// moving the floor the trim deletes against, stopping a machine
+	// writing and letting it write again are not reads, whatever the
+	// anonymous-read posture allows. See retention.go.
+	a.mountRetention(mux)
+	// The capacity window's own control surface. It is the one thing a
+	// maintenance-mode node serves that a publishing one does not need,
+	// and it is why the verb can run at all on a topology whose broker
+	// binds no socket. See retention.go.
+	a.mountCapacity(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
+	// The OPERATOR MCP surface: the same tracker and knowledge tools a
+	// seat holds, offered to a person's own assistant. Under its own
+	// always-guarded prefix rather than under /mcp/, which is exempt
+	// wholesale for the sandbox bridge — see opsmcp.Path.
+	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -288,12 +358,20 @@ func New(opts Options) *App {
 	// reads included — the list of which credentials a company has NOT
 	// configured is worth as much to an attacker as the ones it has.
 	opts.Setup.Routes(mux)
-	// The security headers go on OUTSIDE the guard, so a refusal carries
-	// them as well as an answer, and before routing, so the responses no
-	// handler writes deliberately (the mux's own 404 and 405, the redirect
-	// from `/`, which has an HTML body) are covered without each needing to
-	// remember. A handler serving a page replaces the policy with its own.
-	a.handler = pagepolicy.Apply(a.guard.Middleware(mux))
+	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
+	// carries no credential: the browser sends it itself, before it will
+	// attach an Authorization header to anything. Inside the guard every
+	// preflight to a guarded route answers 401 and the real request is
+	// never sent. See [auth.CORS.Middleware].
+	//
+	// The security headers go on outside both, so a refusal and a preflight
+	// carry them as well as an answer does, and before routing, so the
+	// responses no handler writes deliberately (the mux's own 404 and 405,
+	// the redirect from `/`, which has an HTML body) are covered without
+	// each needing to remember. A handler serving a page replaces the
+	// policy with its own.
+	a.cors = auth.NewCORS(opts.Bootstrap)
+	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(mux)))
 	return a
 }
 
@@ -379,6 +457,10 @@ func (a *App) State() *livestate.LiveState { return a.state }
 // Guard exposes the auth posture, for the startup line that states it.
 func (a *App) Guard() *auth.Guard { return a.guard }
 
+// CORS returns the browser-origin posture, for the startup line that states
+// it beside the anonymous-read one.
+func (a *App) CORS() *auth.CORS { return a.cors }
+
 // Configured reports whether a company revision is active.
 //
 // THROUGH THE SEAM WHEN THERE IS ONE, so this cannot go stale. An embedded
@@ -449,6 +531,26 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
 	case errors.Is(err, queries.ErrUnauthorized):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+	case errors.Is(err, queries.ErrNotFound):
+		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrBadParams):
+		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
+		// was: an untranslated refusal reached the socket as an
+		// unclassified error, so a caller that asked wrong was told the
+		// query FAILED and the node warned about its own health. REST
+		// already answered 400 here, and the two transports disagreeing
+		// about whose fault a request is is exactly what this mapping
+		// exists to prevent.
+		//
+		// THE ONLY ONE HERE THAT KEEPS THE ORIGINAL ERROR, because it is
+		// the only one whose message is written FOR the caller: it names
+		// the field that was missing and the values the field accepts,
+		// and [stream] logs exactly that at debug. The others are
+		// deliberately reduced to the query name — a failure's own text
+		// can carry a database path, and none of them has a reader.
+		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
+	case errors.Is(err, queries.ErrUnavailable):
+		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
 	default:
 		return nil, err
 	}
@@ -487,7 +589,30 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrUnauthorized):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrBadParams):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeQueryFailed})
+		// 400 AND ITS OWN CODE. The status was already right; the code
+		// said `query_failed`, which names a fault of this node for a
+		// request the caller has to change.
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeBadParams})
+	case errors.Is(err, queries.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
+	case errors.Is(err, queries.ErrUnavailable):
+		// 503 AND RETRY-AFTER, because this is the one failure here that
+		// is expected to pass: this node is behind the log and is
+		// draining. A 500 would tell a client to give up on a screen
+		// that will work in a few seconds, and an empty 200 would tell a
+		// person the company has no work.
+		//
+		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
+		// how far behind this node is over how fast it is actually
+		// draining — and five seconds otherwise. A flat hint is wrong in
+		// both directions on one fleet.
+		after := 5
+		if hint := queries.RetryAfter(err); hint > 0 {
+			after = max(1, int(hint.Round(time.Second)/time.Second))
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(after))
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": stream.CodeUnavailable})
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and these routes are

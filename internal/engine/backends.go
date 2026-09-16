@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -216,11 +217,40 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	return out, nil
 }
 
+// sweepWriterPins is the replicated pin the maintenance worker needs beside
+// the state log's own.
+//
+// ONE, and the bound is the worker's own shape rather than a guess: two of its
+// jobs pin a writer on the replicated estate (`tracker_notifications`, which
+// range-deletes a person's inbox rows, and the tracker duty's clear of a
+// project's duplicate-rank flag), and a tick runs every job in series, so at
+// most one of them holds a pin at a time. Neither holds it past its own run,
+// which is what makes one enough for both.
+//
+// Without it the declaration was exactly the number of apply loops, and those
+// hold theirs for the life of the loop: every pin was taken before the first
+// sweep ever asked for one, so the inbox job failed on EVERY tick with
+// "declared 3 pinned writer(s) and 3 are held" and a company's notification
+// rows grew for the life of the deployment. The declaration is what SIZES the
+// pool, so a shortfall cannot show up as contention that clears, only as a
+// refusal that never does.
+const sweepWriterPins = 1
+
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
-		MaxOpenConns: b.Store.MaxOpenConns,
-		BusyTimeout:  b.Store.BusyTimeout(),
+		MaxOpenConns:   b.Store.MaxOpenConns,
+		ReplicatedPath: b.Store.ReplicatedPath,
+		BusyTimeout:    b.Store.BusyTimeout(),
+		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN, PLUS THE SWEEP'S.
+		// Each domain's apply loop holds one for its life: it is the
+		// single writer of that domain's tables, and a loop that had to
+		// reacquire one per batch would be competing with the readers it
+		// is applying for. The count is DECLARED rather than discovered
+		// so the pool is sized for them: an undeclared pin is a reader
+		// starved out of the pool by a writer that never gives its
+		// connection back. See [sweepWriterPins] for the other term.
+		PinnedWriters: len(registeredDomains()) + sweepWriterPins,
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
@@ -268,16 +298,31 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		return nil, fmt.Errorf("engine: stream: %w", err)
 	}
 	cfg := jetstream.Config{
-		URL:         b.Stream.URL,
-		StoreDir:    b.Stream.StoreDir,
-		ClusterName: b.Stream.Cluster.Name,
-		ClusterURLs: b.Stream.Cluster.Peers,
-		ClusterPort: b.Stream.Cluster.Port,
-		ServerName:  nodeID,
-		Replicas:    b.Stream.Replicas,
-		Credentials: b.Stream.Credentials,
-		Token:       b.Stream.Token,
-		TLS:         streamTLS(b.Stream.TLS),
+		URL:              b.Stream.URL,
+		StoreDir:         b.Stream.StoreDir,
+		ClusterName:      b.Stream.Cluster.Name,
+		ClusterURLs:      b.Stream.Cluster.Peers,
+		ClusterPort:      b.Stream.Cluster.Port,
+		ClusterHost:      b.Stream.Cluster.Host,
+		ClusterAdvertise: b.Stream.Cluster.Advertise,
+		ServerName:       nodeID,
+		Replicas:         b.Stream.Replicas,
+		Credentials:      b.Stream.Credentials,
+		Token:            b.Stream.Token,
+		TLS:              streamTLS(b.Stream.TLS),
+
+		// The BROKER's own verbosity, which is not the engine's — see
+		// jetstream.Config.Debug. Read by the embedded branch only; the
+		// validator refuses it against an external cluster, so there is
+		// nothing to decide here.
+		Debug: b.Stream.Debug,
+
+		// Through the accessors for the same reason EventRetention goes
+		// through one: the field is a STRING with two meanings, and a
+		// second place deciding which is which is a second place to get
+		// "always" wrong.
+		SyncAlways:   b.Stream.SyncAlways(),
+		SyncInterval: b.Stream.SyncInterval(),
 	}
 	// Through the accessor, so the seconds-to-duration conversion happens
 	// once at the edge rather than being re-derived here — one slip from
@@ -376,7 +421,19 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
-	shared, err := openFleet(ctx, conn, b.Stream.Replicas)
+	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
+	// sequence actually is: fifteen replicated buckets across two calls,
+	// each of which would otherwise discover a wedged cluster on its own
+	// budget. Without it the real bound is the PRODUCT rather than the
+	// term — a number nobody declared, which is the shape of a limit that
+	// is not a decision. Each create below still takes the lesser of its
+	// own budget and what is left of this one, because WithTimeout only
+	// ever shortens.
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
+	defer cancel()
+
+	shared, err := openFleet(ctx, conn, b.Stream.Replicas, clusteredStream(b))
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
@@ -387,8 +444,9 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		return nil
 	}
 	leases, err := kv.Open(ctx, conn, kv.Config{
-		TTL:      leaseTTL(b),
-		Replicas: b.Stream.Replicas,
+		TTL:       leaseTTL(b),
+		Replicas:  b.Stream.Replicas,
+		Clustered: clusteredStream(b),
 	})
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
@@ -403,7 +461,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // is a BUCKET's age, fixed when the bucket is created, so a silent default
 // would decide it at the moment nobody was looking. Every number is the one
 // the subsystem that reads it already uses, named at its own package.
-func openFleet(ctx context.Context, conn *nats.Conn, replicas int) (coord.Fleet, error) {
+func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered bool) (coord.Fleet, error) {
 	return kv.OpenFleet(ctx, conn, kv.FleetConfig{
 		RateWindow:      coord.RateWindow,
 		ClaimTTL:        coord.ClaimTTL,
@@ -412,6 +470,7 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int) (coord.Fleet,
 		CooldownMax:     coord.CooldownMax,
 		StatusFreshness: coord.StatusFreshness,
 		Replicas:        replicas,
+		Clustered:       clustered,
 	})
 }
 
@@ -448,4 +507,66 @@ func leaseTTL(b *config.Bootstrap) time.Duration {
 		return seat.SeatLeaseTTL
 	}
 	return b.Coordination.LeaseTTL()
+}
+
+// leaseTTLInForce is the coordination backend that knows the TTL leases are
+// ACTUALLY held at, which is not always the one this node's Tier A asks for.
+//
+// Declared here, in the package that calls it, and kept to the one method:
+// [coord.Backend] says nothing about a TTL because the in-process backend has
+// no ceiling to report, and widening the contract for one implementation would
+// make every other one answer a question it has no basis for.
+type leaseTTLInForce interface {
+	TTL() time.Duration
+}
+
+// effectiveLeaseTTL resolves what this node must acquire and renew with.
+//
+// # Why this cannot simply be the configured value
+//
+// The KV backend ADOPTS the lease bucket rather than rewriting it, so on a
+// fleet the TTL in force is whichever member created the bucket first — see
+// [kv.Open]. The bucket's own age is the arbiter, and [kv.Store.validateTTL]
+// refuses a claim longer than it. A node that went on acquiring at its own
+// configured value would therefore be wrong in both directions, and one of
+// them is fatal: configured SHORTER than the bucket and its leases lapse
+// earlier than the operator asked for; configured LONGER and every single
+// acquire is refused as too long, so the node holds no seats at all and the
+// company's work sits unclaimed on a node that looks healthy.
+//
+// Taking the live value is also what keeps the derived timings coherent: the
+// heartbeat and the release budget are fractions of this number, so a node
+// renewing on a 90-second cadence against a 45-second bucket would lose every
+// seat it held between beats.
+//
+// A mismatch is not silent — [kv.Open] logs it with both values and the
+// remedy. It is not fatal either: refusing to boot over it would take a
+// company down for a disagreement the fleet is already resolving one way.
+func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration {
+	configured := leaseTTL(b)
+	live, ok := backend.(leaseTTLInForce)
+	if !ok {
+		// The in-process backend: this node is the only holder, so its
+		// own configuration is the whole truth.
+		return configured
+	}
+	if got := live.TTL(); got > 0 {
+		return got
+	}
+	return configured
+}
+
+// clusteredStream is whether this node's broker has PEERS.
+//
+// The one place the engine decides it, so the queue, the lease store and the
+// fleet store cannot disagree about which budget they are on — and it is the
+// same rule [Queue.Clustered] applies, which is the rule the embedded server
+// itself is built by: the cluster block takes effect only when it is NAMED.
+// Tier A refuses a port or a peer list without one, so the name is sufficient.
+//
+// A topology question rather than a replica count: an external NATS is
+// somebody else's cluster, and an embedded member that names one is clustered
+// whatever replica count it asks for — see [jsprovision.Clustered].
+func clusteredStream(b *config.Bootstrap) bool {
+	return b.Stream.Type == config.StreamNATS || b.Stream.Cluster.Name != ""
 }

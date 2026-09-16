@@ -55,10 +55,12 @@ and answering it in pieces is how a push goes red on the piece you skipped.
 `make help` lists the rest.
 
 Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
-the same flags. Nothing asserts the two have not drifted — a test did, and it
-was dropped — so a convenience target that quietly loses `-race` would report
-a pass CI does not honour and nothing else would notice. Change a target and
-its `ci.yml` step together, and read both. `make check` is:
+the same flags. The two test jobs call `make` directly, so for those there is
+one command rather than a copy. For every other job nothing asserts the two
+have not drifted — a test did, and it was dropped — so a convenience target
+that quietly loses `-race` would report a pass CI does not honour and nothing
+else would notice. Change a target and its `ci.yml` step together, and read
+both. `make check` is:
 
 ```bash
 gofmt -l .               # formatting — prints the files that need it
@@ -68,7 +70,8 @@ scripts/check-signoff_test.sh  # ... and that gate's own suite
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
-go test ./... -race -count=1                                  # the full suite
+make test        # the suite, minus the packages that run alone
+make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 # and the dashboard, whose build output is committed:
@@ -79,10 +82,30 @@ cd dashboard && npm run typecheck && npm test                 # dashboard-test
 
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
-is a data race until proven otherwise — so CI runs the *whole* suite under it
-and so does `make test`. `-count=1` is the other half: without it a cached
+is a data race until proven otherwise — so every package runs under it, in
+CI and in `make check`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
+
+Some packages stand up N engines, each embedding its own NATS server, in ONE
+process. Sharing a two-core runner with everything else — `go test ./...` runs
+package binaries in parallel — their cluster cases cannot form a multi-member
+JetStream quorum inside the 30s stream-provisioning budget, and fail every
+cluster-start attempt with `context deadline exceeded`. Alone on a runner the
+same cases pass.
+
+So those packages run in `make test-solo` and in CI's `end-to-end gates` job,
+and `make test` leaves them out. A contention split, not a coverage one —
+`make check` depends on both targets.
+
+**Which packages those are is computed, not listed.** A package declares it by
+importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
+guard fails the build both ways: a package that stands up a multi-member broker
+without declaring, and a package that declares without needing to. Read
+`go doc ./internal/solo` before reaching for a build tag — it records what each
+alternative measured, and every one of them fails silently. This was a
+hand-maintained `grep -v /internal/e2e` in three places, and it named one
+package while three others stood up clusters in the shared runner.
 
 `make dashboard-check` gates the same shape of problem one level out. The
 dashboard's build output is committed — `go build ./...` and
@@ -121,6 +144,31 @@ start, no environment variable to set and no compose profile to remember:
 Some suites need something the machine may not have and **skip silently
 without it** — a green run has simply not exercised them.
 
+**This is enforced now, and it was not.** Both test targets pipe
+`go test -json` through `internal/skipgate`, which renders the stream back to
+ordinary output and then fails the run on a skip nothing declared. Every
+allowed skip is an entry in `internal/skipgate/allowed.go` carrying a reason
+and a `When`: `Always` for a structural one — a backend that cannot do the
+thing, a driver capability that has not landed — which is ALSO reported when it
+stops firing, because a structural skip that stopped means the world changed;
+`Environment` for one that depends on what the machine has, which is only
+checked in the undeclared direction.
+
+Adding an entry is the decision, so it lands in a diff somebody reviews. Before
+you add one, check the case is covered somewhere: the two defects this gate was
+written after were both cases that ran NOWHERE, and each looked like an
+ordinary capability skip from inside the one run that saw it.
+
+Why this had to exist: `go test` prints nothing about a skipped subtest without
+`-v`, and the suite job has never passed it, so every skip this repository has
+taken was absent from every CI log. Under that, an API gate that read a
+dashboard path the React rewrite deleted certified nothing for the whole of
+that rewrite while reporting a pass — and a queue conformance case skipped on
+*both* backends, so it ran on neither. The rule was a checkbox in the pull
+request template; it is a build failure now.
+
+What follows are the prerequisites that legitimately vary by machine.
+
 - **`node`** runs `internal/e2e`'s client replay: the Go suite drives a real
   company, captures every frame its WebSocket pushed, and replays those exact
   bytes through the dashboard's own protocol module under plain `node`. That
@@ -138,7 +186,7 @@ without it** — a green run has simply not exercised them.
   in the script instead and it becomes a fact that can only ever be corrected
   in most of the places it appears.
 
-- **`npm`** builds and tests the dashboard itself. Its ~200 assertions — the
+- **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, and the
   MEASURED contrast of every colour token over every surface it can land on,
   in both themes and for protan and deutan vision — run under Vitest:
@@ -247,11 +295,11 @@ files sit beside what they cover, as Go expects.
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
 replays the frames its socket produced through the dashboard's own
-`store.js`. Both halves of the wire protocol are checked against each other
+`protocol.js`. Both halves of the wire protocol are checked against each other
 there and nowhere else, so it needs node too:
 
 ```bash
-make test-e2e   # go test ./internal/e2e/... -race -count=1 -v
+make test-solo   # internal/e2e, and every other package that runs alone
 ```
 
 ## Project conventions
@@ -307,6 +355,7 @@ pull request when any of them has a newer release:
 |---|---|---|
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `go.mod` | `gomod` | the engine's own Go dependencies |
+| `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
@@ -321,9 +370,54 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
-bumps carry. CI runs on each pull request, and — as below — CI is what decides
-whether it lands. Three things are worth knowing:
+bumps carry, plus two grouping rules on the npm entry. CI runs on each pull
+request, and — as below — CI is what decides whether it lands. Seven things are
+worth knowing:
 
+- **The React family is grouped.** `react`, `react-dom`, `@types/react` and
+  `@types/react-dom` arrive in a single pull request, because **react-dom checks at runtime that `react` and `react-dom`
+  have the exact same version** — not a compatible one. No version range can
+  say that, so npm's resolver never enforces it and a permissive caret is no
+  protection. React 19.3.0 arrived ungrouped as two pull requests and both were
+  red, each in a different phase: the `react-dom` half never installed
+  (`ERESOLVE` in about a second, on `@types/react-dom@19.3.0` peering
+  `@types/react: ^19.3.0` against 19.2.18 — plus a second unsatisfied edge,
+  `react-dom@19.3.0` peering `react: ^19.3.0` against 19.2.8, that `npm ci`
+  did not get far enough to print), while the `react` half installed cleanly
+  and then failed 19 of 36 test suites on the exact-version check. Neither
+  ordering helped; each needed versions that were in the other pull request.
+  `@testing-library/react` is deliberately outside the group — its react peers
+  are `^18.0.0 || ^19.0.0`, which do ride a React minor — and
+  `@vitejs/plugin-react` is outside it because it declares no react peer at
+  all, only `vite: ^8.0.0`. Its name is the only React-shaped thing about it.
+- **`vite`, `vitest` and `@vitejs/plugin-react` are grouped for the same
+  reason, one major out.** `vite` is a *required* peer of the other two —
+  `^8.0.0` from the plugin, `^6.4.0 || ^7.0.0 || ^8.0.0` from vitest — so a
+  lone `vite` 9 bump breaks both ceilings at once and fails to resolve exactly
+  as the react-dom half did. Minors were never the problem (8.2.2 → 8.3.0
+  landed on its own), so the group buys nothing until the major and then it
+  buys all of it. It costs something in the meantime, and the cost is real: a
+  `vitest`-only bump now arrives titled for the group, with the packages it
+  actually moved in the body rather than the subject.
+- **Nothing else is grouped, and that is the rule rather than today's state.**
+  The only other *required* edges a bump there could split are
+  `@testing-library/react`'s — on react and react-dom at `^18.0.0 || ^19.0.0`,
+  which ride a minor, and on `@testing-library/dom`, a transitive it brings
+  itself and Dependabot therefore moves with it. Every remaining vite peer
+  (`@vitest/mocker`'s, vite's own on `@types/node` and the bundlers) is
+  optional, and npm does not fail on an unsatisfied optional peer. A group
+  raises whichever
+  members have an update together, under a title naming the group rather than
+  any package in it — so it costs a vaguer subject on every bump, and it puts
+  one member's bad release in front of the rest. Pay that where a split bump is
+  genuinely broken — not for neatness, and not to batch unrelated noise.
+- **A dashboard runtime bump needs a rebuilt bundle, so it will not auto-merge.**
+  `static/dashboard` is committed and the `dashboard` job rebuilds and diffs it,
+  but Dependabot edits only `package.json` and the lockfile — it cannot run a
+  bundler. A bump that changes the emitted bytes therefore sits red on that gate
+  until someone runs `make dashboard` and commits the output with it. Bumps that
+  do not touch the output — `@types/*`, `prettier`, a build tool whose result is
+  byte-identical — pass it untouched and land on their own.
 - **A Compose image can be held back on purpose**, with the reason in a
   comment beside the pin — `mattermost-db` holds its Postgres major because an
   existing `mattermost-pgdata` volume will not open under a newer one without a

@@ -947,6 +947,11 @@ type Fleet interface {
 	Secrets
 	Integrations
 	Mailboxes
+	PositionRegister
+	HoldRegister
+	FloorRegister
+	BackupRegister
+	MaintenanceRegister
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

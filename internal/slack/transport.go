@@ -25,8 +25,10 @@ import (
 // lifecycle, a reconnect policy and a backfill window. Slack pushes: each
 // seat's app posts to its own request URL, the API edge verifies it, and the
 // parser reads it. So this transport holds no connection at all. What it
-// owns is the OUTBOUND half — one client per seat — and the identities those
-// clients resolve.
+// owns is one authenticated client per seat and the identity that client
+// resolves — and those clients send no message: an agent speaks through the
+// Slack MCP server on this same token, so the only calls made here are
+// `auth.test` at start and the working indicator.
 //
 // That makes Start cheap and failure local: a seat whose token is refused
 // costs that seat's identity and nothing else, where the self-hosted
@@ -51,8 +53,6 @@ type SeatConfig struct {
 	Handle string
 	// Token is the app's bot token (xoxb-…).
 	Token string
-	// Channel is where this seat posts when nothing else names a target.
-	Channel string
 }
 
 // TransportOptions configure a [Transport].
@@ -83,7 +83,6 @@ type Transport struct {
 	parser   *Parser
 	status   *notify.StatusDriver
 	http     *http.Client
-	now      func() time.Time
 
 	mu sync.Mutex
 	// seats is what this node currently runs, keyed by handle. Rebuilt
@@ -112,7 +111,7 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 	}
 	t := &Transport{
 		cfg: opts.Config, registry: opts.Registry,
-		http: httpClient, now: now, seats: map[string]runningSeat{},
+		http: httpClient, seats: map[string]runningSeat{},
 	}
 
 	var threads *notify.ThreadTracker
@@ -189,17 +188,6 @@ func (t *Transport) lookup(handle string) (Seat, bool) {
 	return s.seat, true
 }
 
-// Client is one seat's authenticated app, for a caller that needs to post.
-func (t *Transport) Client(handle string) (*Client, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	s, ok := t.seats[handle]
-	if !ok {
-		return nil, false
-	}
-	return s.client, true
-}
-
 // Start resolves every seat's identity.
 //
 // CONCURRENTLY, and a seat whose token is refused is left out rather than
@@ -231,7 +219,7 @@ func (t *Transport) Start(ctx context.Context) error {
 			found[i] = resolved{
 				seat: Seat{
 					Handle: cfg.Handle, BotUserID: identity.UserID,
-					AppID: identity.AppID, Channel: cfg.Channel,
+					AppID: identity.AppID,
 				},
 				client: client,
 			}
@@ -244,9 +232,9 @@ func (t *Transport) Start(ctx context.Context) error {
 		if r.err != nil {
 			log.ErrorContext(ctx, "slack_seat_unavailable", "handle", t.cfg.Seats[i].Handle,
 				"error", r.err.Error(),
-				"detail", "this seat sends and receives nothing until its app "+
-					"token is fixed; leaving it out is what stops it answering "+
-					"its own messages")
+				"detail", "this seat receives nothing and shows no working "+
+					"indicator until its app token is fixed; leaving it out is "+
+					"what stops it answering its own messages")
 			continue
 		}
 		seats[r.seat.Handle] = runningSeat{seat: r.seat, client: r.client}
@@ -323,37 +311,6 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 	for _, seat := range seats {
 		t.register(seat)
 	}
-}
-
-// Send posts as one seat, into a thread where one is named.
-//
-// It records PARTICIPATION on a threaded reply, which is how every chat
-// client treats replying: the seat now follows the thread and hears what
-// comes back, without having to be named again.
-func (t *Transport) Send(ctx context.Context, handle, channel, thread, text string) (string, error) {
-	t.mu.Lock()
-	s, ok := t.seats[handle]
-	t.mu.Unlock()
-	if !ok {
-		return "", fmt.Errorf("slack: no app for seat %q", handle)
-	}
-	if channel == "" {
-		channel = s.seat.Channel
-	}
-	if channel == "" {
-		return "", fmt.Errorf("slack: %s: no channel to post in", handle)
-	}
-	ts, err := s.client.PostMessage(ctx, channel, thread, text)
-	if err != nil {
-		return "", err
-	}
-	if thread != "" && t.parser.threads != nil {
-		if err := t.parser.threads.Participated(ctx, handle, channel, thread, t.now()); err != nil {
-			log.WarnContext(ctx, "slack_participation_not_recorded", "handle", handle,
-				"thread", thread, "error", err.Error())
-		}
-	}
-	return ts, nil
 }
 
 // StatusBackend implements [notify.StatusPoster].
@@ -433,11 +390,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 			log.Warn("slack_seat_token_unresolved", "handle", role.Handle())
 			continue
 		}
-		out = append(out, SeatConfig{
-			Handle:  role.Handle(),
-			Token:   token,
-			Channel: envref.Resolve(role.Slack.Channel, lookup),
-		})
+		out = append(out, SeatConfig{Handle: role.Handle(), Token: token})
 	}
 	return out
 }

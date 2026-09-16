@@ -94,7 +94,12 @@ func substrates() []substrate {
 				}
 				t.Cleanup(func() { _ = admin.Stop(context.WithoutCancel(t.Context())) })
 
-				backend, err := coordkv.Open(t.Context(), admin.Conn(), coordkv.Config{TTL: fleetTTL})
+				// CLUSTERED, because the broker under this case is: without
+				// it the buckets are provisioned on the SOLO budget against a
+				// three-member metadata group, which is the flake this whole
+				// change removes — reintroduced in the suite that covers it.
+				backend, err := coordkv.Open(t.Context(), admin.Conn(),
+					coordkv.Config{TTL: fleetTTL, Clustered: true})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)
 				}
@@ -129,7 +134,7 @@ func substrates() []substrate {
 				})
 				admin := c.Client(t, 0)
 				backend, err := coordkv.Open(t.Context(), admin.Conn(), coordkv.Config{
-					TTL: fleetTTL, Replicas: len(c.Servers),
+					TTL: fleetTTL, Replicas: len(c.Servers), Clustered: true,
 				})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)

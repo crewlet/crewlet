@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -58,6 +59,25 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
+		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
+		// this list for exactly the reason the list exists: each
+		// `<domain>_ops` migration says the table is swept and ships
+		// `<domain>_ops_swept_idx` for the range delete, and nothing
+		// swept any of them — a row per applied record, kept for ever,
+		// on every node. They are also the list's first PER-NODE jobs:
+		// the rows record what THIS applier wrote, so under the fleet
+		// singleton they would be tidied on one node and grow for ever
+		// on the others.
+		"pages_ops",
+		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
+		// their entries is the point. The knowledge base had three —
+		// a change retention, a revision prune and an orphan collector
+		// — and adopting the log removed all three: the prune RIDES
+		// EACH COMMIT as the record's own list of retired versions, the
+		// orphans cannot occur because a create is one transaction, and
+		// the history is a Replicated table an applier owns, so a
+		// delete here on one node's own authority is exactly what the
+		// identity claim forbids.
 		"scheduled_runs",
 		// The one job that deletes BROKER state rather than rows: a
 		// removed seat's mailbox, retired after its grace period. Named
@@ -65,6 +85,53 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// nobody runs for the life of the deployment, and the only symptom
 		// is a stream that never shrinks.
 		"seat_mailboxes",
+		// The TRACKER'S OWN JOBS, and they are a different kind of
+		// thing from every entry above: nothing here deletes anything.
+		// Its records are a LOG, which is trimmed by the retention gate
+		// rather than swept — so what these do is finish work a crash
+		// left half-done and tell the tasks a close unblocked. They are
+		// on this list because the list is what says a job exists at
+		// all, and a job nobody registered is a re-spread that never
+		// runs and a board that stays wrong.
+		"tracker_abandoned_merges",
+		"tracker_duplicate_ranks",
+		// AND A PERSON'S INBOX, which IS a range delete and is the one
+		// entry on this list that deletes something a person reads. The
+		// table shipped `tracker_notifications_swept_idx ON
+		// (created_at)` naming "the per-node inbox retention sweep",
+		// the horizon is a validated company setting with a default and
+		// bounds, and its own doc calls it "the one horizon here that
+		// deletes anything" — and nothing deleted anything, so every
+		// routed change kept a row per recipient for the life of the
+		// deployment, on every node.
+		//
+		// PER NODE, because the table is Divergent: what it holds
+		// depends on the epoch's own horizon, so two nodes legitimately
+		// hold different rows and a singleton would tidy one and let
+		// the rest grow. What ages out is a POINTER — the history row
+		// behind each notice is never swept.
+		"tracker_notifications",
+		// AND THE ONE-SIDED DEPENDENCY REPAIR, which is the same kind
+		// of thing: a dependency is two commits on two subjects, the
+		// mirror is best effort because the authored edge is durable
+		// without it, and this writes the one that did not land. Its
+		// repair is LOUD — the authored commit routes to the
+		// DEPENDENT's parties, so the blocker's assignee was never told
+		// at all — which makes it the only wake that side ever gets.
+		// Unregistered, a half-written dependency stays half-written
+		// and nobody hears about it.
+		"tracker_one_sided",
+		"tracker_ops",
+		"tracker_respread",
+		// AND THE SPRINT LIFECYCLE, which is the same kind of thing as
+		// the four beside it and deletes nothing either: it mints the
+		// sprints a policy says to keep ahead, starts one at its window,
+		// closes one at its end, rolls the spillover and archives what
+		// is old. On this list because the list is what says a job
+		// exists — unregistered, a company's sprints simply never start.
+		"tracker_sprints",
+		"tracker_unblocked",
+		"vectors_ops",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -158,6 +225,19 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
+		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the
+		// absence is the point rather than an omission. Both are
+		// state-log domains: their records are a log the retention gate
+		// trims, and their durable rows are written by an applier — so
+		// there is no per-node sweep of ROWS to give a horizon to, and
+		// a delete on one node's own authority is what the identity
+		// claim forbids.
+		//
+		// Their OPERATION LEDGERS are the exception, and they are here
+		// under one entry because every domain takes the same horizon:
+		// the ledger is framework bookkeeping about what THIS applier
+		// wrote, not a durable row any peer reads.
+		"<domain>_ops": statelog.OpsRetention,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

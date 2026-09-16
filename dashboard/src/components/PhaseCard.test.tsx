@@ -58,6 +58,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     trigger: null,
     at: "2026-09-02T10:00:00Z",
     startedAt: "2026-09-02T10:00:00Z",
+    durationMs: 0,
     eventId: "ev-1",
     ...over,
   };

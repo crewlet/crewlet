@@ -76,10 +76,10 @@ import (
 //
 // Read-only. Ask through Failed rather than reaching into the map.
 var FailureEventTypes = map[string]struct{}{
-	"task_failed":       {},
-	"llm_unavailable":   {},
-	"budget_exhausted":  {},
-	"turn.guard_breach": {},
+	"llm_unavailable":    {},
+	"budget_exhausted":   {},
+	"turn.guard_breach":  {},
+	"sandbox_run_failed": {},
 }
 
 // Failed reports whether the work an event describes failed.

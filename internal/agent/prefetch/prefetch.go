@@ -210,6 +210,13 @@ type Sources struct {
 	// tempting shortcut, and it silently disables the memory and knowledge
 	// filters too.
 	SummarizeEpisodes bool
+
+	// SummarizeMaxTokens caps that summary. Zero takes
+	// [DefaultSummaryTokens], which is what a fetcher built without an
+	// operator's configuration gets — and what this block had hardcoded
+	// while the config field of the same name, with the same default,
+	// reached nothing at all.
+	SummarizeMaxTokens int
 }
 
 // Fetcher renders the blocks for a turn.

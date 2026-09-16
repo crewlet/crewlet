@@ -2,10 +2,12 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -162,6 +164,10 @@ var problemKinds = []struct {
 	{"conflict", org.ErrDuplicateHandle},
 	{"conflict", org.ErrDuplicateSeatName},
 	{"conflict", org.ErrDuplicateUnitName},
+	// Its own entry, although a duplicate NAME already carries both
+	// sentinels: where an id is what collided the error carries this one
+	// alone, and with no entry that collision arrives as `invalid`.
+	{"conflict", org.ErrDuplicateUnit},
 	{"conflict", org.ErrHumanSeatField},
 	{"conflict", org.ErrAgentSeatField},
 	{"conflict", org.ErrUnrunnableSchedule},
@@ -367,12 +373,33 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 // Warning is something the engine will run but a person should know about,
 // located like a [Problem].
 //
-// Kind says which: "dangling_reference", a name that resolves to nothing,
-// with Ref naming what carries it (lead, unit, manages, or
-// gitlab_access_level); or "admission", a rule a stored revision breaks that
-// a new write would be refused for, with Ref empty. From and To are display
-// text: what holds the reference and what it names. Seat and Unit are always
-// present, empty when the warning is about neither.
+// # Why warnings are their own channel and not errors
+//
+// A refusal says "this cannot run". Every one of these can, and some of them
+// describe the correct configuration for somebody's deployment: a development
+// topology, a company that has decided not to back up, an organization being
+// assembled in pieces, a rename that will re-onboard a team on purpose.
+// Turning any of them into an error would make the engine refuse a decision
+// that was not its to make.
+//
+// # And why they are not just log lines
+//
+// A log line is read after the thing has already happened. These are read by
+// `crewlet validate`, which is what a person runs BEFORE applying a config and
+// what a CI step runs before a deploy, and by a configuration write, which
+// answers them to a caller that never sees a terminal. Each is a moment where
+// the consequence can still change the decision.
+//
+// # What Kind says
+//
+// "dangling_reference" is a name that resolves to nothing, with Ref naming
+// what carries it (lead, unit, manages, or gitlab_access_level). "admission"
+// is a rule a stored revision breaks that a new write would be refused for.
+// "advisory" is a setting that is valid and carries a consequence, and it is
+// the one kind either tier can raise. Ref is empty on the last two, because
+// neither names a reference. From and To are display text: what holds the
+// reference and what it names. Seat and Unit are always present, empty when
+// the warning is about neither.
 type Warning struct {
 	Kind     string `json:"kind"`
 	Ref      string `json:"ref"`
@@ -387,22 +414,40 @@ type Warning struct {
 
 // WarningDanglingReference is the kind of a [Warning] about a reference that
 // resolves to nothing. WarningAdmission is the kind of one about an admission
-// rule a stored revision breaks.
+// rule a stored revision breaks. WarningAdvisory is the kind of one about a
+// setting that is valid and carries a consequence its author should hear
+// before production tells them.
 const (
 	WarningDanglingReference = "dangling_reference"
 	WarningAdmission         = "admission"
+	WarningAdvisory          = "advisory"
 )
 
+// advisory is one valid-but-worth-knowing setting, located at the field an
+// authoring loop can jump to.
+//
+// The message says what will happen and what to do instead, in that order. A
+// warning that only says something is unusual is one people learn to ignore.
+func advisory(path Path, message string) Warning {
+	return Warning{
+		Kind: WarningAdvisory, Path: path.String(), Segments: segmentsOf(path),
+		Message: message,
+	}
+}
+
 // Warnings is everything a person should know about a company the engine
-// will run: every reference it resolves to nothing ([Company.ReferenceWarnings]),
-// then every admission rule it breaks ([Company.AdmissionWarnings]).
+// will run: every reference it resolves to nothing
+// ([Company.ReferenceWarnings]), every admission rule it breaks
+// ([Company.AdmissionWarnings]), then every setting that is valid and carries
+// a consequence ([Company.AdvisoryWarnings]).
 //
 // A document that passed [Company.Validate] carries no admission warning, so
-// on a write that was admitted this is its references alone. The admission
-// half is what a revision re-activated under the runnable rules still says: a
-// reload or a revert of a company stored before a rule existed.
+// on a write that was admitted this is its references and its advisories. The
+// admission half is what a revision re-activated under the runnable rules
+// still says: a reload or a revert of a company stored before a rule existed.
 func (c *Company) Warnings() []Warning {
-	return append(c.ReferenceWarnings(), c.AdmissionWarnings()...)
+	out := append(c.ReferenceWarnings(), c.AdmissionWarnings()...)
+	return append(out, c.AdvisoryWarnings()...)
 }
 
 // AdmissionWarnings is every admission rule c breaks, as warnings located
@@ -459,4 +504,198 @@ func (c *Company) ReferenceWarnings() []Warning {
 		out = append(out, w)
 	}
 	return out
+}
+
+// AdvisoryWarnings is everything valid about this company that its author
+// should still know.
+//
+// Located at the field they would ADD rather than at the entity in prose: a
+// unit with no id is reported at units[i].id, which is the line an editor
+// jumps to and the node a dashboard marks, and the unit is named in Unit for
+// a reader who has no document in front of them.
+func (c *Company) AdvisoryWarnings() []Warning {
+	o, x := c.organization()
+	var out []Warning
+
+	// A UNIT WITH NO ID IS KEYED ON ITS NAME, and a name is prose: it gets
+	// renamed for the reasons prose does. Two different things follow, and
+	// the warning names both because fixing one does not fix the other.
+	//
+	// THE MESSAGE NAMES THE UNIT, as every unit-scoped line in this engine
+	// does ([org.DanglingRef.Message] opens `unit "Platform" names lead`).
+	// The path is an index now rather than the name it used to be, and a
+	// prose reader gets the path and the message and nothing else: without
+	// the name in the sentence they would have to count units in their own
+	// file to find out which one this is about.
+	for u := range o.AllUnits() {
+		if strings.TrimSpace(u.ID) != "" {
+			continue
+		}
+		w := advisory(at(x.units[u], "id"), fmt.Sprintf(
+			"unit %q has no `id`, so everything durable is keyed on its NAME, "+
+				"and renaming it moves what is filed under it. Giving it an id "+
+				"fixes that, and does NOT stop a rename re-onboarding the seats "+
+				"beneath it: onboarding turns on the name, because the name is "+
+				"what an agent reads as its team", u.Name))
+		w.Unit = u.Name
+		out = append(out, w)
+	}
+	return out
+}
+
+// Warnings is everything valid about this bootstrap that its author should
+// still know.
+//
+// SEPARATE FROM Validate, and it takes no error path: a document that does not
+// validate has problems worth fixing first, and a warning printed beside a
+// refusal is noise at exactly the moment somebody is reading carefully.
+func (b *Bootstrap) Warnings() []Warning {
+	var out []Warning
+
+	// A DECLINED FSYNC IS A DECISION WITH A NUMBER ON IT. It is legitimate
+	// (a replicated fleet across power domains genuinely trades a window
+	// for throughput), and the window is what an operator should have said
+	// out loud rather than inherited.
+	if !b.Stream.SyncAlways() {
+		out = append(out, advisory(field("stream.sync"), fmt.Sprintf(
+			"an acknowledged write may be up to %s behind the disk. That is a "+
+				"trade against a correlated power loss taking every replica at "+
+				"once. Write `always` if this deployment cannot afford it",
+			b.Stream.SyncInterval())))
+	}
+
+	// A FLEET THAT TRIMS ONLY WHAT IT HAS BEEN TOLD IS OFF-SITE does not
+	// trim until somebody tells it, and the log grows until its ceiling
+	// refuses writes. That is the configuration working as asked; it is
+	// also a state nobody discovers until the refusal.
+	if b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
+		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
+			"`operator` means the trim advances only as far as somebody "+
+				"has acknowledged a backup. Until the first acknowledgement the log "+
+				"is never trimmed, and it grows until `stream.tracker_log_max_bytes` "+
+				"starts refusing writes"))
+	}
+
+	// NOBODY OWNS THE BACKUP. A company that never backs up never trims,
+	// since the log is the only copy of what no node has applied yet, so
+	// "who is responsible for this" has a real answer on every deployment
+	// that intends to keep working, and nowhere to write it is how it goes
+	// unasked.
+	if strings.TrimSpace(b.Retention.BackupOwner) == "" {
+		out = append(out, advisory(field("retention.backup_owner"),
+			"nobody is named as this deployment's backup owner. The trim "+
+				"stops when the newest backup ages past "+
+				"`stream.tracker_retention.backup_max_age`, and the alarm that says "+
+				"so has nobody to name"))
+	}
+
+	// AN EMBEDDED STREAM WITH NOWHERE TO PERSIST loses everything on a
+	// restart. It is the right configuration for a test and for an
+	// ingress-only node, and the wrong one for anything holding a company.
+	if b.Stream.Type != StreamNATS && strings.TrimSpace(b.Stream.StoreDir) == "" {
+		out = append(out, advisory(field("stream.store_dir"),
+			"an embedded stream with no store directory keeps everything in "+
+				"memory: a restart loses every mailbox, every coordination record and "+
+				"the company's own history. Correct for a test; not for a node that "+
+				"holds seats"))
+	}
+
+	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
+	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
+	// population, but those are still DEBUG records and every destination
+	// filters by level, so the pair that reads as "I asked for broker
+	// diagnostics" is the pair that produces none. `crewlet run`'s own
+	// -debug / -log-level flags override the file and are invisible from
+	// it, which is why this names them rather than being a refusal.
+	if b.Stream.Debug && !b.logsAtDebug() {
+		out = append(out, advisory(field("stream.debug"),
+			"the embedded broker will produce its debug output and no "+
+				"destination records it: `logging.level` is "+b.loggingLevelName()+
+				" and no `logging.file.level` is `debug`. Set one of them, or pass "+
+				"`-debug` to `crewlet run`"))
+	}
+	return out
+}
+
+// logsAtDebug reports whether ANY destination this document INSTALLS would
+// record a debug line.
+//
+// The most verbose destination decides, the same rule internal/logging's own
+// fan-out follows: a `debug` file behind a `warn` console is a supported
+// shape, and reading only `logging.level` would call that combination silent
+// when it is not.
+//
+// INSTALLS, not "configures", and that is the half that is easy to get wrong
+// in the other direction too: with `logging.stderr: false` the console is not
+// a destination at all, so `logging.level: debug` beside a `warn` file
+// records nothing, except where there is no file, because [logging.install]
+// keeps stderr rather than leave a process logging nowhere. This mirrors that
+// function; the two disagreeing would make the warning fire on a working
+// deployment or stay quiet on a broken one.
+func (b *Bootstrap) logsAtDebug() bool {
+	file := strings.TrimSpace(b.Logging.File.Path) != ""
+	if console := b.Logging.Stderr == nil || *b.Logging.Stderr || !file; console {
+		if b.Logging.Level == logging.LevelDebug {
+			return true
+		}
+	}
+	if !file {
+		return false
+	}
+	// An empty file level follows `logging.level`, which is what makes
+	// `-debug` reach both destinations.
+	level := b.Logging.File.Level
+	if level == "" {
+		level = b.Logging.Level
+	}
+	return level == logging.LevelDebug
+}
+
+// loggingLevelName is the level this document names, spelled as an operator
+// wrote it, and as the DEFAULT when they wrote nothing, because "logging.level
+// is " followed by an empty string reads as a bug in the warning.
+func (b *Bootstrap) loggingLevelName() string {
+	if b.Logging.Level == "" {
+		return "`info` (unset)"
+	}
+	return "`" + string(b.Logging.Level) + "`"
+}
+
+// CheckTiers holds the rules that need BOTH documents, and it exists because
+// neither tier can see the other.
+//
+// Tier A is the operator's and Tier B is the founder's; each validates alone,
+// and a rule about the pair has nowhere else to live. There is exactly one
+// today, and it is worth the seam: it turns a permanent, unrecoverable state
+// into a refusal at the moment somebody could still choose otherwise.
+func CheckTiers(boot *Bootstrap, company *Company) error {
+	var p problems
+	if boot == nil || company == nil {
+		return nil
+	}
+
+	// A NATIVE TRACKER ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
+	// why it is an error rather than the warning Tier A raises alone.
+	//
+	// The engine's own tracker keeps its write-ahead log on the stream. An
+	// embedded server with no store directory keeps its streams in MEMORY,
+	// so a restart recreates them empty, and a node whose durable tables
+	// are ahead of a stream that has restarted from nothing cannot tell
+	// "the log was trimmed" from "the log is a different log", refuses to
+	// serve, and stays refused: every snapshot it could adopt is above the
+	// recreated stream too.
+	//
+	// It is an error rather than a warning because there is no correct
+	// deployment it describes. A company on a vendor tracker starts no log
+	// at all and is unaffected, which is why the rule needs both documents.
+	if company.TrackerBackendFor() == TrackerNative &&
+		boot.Stream.Type != StreamNATS &&
+		strings.TrimSpace(boot.Stream.StoreDir) == "" {
+		p.add(field("stream.store_dir"), ErrMissing,
+			"this company runs the engine's own tracker, whose log lives on the "+
+				"stream, and an embedded stream with no store directory keeps its "+
+				"streams in memory, so a restart recreates them empty and this node "+
+				"refuses to serve the tracker permanently. Name a directory")
+	}
+	return p.err()
 }

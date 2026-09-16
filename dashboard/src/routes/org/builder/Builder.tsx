@@ -1782,7 +1782,11 @@ function Lens({
           />
         )}
 
-        <div className="sr-only org-builder-live" role="status" aria-live="polite">
+        {/* A HOOK, NOT A STYLE. `sr-only` does the hiding; this attribute only
+            names the region so a case can find it. Written as data rather than
+            as a class because a class that declares nothing reads as a missing
+            rule to the next person, and to the scan that looks for one. */}
+        <div className="sr-only" data-live-region role="status" aria-live="polite">
           {live.text}
         </div>
       </div>

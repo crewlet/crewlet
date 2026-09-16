@@ -234,8 +234,7 @@ export function Overview() {
                   <MoreVertGlyph size="sm" />
                 </span>
                 <span className="t-caption">
-                  and {attention.length - 8} more — every one of them is on the screen it belongs
-                  to.
+                  and {attention.length - 8} more, every one of them on the screen it belongs to.
                 </span>
               </div>
             )}
@@ -348,7 +347,7 @@ export function Overview() {
             {stripTruncated && (
               <span className="t-caption">
                 This tab keeps the last {MAX_EVENTS} events, matching the engine's own feed
-                retention — the earliest minutes here are cut off rather than quiet.
+                retention, so the earliest minutes here are cut off rather than quiet.
               </span>
             )}
             <Stack gap={0}>
@@ -392,8 +391,11 @@ export function Overview() {
               <Meter
                 value={orgMeter.used}
                 max={orgMeter.max}
+                // The LEGEND is the accessible name: `label` is linked to the
+                // bar, so the words here are what a screen reader announces
+                // the meter as, and the figures ride the value text beside it.
                 label={
-                  <span title="a process-lifetime meter — not comparable to the spend window above">
+                  <span title="a process-lifetime meter, not comparable to the spend window above">
                     Company budget meter
                   </span>
                 }

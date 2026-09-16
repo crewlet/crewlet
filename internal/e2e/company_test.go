@@ -47,6 +47,25 @@ roles:
     kind: human
     contact:
       slack_user_id: U0FOUNDER
+# TWO UNITS WITH PROJECTS, and they are BELOW the seats deliberately: several
+# fixtures here extend this document by replacing the first "roles:\n" in it,
+# and a unit's own indented roles key would match that one first. Keeping the
+# units last means a fixture patching the seats still patches the seats.
+#
+# They exist because a project is NOT created on demand: a task takes its key
+# from its project's own counter, so the project has to be an object before
+# anything can be filed in it — and the only thing that makes one is the chart
+# apply reading these keys. A company that declared none could file no work at
+# all, which is what these two exercise end to end.
+units:
+  - name: Engineering
+    purpose: builds and runs the product
+    project: ENG
+    lead: CEO
+  - name: Operations
+    purpose: keeps the lights on
+    project: OPS
+    lead: CEO
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 3
@@ -64,6 +83,19 @@ type node struct {
 	app    *api.App
 	server *httptest.Server
 	model  *scriptedModel
+
+	// id is what this node calls itself — its name in a search fan-out's
+	// assignment table and on its own presence lease. Held because a case
+	// that addresses one member by name has to use the SAME string the
+	// engine registered under, and deriving it a second time from the
+	// index would be a second place to decide what a member is called.
+	id string
+
+	// snapshotDir is where this node writes its own snapshots of the
+	// replicated estate. Held because a case that asserts a node TOOK one
+	// has to read the directory, and deriving it a second time from the
+	// bootstrap would be a second place to decide where they go.
+	snapshotDir string
 }
 
 // start stands one up.
@@ -127,7 +159,7 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	srv := httptest.NewServer(app)
 	t.Cleanup(srv.Close)
 
-	return &node{engine: e, app: app, server: srv, model: model}
+	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
 }
 
 // scriptedModel is an Anthropic Messages endpoint that answers by PHASE.
@@ -139,6 +171,10 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 // submit_review, or neither — which is exactly the fact the runner varies.
 type scriptedModel struct {
 	url string
+
+	// close shuts this model's HTTP server down. See newScriptedModel for
+	// why it is a field as well as a t.Cleanup.
+	close func()
 
 	mu      sync.Mutex
 	calls   []string
@@ -219,6 +255,12 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 	srv := httptest.NewServer(http.HandlerFunc(m.serve))
 	t.Cleanup(srv.Close)
 	m.url = srv.URL
+	// EXPOSED as well as registered, for the one caller whose lifetime is
+	// shorter than the test's: a cluster attempt that fails stops what it
+	// started before the next one starts, and this is one of the things it
+	// started. httptest.Server.Close is idempotent, so the cleanup above
+	// stays correct for every other caller.
+	m.close = srv.Close
 	return m
 }
 
@@ -484,9 +526,36 @@ func textReply(text string) string {
 // out waiting for the suspended turn to be resumed", which named the symptom
 // and not one fact about the state that produced it. A condition worth waiting
 // on is worth saying what it saw instead.
+// waitBudget is how long every wait in this suite gets.
+//
+// # Why it is this large
+//
+// The conditions here are not in-process flags: they are a seat claimed
+// through a lease, an engine booted, a detached sandbox run recovered from a
+// row. And the machine they run on is not this one — CI runs the WHOLE suite
+// under the race detector, so an e2e engine boots while a dozen other
+// packages compete for the same cores.
+//
+// # What a long budget does NOT fix
+//
+// A wait that will never complete. When this was raised from thirty seconds
+// the reasoning was that a loaded machine missed the budget — and that was
+// wrong: the restart case was losing a RACE, because its stand-in coding job
+// slept for a fixed three seconds and a loaded second boot took longer, so
+// recovery found a run that had already finished and the seat was never
+// parked. The test then waited out whatever budget it had and failed at
+// thirty-six seconds, and at ninety-six, and would have at any number.
+//
+// That case now holds its job open until the test releases it. The budget
+// stays generous because these waits really do cover multi-second fleet
+// operations on a shared runner, and it costs nothing when the condition is
+// met — but a wait that times out here is a staging bug to find, not a number
+// to raise.
+const waitBudget = 90 * time.Second
+
 func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

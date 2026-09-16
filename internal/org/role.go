@@ -44,7 +44,33 @@ const (
 	TransportConfluence Transport = "confluence"
 	TransportGitHub     Transport = "github"
 	TransportGitLab     Transport = "gitlab"
+
+	// TransportCrewlet is the engine's OWN surface — the API, the
+	// dashboard and the operator tool server — where a person is
+	// identified by the bearer token they hold rather than by an account
+	// on somebody else's platform.
+	//
+	// It is a transport for the same reason the others are: a human seat
+	// acts here, and everything that acts has to be attributable. What it
+	// is NOT is a delivery channel — the engine never sends as itself, so
+	// nothing is ever "delivered" to this identity. It is read in one
+	// direction only: a write arriving with this token is attributed to
+	// this seat, so the item that seat files carries their name and the
+	// notifications it raises reach their colleagues by the identities
+	// above.
+	TransportCrewlet Transport = "crewlet"
 )
+
+// Reachable reports whether an agent can address a person over this
+// transport.
+//
+// Every transport but [TransportCrewlet] is a place a message can be sent.
+// The engine's own surface is not: it never sends as itself, so an operator
+// id is an attribution and never an address. Anything RENDERING a person's
+// contact details — a roster, a colleague card — asks this first, because
+// listing an operator id under "how to reach them" tells an agent to mention
+// a name no platform will resolve.
+func (t Transport) Reachable() bool { return t != TransportCrewlet }
 
 // handlePattern is the canonical handle shape. Slugify output always
 // conforms; an explicit handle is checked against it at validation.
@@ -97,6 +123,28 @@ type HumanContact struct {
 	// GitLabUsername is a GitLab username — assignment, review requests and
 	// sender attribution. Lowercased for the same reason as GitHubLogin.
 	GitLabUsername string `yaml:"gitlab_username,omitempty" json:"gitlab_username,omitempty"`
+
+	// CrewletOperatorID binds one of Tier A's api.auth.tokens ids to this
+	// seat, so a person acting through the dashboard, the REST API or the
+	// operator tool server acts AS THEMSELVES rather than as a credential.
+	//
+	// # Why the binding is written here and not on the token
+	//
+	// Tier A is the root of trust and may never read Tier B — it holds the
+	// keys to the secret store — so a `seat:` field on the token would have
+	// the trusted tier depending on the untrusted one. Naming the token id
+	// from the company document inverts that: Tier A keeps a bare list of
+	// credentials, and the org chart says which of them is a person.
+	//
+	// Unbound is an ORDINARY state, not a misconfiguration. An operator
+	// who is not in the org chart, a pipeline, an automation: each acts as
+	// `operator:<id>` under the label its token carries, and is never
+	// refused for it.
+	//
+	// Lower-cased like the code-host logins, because the guard compares
+	// what an operator typed here against what they typed in Tier A and
+	// two files are two chances to disagree about case.
+	CrewletOperatorID string `yaml:"crewlet_operator_id,omitempty" json:"crewlet_operator_id,omitempty"`
 }
 
 // contactField describes one identity field: what an operator writes, how
@@ -127,6 +175,7 @@ const (
 	fieldAtlassianAccountID
 	fieldGitHubLogin
 	fieldGitLabUsername
+	fieldCrewletOperatorID
 )
 
 // contactFields is every identity a contact can carry, in config order.
@@ -137,6 +186,7 @@ var contactFields = []contactField{
 	{key: "atlassian_account_id", value: func(c *HumanContact) *string { return &c.AtlassianAccountID }},
 	{key: "github_login", lowercase: true, value: func(c *HumanContact) *string { return &c.GitHubLogin }},
 	{key: "gitlab_username", lowercase: true, value: func(c *HumanContact) *string { return &c.GitLabUsername }},
+	{key: "crewlet_operator_id", lowercase: true, value: func(c *HumanContact) *string { return &c.CrewletOperatorID }},
 }
 
 // contactTransports is THE transport-to-field table: which field carries a
@@ -155,6 +205,7 @@ var contactTransports = []struct {
 	{TransportConfluence, fieldAtlassianAccountID},
 	{TransportGitHub, fieldGitHubLogin},
 	{TransportGitLab, fieldGitLabUsername},
+	{TransportCrewlet, fieldCrewletOperatorID},
 }
 
 // Identity is one external account a human seat can be reached at.
@@ -306,20 +357,21 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	return out
 }
 
-// SlackIdentity is a seat's own Slack app: the credentials its transport
-// verifies inbound requests with and delivers outbound messages through.
-// Each agent has its own app, which is what makes an agent's messages come
-// from that agent rather than from a shared company bot.
+// SlackIdentity is a seat's own Slack app: the signing secret its transport
+// verifies inbound deliveries with, and the bot token it resolves the seat's
+// own Slack identity from. Each agent has its own app, which is what makes an
+// agent's messages come from that agent rather than from a shared company
+// bot.
 //
 // These drive the TRANSPORT only. The Slack tool server is a separate MCP
 // entry, and its bot token is named again under mcp_env.slack — two
 // consumers, one secret, named twice on purpose so an operator can split
-// them.
+// them. The engine's own transport posts no message: every message an agent
+// sends is the MCP server's call on this same token, which is also why
+// nothing here names a channel.
 type SlackIdentity struct {
 	BotToken      string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
-	// Channel is an optional default channel id for this seat.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 }
 
 // IsZero reports an unconfigured Slack identity.
@@ -332,7 +384,9 @@ type MattermostIdentity struct {
 	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	// Username defaults to the seat handle when empty.
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
-	// Channel is an optional default channel for this seat.
+	// Channel is a channel this seat's bot is added to at provisioning,
+	// beside the company-wide ones. It aims nothing: this backend's
+	// transport posts no message.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 }
 
@@ -514,15 +568,15 @@ type Role struct {
 	Slack      SlackIdentity      `yaml:"slack,omitempty" json:"slack,omitzero"`
 	Mattermost MattermostIdentity `yaml:"mattermost,omitempty" json:"mattermost,omitzero"`
 
-	// JiraProject and ConfluenceSpace are this seat's integration
+	// Project and Space are this seat's integration
 	// IDENTITY: where inbound activity with no better recipient routes, and
 	// where the seat files its work. Meaningful for a root-level seat; for
 	// a unit-nested one the unit carries it.
 	//
 	// Neither is an MCP credential, and neither scopes what the seat can
 	// READ — read scope is org-wide, on the Organization.
-	JiraProject     string `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
-	ConfluenceSpace string `yaml:"confluence_space,omitempty" json:"confluence_space,omitempty"`
+	Project string `yaml:"project,omitempty" json:"project,omitempty"`
+	Space   string `yaml:"space,omitempty" json:"space,omitempty"`
 
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
@@ -576,8 +630,8 @@ func (r *Role) humanForbidden() []string {
 		{"schedules", len(r.Schedules) > 0},
 		{"integrations.slack", !r.Slack.IsZero()},
 		{"integrations.mattermost", !r.Mattermost.IsZero()},
-		{"integrations.jira", r.JiraProject != ""},
-		{"integrations.confluence", r.ConfluenceSpace != ""},
+		{"integrations.jira", r.Project != ""},
+		{"integrations.confluence", r.Space != ""},
 		{"mcp_env", len(r.MCPEnv) > 0},
 		{"behavioral_guidelines", len(r.BehavioralGuidelines) > 0},
 	}

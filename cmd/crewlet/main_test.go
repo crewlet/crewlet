@@ -968,14 +968,21 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	if !strings.Contains(err.Error(), "roles[0].name, roles[1].name: duplicate seat name") {
 		t.Errorf("the duplicate is not led by both paths:\n%v", err)
 	}
-	if !strings.Contains(out.String(), "warning: units[0].lead: ") {
-		t.Errorf("the dangling lead is not printed as a warning: %q", out.String())
+	if !strings.Contains(out.String(), "warning (dangling reference): units[0].lead: ") {
+		t.Errorf("the dangling lead is not printed as a dangling-reference warning: %q",
+			out.String())
 	}
 }
 
 // A REFERENCE THAT RESOLVES TO NOTHING IS A WARNING, located where it was
 // written, and it fails nothing: the engine runs a company assembled in
 // pieces, and a gate refusing one would refuse every intermediate state.
+//
+// AN ADVISORY RIDES THE SAME LIST (a unit written with no id is valid and
+// still worth knowing before it is applied), and the two are told apart by
+// Kind, so a consumer branches on the field rather than on the prose. They
+// arrive in [config.Company.Warnings]' own order: what is broken first, what
+// could be better after it.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
 	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
@@ -983,13 +990,30 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
 	}
-	if len(got.Warnings) != 1 {
-		t.Fatalf("warnings = %+v, want one", got.Warnings)
+	want := []config.Warning{{
+		Kind: config.WarningDanglingReference, Ref: "lead",
+		Path: "units[0].lead", Segments: config.Path{"units", 0, "lead"},
+		Unit: "Platform", From: "Platform", To: "Ghost",
+	}, {
+		Kind: config.WarningAdvisory,
+		Path: "units[0].id", Segments: config.Path{"units", 0, "id"},
+		Unit: "Platform",
+	}}
+	if len(got.Warnings) != len(want) {
+		t.Fatalf("warnings = %+v, want %d: %s", got.Warnings, len(want), raw)
 	}
-	w := got.Warnings[0]
-	if w.Kind != config.WarningDanglingReference || w.Ref != "lead" || w.Path != "units[0].lead" ||
-		w.Unit != "Platform" || w.From != "Platform" || w.To != "Ghost" || w.Message == "" {
-		t.Errorf("warning = %+v", w)
+	for i, w := range want {
+		g := got.Warnings[i]
+		// THE SENTENCE ITSELF IS NOT PINNED, because it is prose and it
+		// gets reworded. Its PRESENCE is: a warning with no message is one
+		// nobody can act on.
+		if g.Message == "" {
+			t.Errorf("warnings[%d] carries no message: %+v", i, g)
+		}
+		g.Message = ""
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("warnings[%d] = %+v, want %+v", i, g, w)
+		}
 	}
 }
 
@@ -998,6 +1022,12 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // by `crewlet validate company.yaml` but not by `crewlet validate -config
 // crewlet.yaml -company company.yaml` would be a misspelling the gate never
 // shows.
+//
+// TIER A'S OWN ADVISORIES LEAD THE LIST, which is the order the two files are
+// named in, and the company's follow in their own. Both files' warnings on
+// one run is the same rule both files' problems follow: an operator who fixes
+// one file and hears about the other on the next run has paid twice for one
+// edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
 	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
@@ -1013,9 +1043,101 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
 	}
-	if !got.Valid || len(got.Warnings) != 1 || got.Warnings[0].Path != "units[0].lead" {
-		t.Errorf("valid = %v, warnings = %+v; want valid with the dangling lead at units[0].lead",
-			got.Valid, got.Warnings)
+	if !got.Valid {
+		t.Errorf("valid = false for a document whose only faults are warnings: %s", out.String())
+	}
+	// KIND WITH PATH, because either one alone lets the other move: a path
+	// under the wrong kind is a misclassified warning, and a kind at the
+	// wrong path is one no editor can jump to.
+	located := make([]string, 0, len(got.Warnings))
+	for _, w := range got.Warnings {
+		if w.Message == "" {
+			t.Errorf("the warning at %q carries no message: %+v", w.Path, w)
+		}
+		located = append(located, w.Kind+" "+w.Path)
+	}
+	want := []string{
+		config.WarningAdvisory + " retention.backup_owner",
+		config.WarningDanglingReference + " units[0].lead",
+		config.WarningAdvisory + " units[0].id",
+	}
+	if !slices.Equal(located, want) {
+		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())
+	}
+}
+
+// AN OPERATOR CAN TELL THE TWO APART IN PROSE. Both tiers' advisories share
+// the warning list with the references now, and under one undifferentiated
+// `warning:` line a dangling lead, which is broken and has to be corrected,
+// reads exactly like a unit with no id, which is a choice with a consequence.
+// The kind leads the line, so the list can be skimmed by a person and grepped
+// by a CI step.
+func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
+	t.Parallel()
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	var out, errOut bytes.Buffer
+	args := append([]string{"validate"}, configPair(t, "", doc)...)
+	if err := run(args, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v\n%s", err, errOut.String())
+	}
+	for _, want := range []string{
+		"warning (advisory): retention.backup_owner: ",
+		"warning (dangling reference): units[0].lead: ",
+		"warning (advisory): units[0].id: ",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the output does not carry %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// EVERY KIND HAS WORDS, and one this build does not classify renders as its
+// wire value rather than as an empty pair of brackets: the label is the only
+// thing on the line that says how much the warning matters.
+func TestAWarningLineCarriesItsKind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		w    config.Warning
+		want string
+	}{{
+		name: "a dangling reference",
+		w: config.Warning{Kind: config.WarningDanglingReference,
+			Path: "units[0].lead", Message: "no seat holds that name"},
+		want: "warning (dangling reference): units[0].lead: no seat holds that name",
+	}, {
+		name: "an admission rule",
+		w: config.Warning{Kind: config.WarningAdmission,
+			Path: "roles[0].name", Message: "duplicate seat name"},
+		want: "warning (admission): roles[0].name: duplicate seat name",
+	}, {
+		name: "an advisory",
+		w: config.Warning{Kind: config.WarningAdvisory,
+			Path: "stream.sync", Message: "an acknowledged write may lag the disk"},
+		want: "warning (advisory): stream.sync: an acknowledged write may lag the disk",
+	}, {
+		name: "a kind this build does not classify",
+		w:    config.Warning{Kind: "invented", Path: "stream.sync", Message: "something"},
+		want: "warning (invented): stream.sync: something",
+	}, {
+		name: "no kind at all",
+		w:    config.Warning{Path: "stream.sync", Message: "something"},
+		want: "warning: stream.sync: something",
+	}, {
+		// The path is not printed twice when the message already opens
+		// with it, which is prose's own rule. The kind still leads.
+		name: "a message that already opens with its path",
+		w: config.Warning{Kind: config.WarningAdvisory,
+			Path: "stream.sync", Message: "stream.sync: something"},
+		want: "warning (advisory): stream.sync: something",
+	}}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := warningLine(c.w); got != c.want {
+				t.Errorf("warningLine = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

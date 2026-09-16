@@ -246,13 +246,13 @@ var concurrencyCases = []testCase{
 					if _, err := h.b.Get(ctx, "seat:ceo"); err != nil {
 						unanswered()
 					}
-					if _, err := h.b.ListLive(ctx, coord.SeatPrefix); err != nil {
+					if _, err := h.b.ListLive(ctx, coord.ClassSeat); err != nil {
 						unanswered()
 					}
 					if _, err := h.b.ListOwned(ctx, "node-0:1"); err != nil {
 						unanswered()
 					}
-					if _, err := h.b.PreferredResources(ctx, coord.SeatPrefix, "node-0:1"); err != nil {
+					if _, err := h.b.PreferredResources(ctx, coord.ClassSeat, "node-0:1"); err != nil {
 						unanswered()
 					}
 					if _, _, err := h.b.FleetProtocolFloor(ctx); err != nil {

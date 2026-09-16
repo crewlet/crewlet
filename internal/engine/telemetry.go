@@ -131,7 +131,7 @@ func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, c
 			// same reason: a resumed turn sees neither its trigger nor
 			// this frame, so both have to reach the row from here.
 			Task:  task,
-			Reply: string(reply),
+			Reply: reply.String(),
 		},
 	}
 }

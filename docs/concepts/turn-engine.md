@@ -89,15 +89,28 @@ Whether a turn OWES an answer is derived by the engine at dispatch, from the tri
 
 A source's reading of its own routing is [`notify.Prompt.Addressed`](../index.md#integrations) — a tracker answers from its routing reason (assigned, mentioned), a chat backend from the channel type and whether the seat was named. The conservative answer is FALSE: a seat wrongly told nobody is waiting keeps the freedom to stay silent, while one wrongly told somebody is must post on every broadcast it observes. A coalesced trigger takes the STRONGEST obligation of its constituents — a merge must not be able to launder an ask.
 
+**There is no fourth value, and no default.** A turn started without one is refused before any phase runs, because none of the three is a safe reading of "the caller did not say": permissive exempts a turn that owes somebody an answer, strict loops every unaddressed turn to exhaustion. That refusal exists because the omission shipped — the dispatch path derived the obligation correctly, handed it to the runner, and dropped it before the loop, so the decode-time check below stayed armed while **both** of the engine-side gates were skipped on every non-sandbox turn. Nothing about the result said so: the turn simply had no delivery gate.
+
 ### Three checks, in increasing cost
 
 The turn engine checks the executor's account against its own record three times, and the order is the design (`internal/agent/turn/verify.go`):
 
-1. **At decode time**, inside the loop. A `delivered` on a `tool`-awaited turn must cite a call the engine recorded; a `no_action` on any awaited turn is refused outright ("silence is not a decline"); a `blocked` needs evidence. A wrong claim costs one bounced tool call the model can fix — not a review round, and not a silently accepted no-op. The refusal lists what IS citable, because the failure this catches is usually a model naming the tool it MEANT to call.
+1. **At decode time**, inside the loop. A `delivered` on a `tool`-awaited turn must cite a call the engine recorded that reached the surface the ask came from; a `no_action` on any awaited turn is refused outright ("silence is not a decline"); a `blocked` needs evidence. A wrong claim costs one bounced tool call the model can fix — not a review round, and not a silently accepted no-op. The refusal lists what IS citable, because the failure this catches is usually a model naming the tool it MEANT to call.
 2. **Before the reviewer** (`Check`). Two of its three answers cost no model call: a `no_action` nobody asked for and nothing acted on ends the turn as skipped; a claim the record refutes loops back with an engine correction. What it cannot do is judge whether the work was any GOOD — everything that passes goes to the reviewer.
-3. **After the reviewer** (`OverrideDone`). A `done` on a `tool`-awaited turn where no tool that acts outside the engine ran is overturned to `self_iterate`. This is the recorded failure: the reviewer's model judges the produced TEXT, finds a good answer in it, and says done even though nothing put that answer anywhere a person can see. The engine's correction is appended LAST, because on this path the reviewer wrote none of its own.
+3. **After the reviewer** (`OverrideDone`). A `done` on a `tool`-awaited turn where nothing reached the party waiting is overturned to `self_iterate`. This is the recorded failure: the reviewer's model judges the produced TEXT, finds a good answer in it, and says done even though nothing put that answer anywhere a person can see. The engine's correction is appended LAST, because on this path the reviewer wrote none of its own — and where the turn did reach *somewhere*, just not the asker, the correction says so by name, because "no tool was called" reads as plainly false to a model looking at its own successful write and gets argued with rather than acted on.
 
-**What counts as a delivery** is one rule, applied everywhere: a tool is deliverable (`turn.Deliverable`) when it is **server-backed and not positively annotated read-only**. A delivery to a shared surface only ever comes from an MCP server, so a first-party builtin never counts however much it writes: `reflect_and_persist` records a thought, `use_skill` loads a page, and neither is an answer anybody is waiting for. "Not a known read" is POSITIVE: an unannotated tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count. A failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
+**What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody** — the native tracker's writes and the knowledge base's do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count — a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
+
+Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), and an engine builtin's is the native feed's own source — `work` for the tracker, `page` for the knowledge base. Those are the same names an inbound notification reports its source under, and the gate compares the two — because "did this turn reach anybody" and "did the person waiting get told" are different questions, and only the second one matters to the asker. Asking the first is how a founder's Mattermost DM was closed out by a row in the tracker: the seat filed a work item instead of answering, every check passed, and the thread's last message stayed a clarification question the founder had already been answered out from under.
+
+The surface check **narrows only where it can**, and the two fallbacks are the design rather than leniency:
+
+- An obligation with **no named surface** is one the engine could not place. An assignment is the honest case: moving the item, commenting on the ticket and replying in the thread the work came from are all real answers, and nothing can pick between them. Only a notification names a surface, because only a notification knows one.
+- A surface **this seat holds no tool for** leaves nothing to enforce. The seat could not have answered there however many rounds it spent, so insisting would turn an operator's missing integration into a seat that never finishes a turn.
+
+That second fallback is also where the rule is currently weakest, and deliberately so rather than by oversight: a vendor's surface is its **MCP server's name**, which holds only while one server serves one source. The shipped Atlassian setup breaks that — one `atlassian` server serves both Jira and Confluence while inbound events carry `jira` or `confluence` — so those two obligations find no matching surface and take the fallback, which is the pre-existing "any delivery counts". Nothing regresses there; the check simply does not yet narrow for them. Closing it needs the server to declare which sources it serves, which is a config change rather than a derivation.
+
+In both, the flat question is the answer — so the check is strictly stricter than the one it replaces, and never stricter than the seat can satisfy. The decode-time refusal uses the same rule and the same fallbacks, or a model would be told one thing at submission and judged by another.
 
 `no_action` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), it must instead post a brief explanation via the originating channel's reply tool and report that as `delivered`. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. The executor's contract enforces this in prose, the decoder enforces it in code, and each third-party app's notification prompt carries the same rule on the triage side.
 
@@ -428,9 +441,26 @@ after an empty answer is the same prompt against the same model, which is
 the retry [the provider contract](subscription-llm-backends.md) refuses
 to do. One also fits inside the smallest budget any caller declares —
 `workers.max_turns` is validated at ≥ 1 — so the corrective can never eat
-a delegated task's whole allowance. Rounds that reached nobody are
-counted on the phase record as `empty_answer_rounds`, and the dashboard
-badges them.
+a delegated task's whole allowance.
+
+Both allowances bound a **run** of rounds that produced nothing, not the
+phase's lifetime: a round that emits a tool call clears them, so the
+model's next stall is a new stall and earns its own nudge. Counted for
+the phase instead, they bound a different quantity — how many times a
+model may *ever* stall — and one stall early disarms the corrective for
+every round after it. That was the shape of a real incident: an executor
+on a 24-round budget stalled at round 2, filed a work item at round 3,
+had a submission bounced at round 4, and broke on the stall at round 5
+with nineteen rounds unspent, one round before the message it had just
+said it was about to send. The allowance clears on the **call**, not on
+the call's success — a tool that returned an error is a round the model
+has to read and answer, which is the opposite of one that has stopped
+responding.
+
+Rounds that reached nobody are still counted on the phase record as
+`empty_answer_rounds` — that stays a phase **total**, since it measures
+what the turn cost rather than what the loop will tolerate — and the
+dashboard badges them.
 
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would

@@ -21,21 +21,69 @@ import (
 // running without its company's guidance until the next sync walk — which on
 // a webhook-driven sync could be never.
 
-// skillVariables resolves the operator's substitution map for an epoch.
+// skillVariables resolves the operator's substitution map for an epoch, plus
+// the one variable the engine reserves.
 //
 // RESOLVED, because a value may be a ${VAR} reference: the whole point of
 // the map is to carry deployment facts like a tenant URL into skill prose,
 // and those are exactly the values an operator keeps out of a config file.
-func skillVariables(env *config.Resolver, c *Company) map[string]string {
+//
+// # Why crewlet_base_url is injected rather than declared
+//
+// It is the fact a skill most reliably needs and an operator most reliably
+// cannot supply. Where this deployment answers is already written once, as
+// `integrations.public_base_url` — the same address every webhook URL is
+// built on — and it is READ THROUGH THE RESOLVER for the reason that field
+// carries its own resolver argument: a whole `${VAR}` there is how staging
+// and production answer at their own addresses off one company revision, and
+// a raw read would inject the seven characters of the reference into prose a
+// person is meant to click.
+//
+// The name is RESERVED, and the loader refuses a company that declares it.
+// Two sources for one address is how a skill comes to link at the deployment
+// this company used to run on: an operator who moves behind a new domain
+// updates the integrations block, the stale declaration keeps winning, and
+// every link a person clicks lands nowhere with nothing anywhere saying why.
+//
+// UNSET WHEN THERE IS NO PUBLIC URL, rather than empty. A skill referencing
+// it then renders the literal ${crewlet_base_url} and warns, which is the
+// registry's own signal for a variable nobody defined — and is what an
+// operator needs to hear. Defining it as "" would compose every link as a
+// rooted path a person cannot click and say nothing at all.
+func skillVariables(env *config.Resolver, c *Company, publicBase string) map[string]string {
 	declared := c.Config.SkillVariables
-	if len(declared) == 0 {
+	if len(declared) == 0 && publicBase == "" {
 		return nil
 	}
-	out := make(map[string]string, len(declared))
+	out := make(map[string]string, len(declared)+1)
 	for name, value := range declared {
 		out[name] = env.Value(value)
 	}
+	if publicBase != "" {
+		out[config.ReservedBaseURLVariable] = publicBase
+	}
 	return out
+}
+
+// publicBase is where this DEPLOYMENT answers from outside: the base a link a
+// person clicks is composed on, and the one every webhook registration points
+// at.
+//
+// PER EPOCH rather than held on the engine, and READ THROUGH THE RESOLVER,
+// because `integrations.public_base_url` is a Tier B pointer stored verbatim.
+// A whole `${VAR}` there is how staging and production answer at their own
+// addresses off one company revision, and a raw read would put the seven
+// characters of the reference into every link — and into every webhook URL a
+// provisioner registers, which the third-party app then reports as healthy
+// and delivers nowhere.
+//
+// EMPTY when nothing resolves, which every consumer here reads as "compose no
+// link" rather than as a relative one.
+func (e *Engine) publicBase(c *Company) string {
+	if c == nil {
+		return ""
+	}
+	return c.Config.Integrations.WebhookBase(e.resolver().LookupOK)
 }
 
 // refreshSkillVariables installs an epoch's substitution map.
@@ -45,7 +93,7 @@ func skillVariables(env *config.Resolver, c *Company) map[string]string {
 // against the new map — rather than on that skill's next edit, which might
 // be never.
 func (e *Engine) refreshSkillVariables(c *Company) {
-	e.skills.SetVariables(skillVariables(e.resolver(), c))
+	e.skills.SetVariables(skillVariables(e.resolver(), c, e.publicBase(c)))
 }
 
 // auditSkills reports every skill whose trigger names a tool this company
@@ -65,9 +113,10 @@ func (e *Engine) auditSkills(c *Company) {
 
 // SkillsContainer is the knowledge container the sync worker walks, or "".
 //
-// Empty means no sync: a company with no knowledge backend, or one whose
-// backend is configured without a skills space. Both are ordinary, and both
-// mean the catalogue stays empty rather than the engine inventing one.
+// Empty means no sync: a company with `knowledge.backend: none`, or one that
+// turned tool skills off with `knowledge.skills_container: ""`. Both are
+// ordinary, and both mean the catalogue stays empty rather than the engine
+// inventing one.
 //
 // CONTAINER rather than the backend's own word, because the walk it feeds is
 // backend-neutral: [Engine.SyncSkills] takes rendered pages, so the backend
@@ -75,10 +124,25 @@ func (e *Engine) auditSkills(c *Company) {
 // `SkillsProject` while Plane was served — a name that outlived its vendor
 // and then described a Confluence SPACE, which is the drift this rename ends.
 func (e *Engine) SkillsContainer(c *Company) string {
-	if cf := c.Config.Integrations.Confluence; cf != nil {
-		return cf.SkillsSpaceKey()
+	return c.Config.SkillsContainerKey()
+}
+
+// skillsContainer is [Engine.SkillsContainer] read off the CURRENT epoch.
+//
+// The form the long-lived, per-NODE consumers take — the native searcher and
+// the page change feed. Neither is rebuilt by an apply (a projector and a
+// durable consumer both follow a coordination family, which a company
+// revision does not change), so each has to read the key at the moment it
+// uses it or hold a stale one for the life of the process.
+//
+// Empty before the first epoch is published, which is the honest answer:
+// nothing is reserved until there is a company saying so.
+func (e *Engine) skillsContainer() string {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return ""
 	}
-	return ""
+	return e.SkillsContainer(c)
 }
 
 // Skills is this node's tool-skill registry.

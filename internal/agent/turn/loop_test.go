@@ -79,7 +79,7 @@ func settings() turn.Settings { return turn.Settings{MaxIterations: 5} }
 func slackSurface() turn.Surface {
 	return turn.Surface{
 		Catalogue:  []string{"slack_post", "slack_history", "lookup_colleague"},
-		MCPTools:   []string{"slack_post", "slack_history"},
+		Deliveries: map[string]string{"slack_post": "test"},
 		KnownReads: []string{"slack_history"},
 	}
 }
@@ -102,7 +102,7 @@ func TestADeliveredRoundReviewedDoneEndsTheTurn(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestTheReviewersArtifactWinsOverTheExecutorsText(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done, FinalArtifact: "polished"}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Artifact != "polished" {
 		t.Errorf("artifact = %q, want the reviewer's", res.Artifact)
 	}
@@ -154,7 +154,7 @@ func TestNoActionOnAnUnaddressedTurnSkipsWithoutAReview(t *testing.T) {
 		surfaces: []turn.Surface{slackSurface()},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyNone})
+		turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestNoActionOnAnUnaddressedTurnSkipsWithoutAReview(t *testing.T) {
 // without spending a review call on it.
 func TestNoActionOnAnAwaitedTurnIsCorrectedWithoutAReview(t *testing.T) {
 	t.Parallel()
-	for _, reply := range []turn.Reply{turn.ReplyTool, turn.ReplyEngine} {
+	for _, reply := range []turn.Reply{turn.ToolReply(""), turn.EngineReply()} {
 		f := &fake{
 			works:    []turn.Work{{Outcome: turn.OutcomeNoAction, Summary: "not for me"}},
 			surfaces: []turn.Surface{slackSurface()},
@@ -210,7 +210,7 @@ func TestNoActionAfterActingIsCorrected(t *testing.T) {
 		surfaces: []turn.Surface{slackSurface()},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 1},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyNone})
+		turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if res.Decision == phase.Skipped {
 		t.Error("a turn that had already called an outward tool ended as skipped")
 	}
@@ -231,7 +231,7 @@ func TestADeliveryClaimWithNoCallIsCorrectedWithoutAReview(t *testing.T) {
 		surfaces: []turn.Surface{slackSurface()},
 	}
 	turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if f.revRounds != 0 {
 		t.Errorf("the reviewer ran %d times on a claim the record refutes", f.revRounds)
 	}
@@ -254,7 +254,7 @@ func TestAnEngineDeliveredTurnNeedsNoToolCall(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyEngine})
+		turn.Input{TurnID: "t1", Reply: turn.EngineReply()})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestARescuedRoundIsAlwaysReviewed(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Failed, Notes: "nothing usable"}},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyNone})
+		turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestDoneIsOverturnedWhenNothingDelivered(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done, Notes: "reads fine"}},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision == phase.Done {
 		t.Error("a turn that delivered nothing was allowed to finish")
 	}
@@ -336,7 +336,7 @@ func TestDoneIsOverturnedWhenNothingDelivered(t *testing.T) {
 // means the artifact reaches them either way.
 func TestDoneIsNotOverturnedWhenNoToolWasOwed(t *testing.T) {
 	t.Parallel()
-	for _, reply := range []turn.Reply{turn.ReplyNone, turn.ReplyEngine} {
+	for _, reply := range []turn.Reply{turn.NoReply(), turn.EngineReply()} {
 		f := &fake{
 			works: []turn.Work{{
 				Outcome: turn.OutcomeDelivered, Summary: "answered in prose",
@@ -366,7 +366,7 @@ func TestAKnownReadIsNotADelivery(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 1},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision == phase.Done {
 		t.Error("a turn whose only call was a known read finished as delivered")
 	}
@@ -384,13 +384,13 @@ func TestAnUnannotatedMCPToolCountsAsADelivery(t *testing.T) {
 			Calls:      []ledger.Call{{Name: "tracker_do_thing"}},
 		}},
 		surfaces: []turn.Surface{{
-			Catalogue: []string{"tracker_do_thing"},
-			MCPTools:  []string{"tracker_do_thing"},
+			Catalogue:  []string{"tracker_do_thing"},
+			Deliveries: map[string]string{"tracker_do_thing": "test"},
 		}},
 		reviews: []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision != phase.Done {
 		t.Errorf("decision = %s: an unannotated MCP tool did not count as a delivery", res.Decision)
 	}
@@ -406,13 +406,13 @@ func TestABuiltinIsNeverADelivery(t *testing.T) {
 			Calls: []ledger.Call{{Name: "reflect_and_persist"}},
 		}},
 		surfaces: []turn.Surface{{
-			Catalogue: []string{"reflect_and_persist", "slack_post"},
-			MCPTools:  []string{"slack_post"},
+			Catalogue:  []string{"reflect_and_persist", "slack_post"},
+			Deliveries: map[string]string{"slack_post": "test"},
 		}},
 		reviews: []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 1},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision == phase.Done {
 		t.Error("a builtin call was read as a delivery")
 	}
@@ -431,7 +431,7 @@ func TestAFailedCallIsNotADelivery(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 1},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision == phase.Done {
 		t.Error("a failed post was read as a delivery")
 	}
@@ -445,7 +445,7 @@ func TestTwoIdenticalRoundsAbortAsAStall(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision != phase.Failed {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
@@ -471,7 +471,7 @@ func TestProgressIsNotAStall(t *testing.T) {
 		},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision != phase.Done {
 		t.Errorf("decision = %s, want done — changing artifacts are not a stall", res.Decision)
 	}
@@ -490,7 +490,7 @@ func TestRunningOutOfRoundsIsAFailureThatSaysSo(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 3},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision != phase.Failed {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
@@ -513,7 +513,7 @@ func TestZeroIterationsStillRunsOneRound(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, turn.Settings{},
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Rounds != 1 || res.Decision != phase.Done {
 		t.Errorf("rounds = %d, decision = %s", res.Rounds, res.Decision)
 	}
@@ -537,7 +537,7 @@ func TestTheLedgerCarriesWhatTheNextRoundNeeds(t *testing.T) {
 		},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if len(res.Iterations) != 1 {
 		t.Fatalf("ledger = %d entries, want the one closed round", len(res.Iterations))
 	}
@@ -573,13 +573,13 @@ func TestOnlyTheReadsActuallyUsedAreRecorded(t *testing.T) {
 		},
 		surfaces: []turn.Surface{{
 			Catalogue:  []string{"slack_post", "slack_history", "jira_get", "gh_get"},
-			MCPTools:   []string{"slack_post", "slack_history", "jira_get", "gh_get"},
+			Deliveries: map[string]string{"slack_post": "test"},
 			KnownReads: []string{"slack_history", "jira_get", "gh_get"},
 		}},
 		reviews: []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if len(res.Iterations) != 1 {
 		t.Fatalf("ledger = %d entries", len(res.Iterations))
 	}
@@ -598,7 +598,7 @@ func TestASuspendHandsTheLedgerOutWithoutClosingTheRound(t *testing.T) {
 		surfaces: []turn.Surface{slackSurface()},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool, History: prior})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply(""), History: prior})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestAResumedTurnRe_entersRatherThanRestarting(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool, Resume: true})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply(""), Resume: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -647,7 +647,7 @@ func TestOnlyTheFirstRoundOfAResumedTurnResumes(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
 	}
 	turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool, Resume: true})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply(""), Resume: true})
 	if f.resumeRounds != 1 || f.workRounds != 1 {
 		t.Errorf("resume %d / execute %d, want one of each", f.resumeRounds, f.workRounds)
 	}
@@ -662,7 +662,7 @@ func TestAResumedTurnInheritsTheLedgerItLeftBehind(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool, Resume: true, History: prior})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply(""), Resume: true, History: prior})
 	if len(f.historySeen) == 0 || len(f.historySeen[0]) != 1 {
 		t.Fatalf("the resumed round saw %v", f.historySeen)
 	}
@@ -678,7 +678,7 @@ func TestAResumedTurnCanSuspendAgain(t *testing.T) {
 		surfaces: []turn.Surface{slackSurface()},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool, Resume: true})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply(""), Resume: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -691,7 +691,7 @@ func TestAFailedResumeIsAnError(t *testing.T) {
 	t.Parallel()
 	f := &fake{resumeErr: errors.New("no suspended state")}
 	if _, err := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Resume: true}); err == nil {
+		turn.Input{TurnID: "t1", Resume: true, Reply: turn.NoReply()}); err == nil {
 		t.Error("a broken resume was reported as a turn outcome")
 	}
 }
@@ -701,7 +701,7 @@ func TestTheDelegationCapEndsTheTurnBeforeAnyPhaseRuns(t *testing.T) {
 	f := &fake{}
 	res, err := turn.Run(context.Background(), f,
 		turn.Settings{MaxIterations: 5, DelegationDepthLimit: 2},
-		turn.Input{TurnID: "t1", Depth: 2})
+		turn.Input{TurnID: "t1", Depth: 2, Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("a breach was reported as an error: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestADepthLimitOfZeroDisablesTheCap(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Depth: 99, Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Depth: 99, Reply: turn.ToolReply("")})
 	if res.Decision != phase.Done {
 		t.Errorf("decision = %s, want the cap disabled", res.Decision)
 	}
@@ -738,7 +738,7 @@ func TestAReviewerThatGivesUpEndsTheTurnWithoutABreach(t *testing.T) {
 		reviews:  []turn.Review{{Decision: phase.Failed, Notes: "cannot be done"}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision != phase.Failed {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
@@ -764,7 +764,7 @@ func TestAPhaseThatBrokeIsAnErrorNotAFailedTurn(t *testing.T) {
 		},
 	} {
 		if _, err := turn.Run(context.Background(), f, settings(),
-			turn.Input{TurnID: "t1", Reply: turn.ReplyTool}); !errors.Is(err, boom) {
+			turn.Input{TurnID: "t1", Reply: turn.ToolReply("")}); !errors.Is(err, boom) {
 			t.Errorf("%s: err = %v, want the phase's own", name, err)
 		}
 	}
@@ -774,6 +774,48 @@ func TestNoPhasesIsRefused(t *testing.T) {
 	t.Parallel()
 	if _, err := turn.Run(context.Background(), nil, settings(), turn.Input{}); err == nil {
 		t.Error("a nil Phases ran a turn")
+	}
+}
+
+// An unset Reply is a CALLER BUG and must not run, because the turn it would
+// run is one with no delivery gate at all: Check's two corrections and
+// OverrideDone all read this field, and an empty value skips every one of them
+// silently. The ordinary dispatch path omitted it and this suite did not,
+// which is exactly why nothing here went red while production had no gate.
+func TestAnUnsetReplyIsRefused(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:   []turn.Work{{Text: "a"}},
+		reviews: []turn.Review{{Decision: phase.Done}},
+	}
+	_, err := turn.Run(context.Background(), f, settings(), turn.Input{TurnID: "t1"})
+	if err == nil {
+		t.Fatal("a turn ran with no Reply, so it ran with no delivery gate")
+	}
+	// The message has to name the field and where the value comes from: the
+	// reader is whoever added the call site that forgot it.
+	for _, want := range []string{"Input.Reply", "ReplyFor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+	if f.workRounds != 0 {
+		t.Errorf("the executor ran %d times before the refusal, want 0", f.workRounds)
+	}
+}
+
+// A value this build does not know is refused for the same reason, and it is
+// reachable rather than theoretical: a suspended sandbox run carries its Reply
+// as a stored string and is resumed by whatever build is running then.
+func TestAnUnknownReplyValueIsRefused(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:   []turn.Work{{Text: "a"}},
+		reviews: []turn.Review{{Decision: phase.Done}},
+	}
+	if _, err := turn.Run(context.Background(), f, settings(),
+		turn.Input{TurnID: "t1", Reply: turn.Reply{Kind: turn.ReplyKind("carrier-pigeon")}}); err == nil {
+		t.Error("an unrecognised Reply ran a turn")
 	}
 }
 
@@ -791,13 +833,13 @@ func TestTheReportedSurfaceIsWhatTheCheckJudges(t *testing.T) {
 		// The tool was activated mid-run, so it is on the surface the phase
 		// reports and on no list built before it.
 		surfaces: []turn.Surface{{
-			Catalogue: []string{"discovered_post"},
-			MCPTools:  []string{"discovered_post"},
+			Catalogue:  []string{"discovered_post"},
+			Deliveries: map[string]string{"discovered_post": "test"},
 		}},
 		reviews: []turn.Review{{Decision: phase.Done}},
 	}
 	res, _ := turn.Run(context.Background(), f, settings(),
-		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t1", Reply: turn.ToolReply("")})
 	if res.Decision != phase.Done {
 		t.Errorf("decision = %s: a mid-run activation was not seen", res.Decision)
 	}
@@ -818,7 +860,7 @@ func TestAScheduledTurnStopsAtItsWallClockCap(t *testing.T) {
 		MaxWallClock:  90 * time.Second,
 		// One minute passes per read; Run reads once per round boundary.
 		Now: func() time.Time { now = now.Add(time.Minute); return now },
-	}, turn.Input{TurnID: "t-1"})
+	}, turn.Input{TurnID: "t-1", Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -850,7 +892,7 @@ func TestAnUncappedTurnRunsItsRounds(t *testing.T) {
 	res, err := turn.Run(context.Background(), f, turn.Settings{
 		MaxIterations: 3,
 		Now:           func() time.Time { return time.Unix(0, 0).Add(24 * time.Hour) },
-	}, turn.Input{TurnID: "t-2"})
+	}, turn.Input{TurnID: "t-2", Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -868,10 +910,10 @@ func TestABrokenRoundStillReportsWhatItAlreadyWroteOutside(t *testing.T) {
 	t.Parallel()
 	f := &fake{
 		works:    []turn.Work{{Calls: []ledger.Call{{Name: "tracker_comment"}}}},
-		surfaces: []turn.Surface{{MCPTools: []string{"tracker_comment"}}},
+		surfaces: []turn.Surface{{Deliveries: map[string]string{"tracker_comment": "test"}}},
 		workErr:  errors.New("the provider went away mid-loop"),
 	}
-	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1"})
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if err == nil {
 		t.Fatal("Run returned no error for a broken phase")
 	}
@@ -886,7 +928,7 @@ func TestABrokenRoundStillReportsWhatItAlreadyWroteOutside(t *testing.T) {
 func TestARoundThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
 	t.Parallel()
 	f := &fake{workErr: errors.New("no model chain for this phase")}
-	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1"})
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if err == nil {
 		t.Fatal("Run returned no error for a broken phase")
 	}
@@ -904,10 +946,10 @@ func TestABrokenReviewCarriesTheExecutorsWrites(t *testing.T) {
 	t.Parallel()
 	f := &fake{
 		works:    []turn.Work{{Summary: "posted", Calls: []ledger.Call{{Name: "chat_post"}}}},
-		surfaces: []turn.Surface{{MCPTools: []string{"chat_post"}}},
+		surfaces: []turn.Surface{{Deliveries: map[string]string{"chat_post": "test"}}},
 		revErr:   errors.New("the reviewer's provider went away"),
 	}
-	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1"})
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3}, turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if err == nil {
 		t.Fatal("Run returned no error for a broken review")
 	}
@@ -927,7 +969,7 @@ func TestAQuietRoundDoesNotUnsayAnEarlierWrite(t *testing.T) {
 			{Summary: "read", Calls: []ledger.Call{{Name: "chat_history"}}},
 		},
 		surfaces: []turn.Surface{{
-			MCPTools:   []string{"chat_post", "chat_history"},
+			Deliveries: map[string]string{"chat_post": "test"},
 			KnownReads: []string{"chat_history"},
 		}},
 		reviews: []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
@@ -935,7 +977,7 @@ func TestAQuietRoundDoesNotUnsayAnEarlierWrite(t *testing.T) {
 	}
 	// Round two breaks in Review, after a read-only round.
 	f.works[1].Calls = []ledger.Call{{Name: "chat_history"}}
-	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 2}, turn.Input{TurnID: "t1"})
+	res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 2}, turn.Input{TurnID: "t1", Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

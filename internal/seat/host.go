@@ -133,6 +133,55 @@ type Config struct {
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
 
+	// Ready reports whether this node may take on NEW seats right now.
+	// Nil always admits, which is the deployment with nothing to wait for.
+	//
+	// # Why this is not the Seats list, and not the acquire hook
+	//
+	// Returning an empty seat list would DECOMMISSION every seat this node
+	// already holds — the sweep converges in both directions, so "no
+	// seats" reads as "the company deleted them all". Refusing in the
+	// acquire hook would take the lease first and hand it straight back,
+	// spending a claim, a release and a per-seat backoff on a condition
+	// that is about the NODE rather than the seat.
+	//
+	// So it gates only the claim half. A node that is not ready keeps
+	// everything it holds, keeps renewing, keeps SHEDDING to capacity —
+	// an over-subscribed node must still give seats back while it waits —
+	// and simply takes nothing new. That is what makes it safe to flip
+	// false at any time rather than only at boot: this node's own copy of
+	// the company's records going stale is a reason to stop taking work,
+	// never a reason to drop the work already in hand.
+	//
+	// It runs on the sweep path and must not block: read a flag, do not
+	// query a store.
+	Ready func() bool
+
+	// Serviceable reports whether this node may KEEP the seats it holds,
+	// and names what stopped it when the answer is no.
+	//
+	// # A DIFFERENT QUESTION FROM Ready, and the difference is the whole
+	// # reason there are two
+	//
+	// Ready is about work this node has not taken yet: a copy that is
+	// merely BEHIND catches up, so withholding claims is the whole remedy
+	// and dropping work in hand would be pure loss. This one is about work
+	// already in hand, and it fires only where that work would be WRONG —
+	// an applier halted at a record it cannot decode, an eviction whose
+	// peers are dropping everything this node writes, rows below a trim
+	// floor with a hole nothing will fill. A seat left running on any of
+	// those answers its own tools out of a copy the fleet has abandoned.
+	//
+	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
+	// the in-flight turn finishes and the seat leaves when it goes idle.
+	// The node has bad ROWS, not a lost lease, and abandoning a turn
+	// mid-flight would cost more than the stale answer it is racing.
+	//
+	// Nil keeps every seat, which is the single-node case and the case
+	// before a state log exists. It runs on the sweep path and, like
+	// Ready, must not block.
+	Serviceable func() (bool, string)
+
 	TTL               time.Duration
 	HeartbeatInterval time.Duration
 	SweepInterval     time.Duration
@@ -155,15 +204,18 @@ type Config struct {
 
 // Host claims, holds and releases the seats this node runs.
 type Host struct {
-	backend  coord.Backend
-	owner    string
-	nodeID   string
-	seats    func() []placement.Seat
-	profile  placement.NodeProfile
-	status   func(context.Context) coord.NodeStatus
-	hooks    Hooks
-	clock    func() time.Time
-	protocol int
+	backend coord.Backend
+	owner   string
+	nodeID  string
+	seats   func() []placement.Seat
+	ready   func() bool
+	// serviceable is Config.Serviceable — whether held seats may stay.
+	serviceable func() (bool, string)
+	profile     placement.NodeProfile
+	status      func(context.Context) coord.NodeStatus
+	hooks       Hooks
+	clock       func() time.Time
+	protocol    int
 
 	ttl            time.Duration
 	heartbeat      time.Duration
@@ -237,6 +289,8 @@ func New(cfg Config) (*Host, error) {
 		owner:        cfg.Owner,
 		nodeID:       cfg.NodeID,
 		seats:        cfg.Seats,
+		ready:        cfg.Ready,
+		serviceable:  cfg.Serviceable,
 		profile:      profile,
 		status:       cfg.Status,
 		hooks:        cfg.Hooks,
@@ -405,6 +459,24 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 		h.unprovenAdmission[handle] = struct{}{}
 	}
 }
+
+// TTL is the lease TTL THIS host is running — the EFFECTIVE one, which is
+// whatever [New] resolved: a value adopted from a lease bucket a peer created,
+// the deployment's own configuration, or [SeatLeaseTTL] when it set none.
+//
+// THE ADOPTED CASE IS THE ONE THIS EXISTS FOR, so it is the one the sentence
+// has to cover. Described as "the configured value", a caller would reasonably
+// assume the timing it derives follows the local file — which is exactly false
+// on the fleet mismatch this method was added to serve, and the assumption
+// that put three budgets on the shipped constant in the first place.
+//
+// Exported because every budget that races a lease has to be derived from the
+// lease it is racing, and the callers that derive one live in other packages:
+// the drain's give-back budget in [internal/node] and the watchdog threshold
+// in [internal/engine]. Written against the constant instead, each of them
+// claimed in its own comment to follow the deployment's TTL while following
+// the shipped number — which is the drift [HeartbeatRatio] exists to name.
+func (h *Host) TTL() time.Duration { return h.ttl }
 
 // Held is the seats whose leases this node holds, sorted.
 //
@@ -594,8 +666,13 @@ func (h *Host) Stop(ctx context.Context) {
 	// a give-back that inherits it releases nothing — every seat then sits
 	// dark for a full TTL instead of being taken over at once, and this
 	// node's presence lingers so peers keep reserving capacity for it.
+	//
+	// FROM THIS HOST'S TTL and not from [SeatLeaseTTL], for the reason
+	// [HeartbeatRatio] gives: a deployment that shortened its lease to ten
+	// seconds would otherwise spend fifteen giving the seats back, which
+	// is a budget strictly outside the lease it is racing.
 	releaseCtx, cancel2 := context.WithTimeout(
-		context.WithoutCancel(ctx), SeatLeaseTTL/HeartbeatRatio)
+		context.WithoutCancel(ctx), h.ttl/HeartbeatRatio)
 	defer cancel2()
 	h.ReleaseAll(releaseCtx, ReasonDrain)
 	h.releaseNodePresence(releaseCtx)

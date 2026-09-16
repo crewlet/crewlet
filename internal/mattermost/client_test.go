@@ -177,7 +177,9 @@ func TestARestartingServerIsWaitedOut(t *testing.T) {
 // THE RULE THAT MATTERS: a POST is repeated only when the caller has
 // established that repeating it cannot repeat an effect. A 502 leaves it
 // unknowable whether the request was applied and only the answer lost —
-// which is the case that double-posts into a channel people read.
+// which is the case that mints a SECOND access token. Its value is served
+// once and never again, so the duplicate is a live credential with no record
+// anywhere that it exists.
 func TestAPostIsNotRepeatedOnAnUnknowableFailure(t *testing.T) {
 	s := newServer(t)
 	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
@@ -185,19 +187,18 @@ func TestAPostIsNotRepeatedOnAnUnknowableFailure(t *testing.T) {
 		return true
 	})
 
-	_, err := client(t, s).CreatePost(t.Context(), mattermost.PostRequest{
-		ChannelID: "C1", Message: "hello",
-	})
+	_, err := client(t, s).CreateAccessToken(t.Context(), "u1", "crewlet")
 	if err == nil {
 		t.Fatal("a 502 was not reported")
 	}
 	if got := len(s.seen()); got != 1 {
-		t.Fatalf("a post was sent %d times after a 502", got)
+		t.Fatalf("the mint was sent %d times after a 502", got)
 	}
 }
 
 // A rate-limited request never reached the handler, so repeating it cannot
-// repeat a side effect — which makes it safe even for a post.
+// repeat a side effect — which makes it safe even for a write that must not
+// happen twice.
 func TestARateLimitIsRepeatedForAnyMethod(t *testing.T) {
 	s := newServer(t)
 	var n atomic.Int32
@@ -207,21 +208,19 @@ func TestARateLimitIsRepeatedForAnyMethod(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return true
 		}
-		w.Write([]byte(`{"id":"p1"}`))
+		w.Write([]byte(`{"id":"t1","token":"tok-1"}`))
 		return true
 	})
 
-	got, err := client(t, s).CreatePost(t.Context(), mattermost.PostRequest{
-		ChannelID: "C1", Message: "hello",
-	})
+	got, err := client(t, s).CreateAccessToken(t.Context(), "u1", "crewlet")
 	if err != nil {
-		t.Fatalf("CreatePost: %v", err)
+		t.Fatalf("CreateAccessToken: %v", err)
 	}
-	if got.ID != "p1" {
-		t.Fatalf("CreatePost = %+v", got)
+	if got.ID != "t1" || got.Value != "tok-1" {
+		t.Fatalf("CreateAccessToken = %+v", got)
 	}
 	if n.Load() != 2 {
-		t.Fatalf("the post was attempted %d times", n.Load())
+		t.Fatalf("the mint was attempted %d times", n.Load())
 	}
 }
 
@@ -336,7 +335,9 @@ func TestPostListsComeBackOldestFirst(t *testing.T) {
 		t.Fatalf("the backfill asked for %q", s.seen()[0])
 	}
 	// An entry in the ordering with no post is skipped rather than
-	// producing a blank message.
+	// producing a blank message — a deleted post leaves its id in `order`,
+	// and a zero-valued Post replayed from it is an empty message delivered
+	// to a seat as though somebody had sent it.
 	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		json.NewEncoder(w).Encode(map[string]any{
 			"order": []string{"p9", "p1"},
@@ -344,7 +345,10 @@ func TestPostListsComeBackOldestFirst(t *testing.T) {
 		})
 		return true
 	})
-	got, _ = client(t, s).Thread(t.Context(), "p1")
+	got, err = client(t, s).PostsSince(t.Context(), "C1", time.UnixMilli(1718003000))
+	if err != nil {
+		t.Fatalf("PostsSince: %v", err)
+	}
 	if len(got) != 1 || got[0].ID != "p1" {
 		t.Fatalf("a dangling ordering entry produced %+v", got)
 	}
@@ -419,7 +423,6 @@ func TestTheEndpointsAskForWhatTheyName(t *testing.T) {
 	c.ChannelByName(ctx, "t1", "eng")
 	c.Typing(ctx, "u1", "C1", "root-1")
 	c.ClientConfig(ctx)
-	c.Thread(ctx, "root-1")
 
 	want := []string{
 		"GET /api/v4/users/me",
@@ -429,7 +432,6 @@ func TestTheEndpointsAskForWhatTheyName(t *testing.T) {
 		"GET /api/v4/teams/t1/channels/name/eng",
 		"POST /api/v4/users/u1/typing",
 		"GET /api/v4/config/client?format=old",
-		"GET /api/v4/posts/root-1/thread",
 	}
 	got := s.seen()
 	for i, w := range want {
@@ -447,16 +449,11 @@ func TestIncompleteCallsAreRefusedLocally(t *testing.T) {
 	ctx := t.Context()
 
 	for name, err := range map[string]error{
-		"no channel to post in": errOf(func() error {
-			_, e := c.CreatePost(ctx, mattermost.PostRequest{Message: "hi"})
-			return e
-		}),
 		"no username": errOf(func() error { _, e := c.UserByUsername(ctx, " @ "); return e }),
 		"no channel to backfill": errOf(func() error {
 			_, e := c.PostsSince(ctx, "", time.Now())
 			return e
 		}),
-		"no thread":     errOf(func() error { _, e := c.Thread(ctx, ""); return e }),
 		"no team":       errOf(func() error { _, e := c.Channels(ctx, "u1", ""); return e }),
 		"one dm party":  errOf(func() error { _, e := c.DirectChannel(ctx, "u1", ""); return e }),
 		"typing nobody": c.Typing(ctx, "", "C1", ""),

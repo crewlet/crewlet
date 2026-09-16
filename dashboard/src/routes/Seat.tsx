@@ -84,10 +84,13 @@ import {
   Book2Glyph,
   CableGlyph,
   CalendarClockGlyph,
+  CheckGlyph,
   DatabaseGlyph,
   ErrorGlyph,
+  FlagGlyph,
   GroupGlyph,
   HelpGlyph,
+  InboxGlyph,
   InfoGlyph,
   KeyGlyph,
   LayersGlyph,
@@ -140,6 +143,14 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: tab === "overview" || tab === "model" },
   );
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
+  // A PERSON RECORD IS A HUMAN'S. A seat has a MAILBOX — the durable
+  // subscription the engine attaches when it acquires the seat — and nothing
+  // on a person's record describes one, so this is read only for a human.
+  const person = useQuery(
+    "work_person",
+    { handle },
+    { enabled: tab === "overview" && seat?.kind === "human", pollMs: 60_000 },
+  );
   const spend = useQuery(
     "tokens",
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
@@ -328,6 +339,64 @@ export function SeatScreen({ handle }: { handle: string }) {
       />
 
       <TabPanel id={panel} value={tab}>
+        {tab === "overview" && human && person.data?.held && (
+          <Card as="section">
+            <Card.Header
+              icon={<CheckGlyph size="sm" />}
+              subtitle="Read-only here: an inbox is moved on by the person whose it is, through their own assistant."
+            >
+              <Card.Title>Their day</Card.Title>
+            </Card.Header>
+            <StatGroup columns={3}>
+              <StatCard
+                icon={<InboxGlyph />}
+                label="Unread"
+                value={person.data.unread?.length ?? 0}
+                sub={
+                  person.data.due?.length
+                    ? `${person.data.due.length} snoozed and now due`
+                    : "nothing snoozed is due"
+                }
+              />
+              <StatCard
+                icon={<LayersGlyph />}
+                label="Queue"
+                value={person.data.priorities?.length ?? 0}
+                // WHO CHOSE IT is the one thing a queue cannot say for
+                // itself. A lead may set what somebody in their line does
+                // next, and a person who starts the day on work they did
+                // not choose should be able to tell.
+                // AND WHEN. A queue somebody else ordered three weeks ago
+                // is a different fact from one they ordered this morning,
+                // and the name alone cannot tell them apart, which is what
+                // carrying the instant the whole way and rendering nothing
+                // amounted to.
+                sub={
+                  person.data.priorities_set_by ? (
+                    <>
+                      set by {person.data.priorities_set_by}
+                      {person.data.priorities_set_at && (
+                        <>
+                          {" "}
+                          <RelativeTime value={person.data.priorities_set_at} now={now} />
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    "their own order"
+                  )
+                }
+              />
+              <StatCard
+                icon={<FlagGlyph />}
+                label="Pinned views"
+                value={person.data.pinned_views?.length ?? 0}
+                sub={`${person.data.favorites?.length ?? 0} starred`}
+              />
+            </StatGroup>
+          </Card>
+        )}
+
         {tab === "overview" && (
           <>
             <StatGroup columns={4}>
@@ -807,7 +876,10 @@ export function SeatScreen({ handle }: { handle: string }) {
                   <Card.Header
                     divided
                     icon={<BoltGlyph size="sm" />}
-                    count={memory.data?.skills?.length ?? 0}
+                    // `?? 0` for the ANSWER, never for the field: `skills_total`
+                    // is always sent, so falling back to `skills.length` would
+                    // only ever substitute the page size for the total.
+                    count={memory.data?.skills_total ?? 0}
                     subtitle="drafted from its own past work, loadable mid-turn"
                   >
                     <Card.Title>Skills it taught itself</Card.Title>
@@ -827,6 +899,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                           {s.summary && <p className="t-caption">{s.summary}</p>}
                         </div>
                       ))}
+                      {memory.data.skills_total > memory.data.skills.length && (
+                        // THE CUT, SAID. The count above is the seat's whole
+                        // set and this list is a page of it, so without a line
+                        // here the two silently disagree.
+                        <div className="thread-entry t-caption muted">
+                          {memory.data.skills.length} of {memory.data.skills_total} shown
+                        </div>
+                      )}
                     </Stack>
                   ) : (
                     <EmptyState
@@ -933,7 +1013,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Meter
                   value={agent.budget.used}
                   max={agent.budget.max}
-                  label={agent.budget.refused_at ? "Refusing charges" : "Used"}
+                  // WHAT THIS METER MEASURES, as a noun phrase, because the
+                  // label IS the accessible name: a meter announces as its
+                  // name and its number and nothing around it, and "Used" on
+                  // a page with several figures names none of them. The
+                  // refusal stays in the legend rather than replacing it, and
+                  // the line below says what it means.
+                  label={
+                    agent.budget.refused_at
+                      ? `${agent.role}'s token budget, refusing charges`
+                      : `${agent.role}'s token budget`
+                  }
                   valueText={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
                   tone={agent.budget.refused_at ? "danger" : undefined}
                 />

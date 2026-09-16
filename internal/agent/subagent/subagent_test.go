@@ -2416,6 +2416,62 @@ func TestEveryChildIsReportedOnce(t *testing.T) {
 	}
 }
 
+// A WORKER'S OWN WALL CLOCK, on its own Result.
+//
+// The tasks of one call run in PARALLEL under one wall-clock cap, so a caller
+// bracketing Run measures the SLOWEST of them and says nothing about the other
+// seven. "Which worker was slow" is the question a fan-out raises, and until
+// this field existed the answer was nowhere: a worker's phase event is a
+// NESTED one, which publishes no agent_phase_started, so the pairing every
+// consumer used to derive a duration from could never produce one for it.
+func TestAWorkerReportsHowLongItTook(t *testing.T) {
+	t.Parallel()
+	const delay = 8 * time.Millisecond
+	w := newWorld(t)
+	// A SLEEP rather than an injected clock: time.Since is monotonic, so a
+	// sleep can only overshoot and the assertion below is a floor.
+	slow := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		return &llm.Completion{Content: "done"}, nil
+	}}
+	res := one(t, baseConfig(t, w, slow), subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", Prompt: "go", SystemPrompt: "you are a worker"},
+	}})
+	if res.Elapsed < delay {
+		t.Errorf("the worker reports %s after a call that slept %s; its result "+
+			"carries no measurement of its own", res.Elapsed, delay)
+	}
+}
+
+// AND IT IS STAMPED ON THE FAILURE PATHS TOO — which are the ones worth
+// reading. A worker that ran into its wall-clock cap is exactly the task an
+// operator opens the fan-out to find, and a zero there is indistinguishable
+// from a task that never started.
+func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
+	t.Parallel()
+	const wallClock = 20 * time.Millisecond
+	w := newWorld(t)
+	blocked := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	cfg := baseConfig(t, w, blocked)
+	cfg.Limits.TaskTimeout = wallClock
+	res := one(t, cfg, subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", Prompt: "go", SystemPrompt: "you are a worker"},
+	}})
+	if res.Status != subagent.StatusTimedOut {
+		t.Fatalf("status = %q, want the worker to have hit its wall-clock cap", res.Status)
+	}
+	if res.Elapsed < wallClock {
+		t.Errorf("a worker that ran for its whole %s cap reports %s", wallClock, res.Elapsed)
+	}
+}
+
 // A WORKER'S THINKING TRAVELS WITH THE ROUND IT THOUGHT IN.
 //
 // The Result carries Executions and Narration keyed on the SAME round number,

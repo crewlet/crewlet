@@ -62,8 +62,39 @@ var (
 	// called "Platform" under different departments read as distinct on
 	// every screen while each of those resolves one of them.
 	//
-	// An ADMISSION rule, like [ErrDuplicateSeatName].
+	// Compared FOLDED, unlike a seat name: a name is prose, "Platform" and
+	// "platform" are one team, and a reader who cannot tell two units apart
+	// files one team's work under the other the first time they write the
+	// case they remember. Every reference does resolve a unit name as
+	// written, which is what makes that collision quiet rather than what
+	// makes it safe. A seat name is compared exactly because a seat's key
+	// is its handle, which is unique by a runnable rule; a unit's name IS
+	// its key wherever it declares no id.
+	//
+	// The rule that reports this measures a name against other units' IDS
+	// under the same fold, because an id is a lowercase key by rule while a
+	// name is prose. Where the id is what collided, an id is what the
+	// resulting error names, and it carries [ErrDuplicateUnit] alone.
+	//
+	// An ADMISSION rule, like [ErrDuplicateSeatName], and never reported
+	// alone: a name is also a unit's key when it declares no id, so the
+	// error that carries this wraps [ErrDuplicateUnit] as well.
 	ErrDuplicateUnitName = errors.New("duplicate unit name")
+
+	// ErrDuplicateUnit reports two units answering to one key.
+	//
+	// A unit's key is what work, routing and pages are filed under, so a
+	// collision sends one team's work to whichever unit a reader resolved
+	// first, and it arrives by a door nobody watches: an id may collide
+	// with another unit's NAME, and a name with another name that differs
+	// from it only in case, as readily as an id with an id.
+	//
+	// Reported for a duplicate NAME too, in the same error as
+	// [ErrDuplicateUnitName]: on a unit that declares no id the name IS the
+	// key, and a caller branching on either sentinel means the same
+	// collision. Where the id is what collided, this is the only sentinel
+	// the error carries.
+	ErrDuplicateUnit = errors.New("duplicate unit key")
 
 	// ErrMisplacedUnitRef reports a seat declared inside a unit whose `unit:`
 	// reference names a different unit.
@@ -175,7 +206,10 @@ const (
 	DuplicateHandle DuplicateKind = "handle"
 	// DuplicateSeatName is two or more seats carrying one name.
 	DuplicateSeatName DuplicateKind = "seat_name"
-	// DuplicateUnitName is two or more units carrying one name.
+	// DuplicateUnitName is two or more units answering to one key: a name
+	// they share, or an id that is another unit's key. Named for the
+	// sentinel it reports under, and for the field a caller places it at,
+	// which is the name either way.
 	DuplicateUnitName DuplicateKind = "unit_name"
 )
 
@@ -194,15 +228,19 @@ func (k DuplicateKind) Valid() bool {
 //
 // It holds EVERY entity, so a caller placing problems in a document can put
 // one beside each of them. Seats is set for a handle or a seat name, Units
-// for a unit name.
+// for a unit key.
 type DuplicateError struct {
 	Kind DuplicateKind
-	// Key is the shared handle or name.
+	// Key is the shared handle, seat name or unit key, and for a unit it is
+	// the spelling the key was first met in: a unit key is matched folded,
+	// a name and an id alike, and an operator searches their document for
+	// what they wrote rather than for a form nothing in it contains.
 	Key   string
 	Seats []*Role
 	Units []*Unit
 	// Err is the grouped message, wrapping ErrDuplicateHandle,
-	// ErrDuplicateSeatName or ErrDuplicateUnitName.
+	// ErrDuplicateSeatName, or ErrDuplicateUnitName and ErrDuplicateUnit
+	// together.
 	Err error
 }
 

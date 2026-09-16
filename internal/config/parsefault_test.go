@@ -206,9 +206,9 @@ func TestAMemberIsReadByTheDocumentsRules(t *testing.T) {
 		into: func() any { return &config.Role{} },
 		path: config.Path{"gaol"}, kind: config.ErrUnknownField, line: 2,
 	}, {
-		name: "a key inside a nested block", body: `{"name": "Eng", "integrations": {"jira": {"projekt": "ENG"}}}`,
-		into: func() any { return &config.Unit{} },
-		path: config.Path{"integrations", "jira", "projekt"}, kind: config.ErrUnknownField, line: 1,
+		name: "a key inside a nested block", body: `{"name": "CTO", "integrations": {"slack": {"bot_tokne": "${SLACK_BOT_TOKEN}"}}}`,
+		into: func() any { return &config.Role{} },
+		path: config.Path{"integrations", "slack", "bot_tokne"}, kind: config.ErrUnknownField, line: 1,
 	}, {
 		name: "a list where the member belongs", body: `["name", "CTO"]`,
 		into: func() any { return &config.Role{} },

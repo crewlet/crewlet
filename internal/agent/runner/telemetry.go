@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
@@ -451,6 +452,14 @@ type phaseRecord struct {
 	Result    toolloop.Result
 	Exhausted bool
 
+	// Elapsed is the phase's wall clock, as [Runner.runPhase] measured it.
+	//
+	// Carried through rather than read here: this record is assembled after
+	// the phase's payload is decoded, so a clock read at this point would
+	// fold a different amount of the caller's own work into the number on
+	// every path — and the executor's decode is the largest of them.
+	Elapsed time.Duration
+
 	// Decision is the phase's structured verdict: the executor's outcome,
 	// the reviewer's decision, "done" on a marked onboarding pass.
 	//
@@ -504,7 +513,7 @@ type phaseRecord struct {
 // judge model is misconfigured and rescues every phase looked exactly like one
 // whose phases genuinely deserved no extension. The only trace was a log line.
 func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
-	granted int, d extension.Decision,
+	granted int, d extension.Decision, took time.Duration,
 ) {
 	// Tallied first, as everywhere here: the tally is the turn's own
 	// accounting and must not depend on whether anyone is listening.
@@ -534,8 +543,16 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
 		// The verdict and the judge's own wording for it. `Notes` is the
 		// reason: it is what makes a rescue readable, and on the failure
 		// paths it is the only thing that names what went wrong.
-		Decision:        verdict,
-		Notes:           d.Reason,
+		Decision: verdict,
+		Notes:    d.Reason,
+		// HOW LONG THE JUDGEMENT COST. A judge runs in the middle of a
+		// phase that has already been running for minutes, so a slow cheap
+		// model here is a stall the phase's own duration absorbs without
+		// naming. Until this event carried its own measurement there was
+		// nothing to name it with: a nested phase publishes no
+		// agent_phase_started, so the two-event reconstruction every
+		// consumer did could never produce a duration for one.
+		DurationMS:      int(took / time.Millisecond),
 		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 	}, e.traceFor(ctx)))
@@ -612,6 +629,12 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		OutputTokens:   res.OutputTokens,
 		TotalTokens:    res.Tokens(),
 		RoundsUsed:     res.Rounds,
+		// THE WORKER'S OWN WALL CLOCK, off the result. A fan-out of eight
+		// runs its tasks in parallel under one wall-clock cap, so "which
+		// worker was slow" is the question a delegate call raises and the
+		// only one its records could not answer — a nested phase publishes
+		// no start, so there was never a second instant to subtract.
+		DurationMS:     int(res.Elapsed / time.Millisecond),
 		ToolsAvailable: res.ToolsAvailable,
 		// The grant's refusals, which is what Notes is documented to
 		// carry for this phase. A child that asked for a tool it could
@@ -671,6 +694,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		TotalTokens:     rec.Result.InputTokens + rec.Result.OutputTokens,
 		RoundsUsed:      rec.Result.RoundsUsed,
 		ExhaustedRounds: rec.Exhausted,
+		// WHICH ROUND WAS EXPENSIVE, which is the question the token total
+		// makes a reader ask and could not answer. Zero where the phase ran
+		// no loop in this process — see [types.AgentPhaseCompleted].
+		DurationMS: int(rec.Elapsed / time.Millisecond),
 		// Off the loop's own count rather than a re-derivation from the
 		// narration: a round that answered nothing records no narration
 		// at all, so there is nothing downstream to count it from.

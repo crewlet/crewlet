@@ -361,12 +361,23 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	defer span.End()
 
 	company := in.Company
+	resumedReply, err := resumeReply(in.Run)
+	if err != nil {
+		return err
+	}
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply))
+		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task:      resumeTask(in),
+			Task: resumeTask(in),
+			// THE RUNNER NEEDS IT TOO, not just the loop below. This
+			// field reaches runner.Config.Reply, which is what
+			// submit_work's own citation check reads — so a resumed turn
+			// with this unset accepted `no_action` on a turn somebody was
+			// waiting on, and accepted a citation naming any surface at
+			// all, before the loop's later checks ever ran.
+			Reply:     resumedReply,
 			Publisher: e.backends.Queue,
 			Turn:      turnIdentity,
 			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
@@ -426,7 +437,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// resumed turn never sees its trigger, so without this a turn
 		// somebody asked for would come back from a coding run free to
 		// end in silence.
-		Reply: turn.Reply(in.Run.Reply),
+		Reply: resumedReply,
 	})
 	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
 	if err != nil {
@@ -485,6 +496,39 @@ func resumeTask(in resumeInput) string {
 		return in.State.Task
 	}
 	return in.Run.TaskDescription
+}
+
+// resumeReply is the delivery obligation a parked run comes back with.
+//
+// OFF THE ROW, and it cannot come from anywhere else. The resumed turn never
+// sees the trigger that raised the obligation, and the event that carries the
+// completion here is the run FINISHING rather than the ask, so [ReplyFor] over
+// it would answer "nobody is waiting" for every turn somebody is waiting on.
+//
+// AN ABSENT VALUE IS [turn.NoReply], which is the reading [sandbox.PendingRun]
+// states for it: the column is `reply,omitempty`, nothing ever rewrites a
+// parked row, and a run launched before the field existed therefore carries
+// none. Read as [turn.ReplyUnset] instead, those rows were refused by
+// [Company.RunnerFor] and could never be resumed at all, so a box that had
+// already done the work was collected and its answer dropped.
+//
+// A value that is PRESENT and unrecognised is refused rather than defaulted: it
+// was written by a build that knows a kind this one does not, and guessing at
+// who is waiting is the half of the delivery question this engine exists to get
+// right. The refusal is a ROUTING failure, like a state this build cannot
+// decode, so the completion goes back for a peer that can read it.
+func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
+	if run.Reply == "" {
+		return turn.NoReply(), nil
+	}
+	reply := turn.ParseReply(run.Reply)
+	if !reply.Valid() {
+		return turn.Reply{}, fmt.Errorf(
+			"%w: run %s carries reply %q, which is not one of %q, %q or %q",
+			sandbox.ErrResumeUnavailable, run.TurnID, run.Reply,
+			turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
+	}
+	return reply, nil
 }
 
 // persistSuspension writes a turn's suspended conversation to its row, which
@@ -1100,7 +1144,60 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
-	return e.sandboxCoordinator.RecoverSeat(ctx, handle, owner, epoch)
+	if err := e.sandboxCoordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
+		return err
+	}
+	// THE SEAT IS LIVE HERE, which is the fact the live projection has
+	// always had a branch for and nothing ever published: an
+	// `agent_spawned` is what clears a stale `terminated`, `offline` or
+	// `afk` from a seat that has moved to this node, so without it a seat
+	// whose last owner went away renders as broken until it happens to do
+	// some work.
+	e.publishSeatLifecycle(ctx, handle, types.AgentSpawned{})
+	return nil
+}
+
+// publishSeatLifecycle announces a seat arriving on or leaving this node.
+//
+// LIVE-ONLY, and deliberately: placement moves seats between nodes on every
+// rebalance, so a durable row per claim would fill the audit log with a fact
+// about scheduling rather than about the company — which is why neither type
+// is in [events.Category]'s map. What reads them is the live seat state, where
+// "this seat is running here now" is exactly the question.
+//
+// THE ROLE, NOT THE HANDLE, because every other event the projection keys on
+// carries the role name and a seat under two spellings is two rows.
+func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
+	payload events.Payload) {
+
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	role := e.seatRole(handle)
+	if role == nil {
+		// A HANDLE THIS EPOCH NO LONGER HAS, which is the ordinary way a
+		// seat is released: the revision that removed it is already
+		// current. There is no role to key the row on, and inventing one
+		// from the handle would make a second row for the same seat.
+		return
+	}
+	var ev *events.Event
+	switch p := payload.(type) {
+	case types.AgentSpawned:
+		p.RoleName, p.Agent = role.Name, handle
+		ev = events.New(p, tracing.TraceOf(ctx))
+	case types.AgentTerminated:
+		p.RoleName, p.Agent = role.Name, handle
+		ev = events.New(p, tracing.TraceOf(ctx))
+	default:
+		return
+	}
+	ev.Source = role.Name
+	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "seat_lifecycle_not_published", "type", ev.Type,
+			"seat", handle, "error", err.Error(),
+			"detail", "the live seat state keeps whatever this seat last showed")
+	}
 }
 
 // releaseSeat is the node's SeatDone hook.
@@ -1109,6 +1206,12 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 // while the seat is between owners must be held for its successor, and the box
 // it refers to is still real.
 func (e *Engine) releaseSeat(ctx context.Context, handle string) {
+	// FIRST, while the queue is still reachable and before anything this
+	// release tears down: a seat that went away with no event left its
+	// last state standing on every dashboard — stuck "working" in a phase
+	// that ended, because `terminated` was a state nothing could reach.
+	e.publishSeatLifecycle(ctx, handle,
+		types.AgentTerminated{Reason: "the seat was released by this node"})
 	// The seat's children die with its lease. The credentials in one ARE
 	// that seat's identity, so a child left running would let this node go
 	// on acting as a seat a peer has taken over — and the surface goes

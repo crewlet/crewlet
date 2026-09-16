@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/configapi"
 )
 
 const cliCompanyDoc = `
@@ -220,6 +222,61 @@ func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
 	// change", and the header says so.
 	if !strings.Contains(out, `"claude-opus-5" -> "claude-sonnet-5"`) {
 		t.Errorf("string values are not quoted, or the direction inverted:\n%s", out)
+	}
+}
+
+// THE TERMINAL GETS THE WHOLE DIFF. The API's answer is cut at
+// configapi.MaxChanges because a response body and a socket frame have a size
+// budget; this caller has none, and is the one that can pipe the output into
+// a pager, a file or a grep. A cut taken inside the differ meant the reader
+// best equipped to read a long diff was the only one who could not.
+func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	// A document whose every provider names one model, so two of them
+	// differ in far more LEAVES than the API's answer would carry.
+	wide := func(model string) func(string) string {
+		return func(string) string {
+			doc := strings.Builder{}
+			doc.WriteString("name: Nimbus\nproviders:\n  llm:\n")
+			for i := range configapi.MaxChanges + 10 {
+				fmt.Fprintf(&doc, "    p%04d: {type: anthropic, model: %s, api_keys: [\"${K}\"]}\n",
+					i, model)
+			}
+			doc.WriteString("roles:\n  - {name: CEO, handle: ceo}\n")
+			return doc.String()
+		}
+	}
+	if _, _, err := configCmd(t, cfg, "import",
+		companyFile(t, dir, "one.yaml", wide("claude-sonnet-5"))); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	firstID := activeRevisionID(t, cfg)
+	if _, _, err := configCmd(t, cfg, "import",
+		companyFile(t, dir, "two.yaml", wide("claude-opus-5"))); err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+
+	out, _, err := configCmd(t, cfg, "diff", firstID)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	var moved int
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		if strings.HasPrefix(line, "~ ") {
+			moved++
+		}
+	}
+	if moved != configapi.MaxChanges+10 {
+		t.Fatalf("the diff printed %d of the %d changes",
+			moved, configapi.MaxChanges+10)
+	}
+	// AND NOTHING ELSE. A cut used to be reported by a pathless entry the
+	// renderer printed as `... N further changes not listed`; with the whole
+	// diff here there is nothing to report and no marker to print.
+	if strings.Contains(out, "not listed") {
+		t.Errorf("a complete diff still claims it left something out:\n%s",
+			out[max(0, len(out)-200):])
 	}
 }
 

@@ -51,6 +51,25 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
+	// The NATIVE backends. The literal segments beat the wildcards, as
+	// above, so /work/counters is not read as an item whose key is
+	// "counters" — net/http resolves the more specific pattern rather
+	// than the first registered.
+	{method: "GET", pattern: "/work/retention", what: "retention"},
+	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
+	{method: "GET", pattern: "/work/projects", what: "work_projects"},
+	{method: "GET", pattern: "/work/sprints", what: "work_sprints"},
+	{method: "GET", pattern: "/work/activity", what: "work_activity"},
+	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
+	{method: "GET", pattern: "/work/views", what: "work_views"},
+	{method: "GET", pattern: "/work/goals", what: "work_goals"},
+	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
+	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
+	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/work", what: "work_items"},
+	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/pages", what: "pages"},
+	{method: "GET", pattern: "/containers", what: "containers"},
 }
 
 // mountReads registers the named read routes.

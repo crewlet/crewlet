@@ -37,7 +37,7 @@ afterEach(() => {
 const named: OrgProjection = { name: "Acme", roles: [], units: [] };
 
 /** The Builder's one polite live region. */
-const liveRegion = () => document.querySelector(".org-builder-live")!;
+const liveRegion = () => document.querySelector("[data-live-region]")!;
 
 /** A menu's entries by their labels, without the key hints some of them carry. */
 const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map(menuEntryLabel);

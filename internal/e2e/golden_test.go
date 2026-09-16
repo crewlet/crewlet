@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,6 +179,33 @@ func (c *capture) eventTypes(t *testing.T) []string {
 	return out
 }
 
+// phaseRecords returns the payload of every `agent_phase_completed` frame.
+//
+// The PAYLOAD, which is what separates this from [capture.eventTypes]: a phase
+// record without one has no prompts, no tool calls, no decision and no
+// duration, and the payload is exactly what the socket carries and a listing
+// does not.
+func (c *capture) phaseRecords(t *testing.T) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Type    string         `json:"type"`
+				Payload map[string]any `json:"payload"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != "event" {
+			continue
+		}
+		if env.Data.Type == "agent_phase_completed" && env.Data.Payload != nil {
+			out = append(out, env.Data.Payload)
+		}
+	}
+	return out
+}
+
 // read pumps the socket into a capture until the context ends.
 func read(ctx context.Context, conn *websocket.Conn, into *capture) {
 	for {
@@ -298,8 +326,17 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// the whole reason it is a phase rather than a hint inside the
 	// executor's prompt, where it could spend the turn's budget on reading
 	// and starve submit_work.
-	if len(got) > 0 && got[0] != "onboarding" {
-		t.Errorf("the first model call was %q, not the onboarding pass", got[0])
+	//
+	// THE FIRST PHASE, not the first model call. The turn-start prefetch
+	// reaches the same endpoint for its own auxiliary passes — the memory
+	// filter, the knowledge query, the episode summary — and it runs
+	// before any phase by design: the context a turn reasons over is
+	// FROZEN before the runner exists, so a self_iterate loop cannot move
+	// the system prompt underneath a turn. Those passes are labelled
+	// `aux:` for exactly this reason and are not what this invariant is
+	// about.
+	if first := firstPhase(got); first != "onboarding" {
+		t.Errorf("the first phase was %q, not the onboarding pass; calls = %v", first, got)
 	}
 
 	// --- what reached the socket -------------------------------------- //
@@ -379,6 +416,34 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	}
 	if kept["agent_turn_progress"] {
 		t.Error("agent_turn_progress was persisted; it is live-only")
+	}
+
+	// --- and how long each phase took --------------------------------- //
+	// A PHASE MEASURES ITSELF. The duration used to be derivable only by
+	// pairing this record with the `agent_phase_started` that shares its
+	// key, and the reader that needs it most — a dashboard deep-linked into
+	// a turn WHILE IT RUNS — never has both events: its query was answered
+	// before the phase started, and afterwards it buffers only completed
+	// envelopes. So the measurement travels on the record, and this is the
+	// only place in the suite that proves it survives the publisher, the
+	// broker, the broadcast and the JSON round trip rather than existing in
+	// a struct literal.
+	records := frames.phaseRecords(t)
+	if len(records) == 0 {
+		t.Fatal("no phase record reached the socket with its payload")
+	}
+	for _, rec := range records {
+		ms, ok := rec["duration_ms"].(float64)
+		if !ok {
+			t.Errorf("the %v phase record carries no duration_ms at all; the "+
+				"field is not on the wire", rec["phase"])
+			continue
+		}
+		if ms <= 0 {
+			t.Errorf("the %v phase reports %v ms — a phase that ran three model "+
+				"rounds against a live provider took longer than nothing",
+				rec["phase"], ms)
+		}
 	}
 }
 
@@ -610,16 +675,33 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		t.Errorf("the company spent %d against a cap of 200", used)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
+	//
+	// WAITED FOR rather than read once, because the two counters are two
+	// KEYS AND NO TRANSACTION — [coord/kv.FleetStore.Charge] says so and
+	// builds the all-or-nothing property out of ordering instead: the org
+	// is charged first and compensated if the seat then refuses. So there
+	// is a real window in which the org has moved and the seat has not,
+	// and the wait above lands inside it whenever the org's bump is what
+	// satisfied it.
+	//
+	// Read synchronously, this asserted an ATOMICITY the design does not
+	// claim, and CI caught it: `seat spent 0 and the org 150`. The
+	// invariant is that the two agree once the charge is through, which is
+	// what this now says.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
-	seatUsed, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
-	if err != nil {
-		t.Fatalf("seat used: %v", err)
-	}
-	if seatUsed != used {
-		t.Errorf("seat spent %d and the org %d; one charge must move both",
-			seatUsed, used)
-	}
+	var seatUsed int
+	waitFor(t, "the seat's counter to catch the org's", func() bool {
+		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
+		if err != nil {
+			return false
+		}
+		seatUsed = got
+		return got == used
+	}, func() string {
+		return fmt.Sprintf("seat spent %d and the org %d; one charge must "+
+			"move both", seatUsed, used)
+	})
 }
 
 // The trace a wake starts must reach the events the turn it caused writes —
@@ -733,4 +815,14 @@ func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 		t.Errorf("%d lines carried the trace id but none carried a span id",
 			len(lines))
 	}
+}
+
+// firstPhase is the first non-auxiliary call the model saw, or "" for none.
+func firstPhase(calls []string) string {
+	for _, call := range calls {
+		if !strings.HasPrefix(call, "aux:") {
+			return call
+		}
+	}
+	return ""
 }

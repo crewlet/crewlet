@@ -488,22 +488,35 @@ reviewer. A turn holds the company it started under until it ends.
 
 ## 5. Where state lives
 
-Three estates, and which one a fact belongs to is decided by a single
-question: **who has to agree on it?**
+Four estates, and which one a fact belongs to is decided by a single
+question: **who has to agree on it?** — with the fourth answering a second
+question the first three cannot: *and does everybody have to reach the same
+answer by the same route?*
 
 ```mermaid
 flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
-    LOCAL["<b>This node alone</b> — the store<br/><i>one file, one process, exclusively owned</i>"]
-    FLEET["<b>The whole company</b>: coordination KV<br/><i>sixteen buckets on the stream's own connection</i>"]
-    STREAM["<b>In flight, or keyed</b> — the event stream<br/><i>6 streams</i>"]
+    LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
+    DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written only by a state log's applier</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>seventeen buckets on the stream's own connection</i>"]
+    STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
+    Q -->|"everybody, and each derives it<br/>from the same ordered log"| DERIVED
     Q -->|"every node, or the answer<br/>is wrong on all of them"| FLEET
     Q -->|"it is a message, or a<br/>row that has to travel"| STREAM
 ```
 
-What each of the three holds, in full:
+**Why the store is two files and not one.** A snapshot is a copy of ONE
+estate: a node too far behind to replay fetches a peer's replicated file and
+installs it wholesale, and that file must not carry the donor's audit log, its
+learning rows or the bootstrap half of its secret store. Taken from a single
+file the artefact would be a copy of everything followed by a delete — and
+with no in-place `VACUUM`, the deleted pages ride along in the artefact, the
+transfer, the checksum and the integrity check anyway. No transaction spans
+the two and no read joins across them.
+
+What each of the four holds, in full:
 
 **This node alone — the store.**
 
@@ -514,6 +527,22 @@ What each of the three holds, in full:
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `chat_thread_follows` · `secret_values` | Revisions, cron bookkeeping, thread follows, and the secret store's bootstrap half |
+| `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
+| `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
+
+**Every node, identically — the replicated store.**
+
+One file per node, written **only** by a state log's applier: records arrive
+in one order from the log, every node applies the same ones, and the rows plus
+this node's position on the log commit in a single transaction. There is no
+leader and no node whose copy is the real one.
+
+| Tables | What they hold |
+|---|---|
+| **`tracker_tasks`** · `tracker_comments` · `tracker_history` · … | The company's work — the tracker's whole state, derived from `CREWLET_TRACKER_LOG` |
+| **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
+| **`kb_vectors`** · `kb_vectors_bin` | Page and task embeddings and their 1-bit codes, derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
+| `statelog_cursor` · each domain's operation ledger and deferred records | Where this node is on each log, which operations it has already applied, and any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
 
@@ -528,6 +557,7 @@ What each of the three holds, in full:
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
+| `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
 **In flight, or keyed — the event stream.**
 
@@ -539,6 +569,9 @@ What each of the three holds, in full:
 | **`CREWLET_CONFIG`** | `crewlet.config.>` |
 | **`CREWLET_MEMORY`** | `crewlet.memory.>` — *one message per subject: a keyed table, not a log* |
 | **`CREWLET_DLQ`** | `dlq.>` — *deliberately outside* `crewlet.*` |
+| **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age. Two of its subjects carry no object at all: **`…log.barrier`**, which every `linearizable` read appends one record to and then waits for — the acknowledgement is what proves a quorum agrees on a position, where a field read can be served by an isolated former leader; and **`…log.rankorder.<PROJECT>`**, which is where a board drag is arbitrated, so two people reordering one project's board contend and two reordering different ones never do |
+| **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
+| **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |
 
 **Mailboxes and event history are different kinds of stream.** The two
 mailbox streams use *interest* retention — a message lives until its durable
@@ -568,8 +601,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are sixteen of them rather than one with prefixes: three in the lease
-store, thirteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are seventeen of them rather than one with prefixes: three in the lease
+store, fourteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.
@@ -706,6 +739,6 @@ here.
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |
 | REST, the dashboard, the socket | `internal/api`, `static/dashboard` | [API endpoints](../reference/api-endpoints.md) · [Dashboard design](../reference/dashboard-design.md) |
 | Event rows, live projection, traces | `internal/observe`, `internal/tracing`, `internal/tokens` | [Deployment](../guides/deployment.md) |
-| Why there is no task state | — | [Task engine](task-engine.md) |
+| Which tracker a company runs, and why one of them keeps no state | — | [The tracker](task-engine.md) |
 | DACI, and why it needs no engine | — | [Decision framework](decision-framework.md) |
 | More than one node | `internal/seat/placement` | [Scaling out](scaling.md) · [Running a fleet](../guides/fleet.md) · [Satellite nodes](../guides/satellite-nodes.md) |

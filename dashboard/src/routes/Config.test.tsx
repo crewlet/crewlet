@@ -49,6 +49,16 @@ const diff = {
     { path: "integrations.gitlab.url", kind: "changed", from: "a", to: "b" },
     { path: "integrations.slack", kind: "removed", from: {} },
   ],
+  changes_total: 3,
+};
+
+// The same answer for a comparison too long to send whole: the listing is a
+// page of it and `changes_total` is how many there are. The server used to
+// report the cut as a pathless CHANGE inside `changes`, which this screen
+// drew as a blank path turning undefined into a sentence.
+const cutDiff = {
+  ...diff,
+  changes_total: 512,
 };
 
 class InertWebSocket {
@@ -63,8 +73,19 @@ class InertWebSocket {
 /** Every question the screen asked, with its parameters. */
 let asked: { what: string; params: Record<string, unknown> | undefined }[] = [];
 
-function mount(hash: string, active: unknown = {}) {
+/**
+ * What the socket answers, where a case needs something the fixtures are not.
+ *
+ * A PROPERTY THAT IS PRESENT AND NULL IS AN ANSWER, which is why the defaults
+ * turn on absence rather than on nullishness: `config` answers null before a
+ * company's first revision, and that is the case the empty state is for.
+ */
+type Answers = { active?: unknown; diff?: unknown };
+
+function mount(hash: string, answers: Answers = {}) {
   location.hash = hash;
+  const active = "active" in answers ? answers.active : {};
+  const comparison = "diff" in answers ? answers.diff : diff;
   const store = new Store();
   const socket = new LiveSocket(store);
   // The screen's only data path. Stubbed rather than driven through a fake
@@ -80,7 +101,7 @@ function mount(hash: string, active: unknown = {}) {
       what === "config_audit"
         ? revisions
         : what === "config_diff"
-          ? diff
+          ? comparison
           : what === "config"
             ? active
             : {},
@@ -132,6 +153,20 @@ test("a diff line carries the kind the server sends", async () => {
   // And the value column reads the side that exists for that kind.
   expect(screen.getByText('"sre-lead"')).toBeDefined();
   expect(screen.getByText('"a" → "b"')).toBeDefined();
+  // NOTHING SAYS IT WAS CUT, because it was not: changes_total equals the
+  // number of lines, and a "3 of 3 shown" note would be noise on every diff.
+  expect(screen.queryByText(/shown/)).toBeNull();
+});
+
+test("a cut diff says how many changes there are", async () => {
+  mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001", { diff: cutDiff });
+
+  // The count is the COMPARISON's, not the listing's: a screen that showed
+  // three would be reporting the response budget as the answer.
+  expect(await screen.findByText(/3 of 512 shown/)).toBeDefined();
+  // And where the whole thing is: the CLI writes to a terminal, which has no
+  // response budget, so it prints every change.
+  expect(screen.getByText("crewlet config diff")).toBeDefined();
 });
 
 // NULL IS "NOTHING IS ACTIVE", which is what `queries.configDocument` answers
@@ -139,7 +174,7 @@ test("a diff line carries the kind the server sends", async () => {
 // command line; the one screen that can create a company is the org chart's
 // builder, and this is the first place an operator looks for one.
 test("with nothing active, the empty state leads to creating the company", async () => {
-  mount("#/config", null);
+  mount("#/config", { active: null });
   expect(await screen.findByText("No company configuration is active")).toBeDefined();
   const links = screen.getAllByRole("link", { name: "Create the company" });
   expect(links[0]?.getAttribute("href")).toBe("#/org?lens=builder");

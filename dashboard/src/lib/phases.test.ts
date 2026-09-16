@@ -19,12 +19,11 @@ import {
   narrations,
   phaseColor,
   phaseDuration,
-  phaseStarts,
+  phaseStart,
   rounds,
   splitThinking,
   streamedPhases,
   toolCalls,
-  withStarts,
   type PhaseRecord,
 } from "./phases.ts";
 import { DATA_COLOR_OTHER } from "@crewlethq/ui";
@@ -561,91 +560,73 @@ describe("the phases that finish while a tab is watching", () => {
 });
 
 describe("a phase's duration", () => {
-  // `agent_phase_started` and `agent_phase_completed` are the same phase —
-  // same turn, same phase, same iteration, which IS the key. Read apart, the
-  // start is a log line that says nothing the finished card does not, and six
-  // of them on a three-round turn are what made the Turn screen's event list
-  // read as a duplicate of its phase list. Read together they are the one
-  // thing the finished record cannot say alone: how long the phase took.
+  // ON THE RECORD, not reconstructed from a second event. This used to fold
+  // `agent_phase_started` onto the finished record and subtract, which needs
+  // BOTH events in one reader's hands — and the screen it exists for, a turn
+  // deep-linked WHILE IT RUNS, has exactly none of them: its `turn` query was
+  // answered before the phase started, and the only envelopes buffered after
+  // that are completed ones.
 
-  function startEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:00Z") {
-    return {
-      ...phaseEvent(over, ts),
-      id: `start-${ts}`,
-      type: "agent_phase_started",
-    } as EventRecord;
-  }
-
-  test("a phase that published a start gets a real duration", () => {
-    // Before this, `fromPhaseEvent` set startedAt to the COMPLETION instant —
-    // "a finished phase has one instant that matters" — so every completed
-    // phase on this dashboard reported no duration at all, while the event
-    // that carried its start sat in the same query answer.
-    const done = fromPhaseEvent(phaseEvent({}, "2026-01-01T00:01:40Z"))!;
-    const [withStart] = withStarts([done], phaseStarts([startEvent()]));
-    expect(withStart!.startedAt).toBe("2026-01-01T00:00:00Z");
-    expect(phaseDuration(withStart!)).toBe(100_000);
+  test("a completed phase reports what the engine measured", () => {
+    const done = fromPhaseEvent(phaseEvent({ duration_ms: 100_000 }, "2026-01-01T00:01:40Z"))!;
+    expect(phaseDuration(done)).toBe(100_000);
+    // …and the instant it BEGAN is the landing less the measurement, which is
+    // what opens the Turn screen's window on a turn still running.
+    expect(phaseStart(done)).toBe(Date.parse("2026-01-01T00:00:00Z"));
   });
 
-  test("a phase with no start reports no duration rather than zero", () => {
-    // A sub-agent, a judge and a learning worker publish no start — they nest
-    // under a host phase that is already showing one. Synthesising a duration
-    // for them would put a confident 0s on a call that took ten seconds.
-    const nested = fromPhaseEvent(
-      phaseEvent({ phase: "subagent", host_phase: "execute", host_iteration: 1 }),
+  test("a NESTED call reports one too, which the pairing could never give it", () => {
+    // A delegate's worker and the round-cap judge publish no
+    // `agent_phase_started` — they nest under a host phase that is already
+    // showing one — so no worker of a fan-out of eight had a duration
+    // anywhere, and "which one was slow" had no answer on any screen.
+    const worker = fromPhaseEvent(
+      phaseEvent({
+        phase: "subagent",
+        host_phase: "execute",
+        host_iteration: 1,
+        duration_ms: 12_000,
+      }),
     )!;
-    expect(withStarts([nested], phaseStarts([]))[0]!.startedAt).toBe(nested.at);
-    expect(phaseDuration(nested)).toBeNull();
+    expect(phaseDuration(worker)).toBe(12_000);
   });
 
-  test("a live phase keeps the start its own overlay gave it", () => {
-    // The overlay's `started_at` is the value that keeps the elapsed counter
-    // correct in a tab the started event never reached. Overwriting it with a
-    // stored start would make a running phase jump.
+  test("an unmeasured phase reports nothing rather than zero", () => {
+    // An agent-mode executor's rounds ran inside a coding CLI's own loop in
+    // another process, so the engine measured no loop of its own and the
+    // field is 0. Rendering that as "0ms" would put a confident number on a
+    // phase that took four minutes.
+    const done = fromPhaseEvent(phaseEvent())!;
+    expect(done.durationMs).toBe(0);
+    expect(phaseDuration(done)).toBeNull();
+    // The start then degrades to the landing instant rather than to the
+    // epoch: a window opening in 1970 is worse than one opening late.
+    expect(phaseStart(done)).toBe(Date.parse("2026-01-01T00:00:09Z"));
+  });
+
+  test("a live phase has an elapsed time, not a duration", () => {
+    // The overlay's `started_at` is what keeps a running phase's counter
+    // correct; the duration is the engine's FINAL measurement and does not
+    // exist until the phase lands.
     const live = fromLiveCall(liveCall({ started_at: "2026-01-01T00:00:30Z" }), "PM");
-    const [kept] = withStarts([live], phaseStarts([startEvent()]));
-    expect(kept!.startedAt).toBe("2026-01-01T00:00:30Z");
-    // And a running phase has no duration: it has an elapsed time, which is a
-    // different thing and is measured against the clock, not against `at`.
-    expect(phaseDuration(kept!)).toBeNull();
+    expect(phaseDuration(live)).toBeNull();
+    expect(phaseStart(live)).toBe(Date.parse("2026-01-01T00:00:30Z"));
   });
 
-  test("a start stamped after its own finish is refused", () => {
-    // Two clocks the page cannot reconcile. A negative duration reads as a
-    // bug in the engine rather than in the pair of timestamps, so the phase
-    // reports nothing instead.
-    const done = fromPhaseEvent(phaseEvent({}, "2026-01-01T00:00:05Z"))!;
-    const [kept] = withStarts([done], phaseStarts([startEvent({}, "2026-01-01T00:00:09Z")]));
-    expect(kept!.startedAt).toBe(done.at);
-    expect(phaseDuration(kept!)).toBeNull();
+  test("a negative measurement is refused rather than rendered", () => {
+    // Nothing the engine publishes should produce one — it measures with a
+    // single monotonic read — but a payload is a wire value and a negative
+    // duration would render as a phase that finished before it began.
+    const done = fromPhaseEvent(phaseEvent({ duration_ms: -5 }))!;
+    expect(phaseDuration(done)).toBeNull();
   });
 
-  test("an extended phase keeps its FIRST start", () => {
-    // A phase granted more rounds re-enters its tool loop and opens again. The
-    // later start would move the phase's beginning forward past work it had
-    // already done — on exactly the long, hard phases that get extended.
-    const starts = phaseStarts([
-      startEvent({}, "2026-01-01T00:00:00Z"),
-      startEvent({}, "2026-01-01T00:00:50Z"),
-    ]);
-    expect(starts.get(phaseKey("t1", "execute", 1))).toBe("2026-01-01T00:00:00Z");
-  });
-
-  test("starts are keyed per iteration, so a self-iterate turn keeps them apart", () => {
-    const starts = phaseStarts([
-      startEvent({ iteration: 1 }, "2026-01-01T00:00:00Z"),
-      startEvent({ iteration: 2 }, "2026-01-01T00:02:00Z"),
-    ]);
-    expect(starts.get(phaseKey("t1", "execute", 1))).toBe("2026-01-01T00:00:00Z");
-    expect(starts.get(phaseKey("t1", "execute", 2))).toBe("2026-01-01T00:02:00Z");
-  });
-
-  test("a completed event is not mistaken for a start", () => {
-    // The two travel on the same screen and differ only by type. Reading the
-    // wrong one would set every phase's start to its own finish, which is
-    // exactly the state this replaces — silently, and with no duration to
-    // show for it.
-    expect(phaseStarts([phaseEvent()]).size).toBe(0);
+  test("an unreadable landing instant yields no start at all", () => {
+    // `tsKey` answers 0 for what it cannot parse, and 0 is the epoch. The
+    // caller filters zeroes; handing it `0 - duration_ms` would hand it a
+    // NEGATIVE instant that passes no filter written for a missing one.
+    const done = fromPhaseEvent(phaseEvent({ duration_ms: 1000 }, "not a timestamp"))!;
+    expect(phaseStart(done)).toBe(0);
   });
 });
 

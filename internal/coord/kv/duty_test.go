@@ -118,6 +118,24 @@ func TestTheDutyBucketAgeIsOnlyEverRaised(t *testing.T) {
 // putOlderBuildRecord writes a lease record exactly as a build that predates
 // the duty bucket wrote one: into the seat lease bucket, at that bucket's TTL,
 // with no layout field at all.
+//
+// Through [encodeResource], because the key grammar is OLDER than the duty
+// bucket: a build without the duty lane still segmented a resource into its
+// key, so the record an upgrade actually meets is spelled `worker.scheduler`.
+// Spelled with [encodeKey] instead it lands on `worker=3Ascheduler`, one
+// segment where every lease key has two, which certifies the rolling-upgrade
+// rule against a record no build ever wrote.
+//
+// The wrong spelling fails ASYMMETRICALLY, which is why it is worth naming
+// here rather than left to whoever reads the failure. A one-segment key still
+// decodes, because [decodeResource] splits on the separator, finds the one
+// part and unescapes it back to `worker:scheduler`. So the full-bucket scan
+// the older-build gate runs finds the record and the gate behaves correctly.
+// What misses it is every read that names a key or a class: [Store.Get] looks
+// under `worker.scheduler` and is told the key does not exist, and a class
+// listing filters on `worker.>`, which one segment does not match. The symptom
+// is then a gate that works beside reads that see nothing, which reads like a
+// liveness bug and is only ever a spelling one.
 func putOlderBuildRecord(ctx context.Context, t *testing.T, s *Store, resource, owner string) uint64 {
 	t.Helper()
 	data, err := json.Marshal(map[string]any{
@@ -130,7 +148,7 @@ func putOlderBuildRecord(ctx context.Context, t *testing.T, s *Store, resource, 
 	if err != nil {
 		t.Fatalf("encode the older build's record: %v", err)
 	}
-	rev, err := s.leases.kv.Put(ctx, encodeKey(resource), data)
+	rev, err := s.leases.kv.Put(ctx, encodeResource(resource), data)
 	if err != nil {
 		t.Fatalf("write the older build's record for %s: %v", resource, err)
 	}
@@ -140,7 +158,7 @@ func putOlderBuildRecord(ctx context.Context, t *testing.T, s *Store, resource, 
 // rawLease reads a record back the way the store wrote it.
 func rawLease(ctx context.Context, t *testing.T, l *lane, resource string) leaseValue {
 	t.Helper()
-	kve, err := l.kv.Get(ctx, encodeKey(resource))
+	kve, err := l.kv.Get(ctx, encodeResource(resource))
 	if err != nil {
 		t.Fatalf("read %s from %s: %v", resource, l.kv.Bucket(), err)
 	}
@@ -191,7 +209,7 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	// holds the duty for even one round trip is an overlap with the older
 	// node, and the re-check after a write is only the backstop for an
 	// older node that appeared mid-claim.
-	if kve, err := s.duties.kv.Get(ctx, encodeKey(duty)); !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if kve, err := s.duties.kv.Get(ctx, encodeResource(duty)); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Fatalf("a refused duty claim wrote the duty bucket: (%v, %v)", kve, err)
 	}
 	// VISIBLY: to a duty helper the refusal reads like a peer holding the
@@ -215,7 +233,7 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode tombstone: %v", err)
 	}
-	if _, err := s.leases.kv.Put(ctx, encodeKey(coord.NodeResource("old")), tomb); err != nil {
+	if _, err := s.leases.kv.Put(ctx, encodeResource(coord.NodeResource("old")), tomb); err != nil {
 		t.Fatalf("release the older node's presence: %v", err)
 	}
 	taken, err := s.TryAcquire(ctx, duty, coord.AcquireOptions{
@@ -248,7 +266,7 @@ func TestADutyHolderStopsWhenAnOlderBuildAppears(t *testing.T) {
 		t.Fatalf("claim = (%v, %v)", held, err)
 	}
 	putOlderBuildRecord(ctx, t, s, coord.NodeResource("old"), "old:1")
-	before, err := s.duties.kv.Get(ctx, encodeKey(duty))
+	before, err := s.duties.kv.Get(ctx, encodeResource(duty))
 	if err != nil {
 		t.Fatalf("read the held duty: %v", err)
 	}
@@ -261,7 +279,7 @@ func TestADutyHolderStopsWhenAnOlderBuildAppears(t *testing.T) {
 	}
 	// Refused without renewing: a renew would extend the very overlap the
 	// refusal exists to end.
-	after, err := s.duties.kv.Get(ctx, encodeKey(duty))
+	after, err := s.duties.kv.Get(ctx, encodeResource(duty))
 	if err != nil {
 		t.Fatalf("read the duty after the refusal: %v", err)
 	}
@@ -324,10 +342,14 @@ func TestAnOlderBuildsDutyIsVisibleInEveryRead(t *testing.T) {
 	if err != nil || got == nil || got.Owner != "old:1" {
 		t.Fatalf("Get(%s) = (%v, %v), want the older build's holder", duty, got, err)
 	}
+	// The two reads that can reach it. There is no all-classes listing to
+	// ask as well: a class is what ListLive takes, and the empty one is
+	// refused rather than read as "every class" (coordtest's
+	// a_class_that_cannot_address_a_key_is_refused certifies that on both
+	// backends).
 	for name, read := range map[string]func() ([]coord.Lease, error){
-		"ListLive(worker:)": func() ([]coord.Lease, error) { return s.ListLive(ctx, coord.WorkerPrefix) },
-		"ListLive()":        func() ([]coord.Lease, error) { return s.ListLive(ctx, "") },
-		"ListOwned(old:1)":  func() ([]coord.Lease, error) { return s.ListOwned(ctx, "old:1") },
+		"ListLive(worker)": func() ([]coord.Lease, error) { return s.ListLive(ctx, coord.ClassWorker) },
+		"ListOwned(old:1)": func() ([]coord.Lease, error) { return s.ListOwned(ctx, "old:1") },
 	} {
 		leases, err := read()
 		if err != nil {
@@ -338,8 +360,17 @@ func TestAnOlderBuildsDutyIsVisibleInEveryRead(t *testing.T) {
 		}
 	}
 	// The membership read stays a scan of the seat lease bucket only.
-	if nodes, err := s.ListLive(ctx, coord.NodePrefix); err != nil || len(nodes) != 0 {
+	if nodes, err := s.ListLive(ctx, coord.ClassNode); err != nil || len(nodes) != 0 {
 		t.Fatalf("ListLive(node:) = (%v, %v), want no presence", nodes, err)
+	}
+	// And it is still a DUTY, not a seat. This record physically sits in the
+	// seat lease bucket, so a listing that decided a class from the bucket it
+	// read rather than from the key's own leading segment would hand an
+	// operator a running duty back as a live seat, and a capacity count a
+	// seat nobody claimed.
+	if seats, err := s.ListLive(ctx, coord.ClassSeat); err != nil || len(seats) != 0 {
+		t.Fatalf("ListLive(seat:) = (%v, %v), want no seats: an older build's duty "+
+			"lives in the seat lease bucket and is still listed by its own class", seats, err)
 	}
 }
 
@@ -368,7 +399,7 @@ func TestEveryWriteStampsTheLayout(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		if _, err := s.leases.kv.Put(ctx, encodeKey(seat), data); err != nil {
+		if _, err := s.leases.kv.Put(ctx, encodeResource(seat), data); err != nil {
 			t.Fatalf("strip the layout: %v", err)
 		}
 	}

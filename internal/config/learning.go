@@ -324,10 +324,6 @@ type EpisodeLifecycle struct {
 	// rotates through.
 	MaxRawEpisodesPerAgent int `yaml:"max_raw_episodes_per_agent,omitempty" json:"max_raw_episodes_per_agent,omitempty" js:"min=0" desc:"Raw episodes per seat that trigger a lifecycle pass."`
 
-	// WriteCheckEveryN is how often the write path actually counts rather
-	// than incrementing a counter. Higher is cheaper and blunter.
-	WriteCheckEveryN int `yaml:"write_check_every_n,omitempty" json:"write_check_every_n,omitempty" js:"min=0" desc:"Writes between real threshold checks."`
-
 	// NonTerminalMaxAgeDays drops mid-state rows. They never feed skill
 	// synthesis (its terminal-outcome gate filters them out), so the only
 	// consumer is recall, where they are noise.
@@ -380,7 +376,6 @@ type EpisodeLifecycle struct {
 func DefaultEpisodeLifecycle() EpisodeLifecycle {
 	return EpisodeLifecycle{
 		MaxRawEpisodesPerAgent:   500,
-		WriteCheckEveryN:         10,
 		NonTerminalMaxAgeDays:    14,
 		ToolFreeMaxAgeDays:       90,
 		ConsolidatedGraceDays:    30,
@@ -400,7 +395,6 @@ func DefaultEpisodeLifecycle() EpisodeLifecycle {
 func (e *EpisodeLifecycle) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "max_raw_episodes_per_agent", e.MaxRawEpisodesPerAgent))
-	p.wrap(positive(path, "write_check_every_n", e.WriteCheckEveryN))
 	p.wrap(positive(path, "non_terminal_max_age_days", e.NonTerminalMaxAgeDays))
 	p.wrap(positive(path, "tool_free_max_age_days", e.ToolFreeMaxAgeDays))
 	p.wrap(positive(path, "consolidated_grace_days", e.ConsolidatedGraceDays))

@@ -1,6 +1,6 @@
 # Overview
 
-Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, seat ownership, and knowledge and memory infrastructure needed to operate a network of AI agents modeled after a real corporate structure. Task state stays in the work-item tracker the company already uses (see [Task Engine](task-engine.md)).
+Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, seat ownership, and knowledge and memory infrastructure needed to operate a network of AI agents modeled after a real corporate structure. Task state lives in a work-item tracker, the engine's own by default or an external one the engine deliberately mirrors none of (see [The Tracker](task-engine.md)).
 
 Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + a web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
 
@@ -14,9 +14,9 @@ The framework models the same structures found in real companies:
 
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
-- **Task management** — integrated with external PM tools (Jira, GitHub/GitLab issues)
+- **Task management** — the engine's own work tracker by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues) — see [The Tracker](task-engine.md)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
-- **Knowledge** — query-time knowledge-base search for shared docs + per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
+- **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (BM25 over a per-node index; the semantic half is embedded and stored but not yet queried) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
 ---
@@ -30,13 +30,13 @@ Crewlet treats the organizational hierarchy as its primary orchestration structu
 | **Mental model** | A corporate org chart — departments, teams, and named seats |
 | **Hierarchy** | A native tree: identity, downward delegation, manager-handoff target, and scoping all derive from it |
 | **Communication** | Event-driven pub/sub with org-scoped channels |
-| **Knowledge** | A knowledge base searched live at query time, plus a per-agent private diary |
+| **Knowledge** | A knowledge base — the engine's own, or a vendor's searched live — plus a per-agent private diary |
 | **Decision model** | The DACI framework (Driver / Approver / Contributor / Informed) |
 | **Lifetime** | A long-running, persistent company |
 | **Config style** | A YAML org chart, versioned in the store and edited live |
 | **Extensibility** | Out of process: MCP servers for anything an agent calls, and the REST API, the `/ws/stream` socket and OTLP for anything built around the engine. The binary loads no plugins |
 
-The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [Task Engine](task-engine.md).
+The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
 
 ---
 
@@ -44,7 +44,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM and embedding backends behind small contracts; external tools via MCP, and the knowledge base behind one search seam
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
 - **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
@@ -55,7 +55,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 ```mermaid
 flowchart TB
-    EXT["<b>External surfaces</b><br/>Slack · Mattermost · Jira · Confluence · GitHub · GitLab"]
+    EXT["<b>External surfaces</b> (all optional)<br/>Slack · Mattermost · Jira · Confluence · GitHub · GitLab"]
     SUPPLY["<b>What a turn consumes</b><br/>an LLM API, or a coding CLI on your own subscription<br/>embeddings · MCP servers · a code sandbox"]
 
     subgraph proc["<b>crewlet run</b> — one process by default; node.roles picks the groups"]
@@ -139,13 +139,13 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any O
 
 ### Embedding Provider
 
-`embeddings.Embedder` (`internal/providers/embeddings`) has two methods: `Embed(ctx, text)`, which returns one vector for one text, and `Width()`, the configured vector width. An embedding error means "no similarity search" to every caller, never a failed turn. It is used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin). Knowledge-base content is searched live and is **not** embedded. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
+`embeddings.Embedder` (`internal/providers/embeddings`) has two methods: `Embed(ctx, text)`, which returns one vector for one text, and `Width()`, the configured vector width. An embedding error means "no similarity search" to every caller, never a failed turn. It is used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin), **and** by the [knowledge system](knowledge-system.md#semantic-search-two-stages-no-index-no-new-dependency) for the semantic half of a native search: the company's own pages and work items are embedded once by a fleet-singleton duty and applied on every node, so the bill is paid once however many nodes run. A Confluence knowledge base is searched live and embeds nothing. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
 
 ### Database
 
 One local file, opened by Turso — a pure-Go driver over the SQLite file format — and built from a forward-only migration sequence. There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
 
-- **`agent_diary`** (embedding column): each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** in the database: the knowledge base is searched live (see [knowledge system](knowledge-system.md)).
+- **`agent_diary`** (embedding column): each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is a separate read: on the native backend it is this node's own projection of the company's pages, indexed for BM25 search; on Confluence it is a live query with no local copy at all (see [knowledge system](knowledge-system.md)).
 - **`episodes`** (embedding column): one row per completed turn; raw and LLM-compacted aggregates share the same table.
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
@@ -224,6 +224,11 @@ internal/
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
 ├── whsec/                # Webhook signing secrets: the format, minting and the HMAC key
+├── jsprovision/          # How long a replicated JetStream create gets, and
+│                         #   what "the cluster is still forming" looks like:
+│                         #   one policy for the streams, the consumers and the
+│                         #   coordination buckets, branching on whether this
+│                         #   node's broker has peers
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,

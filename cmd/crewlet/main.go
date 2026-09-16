@@ -26,10 +26,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -39,14 +42,19 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 
 	"gopkg.in/yaml.v3"
@@ -168,8 +176,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runBudgets(rest, stdout, stderr)
 	case "backup":
 		return runBackup(rest, stdout, stderr)
+	case "retention":
+		return runRetention(rest, stdout, stderr)
+	case "work":
+		return runWork(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
+	case "search":
+		return runSearch(rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
 		return runIntegration(cmd, rest, stdout, stderr)
 	default:
@@ -190,9 +204,16 @@ Usage:
   crewlet budgets <cmd>       Show or reset the durable token counters
   crewlet backup -dir PATH    Copy this node's store and stream estate, through
                               the running engine, to a path on ITS host
+  crewlet retention <cmd>     What the state log is holding, why it is not
+                              shrinking, and the gestures that change it
+  crewlet work <cmd>          The gestures on work items that belong to a person:
+                              purge, which destroys a task and every row it
+                              produced and which nothing undoes
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
+  crewlet search eval         Measure the semantic search against the exact scan,
+                              on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
@@ -484,8 +505,19 @@ type validation struct {
 	Tier     Tier             `json:"tier"`
 	File     string           `json:"file,omitempty"`
 	Problems []config.Problem `json:"problems"`
+
+	// Warnings are configurations that are VALID and worth knowing about
+	// before applying: a declined fsync's window, a trim that will never
+	// advance, a reference that resolves to nothing, a unit keyed on a name
+	// somebody will rename.
+	//
+	// THEIR OWN LIST rather than problems with a flag: the exit code turns
+	// on Problems alone, so a CI step gates on refusals and still prints
+	// what its operator should read. A warning that could fail a build is
+	// one somebody suppresses.
 	Warnings []config.Warning `json:"warnings"`
-	Summary  map[string]any   `json:"summary,omitempty"`
+
+	Summary map[string]any `json:"summary,omitempty"`
 }
 
 // newValidation is a run with nothing found yet. Both lists are empty rather
@@ -576,6 +608,17 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 			return report(stdout, res, asJSON)
 		}
 		res.Valid = true
+		// TIER A HAS WARNINGS OF ITS OWN: a declined fsync, a trim that
+		// will never advance on its own, an embedded stream with nowhere
+		// to persist. Every one of them describes a correct deployment
+		// for somebody, so none is a refusal, and `crewlet validate` is
+		// the one moment the consequence can still change the decision.
+		//
+		// APPENDED TO THE EMPTY LIST rather than assigned over it:
+		// [config.Bootstrap.Warnings] answers nil when a document has
+		// none, and assigning that would put `null` where the payload
+		// promises an array.
+		res.Warnings = append(res.Warnings, boot.Warnings()...)
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
@@ -611,9 +654,21 @@ type checkedCompany struct {
 // broker, no store, no provider is dialled. It is what catches the problems a
 // schema cannot, such as a seat whose llm names no configured provider.
 //
-// The warnings are the references the document resolves to nothing, reported
-// whenever it PARSED, valid or not: a misspelled lead is worth seeing in the
-// same pass as the problems, since fixing the problems will not fix it.
+// A document that did NOT hold up reports its references alone: they are
+// reported whenever it PARSED, valid or not, because a misspelled lead is
+// worth seeing in the same pass as the problems and fixing the problems will
+// not fix it. The admission half of [config.Company.Warnings] is deliberately
+// not on that path, because this command refuses an admission rule as a
+// PROBLEM, and the same sentence printed twice reads as two findings.
+//
+// Its advisories wait for the same reason the admission half does, from the
+// other side: an advisory describes what a document that RUNS will do, and a
+// paragraph about a unit's id printed beside a refusal is noise at the moment
+// somebody is reading carefully.
+//
+// A document that held up carries the whole set instead: its references, plus
+// every advisory about what it will do that its author should know before
+// applying it.
 func checkCompany(raw []byte) (*checkedCompany, []config.Warning, error) {
 	company, err := config.ParseCompanyDocument(raw)
 	if err != nil {
@@ -627,7 +682,7 @@ func checkCompany(raw []byte) (*checkedCompany, []config.Warning, error) {
 	if err != nil {
 		return nil, warnings, err
 	}
-	return &checkedCompany{Company: company, epoch: epoch}, warnings, nil
+	return &checkedCompany{Company: company, epoch: epoch}, company.Warnings(), nil
 }
 
 // validateBoth is the two-flag form: check a Tier A and a Tier B together.
@@ -650,7 +705,26 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
+	// THE RULES THAT NEED BOTH DOCUMENTS, which is the whole reason this
+	// two-flag form exists: neither tier can see the other, so a
+	// configuration that is valid twice over and unrecoverable together is
+	// only refusable here.
+	if err := config.CheckTiers(boot, company.Company); err != nil {
+		res.Problems = config.Problems(err)
+		return report(stdout, res, asJSON)
+	}
 	res.Valid = true
+	// BOTH TIERS' WARNINGS, for the reason both tiers' problems are
+	// reported: an operator who fixes one file and is told about the other
+	// on the next run has been made to pay twice for one edit. The
+	// company's are already here, put there by checkCompany so that a
+	// refused document still reports them, so Tier A's go in FRONT of them
+	// rather than after, which is the order the two files are named in.
+	//
+	// Inserted rather than appended onto Tier A's own list, which is nil
+	// for a document with no warnings at all: the payload promises both
+	// lists are arrays, and `append(nil)` of nothing stays nil.
+	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -685,8 +759,12 @@ func report(stdout io.Writer, res validation, asJSON bool) error {
 		// unreadable.
 		return errSilent
 	}
+	// ON STDOUT WITH THE ANSWER rather than on stderr, and before the
+	// outcome: a warning is part of what the run found rather than a
+	// diagnostic about the run, and a reader sees it whichever way the
+	// validation went.
 	for _, w := range res.Warnings {
-		fmt.Fprintln(stdout, "warning: "+prose(w.Path, w.Message))
+		fmt.Fprintln(stdout, warningLine(w))
 	}
 	if !res.Valid {
 		return errors.New(strings.Join(problemLines(res.Problems), "\n  "))
@@ -730,6 +808,40 @@ func prose(where, message string) string {
 	return where + ": " + message
 }
 
+// warningLine is one warning as an operator reads it, led by WHICH KIND of
+// warning it is.
+//
+// The list holds sentences that ask for different things: a dangling
+// reference is broken and somebody has to correct it, an advisory is a valid
+// choice reporting what it will cost, an admission rule is a stored revision
+// a new write would be refused for. Printed under one undifferentiated
+// `warning:` they all read as one severity, and a healthy document carries
+// more advisories than references, so the broken one is the line that gets
+// skimmed past.
+func warningLine(w config.Warning) string {
+	if kind := warningKind(w.Kind); kind != "" {
+		return "warning (" + kind + "): " + prose(w.Path, w.Message)
+	}
+	return "warning: " + prose(w.Path, w.Message)
+}
+
+// warningKind is a [config.Warning]'s kind as the words an operator reads. A
+// kind this build does not classify renders as its wire value rather than as
+// a blank, because the label is the only thing on the line that says how much
+// the warning matters and an empty pair of brackets says nothing at all.
+func warningKind(kind string) string {
+	switch kind {
+	case config.WarningDanglingReference:
+		return "dangling reference"
+	case config.WarningAdmission:
+		return "admission"
+	case config.WarningAdvisory:
+		return "advisory"
+	default:
+		return kind
+	}
+}
+
 // summaryLine is the one prose line a successful validation prints.
 func summaryLine(res validation) string {
 	if name, ok := res.Summary["company"].(string); ok {
@@ -764,6 +876,11 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 			"an empty value writes no file")
 	roles := fs.String("roles", "",
 		"what this node runs, overriding node.roles: ingress, seats, workers")
+	mode := fs.String("mode", string(statelog.ModeNormal),
+		"normal (default), maintenance or seal. The two maintenance modes start "+
+			"this node's broker and NO publisher, for a stream capacity change; "+
+			"every node of the fleet has to be in the same one. See "+
+			"`crewlet retention set-capacity`")
 	apiHost := fs.String("api-host", "", "bind address, overriding api.host")
 	apiPort := fs.Int("api-port", -1,
 		"bind port, overriding api.port; 0 serves no HTTP at all")
@@ -802,7 +919,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
 			"[-company <company.yaml> | -import-company <company.yaml>] "+
 			"[-log-level …] [-log-format …] [-log-file …] [-debug] "+
-			"[-roles …] [-api-host …] [-api-port …]")
+			"[-roles …] [-mode …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
 	}
 	if file != "" {
@@ -893,6 +1010,18 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	if err = overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
 		return err
 	}
+	// THE MODE IS A FLAG AND NEVER A CONFIG FIELD, deliberately. Every
+	// node of the fleet restarts into it and out of it again, three times
+	// over one capacity change — so it is a property of THIS RUN rather
+	// than of the deployment, and a file that carried it would leave a
+	// node that came back after an unrelated restart still refusing to
+	// publish, with the reason sitting in a file nobody re-read.
+	nodeMode := statelog.MaintenanceMode(strings.TrimSpace(*mode))
+	if !nodeMode.Valid() {
+		return fmt.Errorf("-mode %q is not one of %v: the two maintenance modes "+
+			"start no publisher, so a typo here would be a node that boots, "+
+			"reports healthy and runs nothing", *mode, statelog.MaintenanceModes)
+	}
 
 	// The engine owns the process signals exclusively — one handler per
 	// signal — because a graceful drain is the difference between a
@@ -916,9 +1045,21 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
+	// ONE RECORDER FOR THE PROCESS, built here and handed to both halves.
+	// The engine writes into it from its apply loops and its write paths;
+	// the MeterProvider tracing installs is a READER of it. Two recorders
+	// would make a collector's dashboard and `crewlet retention status`
+	// disagree about the same event, which is the drift a single generated
+	// catalogue exists to prevent — and building it in neither place is
+	// how every instrument stayed declared and unobserved.
+	recorder, err := metrics.New()
+	if err != nil {
+		return err
+	}
 	flushTraces, err := tracing.Configure(ctx, tracing.Options{
-		NodeID:  nodeID,
-		Version: version.String(),
+		NodeID:   nodeID,
+		Version:  version.String(),
+		Recorder: recorder,
 	})
 	if err != nil {
 		return err
@@ -948,7 +1089,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(company))
-	e, err := engine.New(ctx, engine.Options{Bootstrap: boot, Company: company})
+	e, err := engine.New(ctx, engine.Options{
+		Bootstrap: boot, Company: company, Metrics: recorder, Mode: nodeMode,
+	})
 	if err != nil {
 		return err
 	}
@@ -1296,7 +1439,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the object that opened it, so an API holding a different
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
-		Bridge:       e.Bridge(),
+		Bridge: e.Bridge(),
+		// The OPERATOR MCP surface. Built here rather than in the engine
+		// because it is an API concern — on a split deployment this is
+		// the externally reachable process — and because its writer
+		// identity comes off an HTTP request's own credential.
+		Operator:     operatorMCP(e),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than
@@ -1328,7 +1476,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// seat's Plan phase searches through — nil when none is
 			// configured, which leaves the question unregistered rather
 			// than answering an empty search as though it had run.
-			Knowledge: e.Knowledge(),
+			//
+			// RESOLVED PER CALL. An apply rebuilds the searcher, so a
+			// value read once here would search with a rotated
+			// credential's predecessor, against a retired wiki, or
+			// answer "no backend" forever for a company whose backend
+			// came up after this line ran.
+			Knowledge: e.Knowledge,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
 			// WHERE THIRD-PARTY APPS REACH THIS DEPLOYMENT, resolved
@@ -1374,7 +1528,32 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
-			NodeID:  nodeID,
+			// THIS NODE'S PROJECTION of the company's own tracker and
+			// knowledge base — the same copy a seat's tools read, so an
+			// operator and an agent looking at one item see one item.
+			//
+			// Nil on a company running Jira or Confluence, which leaves
+			// their questions unregistered: there is no native record
+			// for this node to have a copy of, and an empty board would
+			// claim otherwise.
+			//
+			// A METHOD VALUE is safe here where [Sources.Knowledge]
+			// needs a function: the readers belong to the NODE and are
+			// not rebuilt by an apply — see engine/native.go for why a
+			// projector's lifetime is the process rather than the
+			// epoch. Nil-typed-nil is not a risk either, because these
+			// accessors return an untyped nil for a node with no
+			// backend.
+			Work:  nativeWork(e),
+			Pages: nativePages(e),
+			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
+			// how far each domain may be trimmed, what is stopping
+			// it, and what this node costs to replace. Assembled per
+			// call, because half of it is coordination that changes
+			// under the answer and the other half is this node's own
+			// loops.
+			Retention: nativeRetention(ctx, e),
+			NodeID:    nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
@@ -1388,13 +1567,46 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// that can reach it — which is why the reset is a route and not
 		// only a CLI subcommand.
 		Budgets: e.Backends().Fleet,
+		// The fleet's record of what the log may delete, for the one
+		// retention gesture the engine cannot make on its own: an
+		// operator's assertion that a copy has left the host.
+		Retention: e.Backends().Fleet,
+		// And the eviction gate, which is a RECORD rather than a
+		// coordination write — so it goes through the same writer a
+		// seat's tools do, and carries the same three-valued outcome.
+		Nodes: nativeNodes(e),
+		// The capacity window. The engine itself refuses the verb when
+		// this node is publishing, so the route exists in every mode and
+		// answers "you are in the wrong one" rather than 404 — which is
+		// the difference between an operator reading a procedure and an
+		// operator looking for a version mismatch.
+		Capacity: e,
+		// THE ONE OPERATION NOTHING UNDOES, and it had no caller at
+		// all until this line: no verb, no route, no tool. A company
+		// could not destroy a task under any circumstances.
+		Purger: nativePurger(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
 		Backup: backup.New(backup.Options{
-			Store:  e.Backends().Store,
-			Conn:   e.Backends().Conn(),
-			NodeID: boot.Node.ID,
+			Store: e.Backends().Store,
+			Conn:  e.Backends().Conn(),
+			// The trim-hold register. A backup is not a counted node,
+			// so without this the fleet's own trim can delete exactly
+			// the records the artefact's store-to-stream gap needs to
+			// be replayable — and the backup would report success.
+			Holds: e.Backends().Fleet,
+			// And where a finished copy is announced. Without it the
+			// trim's backup term has no input at all and refuses for
+			// ever, so a fleet with a working nightly backup would
+			// still never trim its log.
+			Backups: e.Backends().Fleet,
+			NodeID:  boot.Node.ID,
+			// THE PROCESS'S OWN RECORDER, never a second one: the
+			// copy's duration is a catalogued instrument, and two
+			// recorders in one process would be two sets of series
+			// for one fleet.
+			Metrics: e.Recorder(),
 		}),
 		Config:  configSurface,
 		Secrets: secretSurface,
@@ -1449,7 +1661,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"anonymous_read", app.Guard().AnonymousRead(),
-		"tokens", app.Guard().Tokens())
+		"tokens", app.Guard().Tokens(),
+		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
+		// same-origin only, which is what the dashboard this process
+		// serves needs and what every other site gets.
+		"cross_origin_sites", app.CORS().Origins())
 	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
 		// Stated rather than assumed. The read surface carries LLM
 		// transcripts, diary entries and the whole event stream, and on a
@@ -2103,4 +2319,320 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 		out = append(out, key.ID+":"+key.Material)
 	}
 	return out
+}
+
+// nativeWork and nativePages are this node's projections, as the read surface
+// wants them: an interface that is genuinely nil when the company runs the
+// vendor backends.
+//
+// THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
+// would satisfy its `!= nil` registration check and then panic on the first
+// question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
+// place where the check is a registration rather than a call.
+func nativeWork(e *engine.Engine) queries.WorkReader {
+	if r := e.Tracker(); r != nil {
+		return r
+	}
+	return nil
+}
+
+// nativeNodes is the eviction gate, or nil where this node runs no tracker —
+// converted for [nativeWork]'s reason: a typed nil would pass the route's
+// registration check and panic on the first press.
+func nativeNodes(e *engine.Engine) api.NodeGate {
+	if w := e.TrackerWriter(); w != nil {
+		return w
+	}
+	return nil
+}
+
+// nativePurger is the purge route's writer, or nil.
+//
+// AN ADAPTER RATHER THAN THE WRITER ITSELF, because the API's seam takes the
+// operator as an argument: every other write on that surface is the fleet's
+// and the process's own writer is the right author, while a purge destroys a
+// company's data and the record has to carry the person who asked for it.
+// `As` is where that identity is bound, and it is a tracker concept the API
+// package deliberately does not import a concrete type for.
+func nativePurger(e *engine.Engine) api.TaskPurger {
+	w := e.TrackerWriter()
+	if w == nil {
+		return nil
+	}
+	return purgeAdapter{writer: w}
+}
+
+type purgeAdapter struct{ writer *tracker.Writer }
+
+func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
+	reason string) (tracker.WriteResult, error) {
+
+	return p.writer.As(operator, tracker.AuthorOperator,
+		tracker.Provenance{OperatorID: operator}).
+		PurgeTask(ctx, opID, id, project, reason)
+}
+
+func nativePages(e *engine.Engine) queries.PageReader {
+	if r := e.Pages(); r != nil {
+		return r
+	}
+	return nil
+}
+
+// operatorMCP builds the operator's own MCP surface, or nil.
+//
+// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
+// is what makes this one implementation of ten tools rather than two — see
+// [builtin.WorkDeps.Actor].
+//
+// The DEFAULTS are deliberately absent. A seat files into its unit's project
+// when it names none, because a seat HAS a unit; an operator does not, so the
+// argument is required and the tool refuses naming it rather than guessing a
+// project on a person's behalf.
+func operatorMCP(e *engine.Engine) *opsmcp.Server {
+	var opts opsmcp.Options
+	if c := e.Company(); c != nil && c.Config != nil {
+		opts.Company = c.Config.Name
+	}
+	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
+		opts.Work = builtin.WorkDeps{
+			Reader: reader,
+			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
+			// from the request's context rather than from the call: a
+			// tracker whose author field is chosen by the writer is not
+			// an audit trail, and there is deliberately no way to name a
+			// seat to act as.
+			Writer: func(actor builtin.Actor) builtin.WorkWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE TWO SEQUENCES, which this surface went
+			// without — so an operator's assistant was refused
+			// `waiting_on` and `blocking` by name on a tool whose
+			// own description offers them, and would not have been
+			// served the fold at all. Both need the replicated
+			// estate, which this writer has; nothing else about
+			// them differs from a seat's.
+			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			Merges: func(actor builtin.Actor) builtin.WorkMerger {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE RANKED SEARCH. It reads, so it takes no actor —
+			// the corpus is the same for everybody and there is nothing
+			// to attribute — and without it the operator catalogue
+			// listed a verb this surface could never register.
+			Search: engine.WorkSearcher(e),
+			// THE SAVED-VIEW WRITER, which only this surface has: a
+			// view is furniture a person arranges, and no seat is
+			// given the tools that reach it.
+			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE GOAL WRITER, for the same reason: a goal is an
+			// outcome a person commits the company to, so no seat is
+			// given the tool that sets one.
+			GoalWriter: func(actor builtin.Actor) builtin.GoalWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE CATALOGUE WRITER: the company's own vocabulary is
+			// a person's to set, never a seat's to widen so its own
+			// create succeeds.
+			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE PERSON WRITER. Who may write what is the
+			// tracker's own rule; what this surface supplies is the
+			// identity it is judged against.
+			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE INBOX READ. It takes no actor for the reason
+			// Search takes none — it reads, and whose inbox is an
+			// argument rather than an identity — and it is this
+			// surface's alone beside the person writer, because a
+			// seat has a mailbox rather than an inbox.
+			Inbox: reader,
+			// AND THE TRASH. A removal takes an item off every board in
+			// the company and a restore puts it back at any age; neither
+			// destroys anything, which is what separates both from the
+			// purge the CLI guards with a typed confirmation. No seat
+			// holds either — see internal/agent/builtin/worktrash.go.
+			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
+			// this one is on every surface — declaring a tag is open
+			// to every seat — and what an operator adds here is the
+			// credential the archive facet asks for.
+			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// AND THE SPRINT SIDE. A sprint is a commitment a team made
+			// together, so starting or closing one is a lead's decision
+			// — which is why this surface has it and no seat does, and
+			// why the tool is additionally gated on leading the project.
+			SprintWriter: func(actor builtin.Actor) builtin.SprintWriter {
+				return writer.As(actor.Handle, actor.Kind,
+					tracker.Provenance{OperatorID: actor.OperatorID})
+			},
+			// THE ROSTER, so an operator's assistant is refused a
+			// handle nobody has rather than silently filing work for
+			// one — the same check every seat's tools make.
+			Seats: func() []colleague.Seat {
+				c := e.Company()
+				if c == nil {
+					return nil
+				}
+				return builtin.Corpus(c.Org)
+			},
+			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
+			// ONE WENT WITHOUT. Their absence was invisible and not
+			// harmless: with no Leads, an operator filing an unassigned
+			// task woke nobody at all — the lead fallback is what
+			// catches exactly that task — and with no Units every
+			// project this surface listed read as belonging to no team.
+			Leads:          engine.LiveLeads(e),
+			Units:          engine.LiveUnits(e),
+			DefaultProject: func(string) string { return "" },
+			Actor:          opsmcp.WorkActor,
+			// THE MENTION RESOLVER, which this surface went without: a
+			// comment's @-mention is turned into a wake by the tracker's
+			// recipients only when the writer resolved it, so an
+			// operator writing "@alice can you take this" reached her
+			// watchers and never her — while the tool's own description,
+			// which their assistant reads, promised it would.
+			Mentions: engine.LiveMentions(e),
+			Await:    e.WaitCommitted,
+		}
+	}
+	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
+		opts.Pages = builtin.PageDeps{
+			Reader: reader, Writer: writer,
+			Actor:    opsmcp.PageActor,
+			Mentions: engine.LiveMentions(e),
+			Reserved: reservedFor(e),
+			Await:    e.WaitCommitted,
+		}
+	}
+	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
+	// unlike the ten write tools, ranked search over the company's own
+	// wiki is exactly as useful to an operator's assistant on Confluence.
+	if e.Knowledge() != nil {
+		opts.Knowledge = operatorKnowledge{engine: e}
+		// AND THE CHART BESIDE IT. An operator has no turn, so the org
+		// the search is scoped against comes from here; resolved per
+		// call, because a config apply replaces it.
+		opts.Org = func() *org.Organization {
+			c := e.Company()
+			if c == nil {
+				return nil
+			}
+			return c.Org
+		}
+	}
+	// THE LEAD RELATION, which the tracker deliberately does not derive:
+	// it holds no org chart, and one it derived would be a second opinion
+	// about the hierarchy.
+	opts.Leads = leadsOf(e)
+	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
+	// about a person's line, the other about who plans a container's work.
+	opts.LeadsProject = engine.LeadsProjectOf(e)
+	return opsmcp.New(opts)
+}
+
+// leadsOf answers whether one handle leads another, walking the chart's own
+// management chain.
+//
+// ANY ANCESTOR, not just the direct manager: a founder leads everybody, and an
+// authority that stopped at one level would make "a lead may set what somebody
+// in their line does next" mean "a lead may, for the people directly under
+// them" — which is not what a line is.
+//
+// A HANDLE THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
+// direction: the write is then refused unless it is the person's own.
+func leadsOf(e *engine.Engine) builtin.Leads {
+	return func(_ context.Context, actor, handle string) bool {
+		c := e.Company()
+		if c == nil || c.Org == nil || actor == "" || actor == handle {
+			return false
+		}
+		seat := c.Org.SeatByHandle(handle)
+		if seat == nil {
+			return false
+		}
+		for _, manager := range c.Org.Ancestors(seat) {
+			if manager.Handle() == actor {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// reservedFor is the containers an operator's assistant may not write to
+// directly, on the same terms a seat has them.
+func reservedFor(e *engine.Engine) []string {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	var out []string
+	for _, key := range []string{c.Config.SkillsContainerKey(), c.Config.RootSpaceKey()} {
+		if key = strings.TrimSpace(key); key != "" {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// operatorKnowledge resolves the node's searcher per call, for the reason the
+// engine's own liveKnowledge does: an apply REPLACES it, and a value captured
+// when the API was assembled searches with a rotated credential's predecessor.
+type operatorKnowledge struct{ engine *engine.Engine }
+
+func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
+	s := k.engine.Knowledge()
+	return s != nil && s.CanSearch(seat, o)
+}
+
+func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+	s := k.engine.Knowledge()
+	if s == nil {
+		return nil
+	}
+	return s.Search(ctx, q)
+}
+
+// nativeRetention is this node's retention answer, or nil where there is none.
+//
+// NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
+// follows: a process running no state log has no applier, no stream and no
+// floor, and a report of zeros would claim a fleet whose log is perfectly
+// trimmed. The question is simply unregistered instead.
+// nativeRetention is the retention half of the API's node runtime, or nil on a
+// node that runs no state log.
+//
+// IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
+// probe is a coordination read, so on a node whose store cannot be reached it
+// is exactly as slow as every other one — and a `context.Background()` here
+// made the ONE call that decides whether this surface exists at all the one
+// call a shutting-down process could not abandon.
+func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context) any {
+	if _, runs := e.RetentionReport(ctx); !runs {
+		return nil
+	}
+	return func(ctx context.Context) any {
+		report, _ := e.RetentionReport(ctx)
+		return report
+	}
 }

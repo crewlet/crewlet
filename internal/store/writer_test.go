@@ -27,7 +27,7 @@ func TestRecordForPromotesTags(t *testing.T) {
 	t.Parallel()
 	ev := buildEvent(t, `{
 		"id": "6f1a2b3c-0000-4000-8000-000000000001",
-		"type": "task_started",
+		"type": "task_assigned",
 		"timestamp": "2026-04-01T12:00:00Z",
 		"source": "engine",
 		"trace_id": "tr-1",
@@ -44,7 +44,7 @@ func TestRecordForPromotesTags(t *testing.T) {
 		t.Fatalf("RecordFor: %v", err)
 	}
 	if !tracked {
-		t.Fatal("task_started must be stored")
+		t.Fatal("agent_phase_started must be stored")
 	}
 	want := map[string]string{
 		"agent_id":         "agent-9",
@@ -98,7 +98,7 @@ func TestRecordForReadsUnknownTypes(t *testing.T) {
 	t.Parallel()
 	ev := buildEvent(t, `{
 		"id": "6f1a2b3c-0000-4000-8000-000000000003",
-		"type": "task_started",
+		"type": "task_assigned",
 		"timestamp": "2026-04-01T12:00:00Z",
 		"source": "engine",
 		"role": "from-the-future",
@@ -154,13 +154,13 @@ func TestRecordForSkipsUntracked(t *testing.T) {
 func TestCategoriesAreKnownValues(t *testing.T) {
 	t.Parallel()
 	known := map[string]bool{
-		"lifecycle": true, "task": true, "communication": true, "a2a": true,
-		"decision": true, "knowledge": true, "notification": true,
+		"lifecycle": true, "task": true, "a2a": true,
+		"decision": true, "notification": true,
 		"system": true, "learning": true,
 	}
 	for _, typ := range []string{
-		"org_started", "task_created", "message_sent", "a2a_channel_opened",
-		"decision_requested", "document_created", "external_notification",
+		"org_started", "task_assigned", "a2a_channel_opened",
+		"decision_requested", "external_notification",
 		"budget_exhausted", "skill_synthesized", "sandbox_run_started",
 		"config_revision_activated",
 	} {

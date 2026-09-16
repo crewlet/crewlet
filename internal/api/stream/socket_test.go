@@ -243,7 +243,7 @@ func TestAnIngestedEventReachesTheSocket(t *testing.T) {
 	}
 
 	f.svc.Ingest(livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: "2026-06-14T12:00:00Z",
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 
@@ -344,6 +344,13 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 	}{
 		{stream.ErrUnknownQuery, stream.CodeUnknownQuery},
 		{stream.ErrUnauthorized, stream.CodeUnauthorized},
+		{stream.ErrNotFound, stream.CodeNotFound},
+		// A REFUSED REQUEST IS NOT A FAILED ONE. Left to the default it
+		// reached the client as `query_failed` — retried on every poll
+		// of a screen that could never succeed — and was logged by this
+		// node as though its own health were in question.
+		{stream.ErrBadParams, stream.CodeBadParams},
+		{stream.ErrUnavailable, stream.CodeUnavailable},
 		{errors.New("the store fell over at /var/lib/crewlet/crewlet.db"), stream.CodeQueryFailed},
 	} {
 		f := newSocket(t, nil, func(context.Context, string, map[string]any, string) (any, error) {
@@ -552,7 +559,7 @@ func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "events"})
 	f.svc.Ingest(livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: "2026-06-14T12:00:00Z",
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 	if got := next(t, conn); got["kind"] != stream.KindEvent {

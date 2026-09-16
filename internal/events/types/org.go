@@ -1,21 +1,34 @@
 package types
 
-import (
-	"strings"
+import "github.com/crewlet/crewlet/internal/events"
 
-	"github.com/crewlet/crewlet/internal/events"
-)
-
-// Organization lifecycle: the org coming up and going down, and seats being
-// filled, emptied, moved or redefined under it.
+// Two lifecycles, on different clocks: this NODE coming up and going down
+// under a company, and a SEAT arriving on or leaving this node.
+//
+// ONE ORG PAIR PER NODE, and the envelope's source names which — the same
+// shape [ConfigRevisionApplied] has, and for the same reason: starting and
+// stopping is something a PROCESS does, and a fleet of three that reported one
+// start between them would be hiding two of them.
+//
+// THE SEAT PAIR IS LIVE-ONLY (see [events.LiveOnly]). Placement moves seats on
+// every rebalance, so a durable row per claim would fill the audit log with a
+// fact about scheduling rather than about the company. What reads them is the
+// live seat state, where "is this seat running, and where" is the question —
+// and where `terminated` was a state nothing could reach, so a seat that went
+// away kept showing whatever it last did.
+//
+// # Why there is no seat REDEFINITION here
+//
+// There were two more — reassigned, redefined — and neither had a publisher.
+// The roster change they were about is a CONFIG REVISION, which the engine
+// stores whole and serves a diff of: a precise record where these were a lossy
+// paraphrase of one, published N times on a fleet that all apply it.
 
 func init() {
 	events.Register[OrgStarted]()
 	events.Register[OrgStopped]()
 	events.Register[AgentSpawned]()
 	events.Register[AgentTerminated]()
-	events.Register[AgentReassigned]()
-	events.Register[RoleUpdated]()
 }
 
 // orgName is the organization's own name, falling back to the actor — which
@@ -56,7 +69,7 @@ func (e OrgStopped) SummaryFor(actor string) string {
 	return "Organization '" + orgName(e.OrgName, actor) + "' stopped"
 }
 
-// AgentSpawned marks a seat being filled by a live agent instance.
+// AgentSpawned marks a seat starting to run on this node.
 type AgentSpawned struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -68,13 +81,13 @@ func (AgentSpawned) EventType() string { return "agent_spawned" }
 // Role is the seat that was filled.
 func (e AgentSpawned) Role() string { return e.RoleName }
 
-// AgentID is the instance now holding the seat.
+// AgentID is the handle now holding the seat.
 func (e AgentSpawned) AgentID() string { return e.Agent }
 
 // SummaryFor leads with the seat, which the actor chain resolves from Role.
 func (e AgentSpawned) SummaryFor(actor string) string { return lead(actor, "joined the organization") }
 
-// AgentTerminated marks a seat's instance being torn down.
+// AgentTerminated marks a seat leaving this node.
 type AgentTerminated struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -87,68 +100,15 @@ func (AgentTerminated) EventType() string { return "agent_terminated" }
 // Role is the seat being emptied.
 func (e AgentTerminated) Role() string { return e.RoleName }
 
-// AgentID is the instance being torn down.
+// AgentID is the handle giving the seat up.
 func (e AgentTerminated) AgentID() string { return e.Agent }
 
-// SummaryFor appends the reason when one was given: a seat that went away
-// deliberately and one that was killed read identically without it.
+// SummaryFor appends the reason when one was given: a seat released because a
+// node is draining and one shed under capacity read identically without it.
 func (e AgentTerminated) SummaryFor(actor string) string {
 	line := lead(actor, "was terminated")
 	if e.Reason != "" {
 		return line + ": " + e.Reason
 	}
 	return line
-}
-
-// AgentReassigned marks a seat moving in the hierarchy.
-type AgentReassigned struct {
-	Agent      string `json:"agent_id"`
-	OldRole    string `json:"old_role"`
-	NewRole    string `json:"new_role"`
-	OldManager string `json:"old_manager"`
-	NewManager string `json:"new_manager"`
-}
-
-// EventType is the "agent_reassigned" wire type.
-func (AgentReassigned) EventType() string { return "agent_reassigned" }
-
-// AgentID is the instance that moved. There is no Role: the move spans two
-// of them, and picking either as THE role would misattribute the event.
-func (e AgentReassigned) AgentID() string { return e.Agent }
-
-// Summary names both roles instead of leading with an actor — the sentence is
-// about the move, and the old role is half of what it says.
-func (e AgentReassigned) Summary() string {
-	return "Agent reassigned from " + e.OldRole + " to " + e.NewRole
-}
-
-// RoleUpdated fires when an existing role's definition changes during a config
-// reload — the seat stays, what it is changes.
-type RoleUpdated struct {
-	RoleName      string   `json:"role"`
-	Agent         string   `json:"agent_id"`
-	ChangedFields []string `json:"changed_fields,omitempty"`
-}
-
-// EventType is the "role_updated" wire type.
-func (RoleUpdated) EventType() string { return "role_updated" }
-
-// Role is the seat whose definition changed.
-func (e RoleUpdated) Role() string { return e.RoleName }
-
-// AgentID is the instance holding that seat across the change — the seat
-// survives a config reload, only what it is changes.
-func (e RoleUpdated) AgentID() string { return e.Agent }
-
-// SummaryFor is possessive ("Engineer's role updated"), so it spells the actor
-// into the line itself rather than going through lead.
-func (e RoleUpdated) SummaryFor(actor string) string {
-	changed := ""
-	if len(e.ChangedFields) > 0 {
-		changed = " (" + strings.Join(e.ChangedFields, ", ") + ")"
-	}
-	if actor == "" {
-		return "Role updated" + changed
-	}
-	return actor + "'s role updated" + changed
 }

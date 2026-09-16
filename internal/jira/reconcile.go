@@ -417,7 +417,7 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	for i, seat := range seats {
 		out[i] = SeatIdentity{
 			Handle:  seat.Handle(),
-			Project: org.NormalizeScope(seat.JiraProject),
+			Project: org.NormalizeScope(seat.Project),
 		}
 		creds[i] = atlassian.CredentialOf(atlassian.ProductJira, seat, opts.Value)
 		if !creds[i].Held() {

@@ -1,0 +1,363 @@
+package jetstream
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
+)
+
+// notYetVisibleJS answers `Stream` with "not found" for the first n calls and
+// then delegates, which is the clustered window this file's fix exists for: a
+// create committed by the metadata leader that the member which made it cannot
+// see yet.
+//
+// EMBEDS THE INTERFACE rather than implementing it, because the one method
+// under test is one of dozens and a hand-written stub would be a list of
+// panics that has to be maintained against the vendored client.
+type notYetVisibleJS struct {
+	jetstream.JetStream
+	notFound atomic.Int32
+	calls    atomic.Int32
+}
+
+func (f *notYetVisibleJS) Stream(context.Context, string) (jetstream.Stream, error) {
+	f.calls.Add(1)
+	if f.notFound.Add(-1) >= 0 {
+		return nil, jetstream.ErrStreamNotFound
+	}
+	// A NIL STREAM WITH A NIL ERROR is enough: nothing in openProvisioned
+	// touches the handle, and building a real one would need a broker to
+	// test a decision that has none in it.
+	return nil, nil
+}
+
+// A CREATE THAT HAS NOT PROPAGATED YET IS WAITED OUT, not reported.
+//
+// This is the failure it was found by: a clustered boot died with `open the
+// log "CREWLET_TRACKER_VECTORS": stream not found` on the node whose own
+// create of that stream had just returned success. The lookup was the one step
+// on the provisioning path with no tolerance for a peer-visible-but-not-yet-
+// local create, and a state log that cannot open the stream it just made takes
+// the whole engine down with it.
+func TestALookupWaitsOutACreateThatHasNotPropagated(t *testing.T) {
+	t.Parallel()
+	js := &notYetVisibleJS{}
+	js.notFound.Store(3)
+	q := &Queue{js: js}
+
+	if _, err := q.openProvisioned(t.Context(), "CREWLET_TRACKER_VECTORS"); err != nil {
+		t.Fatalf("a stream that appeared on the fourth look was reported as %v", err)
+	}
+	if got := js.calls.Load(); got != 4 {
+		t.Errorf("the lookup was made %d times, want 4 — three not-founds "+
+			"waited out and the one that answered", got)
+	}
+}
+
+// AND A STREAM THAT REALLY IS GONE IS STILL REPORTED — with its own error,
+// not the deadline's.
+//
+// The tolerance above is bounded for exactly this: if "not found" were waited
+// out for ever, a genuinely missing stream would hang a boot instead of naming
+// itself, which is the trade openBucket's placement retry documents in the
+// other direction.
+func TestAMissingStreamIsStillReportedAsMissing(t *testing.T) {
+	t.Parallel()
+	js := &notYetVisibleJS{}
+	// More not-founds than the budget can hold at the retry cadence, so the
+	// wait runs out rather than succeeding late.
+	js.notFound.Store(1 << 30)
+	q := &Queue{js: js}
+
+	_, err := q.openProvisioned(t.Context(), "CREWLET_NOTHING")
+	if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Fatalf("a missing stream reported %v, want the broker's own "+
+			"not-found rather than a bare deadline", err)
+	}
+}
+
+// A CANCELLED CALLER IS NOT HELD for the whole tolerance. The retry shortens
+// against the parent like every other budget on this path, so a boot somebody
+// interrupted gives the prompt back rather than finishing its wait.
+func TestACancelledLookupReturnsAtOnce(t *testing.T) {
+	t.Parallel()
+	js := &notYetVisibleJS{}
+	js.notFound.Store(1 << 30)
+	q := &Queue{js: js}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := q.openProvisioned(ctx, "CREWLET_NOTHING"); err == nil {
+		t.Fatal("a cancelled lookup reported success")
+	}
+	if got := js.calls.Load(); got > 1 {
+		t.Errorf("a cancelled lookup made %d calls, want at most the first", got)
+	}
+}
+
+// deadlineJS records the deadline the call it was handed actually carried.
+type deadlineJS struct {
+	jetstream.JetStream
+	had   bool
+	until time.Time
+}
+
+func (f *deadlineJS) CreateConsumer(ctx context.Context, _ string,
+	_ jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.until, f.had = ctx.Deadline()
+	return nil, errors.New("refused, so the read-back below runs")
+}
+
+// Consumer is the read-back ensureDurableConsumer makes when a create fails,
+// and it refuses too: this case is about the DEADLINE the create carried, and
+// a read-back that answered would only add a second path to reason about.
+func (f *deadlineJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
+	return nil, errors.New("not there either")
+}
+
+// A DURABLE CONSUMER GETS THE PROVISIONING BUDGET, like every other replicated
+// create on this path.
+//
+// It did not. Nothing here set a deadline, so the caller's context reached
+// nats.go with none of its own — an engine boot's has none — and the client's
+// FIVE-SECOND default applied instead. That is a twenty-fourth of the clustered
+// budget, and shorter than [jsprovision.SlowAfter], so the slow-create
+// breadcrumb beside this call could never fire and the retry window it
+// describes did not exist.
+func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
+	t.Parallel()
+	js := &deadlineJS{}
+	// A NAMED CLUSTER is what selects the clustered budget — Replicas does
+	// not, and a test that set only it would exercise the solo path while
+	// claiming to cover this one. See [Queue.Clustered].
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what a boot passes.
+	_, _, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
+		jetstream.ConsumerConfig{Durable: "agent-ceo"})
+
+	if !js.had {
+		t.Fatal("the create ran with no deadline, so nats.go's 5s default " +
+			"applies and neither the budget nor the breadcrumb exists")
+	}
+	// It must be the CLUSTERED budget rather than the client's default.
+	if left := time.Until(js.until); left <= jsprovision.SlowAfter {
+		t.Errorf("the create got %v, which is inside the %v slow threshold — "+
+			"the breadcrumb could never fire", left, jsprovision.SlowAfter)
+	}
+}
+
+// racedJS is a broker on which THIS node's create loses: the create reports
+// the consumer already there, and the read-back finds it.
+type racedJS struct {
+	jetstream.JetStream
+	created int
+}
+
+func (f *racedJS) CreateConsumer(context.Context, string,
+	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.created++
+	return nil, jetstream.ErrConsumerExists
+}
+
+// The read-back answers, which is the whole point: the consumer exists,
+// somebody else made it, and the boot must carry on.
+func (f *racedJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
+	return nil, nil
+}
+
+// A CONSUMER THE READ-BACK RECOVERED WAS NOT CREATED BY THIS CALL.
+//
+// # Why the bool is worth being exact about
+//
+// [queue.EventQueue] says EnsureSubscription "reports whether this call
+// created it", and the read-back is the one path that can answer wrongly: it
+// exists precisely because somebody ELSE's create is what put the consumer
+// there. Derived from the preceding lookup alone, every member of a fleet
+// booting together reported that it had made every mailbox — the lookup says
+// not-found on all of them, and the recovery is invisible to it.
+//
+// Nothing branches on the bool today; it is a log line and a contract the
+// conformance suite holds both backends to. That is the reason to keep it
+// honest rather than to let it drift: a count that is wrong on every node is
+// worse than no count, because it reads exactly like a correct one.
+func TestAConsumerFoundByTheReadBackIsNotReportedAsCreated(t *testing.T) {
+	t.Parallel()
+	js := &racedJS{}
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	cons, won, err := q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
+		jetstream.ConsumerConfig{Durable: "agent-ceo"})
+	if err != nil {
+		t.Fatalf("a consumer a peer created failed the boot: %v", err)
+	}
+	if cons != nil {
+		t.Errorf("the fake returns a nil consumer; got %v", cons)
+	}
+	if won {
+		t.Error("a consumer recovered by the read-back was reported as created " +
+			"by this call — on a fleet booting together every member claims to " +
+			"have made every mailbox")
+	}
+	if js.created != 1 {
+		t.Errorf("the create ran %d times, want exactly one attempt", js.created)
+	}
+}
+
+// alignJS answers the alignment's Info with a consumer that needs updating, and
+// records the deadline UpdateConsumer was handed.
+type alignJS struct {
+	jetstream.JetStream
+	had   bool
+	until time.Time
+}
+
+func (f *alignJS) UpdateConsumer(ctx context.Context, _ string,
+	_ jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.until, f.had = ctx.Deadline()
+	return nil, ctx.Err()
+}
+
+// staleConsumer reports a configuration the alignment has to change, so the
+// update below it actually runs.
+type staleConsumer struct {
+	jetstream.Consumer
+}
+
+func (staleConsumer) CachedInfo() *jetstream.ConsumerInfo { return nil }
+
+func (staleConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
+	return &jetstream.ConsumerInfo{Config: jetstream.ConsumerConfig{
+		// Neither matches this build's, so the alignment updates.
+		MaxAckPending: 1,
+		AckWait:       time.Second,
+	}}, nil
+}
+
+// THE ALIGNMENT GETS THE PROVISIONING BUDGET, AND ONLY A LIVE CALLER CAN GIVE
+// IT ONE.
+//
+// # The two ways to get this wrong, which are each other's repair
+//
+// Handed the PER-CREATE context, the alignment inherits a deadline that may
+// have just expired — that is what puts the recovery path here at all — and
+// [context.WithTimeout] cannot revive it, because it only ever shortens. Info
+// and UpdateConsumer then fail instantly and the boot dies one line below the
+// read-back that saved it. So the call sites pass the context that bounds the
+// BOOT.
+//
+// Handed that context and nothing else, the alignment reaches nats.go with no
+// deadline at all and the client's five-second default decides it — and
+// UpdateConsumer is a write against the same metadata group as the create,
+// which is allowed twenty-four times longer. So the budget is derived here.
+//
+// Both halves are asserted below: the budget is applied, and a caller's own
+// shorter deadline still wins.
+func TestTheAlignmentGetsTheProvisioningBudget(t *testing.T) {
+	t.Parallel()
+	js := &alignJS{}
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what an engine boot
+	// passes and what the call sites hand this.
+	if _, err := q.alignDomainConsumer(t.Context(), "CREWLET_AGENT", staleConsumer{}); err != nil {
+		t.Fatalf("the alignment failed: %v", err)
+	}
+	if !js.had {
+		t.Fatal("the update ran with no deadline of its own, so nats.go's 5s " +
+			"default decides a replicated write on a clustered boot")
+	}
+	if left := time.Until(js.until); left <= jsprovision.SlowAfter {
+		t.Errorf("the update got %v, which is shorter than the slow-create "+
+			"threshold and so cannot be the provisioning budget", left)
+	}
+
+	// AND A TIGHTER CALLER STILL WINS, which is what keeps the aggregate
+	// ceilings above this meaningful.
+	short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	js.had = false
+	if _, err := q.alignDomainConsumer(short, "CREWLET_AGENT", staleConsumer{}); err != nil {
+		t.Fatalf("the alignment failed under a short caller: %v", err)
+	}
+	if left := time.Until(js.until); left > time.Second {
+		t.Errorf("a caller with a 50ms deadline saw the update given %v — "+
+			"WithTimeout is supposed to only ever shorten", left)
+	}
+}
+
+// heldCreateJS is the shape a clustered boot actually produces: the create is
+// HELD by the server while the metadata group settles, outlives its deadline,
+// and comes back a timeout — with the consumer there all the same.
+type heldCreateJS struct {
+	jetstream.JetStream
+	lookups int
+}
+
+func (f *heldCreateJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
+	f.lookups++
+	if f.lookups == 1 {
+		// The propagation window: this node made it on an earlier boot
+		// and has not been told about it yet.
+		return nil, jetstream.ErrConsumerNotFound
+	}
+	return staleConsumer{}, nil
+}
+
+func (f *heldCreateJS) CreateConsumer(context.Context, string,
+	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	return nil, context.DeadlineExceeded
+}
+
+func (f *heldCreateJS) UpdateConsumer(context.Context, string,
+	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	return staleConsumer{}, nil
+}
+
+// A HELD CREATE THAT TIMED OUT IS READ BACK, not just an explicit
+// already-exists.
+//
+// # Why the tidy error is the one that matters least
+//
+// The state-log consumer's name carries the node id, so no peer races it —
+// but this node's OWN create meets the consumer it made on an earlier boot,
+// and the create announces that in two shapes. ErrConsumerExists is the tidy
+// one and needs the configs to differ. The other is a TIMEOUT: the server
+// holds the request while the metadata group settles and the deadline runs
+// out underneath it, with the consumer perfectly well placed.
+//
+// That second shape is what a clustered boot produces, and gating the
+// read-back on ErrConsumerExists alone left it reporting the timeout — a boot
+// failing over a consumer that was there, which is the failure this whole
+// change exists to remove and the one [Queue.ensureDurableConsumer] has always
+// handled for mailbox consumers.
+func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
+	t.Parallel()
+	js := &heldCreateJS{}
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_TRACKER_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("a create that was held and timed out failed the boot, even "+
+			"though the read-back found the consumer: %v", err)
+	}
+	if cons == nil {
+		t.Fatal("no consumer came back")
+	}
+	if js.lookups < 2 {
+		t.Errorf("the consumer was looked up %d time(s); the read-back after "+
+			"the timed-out create never ran", js.lookups)
+	}
+}

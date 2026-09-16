@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -878,15 +879,40 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // a blank inbound path, and both sides' tests passed, because each was
 // checked against its own idea of the other.
 //
-// This reads the FIELD NAMES out of the room's own source and asserts the
-// answer carries each. It is the cheap half of the gate `internal/e2e` gives
-// the push protocol; the query channel had none at all.
+// This reads the FIELD NAMES out of the client's own declaration and asserts
+// the answer carries each. It is the cheap half of the gate `internal/e2e`
+// gives the push protocol; the query channel had none at all.
+//
+// TWICE NOW THIS GATE HAS POINTED AT A PATH THAT DOES NOT EXIST, so it is
+// worth saying what it reads and why. It read
+// `static/dashboard/js/views/integrations.js` — the hand-written bundle the
+// React rewrite deleted — so os.ReadFile failed, the t.Skipf below it fired,
+// and this certified NOTHING on every machine and in CI for the whole of that
+// rewrite while reporting a pass. [rooms_test.go] records the identical bug
+// being found and fixed in this same package; this file was missed, and
+// nothing noticed, because nothing counted skips. So: the source, never the
+// build output, and a missing file is FATAL — a broken checkout is not a
+// reason to certify nothing.
+//
+// It reads the TYPE rather than the room's access sites, and that is the
+// second lesson. The old sweep matched `row.<field>` and `data.<field>`
+// literally. Integrations.tsx destructures (`const { data } = useQuery(…)`,
+// then `data?.integrations`) and names a row `r` inside its map callback, so
+// the `data.` half matched nothing at all and the `row.` half missed `r.key`
+// — a sweep whose whole job is to notice a missing name, silently narrowing
+// to whichever identifiers one file happened to use. A declared interface is
+// ONE place, and a field added there without a server that sends it fails
+// here.
 func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
-	source, err := os.ReadFile(filepath.Join(
-		"..", "..", "..", "static", "dashboard", "js", "views", "integrations.js"))
+	// dashboardTree is rooms_test.go's, for the reason its comment gives:
+	// the source tree, not the build output.
+	typesPath := filepath.Join(dashboardTree, "protocol", "types.ts")
+	source, err := os.ReadFile(typesPath)
 	if err != nil {
-		t.Skipf("the dashboard tree is not in this checkout: %v", err)
+		t.Fatalf("read %s: %v — this gate cannot run without the client's "+
+			"declaration, and skipping would certify nothing while reporting "+
+			"a pass", typesPath, err)
 	}
 
 	// EVERY third-party app, because the per-integration detail fields (url,
@@ -905,9 +931,17 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("the answer carried no integrations, so this proves nothing")
 	}
-	// Across every row, not just the first: `url` and `seats` are
-	// per-integration detail, so a field carried by ANY row is a field the
-	// answer knows how to send.
+	// TWO READINGS, because the two halves of the contract are different.
+	//
+	// A REQUIRED field is required of EVERY row — the TypeScript interface
+	// describes each element, not the set — so it is checked per entry. The
+	// union was wrong for this: one integration carrying `endpoint` made the
+	// gate accept another that omitted it, which is precisely the card
+	// rendering undefined that this exists to catch.
+	//
+	// An OPTIONAL field is the other way round: `url` and `seats` are
+	// per-integration detail, so a field carried by ANY row is one the answer
+	// knows how to send, and only a field NO row carries is worth reporting.
 	sent := map[string]bool{}
 	for _, r := range rows {
 		entry, _ := r.(map[string]any)
@@ -916,22 +950,72 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		}
 	}
 
-	// Every `row.<field>` and `data.<field>` the view reads.
-	rowFields := regexp.MustCompile(`\brow\.([a-z_]+)`)
-	dataFields := regexp.MustCompile(`\bdata\.([a-z_]+)`)
+	// Every field the client declares on a row, and on the answer around it.
+	for field, required := range declaredFields(t, string(source), "IntegrationRow") {
+		if required {
+			for _, r := range rows {
+				entry, _ := r.(map[string]any)
+				if _, ok := entry[field]; !ok {
+					t.Errorf("IntegrationRow declares %s as REQUIRED and the row "+
+						"for %v does not send it — that field renders as undefined "+
+						"on that card", field, entry["key"])
+				}
+			}
+			continue
+		}
+		switch {
+		case sent[field]:
+		default:
+			// An optional field no row carries is within the type's contract,
+			// so it is not a failure — but it is either dead client code or a
+			// server that stopped sending something, and both are worth
+			// seeing. The required half above is what fails.
+			t.Logf("IntegrationRow declares %s (optional) and no row carries it", field)
+		}
+	}
+	for field, required := range declaredFields(t, string(source), "IntegrationsAnswer") {
+		if _, ok := body[field]; !ok && required {
+			t.Errorf("IntegrationsAnswer declares %s as REQUIRED and the "+
+				"answer never sends it", field)
+		}
+	}
+}
 
-	for _, m := range rowFields.FindAllStringSubmatch(string(source), -1) {
-		if !sent[m[1]] {
-			t.Errorf("the room reads row.%s and the answer never sends it — "+
-				"that field renders as undefined on every card", m[1])
-		}
+// declaredFields returns the fields of one TypeScript interface, mapped to
+// whether the client declares them REQUIRED (no `?`).
+//
+// Deliberately a small parser over the declaration rather than a sweep of
+// access sites: an interface states the contract once, where a `row.x` /
+// `r.x` / destructured-`x` sweep states it as many times as the room has
+// spellings and silently covers only the spellings it guessed.
+func declaredFields(t *testing.T, source, iface string) map[string]bool {
+	t.Helper()
+
+	start := regexp.MustCompile(`(?m)^export interface ` + iface + ` \{$`).FindStringIndex(source)
+	if start == nil {
+		t.Fatalf("no `export interface %s` in the client's protocol types — "+
+			"it was renamed or removed, and this gate is asserting about nothing", iface)
 	}
-	for _, m := range dataFields.FindAllStringSubmatch(string(source), -1) {
-		// `integrations` is the row list itself.
-		if _, ok := body[m[1]]; !ok {
-			t.Errorf("the room reads data.%s and the answer never sends it", m[1])
-		}
+	end := regexp.MustCompile(`(?m)^\}$`).FindStringIndex(source[start[1]:])
+	if end == nil {
+		t.Fatalf("interface %s is not closed at column 0", iface)
 	}
+	body := source[start[1] : start[1]+end[0]]
+
+	// A field line, at one level of indentation: `name?: type;`. The leading
+	// `^  ` anchors to the interface's own fields, so a nested object literal
+	// contributes nothing; the `[a-z_]` class excludes the `[key: string]:
+	// unknown` index signature, which is not a field anybody reads by name.
+	field := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9_]*)(\??):`)
+	out := map[string]bool{}
+	for _, m := range field.FindAllStringSubmatch(body, -1) {
+		out[m[1]] = m[2] == ""
+	}
+	if len(out) == 0 {
+		t.Fatalf("interface %s declared no fields this could read; the shape "+
+			"of the declaration changed and this gate stopped asserting", iface)
+	}
+	return out
 }
 
 // brokenPlane is a config plane that answers nothing, for the case where the
@@ -1765,5 +1849,141 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 			t.Errorf("%v reports enabled: false with no block to say so, so "+
 				"the dashboard draws residue as Paused", entry["key"])
 		}
+	}
+}
+
+// A SKILL LISTING PAST THE PAGE LIMIT SAYS SO, and the count is the seat's
+// whole set rather than the page's length.
+//
+// The diary and the episodes ask their store for [queries.MemoryPageLimit] and
+// get a recency feed, where "the most recent fifty" IS the question. Skills
+// are a SET the seat loads from, so the page carries the size of the set it
+// came from — and it once carried nothing, which is the one shape this tree
+// does not allow a cut to have. The panel counts what it is given, so a seat
+// with more skills than the page holds reported exactly the page limit: a
+// number an operator has no reason to doubt and no way to check.
+func TestASkillListingPastThePageLimitReportsWhatItCut(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	skills := learning.NewSkills(db)
+	const held = queries.MemoryPageLimit + 7
+	for i := range held {
+		name := "skill-" + strconv.Itoa(i)
+		if err := skills.Insert(t.Context(), learning.Skill{
+			ID: name, AgentHandle: "ceo", Name: name,
+			Description: "drafted from repeated work",
+			CreatedAt:   pinned, UpdatedAt: pinned,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	body := asMap(t, answer(t, queries.Sources{Skills: skills},
+		"agent_memory", map[string]any{"id": "ceo"}))
+
+	rows, _ := body["skills"].([]any)
+	if len(rows) != queries.MemoryPageLimit {
+		t.Fatalf("the listing carries %d skill(s), want the page limit %d",
+			len(rows), queries.MemoryPageLimit)
+	}
+	total, present := body["skills_total"]
+	if !present {
+		t.Fatal("the answer omits skills_total, so a page of the set is " +
+			"indistinguishable from the whole of it")
+	}
+	if got, want := jsonInt(t, total), held; got != want {
+		t.Errorf("skills_total = %d, want %d — the count a screen renders is "+
+			"the seat's whole set, not the length of the page", got, want)
+	}
+}
+
+// AND THE PAGE IS TAKEN IN THE STORE rather than out of a fully materialized
+// library.
+//
+// The total and the page used to come from ONE unbounded listing that decoded
+// every row the seat owns — content, frontmatter and all — to show fifty of
+// them, so the answer stayed O(the whole catalogue) in I/O and allocations
+// however small the page was. The bound is [learning.ListOptions.Limit] now,
+// which the SQL honours, and the total is a COUNT beside it. Both halves are
+// asserted here because either one alone is satisfiable by the bug: a listing
+// that is bounded but counted off the page under-reports the set, and an
+// honest total over an unbounded read is exactly what this replaced.
+//
+// The zero Limit is asserted too. It is the unbounded setting every other
+// caller in the tree relies on — the prefetch's offer, the refiner's view of
+// what is live — so a bound that leaked into the default would silently
+// truncate all of them.
+func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	skills := learning.NewSkills(db)
+	const held = queries.MemoryPageLimit + 7
+	for i := range held {
+		name := "skill-" + strconv.Itoa(i)
+		if err := skills.Insert(t.Context(), learning.Skill{
+			ID: name, AgentHandle: "ceo", Name: name,
+			Description: "drafted from repeated work",
+			Content:     strings.Repeat("a body a page never renders. ", 64),
+			CreatedAt:   pinned, UpdatedAt: pinned,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	page, err := skills.List(t.Context(), "ceo",
+		learning.ListOptions{Limit: queries.MemoryPageLimit})
+	if err != nil {
+		t.Fatalf("bounded listing: %v", err)
+	}
+	if len(page) != queries.MemoryPageLimit {
+		t.Errorf("a listing bounded to %d read %d row(s), so the answer pays "+
+			"for every skill the seat holds to render a page of them",
+			queries.MemoryPageLimit, len(page))
+	}
+	whole, err := skills.List(t.Context(), "ceo", learning.ListOptions{})
+	if err != nil {
+		t.Fatalf("unbounded listing: %v", err)
+	}
+	if len(whole) != held {
+		t.Errorf("the zero Limit read %d of %d skill(s): it is the unbounded "+
+			"setting every non-paging caller depends on", len(whole), held)
+	}
+
+	body := asMap(t, answer(t, queries.Sources{Skills: skills},
+		"agent_memory", map[string]any{"id": "ceo"}))
+	rows, _ := body["skills"].([]any)
+	if len(rows) != queries.MemoryPageLimit {
+		t.Errorf("the answer carries %d skill(s), want the page limit %d",
+			len(rows), queries.MemoryPageLimit)
+	}
+	if got := jsonInt(t, body["skills_total"]); got != held {
+		t.Errorf("skills_total = %d, want %d — the total is counted over the "+
+			"seat's set, never measured off the page", got, held)
+	}
+}
+
+// AND IT IS PRESENT WHEN NOTHING WAS CUT, so a client never has to tell an
+// absent key from a total of zero.
+func TestSkillsTotalIsAlwaysPresent(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	body := asMap(t, answer(t, queries.Sources{Skills: learning.NewSkills(db)},
+		"agent_memory", map[string]any{"id": "nobody"}))
+	if _, present := body["skills_total"]; !present {
+		t.Error("the answer omits skills_total for a seat with none")
+	}
+}
+
+// jsonInt reads a number that survived a JSON round trip as either shape.
+func jsonInt(t *testing.T, v any) int {
+	t.Helper()
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		t.Fatalf("%v is not a number (%T)", v, v)
+		return 0
 	}
 }

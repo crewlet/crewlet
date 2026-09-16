@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
 	"os"
+	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -19,10 +24,51 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// readyTimeout bounds waiting for an embedded server to accept connections.
-// Generous because a cold file store on a slow disk legitimately takes a
-// moment, and failing here fails the whole boot.
-const readyTimeout = 30 * time.Second
+// The budgets for an embedded server ACCEPTING CONNECTIONS.
+//
+// Not to be confused with [clusterReadyTimeout] below, which bounds a
+// different and later wait: this one is "the listener is up", that one is
+// "this member's JetStream has caught up with the metadata group". A boot
+// waits for both in that order, and they fail for different reasons.
+//
+// # Why two, and why the clustered one is larger
+//
+// A SOLO server has one thing to do before it accepts: recover its own file
+// store. A CLUSTERED member does that while also standing up its route
+// listener and starting to gossip with peers that are themselves booting —
+// so on a host bringing several members up at once it is competing for the
+// same disk and the same scheduler. One number for both is wrong for one of
+// them.
+//
+// # And why both are generous
+//
+// The asymmetry decides it. Failing here fails the WHOLE BOOT, so a budget
+// that is too short turns a busy host into a node that refuses to start and
+// then works on the retry — which during a rolling restart is how one slow
+// member takes out the restart. Too long only means a genuinely broken
+// server is reported as broken later, and the wait is CANCELLABLE, so a
+// person who has seen enough gets their prompt back immediately.
+//
+// The clustered case shared the solo 30 seconds and flaked under the full
+// race suite with several clusters forming at once — which is a smaller
+// version of exactly the production case it has to survive.
+const (
+	// acceptTimeout bounds a solo server: its own file store, and nothing
+	// else.
+	acceptTimeout = 30 * time.Second
+
+	// clusterAcceptTimeout bounds a member that is also standing up a
+	// route listener and gossiping with peers mid-boot.
+	clusterAcceptTimeout = 2 * time.Minute
+)
+
+// acceptBudget is how long this server gets to accept connections.
+func acceptBudget(clustered bool) time.Duration {
+	if clustered {
+		return clusterAcceptTimeout
+	}
+	return acceptTimeout
+}
 
 const (
 	// clusterReadyTimeout bounds waiting for a clustered member's JetStream
@@ -100,6 +146,68 @@ func (s *Server) Conn() (*nats.Conn, error) {
 	return s.embedded.connect()
 }
 
+// RoutePeers names the cluster members this server currently holds a route
+// to, sorted, and never itself.
+//
+// Test-facing, and it exists for one assertion: that a partition harness
+// actually cut something. NATS keeps an established route open indefinitely
+// and re-dials a lost one on its own schedule, so a harness that only stops
+// listeners partitions nothing — and every fleet-failure case above it then
+// passes for the wrong reason. A partitioned member's list is empty.
+//
+// PEERS RATHER THAN CONNECTIONS, which is the whole reason this is not
+// nats-server's own NumRoutes: since 2.10 a member opens a POOL of route
+// connections to each peer (three by default) plus a pinned one per
+// system account, so a healthy three-node cluster reports eight routes and
+// counting them says nothing a reader can check against the topology.
+func (s *Server) RoutePeers() []string {
+	if s.embedded == nil {
+		return nil
+	}
+	return s.embedded.routePeers()
+}
+
+// routePeers is the derivation itself, shared with [embeddedServer.awaitClusterReady]
+// — which gates a boot on the same number a partition harness asserts about.
+// Two readings of "who can this member reach" would be two answers.
+func (e *embeddedServer) routePeers() []string {
+	rz, err := e.ns.Routez(nil)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, r := range rz.Routes {
+		if r.RemoteName != "" {
+			seen[r.RemoteName] = struct{}{}
+		}
+	}
+	peers := slices.Collect(maps.Keys(seen))
+	slices.Sort(peers)
+	return peers
+}
+
+// ClusterPort is the port this member's ROUTE listener actually bound, and 0
+// when it bound none.
+//
+// # Why a caller needs to ask
+//
+// A member whose route port is already taken does not fail to start: the
+// server logs the listener error and carries on serving clients, so every
+// readiness check passes and the member simply never forms a route. From the
+// outside that is indistinguishable from a cluster that is merely slow to
+// converge — which is how it was found, as a harness waiting out its whole
+// budget for peers that could never arrive.
+func (s *Server) ClusterPort() int {
+	if s.embedded == nil {
+		return 0
+	}
+	addr := s.embedded.ns.ClusterAddr()
+	if addr == nil {
+		return 0
+	}
+	return addr.Port
+}
+
 // Shutdown stops the broker. Every client of it should be stopped first.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
@@ -117,7 +225,13 @@ func (s *Server) Shutdown() {
 // failing in production, and a wrong SyncAlways surfaces only as acked data
 // missing after a host loses power — which no test can stage.
 func embeddedOptions(cfg Config) (*server.Options, string, error) {
-	clustered := cfg.ClusterName != "" || len(cfg.ClusterURLs) > 0 || cfg.ClusterPort != 0
+	// THE NAME, and only the name: the cluster block below is installed on
+	// it alone, so a port or a peer list without one configures nothing and
+	// this member starts solo. Tier A refuses that shape (it requires
+	// stream.cluster.name once either is set), and [Queue.Clustered] reads
+	// the same field for the provisioning budgets — one rule, so the server
+	// that gets built and the budget it is given cannot disagree.
+	clustered := cfg.ClusterName != ""
 	name := cfg.ServerName
 	if name == "" {
 		if clustered {
@@ -168,15 +282,36 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		// turns and lease renewals by a 15-second heartbeat, not by a
 		// throughput workload.
 		//
-		// A CLUSTERED member does not, because the quorum IS the
-		// durability: a publish returns once a majority holds it, so the
-		// host that loses power loses nothing its peers cannot replay.
-		// nats-server draws the same line itself — it enables the
-		// async-flush path for a replicated stream only when SyncAlways is
-		// off (server/filestore.go) — so forcing it on every member would
-		// spend an fsync per write to protect a copy two others already
-		// have.
-		SyncAlways: cfg.Replicas <= 1,
+		// A CLUSTERED member USED TO BE EXEMPTED HERE, on the argument
+		// that the quorum is the durability: a publish returns once a
+		// majority holds it, so a host that loses power loses nothing its
+		// peers cannot replay. That is true of ONE failure class and the
+		// inference covered five.
+		//
+		// A single host losing power, a kernel panic, an orderly
+		// shutdown: the quorum survives all three and the exemption is
+		// right. A RACK or a ZONE losing power takes a majority
+		// together, and a correlated power loss takes every member —
+		// and a three-node fleet on one rack, which is what a first
+		// production deployment looks like, is exposed to both by
+		// construction. Against those the quorum is three copies of the
+		// same unflushed page cache.
+		//
+		// So the operator decides and the engine stops guessing.
+		// nats-server's own async-flush path is gated on this too — it
+		// enables it for a replicated stream only when SyncAlways is off
+		// (server/filestore.go) — but that is an OPTIMISATION GATE
+		// rather than an argument about durability: the raft WAL under a
+		// replicated stream sets SyncAlways for itself regardless
+		// (server/jetstream_cluster.go:2982-2983), which is the server
+		// saying that consensus state is worth an fsync even when the
+		// stream's own data is not.
+		SyncAlways: cfg.SyncAlways,
+
+		// AND WHEN THE FSYNC IS DECLINED, the window is named rather than
+		// inherited. Unset, the file store flushes on a two-minute
+		// interval, which is a recovery-point objective nobody chose.
+		SyncInterval: cfg.SyncInterval,
 
 		// THE ENGINE OWNS THE PROCESS SIGNALS. Left false, Server.Start
 		// installs its own SIGINT/SIGTERM handler, which shuts the
@@ -218,7 +353,16 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		opts.StoreDir, scratch = dir, dir
 	}
 	if cfg.ClusterName != "" {
-		opts.Cluster = server.ClusterOpts{Name: cfg.ClusterName, Port: cfg.ClusterPort}
+		opts.Cluster = server.ClusterOpts{
+			Name: cfg.ClusterName, Port: cfg.ClusterPort,
+			// Both empty on an ordinary single-homed node, which is why
+			// they are pass-through rather than derived: the engine has
+			// no way to tell which of a multi-homed host's addresses its
+			// peers can reach, and guessing wrong forms a cluster with a
+			// member nobody can route to.
+			Host:      cfg.ClusterHost,
+			Advertise: cfg.ClusterAdvertise,
+		}
 		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
 	}
 	return opts, scratch, nil
@@ -229,7 +373,44 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	clustered := opts.Cluster.Name != "" || len(opts.Routes) > 0 || opts.Cluster.Port != 0
+	clustered := opts.Cluster.Name != ""
+
+	// THE ROUTE PORT IS PROBED BEFORE THE SERVER IS ASKED FOR IT, because
+	// nats-server does not report this failure in any way an operator can
+	// act on.
+	//
+	// A member whose configured route port is held by something else does
+	// not fail: the listener error goes to the log and the server carries
+	// on. It then never becomes READY either — ReadyForConnections waits
+	// for the cluster listener as well as the client one — so the boot
+	// spends its whole clustered accept budget and fails with a message
+	// about peers being unreachable. Measured: two minutes, and it sends
+	// whoever reads it to debug a network path that is fine.
+	//
+	// The probe cannot close the race and does not try; what it buys is the
+	// common case, named, in microseconds. The accept-timeout message below
+	// covers the rest.
+	if clustered && opts.Cluster.Port != 0 {
+		free, probeErr := PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port)
+		switch {
+		case probeErr != nil:
+			// THE PROBE ITSELF COULD NOT ANSWER — the address is not one
+			// this host has, the port is privileged, or the caller is
+			// shutting down. Reported as what it was: calling any of
+			// those "already in use" sends the reader hunting for a
+			// process that does not exist.
+			removeScratch(scratch)
+			return nil, fmt.Errorf("stream.cluster.port %d on %s cannot be "+
+				"bound by this node: %w", opts.Cluster.Port,
+				routeHostLabel(opts.Cluster.Host), probeErr)
+		case !free:
+			removeScratch(scratch)
+			return nil, fmt.Errorf("%w: stream.cluster.port %d is already in use on %s, "+
+				"so this member's route listener cannot bind and it could never form "+
+				"a route to a peer — free that port or give this node a different one",
+				ErrRoutePortTaken, opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
+		}
+	}
 
 	ns, err := server.NewServer(opts)
 	if err != nil {
@@ -239,31 +420,38 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// BEFORE Start, or the boot is the one stretch that logs nowhere —
 	// which is where stream recovery and a failed store directory report.
 	// Trace is never enabled: it is a line per protocol message, and the
-	// engine publishes every event through here.
-	natsLog, natsDebug := newNATSLogger(ctx)
-	ns.SetLoggerV2(natsLog, natsDebug, false, false)
+	// engine publishes every event through here. Debug is the operator's
+	// own answer rather than the log level's — see [Config.Debug].
+	ns.SetLoggerV2(newNATSLogger(), cfg.Debug, false, false)
 	go ns.Start()
 
 	// THE WAIT IS CANCELLABLE, which is the whole reason this function takes
-	// a context. ReadyForConnections blocks for up to readyTimeout with no way
+	// a context. ReadyForConnections blocks for up to its budget with no way
 	// to interrupt it, so a Ctrl-C during a slow cold start — a large file
 	// store recovering its streams — used to sit out the full 30 seconds
 	// before the process could begin its drain.
+	budget := acceptBudget(clustered)
 	ready := make(chan bool, 1)
-	go func() { ready <- ns.ReadyForConnections(readyTimeout) }()
+	go func() { ready <- ns.ReadyForConnections(budget) }()
 	select {
 	case ok := <-ready:
 		if !ok {
-			ns.Shutdown()
-			removeScratch(scratch)
-			return nil, errors.New("embedded nats server did not become ready")
+			// FORMED BEFORE THE SHUTDOWN, which is the whole reason this
+			// is one expression rather than a branch below: Shutdown
+			// closes the route listener and clears ClusterAddr, so read
+			// afterwards it answers nil on every clustered member and
+			// every readiness failure there is would be reported as a
+			// port collision.
+			err := notReadyError(budget, clustered, opts.Cluster.Port,
+				opts.Cluster.Host, ns.ClusterAddr() != nil)
+			shutdownAndClean(ns, scratch)
+			return nil, err
 		}
 	case <-ctx.Done():
 		// Shutdown makes the in-flight ReadyForConnections return, so the
 		// goroutine above finishes into its buffered channel rather than
 		// leaking.
-		ns.Shutdown()
-		removeScratch(scratch)
+		shutdownAndClean(ns, scratch)
 		return nil, fmt.Errorf("start embedded nats: %w", ctx.Err())
 	}
 	return &embeddedServer{
@@ -271,8 +459,46 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}, nil
 }
 
-// awaitClusterReady waits for this member's JetStream to catch up with the
-// cluster's metadata group.
+// notReadyError says what a readiness failure MEANS, which is not one thing:
+// a member that never bound its route listener has a different problem, a
+// different remedy and a different thing to go and look at from one whose
+// peers did not answer.
+//
+// routed is whether the route listener was bound, and it is the caller's to
+// read BEFORE it shuts the server down — see the call site. It is a plain
+// argument rather than a *server.Server for that reason: a helper handed the
+// server could read it at the wrong moment, which is the bug this shape
+// removes.
+func notReadyError(budget time.Duration, clustered bool,
+	routePort int, routeHost string, routed bool) error {
+
+	// THE ROUTE LISTENER FIRST, because when it is the cause every other
+	// word here is a wrong lead. The pre-bind probe catches the ordinary
+	// case; this catches the port lost in the window between that probe
+	// and the bind, and it is the only evidence of it — the listener error
+	// went to the log and the server carried on serving clients.
+	if clustered && routePort != 0 && !routed {
+		return fmt.Errorf(
+			"%w: embedded nats server bound no route listener within %v, "+
+				"so stream.cluster.port %d on %s was taken while this member "+
+				"was starting and it can never form a route to a peer",
+			ErrRoutePortTaken, budget, routePort, routeHostLabel(routeHost))
+	}
+	// THE BUDGET IS IN THE MESSAGE, and whether this member was waiting on
+	// peers: "did not become ready" alone sends an operator to the disk
+	// when a route was the problem.
+	return fmt.Errorf(
+		"embedded nats server did not become ready within %v (clustered: %v). "+
+			"A clustered member also waits for its routes to dial and for "+
+			"the metadata group to elect a leader, so check that the members "+
+			"named in stream.cluster.peers are reachable", budget, clustered)
+}
+
+// awaitClusterReady waits for this member to be able to serve the writes the
+// caller is about to make: its JetStream caught up with the metadata group,
+// AND enough peers routed to place a replicated stream.
+//
+// # Why the metadata group is not enough on its own
 //
 // Accepting connections is NOT the same as being able to serve JetStream. A
 // clustered member answers its client port as soon as it is listening, while
@@ -280,18 +506,47 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 // eight on a quiet three-member cluster — and until it has one, creating a
 // replicated stream BLOCKS rather than failing. A node that provisioned at
 // boot therefore hung with nothing to diagnose, looking exactly like a broker
-// that is up and ignoring you.
+// that is up and ignoring you. That is the first half.
+//
+// # And why placement succeeding is not enough either
+//
+// The metadata group becomes current for THIS member as soon as it has caught
+// up with whatever group exists — which on a fleet booting together is two of
+// three. The provision that follows then asks the leader to place a stream at
+// `replicas`, and the leader answers from the peer set IT knows, which can
+// already include a member whose routes have not converged here. Placement
+// succeeds, the stream is created, and its own raft group never commits:
+// nats-server reports `NO quorum, stalled` per stream and every publish into
+// it blocks for ever.
+//
+// That is not a hypothetical either. It is exactly what three engines starting
+// at once produce, and the symptom is the worst kind — a cluster that formed,
+// reported itself ready, created every stream, and cannot write to any of
+// them.
+//
+// So the wait is on the number the WRITE actually needs: a stream of R
+// replicas needs R members, which is this one plus R-1 routed peers. Derived
+// from the replica factor rather than from the peer LIST, because a peer list
+// is a seed set — it may name this member, it may name a subset, and neither
+// shape says how many members a stream needs.
 //
 // A no-op for a solo member and for an external URL: solo has no metadata
 // group to join, and an external cluster is somebody else's to have made
 // ready before pointing an engine at it.
-func (e *embeddedServer) awaitClusterReady(ctx context.Context) error {
+func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) error {
 	if e == nil || !e.clustered {
 		return nil
 	}
+	// A member of a cluster still writes R=1 streams sometimes, and one
+	// replica needs no peer at all — so the floor is zero rather than a
+	// negative that would read as "wait for nobody" by accident.
+	wantPeers := max(replicas-1, 0)
+	ready := func() bool {
+		return e.ns.JetStreamIsCurrent() && len(e.routePeers()) >= wantPeers
+	}
 	deadline := time.Now().Add(clusterReadyTimeout)
 	for time.Now().Before(deadline) {
-		if e.ns.JetStreamIsCurrent() {
+		if ready() {
 			return nil
 		}
 		select {
@@ -301,11 +556,18 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context) error {
 		case <-time.After(clusterReadyPoll):
 		}
 	}
-	if e.ns.JetStreamIsCurrent() {
+	if ready() {
 		return nil
 	}
-	return fmt.Errorf("embedded nats server %q joined no jetstream cluster within %s",
-		e.ns.Name(), clusterReadyTimeout)
+	// THE TWO HALVES ARE NAMED SEPARATELY, because they have different
+	// remedies: a member that never became current is one whose metadata
+	// group could not form, and a member that is current with too few
+	// peers is a routing problem — a firewall, a wrong advertise address,
+	// a peer that never started.
+	return fmt.Errorf("embedded nats server %q is not ready to serve a "+
+		"%d-replica stream within %s: jetstream current=%t, routed to %v "+
+		"(want %d peers)", e.ns.Name(), replicas, clusterReadyTimeout,
+		e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers)
 }
 
 func (e *embeddedServer) connect() (*nats.Conn, error) {
@@ -315,10 +577,25 @@ func (e *embeddedServer) connect() (*nats.Conn, error) {
 	return nats.Connect(e.ns.ClientURL())
 }
 
-func (e *embeddedServer) shutdown() {
-	e.ns.Shutdown()
-	e.ns.WaitForShutdown()
-	removeScratch(e.scratch)
+func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
+
+// shutdownAndClean stops the server and removes its scratch store, IN THAT
+// ORDER AND WAITING IN BETWEEN.
+//
+// [server.Server.Shutdown] is asynchronous — it signals and returns, while the
+// server's own goroutine is still closing listeners and flushing its file
+// store. Removing the directory without waiting races that goroutine, so the
+// store is deleted underneath a broker still writing to it.
+//
+// It exists because the two shapes had drifted: the ordinary teardown waited
+// and the two failure paths inside [startEmbedded] did not, which is the
+// harder half to notice — those run when a boot is already going wrong, and a
+// RemoveAll that raced left an error about a scratch directory on top of the
+// failure the operator actually needed to read.
+func shutdownAndClean(ns *server.Server, scratch string) {
+	ns.Shutdown()
+	ns.WaitForShutdown()
+	removeScratch(scratch)
 }
 
 // removeScratch deletes a scratch store directory. A failure is logged rather
@@ -499,4 +776,74 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 		}
 	}()
 	h(ctx, subject, ev)
+}
+
+// ErrRoutePortTaken is a clustered member whose route port was held by
+// something else — found before the bind by the probe, or after it by the
+// readiness failure that follows a listener which never came up.
+//
+// A SENTINEL because it is the one provisioning failure that is worth RETRYING
+// WITH A DIFFERENT NUMBER rather than reporting, and telling it apart from
+// everything else a boot can fail on is not something a caller should do by
+// matching text. The e2e harness retries on exactly this; a deterministic
+// failure — a bad company config, an engine that will not start — must fail
+// the first time rather than three times with a misleading diagnosis.
+var ErrRoutePortTaken = errors.New("cluster route port taken")
+
+// PortAvailable reports whether a port can still be bound on host right now.
+//
+// A PROBE, NOT A RESERVATION: it binds, reads the answer and lets go, so the
+// port is free again — and available to somebody else — the instant it
+// returns. Nothing can close that window short of never releasing the port,
+// and closing it is not what this is for. What it buys is the difference
+// between a named failure in microseconds and a two-minute readiness timeout
+// blaming the network, on the one condition that has no other symptom: a
+// clustered member whose route listener cannot bind starts anyway, serves
+// clients, answers health checks and silently never routes.
+//
+// host empty means every interface, which is what an unset stream.cluster.host
+// binds.
+//
+// EXPORTED because the test harness needs the identical check against members
+// it does not start itself (see jetstreamtest.PortFree), and two spellings of
+// "is this port free" is how one stops matching the other.
+//
+// It answers (ok, err) rather than a bool because the CALLER'S MESSAGE depends
+// on which failure it was. Collapsing every listen error into "not free" made
+// a cancelled start, an address this host does not have, and a privileged port
+// all report themselves as a port somebody else is holding — three different
+// remedies behind one sentence, and two of them send the reader to look for a
+// process that does not exist. err is nil exactly when the probe ran and
+// answered.
+func PortAvailable(ctx context.Context, host string, port int) (bool, error) {
+	// CANCELLATION IS NOT AN ANSWER about the port, and it is checked
+	// BEFORE the probe rather than after: [net.ListenConfig.Listen] does
+	// not refuse on a dead context for a plain local bind — measured, it
+	// succeeds and hands back a listener — so a check on the error path
+	// alone would report a port free to a caller that is shutting down.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err == nil {
+		return true, l.Close()
+	}
+	// IN USE is the one this exists to name. Everything else — a host
+	// address that is not this machine's, a port below 1024 without the
+	// capability — is a configuration error of a different kind, and it is
+	// handed back rather than renamed.
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return false, nil
+	}
+	return false, err
+}
+
+// routeHostLabel renders a cluster host for a message, naming the default
+// rather than leaving a blank where an address should be.
+func routeHostLabel(host string) string {
+	if host == "" {
+		return "every interface"
+	}
+	return host
 }

@@ -1118,15 +1118,21 @@ func TestSlackAnswersOneListPerAgentSeat(t *testing.T) {
 	if first["inbound_path"] != "/webhooks/slack/"+first["handle"].(string) {
 		t.Errorf("inbound_path = %v", first["inbound_path"])
 	}
+	// THE FIELDS BY NAME rather than a count, because a count is satisfied by
+	// any three boxes and says nothing about which — a form that dropped the
+	// signing secret and grew a field nothing reads would pass it.
 	reqs, _ := first["requirements"].([]any)
-	if len(reqs) != 3 {
-		t.Fatalf("a seat declares %d requirements", len(reqs))
-	}
-	// NOTHING CARRIES A VALUE, per seat as everywhere else.
+	var fields []string
 	for _, row := range reqs {
+		field, _ := row.(map[string]any)["field"].(string)
+		fields = append(fields, field)
+		// NOTHING CARRIES A VALUE, per seat as everywhere else.
 		if _, leaked := row.(map[string]any)["value"]; leaked {
 			t.Error("a per-seat requirement carries a value")
 		}
+	}
+	if !slices.Equal(fields, []string{"bot_token", "signing_secret"}) {
+		t.Fatalf("a seat declares %v", fields)
 	}
 }
 

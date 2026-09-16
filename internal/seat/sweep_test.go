@@ -57,7 +57,7 @@ func TestPresenceOmitsStatusWhenTheNodeHasNone(t *testing.T) {
 // presenceOf reads a node's presence lease.
 func presenceOf(t *testing.T, f *fleet, node string) coord.Lease {
 	t.Helper()
-	leases, err := f.store.ListLive(f.ctx, coord.NodePrefix)
+	leases, err := f.store.ListLive(f.ctx, coord.ClassNode)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -125,5 +125,147 @@ func TestATinyHeartbeatStillPublishesStatus(t *testing.T) {
 	live, ok := coord.StatusFromMeta(presenceOf(t, f, "node-a").Meta)
 	if !ok || live.InFlight != 3 {
 		t.Errorf("status = %+v, published = %v", live, ok)
+	}
+}
+
+// --- the unserviceable shed ------------------------------------------------
+
+// A NODE WHOSE ROWS ARE WRONG GIVES THE SEATS BACK, which is the half of D122
+// that had no implementation at all.
+//
+// [Config.Ready] withholds claims and says so in its own log line — "it keeps
+// what it holds and claims nothing until it is" — which is right for a copy
+// that is merely behind. It is wrong for a copy that is WRONG, and the engine
+// was telling operators otherwise: the `deferred_old` alarm reads "its seats
+// move at 30m0s" with the remedy "its seats have already moved", against a
+// mechanism where nothing moved them.
+func TestAnUnserviceableNodeGivesBackEverySeat(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	hooks := &hookLog{}
+	fit := true
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo", "eng"), Hooks: hooks,
+		Serviceable: func() (bool, string) {
+			if fit {
+				return true, ""
+			}
+			return false, "tracker"
+		},
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 2, "seats held while serviceable")
+
+	fit = false
+	h.Sweep(f.ctx)
+	wantStrings(t, h.Held(), nil, "seats held while unserviceable")
+	wantStrings(t, hooks.released(),
+		[]string{"ceo:unserviceable", "eng:unserviceable"}, "releases")
+
+	// AND IT CLAIMS NOTHING WHILE IT HOLDS. A shed that let the very next
+	// pass re-claim would be a node cycling its whole company every sweep
+	// interval, which is worse than either holding or shedding.
+	h.Sweep(f.ctx)
+	wantStrings(t, h.Held(), nil, "seats re-claimed while still unserviceable")
+
+	// THE RECOVERY IS THE SAME GATE, from the other side: nothing has to
+	// be reset by hand, and the node takes its share back on the first
+	// pass after its rows are right again.
+	fit = true
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 2, "seats reclaimed once serviceable again")
+}
+
+// THE RELEASE IS VOLUNTARY, not fenced. The lease is still held and still
+// renewed — what is wrong is this node's ROWS — so the turn already running
+// against them finishes rather than being abandoned mid-flight.
+func TestTheUnserviceableShedIsVoluntary(t *testing.T) {
+	t.Parallel()
+	if ReasonUnserviceable.Fenced() {
+		t.Error("ReasonUnserviceable reports itself fenced, so an in-flight " +
+			"turn is abandoned rather than finished — the lease is intact " +
+			"and only the rows are wrong")
+	}
+}
+
+// A GATE THAT CANNOT ANSWER MUST NOT SHED A FLEET'S WORK, which is the
+// opposite default from every other check in this file and deliberate: a
+// panicking readiness gate costs a node its new claims, and a panicking
+// serviceability gate would cost the company every seat on the node.
+func TestAPanickingServiceabilityGateKeepsTheSeats(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	hooks := &hookLog{}
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"), Hooks: hooks,
+		Serviceable: func() (bool, string) { panic("status source is down") },
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 1, "seats held through a panicking gate")
+	wantStrings(t, hooks.released(), nil, "releases from a panicking gate")
+}
+
+// A NIL GATE KEEPS EVERY SEAT, which is the single-node case and every
+// deployment with no native backend at all.
+func TestNoServiceabilityGateKeepsTheSeats(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng")})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantInt(t, len(h.Held()), 2, "seats held with no gate wired")
+}
+
+// countingHints is a backend that records how often the placement hints were
+// read, and delegates everything else.
+type countingHints struct {
+	coord.Backend
+	reads int
+}
+
+func (c *countingHints) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
+	c.reads++
+	return c.Backend.PreferredResources(ctx, class, nodeID)
+}
+
+// THE HINT READ IS PAID FOR AN ORDERING, so a pass with no ordering to make
+// does not pay it.
+//
+// Placement hints live in the epochs bucket, which has NO TTL and is never
+// pruned — it holds a record for every resource the deployment has ever
+// leased, so it is the largest thing a node reads and it grows for the life
+// of the deployment. The sweep runs every five seconds. Reading all of it to
+// sort a list of fewer than two elements — which has exactly one order — is
+// the whole of that cost for none of its benefit, and it lands hardest on a
+// node whose remaining candidates are all in acquire backoff, which is the
+// state the backoff exists to calm.
+func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	counting := &countingHints{Backend: f.store}
+
+	h := f.newHost("node-a", Config{Backend: counting, Seats: seatsNamed("ceo", "eng")})
+
+	// Two candidates: an ordering exists, so the hints are worth reading.
+	if got := h.claimOrder(f.ctx, []string{"ceo", "eng"}); len(got) != 2 {
+		t.Fatalf("claimOrder over two = %v", got)
+	}
+	if counting.reads != 1 {
+		t.Fatalf("two candidates read the hints %d times, want 1", counting.reads)
+	}
+
+	// One, and none: each has exactly one ordering, so neither reads.
+	if got := h.claimOrder(f.ctx, []string{"ceo"}); len(got) != 1 {
+		t.Fatalf("claimOrder over one = %v", got)
+	}
+	if got := h.claimOrder(f.ctx, nil); len(got) != 0 {
+		t.Fatalf("claimOrder over none = %v", got)
+	}
+	if counting.reads != 1 {
+		t.Errorf("a pass with nothing to order read the hints; reads = %d, want 1. "+
+			"That walk is the never-pruned epochs bucket, on the five-second sweep, "+
+			"for an ordering that has one possible answer", counting.reads)
 	}
 }

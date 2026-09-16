@@ -146,9 +146,6 @@ type Seat struct {
 	// half of own-message suppression: a `bot_message` echo of this seat's
 	// own post carries the app id and no user id at all.
 	AppID string
-
-	// Channel is where this seat posts when nothing else names a target.
-	Channel string
 }
 
 // Seats resolves a handle to the app this node has registered for it.

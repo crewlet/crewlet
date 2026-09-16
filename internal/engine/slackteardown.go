@@ -120,9 +120,9 @@ func (e *Engine) tearDownSlack(
 //
 // THE WHOLE BLOCK, not the two credentials inside it. A block is refused at
 // load unless it carries both ([config.RoleSlack.validate]), so a block
-// stripped of its credentials is a document that will not load at all — and
-// the third field, the default channel, addresses a channel in a workspace
-// this company no longer talks to.
+// stripped of its credentials is a document that will not load at all, and an
+// empty `slack: {}` left behind would make a disconnected seat read as one
+// whose app is merely unconfigured.
 func (e *Engine) clearSlackSeat(ctx context.Context, handle string) error {
 	writer := e.configWriterOrNil()
 	if writer == nil {

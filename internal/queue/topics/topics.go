@@ -98,6 +98,20 @@ const (
 	ConfigRevisionActivated = ConfigPrefix + "revision_activated"
 	// ConfigRevisionApplied reports a node's apply outcome.
 	ConfigRevisionApplied = ConfigPrefix + "revision_applied"
+
+	// SearchPrefix prefixes the search fan-out's subjects.
+	//
+	// THE ONLY SUBJECTS IN THIS FILE THAT ARE NOT EVENTS. Nothing
+	// publishes here and nothing subscribes: these carry the ephemeral
+	// request and reply of [queue.EventQueue.Ask], which leave no stream,
+	// no consumer and no record. They live in this file anyway because a
+	// subject is a subject — two subsystems minting one namespace out of
+	// each other's sight is how a wildcard starts capturing traffic
+	// somebody else owns.
+	SearchPrefix = "crewlet.search."
+	// SearchSlice is where one query's assignment table is scattered.
+	// Every node serves it and answers only for its own row.
+	SearchSlice = SearchPrefix + "slice"
 )
 
 // AgentInbox returns the inbox subject for the seat with this handle.

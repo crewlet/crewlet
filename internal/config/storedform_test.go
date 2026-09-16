@@ -266,12 +266,20 @@ roles:
 }
 
 // exampleCompany reads the Nimbus example, the repository's largest config.
+//
+// AN ABSENT EXAMPLE FAILS. It used to t.Skipf "the example company is not
+// readable from here", and since CI does a full checkout that skip has never
+// fired — so the only event it could ever respond to was the one it must not
+// hide, somebody renaming or moving the file it certifies. Its own copy rather
+// than examples_test.go's readRepoFile, because that one lives in `package
+// config` and this suite is `package config_test`.
 func exampleCompany(t *testing.T) []byte {
 	t.Helper()
 	path := filepath.Join("..", "..", "examples", "nimbus.company.yaml")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // a path this repository ships
 	if err != nil {
-		t.Skipf("the example company is not readable from here: %v", err)
+		t.Fatalf("read %s: %v — this suite certifies a file this repository "+
+			"ships, so a missing one is a rename that was not swept", path, err)
 	}
 	return data
 }

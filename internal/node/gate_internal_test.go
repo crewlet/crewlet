@@ -5,6 +5,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // WHAT THE GATE IS FOR.
@@ -297,3 +303,50 @@ func TestANegativeSizeIsOneSlotNotNone(t *testing.T) {
 	}
 	release()
 }
+
+// THE GIVE-BACK BUDGET FOLLOWS THIS NODE'S OWN LEASE, not the shipped one.
+//
+// # Why the constant was the bug
+//
+// Its whole justification is that it must be strictly INSIDE the lease it is
+// racing — a release that outlives its own lease is racing nothing, because
+// the seat has already lapsed and a peer has already taken it. Derived from
+// [seat.SeatLeaseTTL], that held only for a deployment running the shipped
+// forty-five seconds: one that set coordination.lease_ttl_seconds to ten, or
+// adopted a shorter TTL from a peer's bucket, spent fifteen seconds giving
+// back leases that expired after ten. The comment said it followed the
+// deployment's TTL; it followed the number in the source.
+func TestTheReleaseBudgetIsInsideTheLeaseItRaces(t *testing.T) {
+	t.Parallel()
+
+	for _, ttl := range []time.Duration{2 * time.Second, 90 * time.Second} {
+		n, err := New(Config{
+			Queue:    stubQueue{},
+			Coord:    coordmem.New(),
+			NodeID:   "budget",
+			Owner:    "budget:1",
+			LeaseTTL: ttl,
+			Seats:    func() []placement.Seat { return nil },
+			Turn: func(context.Context, string, []*events.Event) queue.Result {
+				return queue.Ack()
+			},
+		})
+		if err != nil {
+			t.Fatalf("node.New at a %v lease: %v", ttl, err)
+		}
+		got := n.seatReleaseBudget()
+		if got >= ttl {
+			t.Errorf("a node leasing its seats for %v spends %v giving them "+
+				"back, which is outside the lease it is racing — the seats "+
+				"have already lapsed to a peer", ttl, got)
+		}
+		if want := ttl / seat.HeartbeatRatio; got != want {
+			t.Errorf("a %v lease gives back in %v, want one heartbeat interval (%v)",
+				ttl, got, want)
+		}
+	}
+}
+
+// stubQueue satisfies the one dependency node.New insists on. Nothing in the
+// case above attaches a mailbox, so no method is ever called.
+type stubQueue struct{ queue.EventQueue }

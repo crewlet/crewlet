@@ -3,11 +3,13 @@ package embeddings_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -462,5 +464,353 @@ func TestAFailedCallIsNotRetried(t *testing.T) {
 	}
 	if asked := s.requests(); len(asked) != 1 {
 		t.Fatalf("the endpoint was called %d times, want exactly 1", len(asked))
+	}
+}
+
+// ── the batch, and which input each vector answers ──
+
+// batchItem is one element of a fake batch response.
+//
+// The vector's first component MARKS the item, so a test can say which item
+// filled a slot rather than only that something did — an assertion that a
+// slot is non-nil passes just as happily when every slot holds the same
+// wrongly-filed vector.
+type batchItem struct {
+	mark  float64
+	index int64
+	// bare omits the index field entirely, as an OpenAI-compatible server
+	// may: the value decodes as 0 either way, so only the response can
+	// say which it was.
+	bare bool
+	// raw is the index field's JSON verbatim, for the values no int64
+	// can hold. `null` and a non-numeric string both decode to 0 with the
+	// field marked unreadable rather than absent, which is a THIRD state
+	// the bool above cannot express.
+	raw string
+}
+
+func batchBody(width int, items ...batchItem) string {
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		vector := make([]string, width)
+		vector[0] = strconv.FormatFloat(it.mark, 'f', -1, 64)
+		for i := 1; i < width; i++ {
+			vector[i] = "0.5"
+		}
+		index := fmt.Sprintf(`"index":%d,`, it.index)
+		if it.raw != "" {
+			index = `"index":` + it.raw + `,`
+		}
+		if it.bare {
+			index = ""
+		}
+		parts = append(parts, `{"object":"embedding",`+index+
+			`"embedding":[`+strings.Join(vector, ",")+`]}`)
+	}
+	return `{"object":"list","data":[` + strings.Join(parts, ",") +
+		`],"model":"m"}`
+}
+
+// marks is the first component of every vector in a batch, with -1 for a slot
+// that came back empty.
+func marks(t *testing.T, got [][]float32) []float64 {
+	t.Helper()
+	out := make([]float64, len(got))
+	for i, v := range got {
+		if len(v) == 0 {
+			out[i] = -1
+			continue
+		}
+		out[i] = float64(v[0])
+	}
+	return out
+}
+
+// AN EMPTY INPUT KEEPS ITS SLOT and is never sent: the caller matches vectors
+// to documents positionally, so a batch that compacted its answer would file
+// every later document onto the wrong vector.
+func TestAnUnsendableInputKeepsItsSlotInTheBatch(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	s.answers(http.StatusOK, batchBody(4,
+		batchItem{mark: 10, index: 0},
+		batchItem{mark: 20, index: 1}))
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(),
+		[]string{"the deploy is red", "  \n ", "the runbook is stale"})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if want := []float64{10, -1, 20}; !slices.Equal(marks(t, got), want) {
+		t.Fatalf("the batch came back as %v, want %v", marks(t, got), want)
+	}
+	input, _ := s.requests()[0]["input"].([]any)
+	if len(input) != 2 {
+		t.Fatalf("%d inputs were sent, want the two that had text", len(input))
+	}
+}
+
+// THE PROVIDER'S INDEX IS AUTHORITATIVE: the API documents that results may
+// come back out of order, and filing them by arrival would hand each document
+// another's vector with no symptom but wrong search answers.
+func TestAnOutOfOrderBatchIsFiledByTheIndexItCarries(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	s.answers(http.StatusOK, batchBody(4,
+		batchItem{mark: 30, index: 2},
+		batchItem{mark: 10, index: 0},
+		batchItem{mark: 20, index: 1}))
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(),
+		[]string{"first", "second", "third"})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if want := []float64{10, 20, 30}; !slices.Equal(marks(t, got), want) {
+		t.Fatalf("the batch came back as %v, want %v", marks(t, got), want)
+	}
+}
+
+// A REPEATED INDEX IS REFUSED rather than leaving a hole. Overwriting the
+// first slot and returning a full-length slice is the worst answer available:
+// the duty publishes the overwritten vector as that document's own, which
+// nothing can detect afterwards, and reads the nil slot as "nothing to embed",
+// which re-selects that document on every pass for ever.
+func TestARepeatedIndexIsRefusedRatherThanLeavingAHole(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	s.answers(http.StatusOK, batchBody(4,
+		batchItem{mark: 10, index: 0},
+		batchItem{mark: 20, index: 0}))
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(), []string{"a", "b"})
+	if err == nil {
+		t.Fatalf("two vectors for input 0 were accepted as %v", marks(t, got))
+	}
+	if got != nil {
+		t.Fatalf("a partial batch came back beside the error: %v", marks(t, got))
+	}
+	for _, want := range []string{"input 0 twice", "another's"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error does not say %q: %v", want, err)
+		}
+	}
+}
+
+// AN INDEX OUTSIDE THE BATCH NAMES NO DOCUMENT, so it is refused rather than
+// quietly resolved to the item's arrival position — which is the same silent
+// re-filing the index exists to prevent.
+func TestAnIndexOutsideTheBatchIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		index int64
+	}{
+		{"past the end", 7},
+		{"negative", -1},
+		// 2^32 is outside a two-input batch on any build, so on a
+		// 64-bit one this case says no more than the first. It earns
+		// its place on a 32-bit one, where int(item.Index) truncates
+		// it to 0 — the slot the other item deliberately does NOT
+		// claim here, so the truncated mapping is a clean bijection
+		// that gets accepted outright, one document holding the
+		// other's vector. `GOARCH=386 go test` is where it bites.
+		{"wider than an int on a 32-bit build", 1 << 32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := fakeAPI(t, 4)
+			s.answers(http.StatusOK, batchBody(4,
+				batchItem{mark: 10, index: 1},
+				batchItem{mark: 20, index: tc.index}))
+			got, err := provider(t, s, 4).EmbedBatch(t.Context(),
+				[]string{"a", "b"})
+			if err == nil {
+				t.Fatalf("index %d was accepted as %v", tc.index, marks(t, got))
+			}
+			if got != nil {
+				t.Fatalf("a partial batch came back: %v", marks(t, got))
+			}
+			if !strings.Contains(err.Error(), "2-input batch") {
+				t.Fatalf("the error does not name the batch: %v", err)
+			}
+		})
+	}
+}
+
+// A RESPONSE THAT OMITS THE INDEX ENTIRELY is filed by position, which is what
+// keeps an OpenAI-compatible server that does not echo it working. The value
+// decodes as 0 on every item, so reading presence from the value rather than
+// from the JSON metadata would file the whole batch onto the first input.
+func TestABatchWithNoIndicesAtAllIsFiledByPosition(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	s.answers(http.StatusOK, batchBody(4,
+		batchItem{mark: 10, bare: true},
+		batchItem{mark: 20, bare: true},
+		batchItem{mark: 30, bare: true}))
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(),
+		[]string{"first", "second", "third"})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if want := []float64{10, 20, 30}; !slices.Equal(marks(t, got), want) {
+		t.Fatalf("the batch came back as %v, want %v", marks(t, got), want)
+	}
+}
+
+// A RESPONSE THAT INDEXES ONLY SOME OF ITS ITEMS is refused: position and
+// index are two different claims about which input an item answers, and a
+// response carrying both says nothing about which to believe.
+func TestABatchThatIndexesOnlySomeItemsIsRefused(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	s.answers(http.StatusOK, batchBody(4,
+		batchItem{mark: 10, index: 0},
+		batchItem{mark: 20, bare: true}))
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(), []string{"a", "b"})
+	if err == nil {
+		t.Fatalf("a half-indexed response was accepted as %v", marks(t, got))
+	}
+	if got != nil {
+		t.Fatalf("a partial batch came back: %v", marks(t, got))
+	}
+	if !strings.Contains(err.Error(), "1 of 2") {
+		t.Fatalf("the error does not count what was indexed: %v", err)
+	}
+}
+
+// AN INDEX THAT IS PRESENT BUT UNREADABLE IS REFUSED, not quietly demoted to
+// the positional fallback.
+//
+// The metadata this reads is three-valued and the two obvious branches are a
+// trap: `Valid()` is false for a field that was omitted, for a JSON null, and
+// for a value that is not an index at all. Counting only validity, a response
+// whose every index is null or garbage looks exactly like one that carried no
+// indices — so it takes the fallback and files a batch the server had
+// deliberately ordered onto whatever arrived first, which is the silent
+// re-filing the index exists to prevent. Only an ABSENT field is a server
+// making no claim; the rest are claims this cannot read, and an unreadable
+// claim is refused like every other one here.
+func TestAnIndexThatCannotBeReadIsRefusedRatherThanIgnored(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{"null", "null"},
+		{"a string that is not a number", `"second"`},
+		{"an object", `{"n":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := fakeAPI(t, 4)
+			// EVERY item carries it, which is the case the
+			// validity count cannot see: with one readable index
+			// among them the mixed-response rule already refuses.
+			s.answers(http.StatusOK, batchBody(4,
+				batchItem{mark: 10, raw: tc.raw},
+				batchItem{mark: 20, raw: tc.raw}))
+			got, err := provider(t, s, 4).EmbedBatch(t.Context(),
+				[]string{"a", "b"})
+			if err == nil {
+				t.Fatalf("an index of %s was read as no index at all and the "+
+					"batch was filed by arrival as %v", tc.raw, marks(t, got))
+			}
+			if got != nil {
+				t.Fatalf("a partial batch came back: %v", marks(t, got))
+			}
+			for _, want := range []string{"index on 2 of 2", "does not name an input"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("the error does not say %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// A SHORT ANSWER IS NOT A PARTIAL RESULT. One vector for two inputs cannot be
+// a bijection whatever it is indexed, and accepting it would leave a document
+// that is selected again on every pass for ever.
+func TestABatchWithTheWrongNumberOfVectorsIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		items []batchItem
+	}{
+		{"short", []batchItem{{mark: 10, index: 0}}},
+		{"long", []batchItem{
+			{mark: 10, index: 0}, {mark: 20, index: 1}, {mark: 30, index: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := fakeAPI(t, 4)
+			s.answers(http.StatusOK, batchBody(4, tc.items...))
+			got, err := provider(t, s, 4).EmbedBatch(t.Context(),
+				[]string{"a", "b"})
+			if err == nil {
+				t.Fatalf("%d vectors for 2 inputs were accepted as %v",
+					len(tc.items), marks(t, got))
+			}
+			if got != nil {
+				t.Fatalf("a partial batch came back: %v", marks(t, got))
+			}
+		})
+	}
+}
+
+// EVERY VECTOR IN A BATCH IS WIDTH-CHECKED, not just the first: an aggregator
+// that changed model mid-deployment writes rows the store can never read back.
+func TestAWrongWidthVectorInABatchIsRefused(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	s.answers(http.StatusOK, `{"object":"list","data":[`+
+		`{"object":"embedding","index":0,"embedding":[0.5,0.5,0.5,0.5]},`+
+		`{"object":"embedding","index":1,"embedding":[0.5,0.5]}],"model":"m"}`)
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(), []string{"a", "b"})
+	if err == nil {
+		t.Fatalf("a 2-wide vector was accepted for a 4-wide store: %v", got)
+	}
+	if !strings.Contains(err.Error(), "2-wide") {
+		t.Fatalf("the error does not name the width it got: %v", err)
+	}
+}
+
+// A BATCH OF NOTHING SENDABLE COSTS NO CALL, and still answers one slot per
+// input — the contract does not bend for the degenerate case.
+func TestABatchOfEmptyInputsIsNotSent(t *testing.T) {
+	t.Parallel()
+	s := fakeAPI(t, 4)
+	got, err := provider(t, s, 4).EmbedBatch(t.Context(), []string{"", "  \t "})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if want := []float64{-1, -1}; !slices.Equal(marks(t, got), want) {
+		t.Fatalf("the batch came back as %v, want %v", marks(t, got), want)
+	}
+	if len(s.requests()) != 0 {
+		t.Fatal("a batch with nothing to embed reached the network")
+	}
+}
+
+// THE FAKE HONOURS THE SAME CONTRACT, because a twin that agrees only with
+// itself proves nothing about the backend the company runs on.
+func TestTheFakeBatchKeepsEveryInputsSlot(t *testing.T) {
+	t.Parallel()
+	f := embeddings.NewFake(64)
+	got, err := f.EmbedBatch(t.Context(), []string{"the deploy is red", " ", "x"})
+	if err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("%d vectors for 3 inputs", len(got))
+	}
+	if len(got[0]) != 64 || len(got[1]) != 0 || len(got[2]) != 64 {
+		t.Fatalf("widths %d/%d/%d, want the empty input to hold its slot",
+			len(got[0]), len(got[1]), len(got[2]))
+	}
+	alone, err := f.Embed(t.Context(), "the deploy is red")
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if !slices.Equal(got[0], alone) {
+		t.Fatal("the batch and the single call disagree about one text")
 	}
 }

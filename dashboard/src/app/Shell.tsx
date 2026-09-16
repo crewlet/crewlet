@@ -359,7 +359,18 @@ function navBadge(key: string, attention: number, working: number): ReactNode {
   return null;
 }
 
-/** The theme and density choices, which sit together at the foot of the rail. */
+/**
+ * The theme and density choices, which sit together at the foot of the rail.
+ *
+ * BOTH ROWS CHOOSE AS FOCUS MOVES, because both are SETTINGS and the design
+ * system draws a setting as a radio group whose arrows select as they move. A
+ * row that names a SECTION is the other kind and carries `semantics="tabs"`,
+ * where the arrows only move focus and Enter or Space chooses: a section in
+ * this product is a query and a history entry, so arrowing across one would
+ * cost a fetch and a Back press per keystroke. These two write `localStorage`
+ * and a `data-` attribute, so arrowing across them costs one repaint and
+ * leaves a reader nothing to undo.
+ */
 function ThemeAndDensity() {
   return (
     <>

@@ -14,15 +14,22 @@ import (
 
 // preview trims a title to n runes and marks that it was cut.
 //
-// Runes, not bytes: a byte slice through UTF-8 leaves a broken code point,
-// which renders as a replacement character in the feed and, worse, is invalid
-// JSON's problem to explain rather than the trimming's.
+// RUNES rather than [github.com/crewlet/crewlet/internal/textcut]'s bytes,
+// which is the one reason this is not that: every budget here is a column of
+// a one-line feed row, so the unit a caller means is characters, and a CJK
+// title cut to 60 BYTES is 20 of them. The cut still lands on a boundary —
+// a byte slice through UTF-8 leaves a broken code point, which renders as a
+// replacement character in the feed.
+//
+// ONE SPELLING OF THE MARKER, "…" rather than "...", which is textcut's own
+// rule and the drift it was written to end: this helper predated it and was
+// the last place in the tree where the same cut read differently.
 func preview(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "..."
+	return string(r[:n]) + "…"
 }
 
 // join assembles a summary from the parts that are present.

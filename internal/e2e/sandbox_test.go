@@ -97,6 +97,7 @@ roles:
         FAKE_AGENT_MODE: "${FAKE_AGENT_MODE}"
         FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
+        FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
   - name: Founder
     kind: human
     contact:
@@ -127,9 +128,6 @@ func (n *codingNode) agentArgv(t *testing.T) []string {
 // startCoding stands up a node with a local sandbox and a fake coding CLI.
 func startCoding(t *testing.T, mode string) *codingNode {
 	t.Helper()
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("the local sandbox needs a POSIX shell")
-	}
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
 	// Both reach the box through role.sandbox.env, which is the ONLY way an
@@ -177,12 +175,34 @@ case "${FAKE_AGENT_MODE:-succeed}" in
     crewlet-ask "Which branch should I target?" --to requester
     printf '{"result":"blocked","subtype":"success"}\n'
     ;;
-  slow)
-    # Long enough that the engine can be stopped while the job runs, short
-    # enough that the test does not wait out a real coding job.
-    sleep 3
+  held)
+    # RUNS UNTIL THE TEST SAYS SO, rather than for a fixed time.
+    #
+    # The restart case needs this job still running when the second engine
+    # recovers the seat, and a sleep cannot promise that: on a loaded
+    # machine the second boot takes longer than any duration short enough
+    # to keep the test quick, the job finishes first, recovery sees a
+    # settled run and the seat is never parked — a hang no timeout can
+    # fix, because the state it waits for will never arrive.
+    #
+    # So the test creates the release file when it has seen what it needed
+    # to see. The ceiling is a backstop against a test that dies without
+    # releasing, not a timing assumption.
+    waited=0
+    while [ ! -f "${FAKE_AGENT_RELEASE:-/nonexistent}" ] && [ "$waited" -lt 1200 ]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
     printf 'Outcome: succeeded\nfinished after the restart\n' > "$work/findings.md"
     printf '{"result":"done","subtype":"success"}\n'
+    ;;
+  *)
+    # A MODE THIS SCRIPT DOES NOT KNOW SAYS SO. Falling through silently
+    # would exit 0 with no envelope, which reaches the engine as a run
+    # that produced nothing — and every test on top of it waits out its
+    # budget for a state that will never arrive.
+    printf 'unknown FAKE_AGENT_MODE %s\n' "${FAKE_AGENT_MODE:-}" >&2
+    exit 64
     ;;
 esac
 `
@@ -624,12 +644,14 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 // on the seat's next claim, drives it to completion, and re-enters the SAME
 // conversation the dead process suspended.
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("the local sandbox needs a POSIX shell")
-	}
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
-	t.Setenv("FAKE_AGENT_MODE", "slow")
+	t.Setenv("FAKE_AGENT_MODE", "held")
+	// THE JOB RUNS UNTIL THIS FILE APPEARS. The restart has to happen while
+	// it is still running, and how long a second engine takes to boot is a
+	// property of the machine rather than of the design.
+	release := filepath.Join(t.TempDir(), "release")
+	t.Setenv("FAKE_AGENT_RELEASE", release)
 	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
 
 	// ONE store and ONE stream directory across both processes, which is
@@ -676,6 +698,12 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 		return second.engine.AwaitingSandbox("swe")
 	})
 
+	// The job may finish now: the restart happened while it was running,
+	// which is the whole staging this case needed.
+	if err := os.WriteFile(release, []byte("go"), 0o600); err != nil {
+		t.Fatalf("release the held agent: %v", err)
+	}
+
 	// And it drives the same run to completion, re-entering the
 	// conversation the dead process suspended.
 	waitFor(t, "the recovered run to resume its turn", func() bool {
@@ -705,7 +733,15 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	}
 	image := os.Getenv("CREWLET_TEST_SANDBOX_IMAGE")
 	if image == "" {
-		image = "alpine:3"
+		// PINNED, like every image docker-compose.yml names. `alpine:3` is a
+		// floating tag, and CLAUDE.md's rule against those is not about
+		// tidiness: a green run under one is a claim about a build nobody can
+		// name afterwards, and the day the tag moves this gate's subject
+		// changes with no commit to point at. 3.24.1 is the version `3`
+		// resolves to today (Docker Hub puts 3, 3.24, 3.24.1 and latest on one
+		// digest); nothing bumps a literal in Go source, so a failure here that
+		// names the image IS the bump signal.
+		image = "alpine:3.24.1"
 	}
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
 		Placement: sandbox.Container, StateDir: t.TempDir(),
@@ -828,9 +864,6 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 // hour for the production value.
 func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
 	t.Helper()
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("the local sandbox needs a POSIX shell")
-	}
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
 	t.Setenv("FAKE_AGENT_MODE", mode)

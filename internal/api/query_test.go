@@ -34,7 +34,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	base := time.Now().UTC().Add(-time.Hour)
 	for i := range 6 {
 		if err := db.Events().Append(t.Context(), store.EventRecord{
-			ID: "ev" + string(rune('a'+i)), Type: "task_started", Source: "engine",
+			ID: "ev" + string(rune('a'+i)), Type: "agent_phase_started", Source: "engine",
 			Time: base.Add(time.Duration(i) * time.Second), Category: "task",
 			Actor: "Lead", Summary: "did a thing", TraceID: "tr-1",
 			Payload: json.RawMessage(`{"role":"Lead"}`),
@@ -45,7 +45,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
-		ID: "e1", Type: "task_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		ID: "e1", Type: "agent_phase_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
 
@@ -212,9 +212,22 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 	a := seededApp(t, nil)
 	// A cursor missing half its key would skip or repeat whatever collided
 	// with it, silently.
-	status, _ := overREST(t, a, "events", url.Values{"before_id": {"ev1"}})
+	status, body := overREST(t, a, "events", url.Values{"before_id": {"ev1"}})
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", status)
+	}
+	if got := body.(map[string]any)["error"]; got != "bad_params" {
+		t.Errorf("REST error = %v, want bad_params — `query_failed` names a "+
+			"fault of this node for a request the caller has to change", got)
+	}
+
+	// AND THE SOCKET SAYS THE SAME THING. It said `query_failed` — the
+	// code a client retries — so a screen polling a question it was
+	// malforming retried for ever, while this node logged a warning per
+	// tick about a request that was never its fault.
+	socket := overSocket(t, a, "events", map[string]any{"before_id": "ev1"})
+	if socket["kind"] != "error" || socket["error"] != "bad_params" {
+		t.Errorf("socket answer = %v, want bad_params", socket)
 	}
 }
 

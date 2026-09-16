@@ -570,6 +570,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	meter toolloop.BudgetMeter, task resolved, deps []Result,
 ) (res Result) {
 	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
+	began := time.Now()
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
 	// contains. Deferred FIRST so it runs LAST: the recovery below writes
@@ -583,6 +584,14 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	if cfg.Telemetry != nil {
 		defer func() { cfg.Telemetry(ctx, res) }()
 	}
+
+	// STAMPED ON EVERY PATH TOO, and registered AFTER the telemetry hook so
+	// it runs BEFORE it: defers unwind last-registered-first, so a
+	// measurement written after the hook would reach a consumer that had
+	// already published a zero. A worker that timed out or panicked is
+	// exactly the one whose duration is worth reading, which is why this is
+	// a defer rather than a line beside the return.
+	defer func() { res.Elapsed = time.Since(began) }()
 
 	// A PANIC IS CONTAINED HERE.
 	//

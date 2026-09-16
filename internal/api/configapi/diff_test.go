@@ -152,35 +152,92 @@ func TestASubtreeIsAddedWholeRatherThanLeafByLeaf(t *testing.T) {
 	}
 }
 
-func TestADiffIsCappedAndSaysSo(t *testing.T) {
-	t.Parallel()
-	// A wholesale rewrite produces one change per leaf — thousands, none of
-	// which a person reads. Truncating is fine; truncating SILENTLY is not,
-	// because a short diff reads as "that is all that changed".
-	// Two documents that differ in every one of many LEAVES, which is what
-	// the cap is for — an addition is reported as a whole subtree and needs
-	// no cap.
-	build := func(model string) *config.Company {
-		doc := strings.Builder{}
-		doc.WriteString("name: Acme\nproviders:\n  llm:\n")
-		for i := range configapi.MaxChanges + 10 {
-			fmt.Fprintf(&doc, "    p%04d: {type: anthropic, model: %s, api_keys: [\"${K}\"]}\n", i, model)
-		}
-		doc.WriteString("roles:\n  - {name: CEO, handle: ceo}\n")
-		return companyFrom(t, doc.String())
+// wideCompanyDoc is a document whose every provider names one model, so two
+// of them differ in MaxChanges+10 LEAVES — which is what a cap is for. An
+// addition is reported as a whole subtree and needs none.
+func wideCompanyDoc(model string) string {
+	doc := strings.Builder{}
+	doc.WriteString("name: Acme\nproviders:\n  llm:\n")
+	for i := range configapi.MaxChanges + 10 {
+		fmt.Fprintf(&doc, "    p%04d: {type: anthropic, model: %s, api_keys: [\"${K}\"]}\n", i, model)
 	}
+	doc.WriteString("roles:\n  - {name: CEO, handle: ceo}\n")
+	return doc.String()
+}
 
-	changes, err := configapi.Changes(build("one"), build("two"))
+// THE COMPARISON IS COMPLETE AND THE CAP IS THE CALLER'S. Where a diff has to
+// be cut is a property of what is rendering it — a response body has a size
+// budget and a terminal does not — so a bound taken in here is one the CLI
+// could not lift, and it bought no work either: the walk builds every change
+// before it can sort them.
+func TestADiffReportsEveryChangeItFound(t *testing.T) {
+	t.Parallel()
+	changes, err := configapi.Changes(companyFrom(t, wideCompanyDoc("one")),
+		companyFrom(t, wideCompanyDoc("two")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != configapi.MaxChanges+1 {
-		t.Fatalf("%d changes, want the cap plus the notice", len(changes))
+	if len(changes) != configapi.MaxChanges+10 {
+		t.Fatalf("%d changes, want every one of the %d leaves that moved",
+			len(changes), configapi.MaxChanges+10)
 	}
-	last := changes[len(changes)-1]
-	note, _ := last.To.(string)
-	if !strings.Contains(note, "further changes not listed") {
-		t.Errorf("the truncation is silent: %+v", last)
+	// NOTHING IN THE LISTING IS A MARKER. The cut used to append a pathless
+	// entry whose To was a sentence, so every renderer had to know one of
+	// its changes was not a change — the dashboard did not, and drew it as
+	// a blank path turning undefined into prose.
+	for _, c := range changes {
+		if c.Path == "" {
+			t.Fatalf("a change with no path is in the listing: %+v", c)
+		}
+	}
+}
+
+// THE ANSWER IS CUT AND SAYS SO, because this is the side with a size budget.
+// Truncating is fine; truncating SILENTLY is not — a short diff reads as
+// "that is all that changed".
+func TestTheDiffAnswerIsCappedAndReportsTheTotal(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	first := s.seed(t, wideCompanyDoc("one"), nil)
+	second := s.seed(t, wideCompanyDoc("two"), nil)
+
+	body, err := s.service().Diff(t.Context(), second, first)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	changes, _ := body["changes"].([]configapi.Change)
+	if len(changes) != configapi.MaxChanges {
+		t.Fatalf("the answer carries %d changes, want the cap of %d",
+			len(changes), configapi.MaxChanges)
+	}
+	if total, _ := body["changes_total"].(int); total != configapi.MaxChanges+10 {
+		t.Errorf("changes_total is %v, want the %d that actually moved",
+			body["changes_total"], configapi.MaxChanges+10)
+	}
+}
+
+// AN EMPTY LISTING IS A LIST, like every other listing this surface answers.
+// `null` is a shape a typed client guards for a second time to learn that
+// nothing changed.
+func TestADiffOfIdenticalRevisionsAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	first := s.seed(t, companyDoc, nil)
+	second := s.seed(t, companyDoc, nil)
+
+	body, err := s.service().Diff(t.Context(), second, first)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	changes, ok := body["changes"].([]configapi.Change)
+	if !ok || changes == nil {
+		t.Fatalf("changes is %#v, want an empty list", body["changes"])
+	}
+	if len(changes) != 0 {
+		t.Errorf("%d changes between two copies of one document", len(changes))
+	}
+	if total, _ := body["changes_total"].(int); total != 0 {
+		t.Errorf("changes_total is %v, want 0", body["changes_total"])
 	}
 }
 

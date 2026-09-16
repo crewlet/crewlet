@@ -191,12 +191,21 @@ meets their company first and the engine last.
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter\|builder&unit=&seat=&view=&chart=` | the hierarchy, the directory, and the company's own mission, vision and policies, from the `org` projection and the hierarchy the engine derived. `unit` and `seat` select, and a link carrying one reveals it on arrival. The **builder** lens *(operator-gated)* edits the organization over `/config` and creates the company where none is active; `view=canvas\|outline` and `chart=structure\|reporting` are its sections, and `unit` and `seat` its selection |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access. Identity and reporting lines from the `org` projection; email, model, token budget, schedules, contact identities, integrations and tool credential names from the `config` query *(operator-gated)* |
-| **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
+| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
+| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
+| | *the project strip* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the filter offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts, its lead, the unit that owns it and the sprint that is running. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
+| | *the feed* | `#/work?project=ENG` | `work_activity` — what HAPPENED in the container, which is a different question from what is on the board: the feed is ordered by the log rather than by anything the rows sort on, so a change that moved nothing on screen is still visible. A change is rendered from its DELTAS (`status: todo → in_progress`), falling back to its excerpt and then to its kind — a row with neither is still a real commit, and rendering it blank would read as a bug |
+| | My work | `#/work/me` | `work_my_work` — one person's seven claims. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the Work board's own header |
+| | Sprints | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
+| | Goals | `#/goals?group=&owner=&archived=` | `work_goals`: the tier above projects, with what each goal is at (computed from the targets behind it on every read rather than stored) and the health its owner set. Read-only, like the board |
+| | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
 | **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
 | | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |
-| | Knowledge | `#/knowledge?q=` | `knowledge` — the company's own live search |
+| | Knowledge | `#/knowledge?q=` | `knowledge` — search, ranked, through the same seam a seat's own `search_knowledge` uses |
+| | Pages | `#/pages?container=&title=&kind=` | `pages` + `containers` — the same knowledge base BROWSED rather than searched. Two screens because they answer different questions: "show me what the platform team wrote down" should not be a search for a word somebody has to guess |
+| | *a page* | `#/pages/{id}` | `page` — body, breadcrumb, children, comments and revision metadata |
 | **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
 | | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
@@ -204,15 +213,22 @@ meets their company first and the engine last.
 | | Configuration | `#/config?lens=&revision=&against=` | `config` / `config_audit` / `config_diff` *(operator-gated)*. The diff lens compares `revision` with the active revision, or with `against` when a link names one (what one save changed is its revision against its parent). It reads and writes nothing: every surface that reports no active configuration (the shell's banner, the attention row, this screen's empty state) links to `#/org?lens=builder` to create the company, and names `crewlet config import` beside it |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |
+| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` and `Download turn` in the header assemble the record, the phases and the rest as one JSON object — the same bytes, for pasting into a thread and for attaching to a bug report — and the Turn record panel copies itself and owns ⌘A |
 | — | Event | `#/events/{id}` | `event` |
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
 **Old routes redirect, with their query strings intact.** `#/agents`,
-`#/agents/{id}`, `#/work`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
+`#/agents/{id}`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
 `#/org?lens=seats` all resolve to their new homes. Those links are in bookmarks
 and in chat threads; a redirect costs one navigation, a dead link costs the
 reader the thing they were looking for.
+
+**A redirect is removed the moment a live screen takes its path.** `#/work`
+redirected to the coding runs back when "work" meant a coding run; the work
+board then took the name, and the entry would have sent every reader of a live
+route somewhere else, permanently, with the address bar agreeing with them.
+That is strictly worse than the dead link a redirect exists to avoid, because
+a dead link is visible. `router.test.ts` holds the rule against the nav.
 
 ### Moving, and going back
 
@@ -549,6 +565,22 @@ than they looked:
   tabs with no panel, and the arrows select as they move, because changing a
   setting costs nothing on every keypress. The same applies to a filter that
   replaces the history entry.
+- **The group keeps one tab stop, wherever the reader is standing.** The stop
+  travels with the arrows rather than sitting on the selection, because on a
+  section row the two stop being the same question: a reader stands on an
+  option they have not chosen for as long as they are still deciding, and a
+  stop left behind on the selected one drops them somewhere they did not leave
+  when they tab out and back. A change from outside the group (a click
+  elsewhere, the browser's Back button, a pasted URL) retires whatever the
+  arrows were pointing at and takes the stop back, and so does an option
+  leaving `options`. It survives a value the options do not carry, too: `value`
+  comes off the query string at most of these call sites, so an older build's
+  link, a typo or a renamed option arrives as a value no option matches, and a
+  stop that fell back only when the *held* option left the set gave every
+  option `tabIndex="-1"` on `?lens=bogus` and dropped the whole control out of
+  the page's tab order, unreachable by keyboard and strictly worse than the
+  plain buttons it replaced. It falls back to the first option; nothing is
+  selected, so nothing else has a claim to the stop.
 - **A sortable column is a button in its header.** The click used to be on the
   `th` itself, which a keyboard cannot reach and a screen reader does not
   announce as a control. `aria-sort` stays on the header cell, and each column
@@ -558,7 +590,7 @@ than they looked:
   last in BOTH directions, because a seat with no meter has not spent nothing,
   it has not been measured.
 
-Three more controls that looked like something they were not:
+Four more controls that looked like something they were not:
 
 - **A copy button says whether it copied.** The clipboard is invisible, so a
   control that writes to it and reports nothing is indistinguishable from a
@@ -569,6 +601,24 @@ Three more controls that looked like something they were not:
   design system's `CopyButton` falls back to the deprecated `execCommand` path,
   which is the only one that works there, and then says `Copied` or
   `Copy failed` — announced as well as drawn.
+- **A download button says whether it downloaded, and refuses rather than
+  navigating.** The same invisible outcome with a worse failure available to
+  it: an `<a>` whose `download` attribute the browser ignores does not save
+  the JSON, it OPENS it, and a tab full of text looks enough like something
+  happening that nobody checks. `DownloadButton` tests for both halves —
+  `URL.createObjectURL` and `download` — before it builds anything, says
+  `Download failed` when either is missing. What it says on success is
+  `Downloading`, not `Saved`: there is no completion event on an
+  `<a download>`, so the only thing observed is the hand-off, and a browser
+  can still stop it afterwards. It names the file
+  (`download started — turn-….json`) because a reader who cannot see the
+  download shelf has nothing else to tell them what to go and open. It shares
+  the confirmation machinery with `CopyButton` rather than reimplementing it:
+  the two sit side by side in the Turn header, so a difference in how long
+  either holds its answer is a visible inconsistency rather than a private
+  detail. A `data:` URL is deliberately NOT the fallback — several engines cap
+  one around two megabytes, so it would work on the small turns nobody needs
+  it for and fail silently on the large ones.
 - **A caption-sized link is still a link.** `.t-caption` on an `<a>` sets the
   muted colour, which wins over the anchor rule, so four real navigations —
   a phase's own event, a turn card's id, a seat's last error, the spend
@@ -582,6 +632,33 @@ Three more controls that looked like something they were not:
   chord while it holds focus; everywhere else the browser keeps it. The
   focus ring is not decoration: a keyboard verb that changes meaning on
   click is a secret without one.
+
+Two more a sighted reader could use and a keyboard or screen-reader one could
+not, which is the class of defect that never shows up in a screenshot:
+
+- **A meter needs a name, and a value inside its own range.** `role="meter"`
+  with no accessible name announces as a bare number on a screen that renders
+  several, and the visible legend is not the name: a reading ("94% of the
+  meter used") is not a noun. `Meter` takes its `label` for that reason, as
+  every other named control in the package does. The bar's fill is clamped and
+  so is `aria-valuenow`, because a budget *lowered* under a counter that has
+  already spent past it (the exact state an operator opens the screen in)
+  would otherwise publish a value above `aria-valuemax`; `valueText` carries
+  the true figures, so the overage is reported rather than hidden. A meter
+  with no ceiling is not drawn as one at all, because "0 of 100" is a
+  confident claim that nothing has been spent where the truth is that nobody
+  has said what the limit is.
+- **A tall record block is reachable from a keyboard.** A `CodeBlock` scrolls
+  under its height cap, and in Chrome and Safari a scroll container is
+  reachable by keyboard only if something makes it focusable. A `selectable`
+  block is, because select-all needs it; the rest were not, and they are the
+  tall ones: a phase card's verbatim system prompt runs to tens of kilobytes
+  and could not be scrolled from the keyboard at all. A block that actually
+  overflows, on both axes, since `plain` sets `white-space: pre` and scrolls
+  sideways, is a named `region` with a tab stop. Measured rather than
+  assumed, because a stop on every block would put one in front of each of a
+  round's tool arguments, and `label` is what such a block takes focus under:
+  taking focus without a name is the other half of the same trade.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
@@ -614,16 +691,24 @@ rendered as the stat strip and as a raw JSON dump.
 
 Four rules replace it, and each one names what it fixes.
 
-1. **A duplicate is a fact with a missing half.** `agent_phase_started` and
-   `agent_phase_completed` are the same phase — same `turn_id|phase|iteration`,
-   which *is* the phase key. Read apart, the start says nothing new. Read
-   together they are the one thing the finished record cannot say alone: the
-   completed event carries only the instant the phase **landed**, so no
-   completed phase had a duration anywhere on this dashboard. The start is
-   folded onto its own card now (`withStarts`), and every phase reports how
-   long it took — which is what answers "why did this turn cost 290k tokens"
-   on exactly the self-iterating turns where the question gets asked. A nested
-   call publishes no start and reports no duration rather than a wrong one.
+1. **A duplicate is a row whose fact belongs somewhere else.**
+   `agent_phase_started` and `agent_phase_completed` are the same phase — same
+   `turn_id|phase|iteration`, which *is* the phase key — and the start says
+   nothing the finished card does not. It used to say one thing: paired with
+   the completion instant it gave the phase a duration, which no completed
+   record carried. That pairing is gone, because it needed **both** events in
+   one reader's hands and the reader who needs the number most never has them:
+   a turn deep-linked *while it runs* asked its query before the phase started,
+   and the only envelopes it buffers afterwards are completed ones. So the
+   engine measures the phase where the clock is and publishes `duration_ms` on
+   `agent_phase_completed` itself. Every phase reports how long it took —
+   which is what answers "why did this turn cost 290k tokens" on exactly the
+   self-iterating turns where the question gets asked — and so does every
+   **nested** call, a delegate's worker and the round-cap judge included, which
+   publish no start and so could never have been given one. Zero means *not
+   measured*, never *took no time*: an agent-mode executor's rounds ran inside
+   a coding CLI's own loop in another process, and that run's wall clock is on
+   `sandbox_run_started` / `sandbox_run_completed` instead.
 
 2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
    payload doc says it deliberately carries no outcome; a guard breach is a
@@ -635,10 +720,37 @@ Four rules replace it, and each one names what it fixes.
    list rather than being dropped. The event registry is additive-only; a type
    a newer node publishes has to still render.
 
-3. **A healthy turn must be able to say so.** A set defined by subtraction
-   (`type !== …`) has no meaningful empty state, so "nothing went wrong here"
-   was not a state this screen could reach — and a section that is always full
-   is a section nobody reads.
+   A band is not a rendering, though, and *What the turn was given* was
+   rendering half of its own. `prompt.size` — six integers per phase, which
+   exist so prompt-slimming progress is measurable rather than argued about —
+   was banded here and then read by nobody: the panel took `prefetch_summary`
+   out of the band and dropped the rest, so the only route to a phase's prompt
+   size was the raw payload of a row in the residual list. The panel carries
+   both halves now, which is the pair that says whether a heavy prompt is
+   heavy *because* of what was prefetched or in spite of it. Per phase and per
+   round, never summed: a prompt is re-sent on every round of the tool loop,
+   so a total would be neither the turn's input bill — the tiles above already
+   report that — nor any single thing that was ever sent.
+
+3. **A healthy turn must be able to say so — and only when it can.** A set
+   defined by subtraction (`type !== …`) has no meaningful empty state, so
+   "nothing went wrong here" was not a state this screen could reach — and a
+   section that is always full is a section nobody reads. It is a badge in the
+   header now, beside the problem count it replaces. It is withheld on a
+   **cut** view for the same reason it is withheld on a running turn: the
+   `turn` answer carries a `truncated` flag (the `trace` answer always did;
+   this one did not), so a guard breach among the rows the read could not
+   reach is one this page cannot see.
+
+   Which rows those are changed too, because the original answer was the worse
+   half. A turn is read oldest first, so a head-only read dropped the
+   **ending** — including the two records the header reads its outcome, its
+   duration and its plan summary off — and the page said so out loud, printing
+   "no turn record" directly above the rows it did get and captioning a
+   partial event span as the turn's own measurement. Naming that would have
+   been honest and still useless: the outcome is the headline of this screen.
+   So the answer recovers the turn's last rows beside its first, and what the
+   flag names is a gap in the **middle**. The badge reads "middle not shown".
 
 4. **The feed's row is not this screen's row.** `EventRow` has four columns —
    time, actor, summary, source and category. On a page about ONE turn the
@@ -841,8 +953,11 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   company and "no events" on a node with no event log are the same empty list
   and completely different problems. `QueryState` renders the engine's own code
   (`unknown_query` for a question this node does not serve, such as the event
-  log on a node with none, `unauthorized`, `query_failed`) and the client's own
-  `timeout` as a sentence saying which.
+  log on a node with none, `unauthorized`, `not_found`, `unavailable`,
+  `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
+  saying which. `bad_params` is the one that names the SCREEN as the fault: the
+  engine understood the question and refused it, so retrying sends the same bad
+  request again.
 - **Zero** vs **unknown.** The integrations answer's counts are three-valued,
   and a node not serving ingress reports `unknown`, not `0`. The budgets answer
   says `durable: false` when the counter could not be READ.
@@ -947,6 +1062,16 @@ rendered idle from the first phase to the last.
   first query as the page boots, so rejecting when not-yet-connected made every
   deep link render "could not load" and stay there. Queries are pure reads, so
   one in flight when the socket drops is re-sent on reconnect.
+- **A question whose parameter is not chosen yet is SKIPPED, not sent.** Absent
+  params are an empty params object on the wire, not a skipped question, so
+  `useQuery("work_project", project ? { key: project } : undefined)` reads like
+  a guard and is not one: the engine refuses a question missing a parameter it
+  has no default for, and the screen shows an error for something nobody asked.
+  The engine classifies it as `bad_params` and logs it as `stream_query_refused`
+  at DEBUG — the caller's fault, not the node's, so it is not a warning and not
+  in an operator's log at all unless they went looking. The guard that works is
+  `enabled`, and a test scans for the shape that admits an empty parameter
+  without one.
 - **A refused credential is diagnosed over HTTP.** A handshake the engine
   answers 401 never reaches the page as `close(1008)` — a connection that never
   opened has no frames, so the browser reports 1006, the same code it gives for
@@ -1371,14 +1496,27 @@ to.
     dash is read aloud as "dash" or skipped, and a value still arriving is a
     different fact again, which a tile reports by being busy.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
-    a write, a revoke — if the reader cannot see the result, the control says
-    it, in text a screen reader reaches as well as an icon.
-14. **A link reads as a link at every size.** A text-register class on an `<a>`
+    a download, a write, a revoke — if the reader cannot see the result, the
+    control says it, in text a screen reader reaches as well as an icon. A
+    refusal is reported too, and it OUTLASTS the confirmation: a reader who
+    looked away for three seconds must still be able to learn it did not
+    land, so a failed state holds until the next click while a successful one
+    settles back.
+14. **Per-subject state is keyed on its subject.** A hash change re-renders
+    the route switch rather than remounting it, so `#/turns/A` → `#/turns/B`
+    reconciles and anything the screen remembers about A — a held refusal, an
+    open disclosure, a selected tab — describes B until something clears it.
+    Every id-bearing route carries `key={id}`.
+15. **A screen head's controls wrap.** A button does not break its own label,
+    so a head carrying several of them overflows a phone's line instead of
+    taking a second one. `PageHeader` takes its badges and its actions as slots
+    that wrap, and any row built beside one wraps too.
+16. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.
-15. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
+17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.
-16. **Everything the page runs or loads is its own bundle.** The engine serves
+18. **Everything the page runs or loads is its own bundle.** The engine serves
     the shell under a Content-Security-Policy that allows scripts, styles,
     fonts, images and connections from this origin only (images also as
     `data:`), and no inline script or `<style>` block

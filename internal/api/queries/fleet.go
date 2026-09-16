@@ -25,15 +25,15 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	// first — and three copies of "the lease table IS the fleet, so an
 	// unreadable one must not answer an empty company" is three chances
 	// for one of them to stop saying it.
-	live := map[string][]coord.Lease{}
-	for _, prefix := range []string{coord.NodePrefix, coord.SeatPrefix, coord.WorkerPrefix} {
-		leases, err := s.Coord.ListLive(ctx, prefix)
+	live := map[coord.Class][]coord.Lease{}
+	for _, class := range []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker} {
+		leases, err := s.Coord.ListLive(ctx, class)
 		if err != nil {
 			return nil, err
 		}
-		live[prefix] = leases
+		live[class] = leases
 	}
-	nodes, seats, duties := live[coord.NodePrefix], live[coord.SeatPrefix], live[coord.WorkerPrefix]
+	nodes, seats, duties := live[coord.ClassNode], live[coord.ClassSeat], live[coord.ClassWorker]
 	now := s.clock()
 
 	held := map[string]int{}
@@ -42,7 +42,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		node := nodeOf(lease.Owner)
 		held[node]++
 		seatRows = append(seatRows, map[string]any{
-			"handle":     strings.TrimPrefix(lease.Resource, coord.SeatPrefix),
+			"handle":     nameIn(coord.ClassSeat, lease.Resource),
 			"node":       node,
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
@@ -56,7 +56,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	applied := s.applyStatus(ctx)
 	nodeRows := make([]map[string]any, 0, len(nodes))
 	for _, lease := range nodes {
-		id := strings.TrimPrefix(lease.Resource, coord.NodePrefix)
+		id := nameIn(coord.ClassNode, lease.Resource)
 		profile := placement.FromMeta(id, lease.Meta)
 		row := map[string]any{
 			"id":         id,
@@ -98,7 +98,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	dutyRows := make([]map[string]any, 0, len(duties))
 	for _, lease := range duties {
 		dutyRows = append(dutyRows, map[string]any{
-			"duty":       strings.TrimPrefix(lease.Resource, coord.WorkerPrefix),
+			"duty":       nameIn(coord.ClassWorker, lease.Resource),
 			"node":       nodeOf(lease.Owner),
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
 		})
@@ -289,4 +289,15 @@ func isoOrEmpty(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// nameIn is a lease's name within its class, for a listing that already asked
+// for that class.
+//
+// Through [coord.Class.Name] rather than a bare TrimPrefix: the prefix is the
+// class AND its separator, and trimming the class alone leaves the separator
+// on the front of every handle the dashboard renders.
+func nameIn(class coord.Class, resource string) string {
+	name, _ := class.Name(resource)
+	return name
 }

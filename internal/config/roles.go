@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 
@@ -124,6 +125,13 @@ type Role struct {
 
 	// Integrations is this seat's non-tool identity on external surfaces.
 	Integrations RoleIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
+
+	// Project and Space are this seat's own tracker and knowledge
+	// identity, meaningful for a ROOT-LEVEL seat: a seat inside a unit
+	// takes the unit's. Vendor-neutral for the reason the unit's are —
+	// see [Unit.Project].
+	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Tracker project this seat owns. Root-level seats; a unit member takes its unit's."`
+	Space   string `yaml:"space,omitempty" json:"space,omitempty" desc:"Knowledge container this seat owns. Root-level seats; a unit member takes its unit's."`
 
 	// Schedules are this seat's own recurring work.
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work fired into this seat's inbox."`
@@ -274,27 +282,11 @@ type RoleIntegrations struct {
 	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: how much it may do, and where."`
 	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
-	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
-	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this seat owns."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
-	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
-		r.Jira == nil && r.Confluence == nil
-}
-
-// ProjectRef is the tracker project a seat or unit owns. Integration
-// identity — where activity with no better recipient routes, and where work
-// is filed. Not a credential, and not a read scope.
-type ProjectRef struct {
-	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Project key or identifier."`
-}
-
-// SpaceRef is the wiki space a seat or unit owns, on the same terms as
-// [ProjectRef].
-type SpaceRef struct {
-	Space string `yaml:"space,omitempty" json:"space,omitempty" desc:"Space key."`
+	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -436,10 +428,17 @@ func (g *RoleGitHub) TierOrDefault() string {
 // TRANSPORT only; the Slack tool server is a separate MCP entry whose token
 // is named again under mcp_env — two consumers, one secret, named twice on
 // purpose so an operator can split them.
+//
+// TWO FIELDS, and there is deliberately no third. A `channel` sat here as
+// long as the transport had a `Send` with a fallback target; that send had no
+// caller — an agent's every message goes out through the Slack MCP server, on
+// this same token — so the field named a channel nothing ever posted in. The
+// seat's room is [OrgUnit.Channel], which the executor prompt renders as the
+// team channel and which names one room per unit whatever chat backend the
+// company runs on.
 type RoleSlack struct {
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
-	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel id for this seat."`
 }
 
 // validate checks a seat's Slack app.
@@ -484,7 +483,12 @@ type RoleMattermost struct {
 	// name.
 	Username string `yaml:"username,omitempty" json:"username,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]*$" desc:"Bot username; defaults to the seat handle."`
 
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel name for this seat."`
+	// Channel is a PROVISIONING input, not a posting default: the reconcile
+	// adds this bot to it, on top of the company-wide
+	// `provisioning.channels`. Nothing aims a message with it — the engine's
+	// transport posts none, and an agent's messages are the Mattermost MCP
+	// server's calls on this same token, each naming its own channel.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Channel this seat's bot is added to at provisioning, on top of provisioning.channels."`
 }
 
 func (m *RoleMattermost) validate(path Path) error {
@@ -569,7 +573,6 @@ func (r *Role) Seat() *org.Role {
 		seat.Slack = org.SlackIdentity{
 			BotToken:      s.BotToken,
 			SigningSecret: s.SigningSecret,
-			Channel:       s.Channel,
 		}
 	}
 	if m := r.Integrations.Mattermost; m != nil {
@@ -579,8 +582,8 @@ func (r *Role) Seat() *org.Role {
 			Channel:  m.Channel,
 		}
 	}
-	seat.JiraProject, seat.ConfluenceSpace = identities(
-		r.Integrations.Jira, r.Integrations.Confluence)
+	seat.Project = strings.TrimSpace(r.Project)
+	seat.Space = strings.TrimSpace(r.Space)
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))
@@ -615,23 +618,19 @@ func (r Role) IdentityKey() string { return r.Seat().Handle() }
 // a unit, or between units. See documentIdentified.
 func (Role) identityIsDocumentWide() {}
 
-// identities extracts the tracker project and wiki space a seat or unit
-// owns. References are left VERBATIM and resolved at use time, like every
-// other Tier B value.
-func identities(jira *ProjectRef, confluence *SpaceRef) (string, string) {
-	var project, space string
-	if jira != nil {
-		project = strings.TrimSpace(jira.Project)
-	}
-	if confluence != nil {
-		space = strings.TrimSpace(confluence.Space)
-	}
-	return project, space
-}
-
 // Unit is the AUTHORED shape of one `units:` entry, nesting to any depth.
 type Unit struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name; also what a manages entry can reference."`
+
+	// ID is this unit's stable identity — see [org.Unit.ID]. A name is
+	// read by people and therefore renamed; an id is not read by anybody
+	// and therefore survives.
+	//
+	// THE PATTERN IS ON THE FIELD as well as in the validator, because the
+	// generator emits it into the published schema — and a schema that
+	// accepts ids the engine refuses is exactly the drift the schema-diff
+	// test cannot see.
+	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[a-z][a-z0-9_-]{0,63}$" desc:"Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter."`
 
 	// Type is an informational label — department, team, squad, pod, or
 	// anything else. Nothing in the engine behaves differently for one.
@@ -668,7 +667,21 @@ type Unit struct {
 	// mcp_env at all.
 	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct agent members."`
 
-	Integrations UnitIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
+	// Project and Space are the unit's tracker and knowledge IDENTITY: the
+	// project it files work in, and the container it writes pages in.
+	//
+	// VENDOR-NEUTRAL, and required of any unit that owns either. They were
+	// `integrations.jira.project` and `integrations.confluence.space`,
+	// which made the org chart name a product: a company switching
+	// backends had to rewrite its units, and a company running a native
+	// tracker against a Confluence wiki could not say so at all. The tree
+	// made this rename once already, when `slack_channel` became `channel`.
+	//
+	// NOT a credential, and NOT a read scope. Read scope is the org-wide
+	// knowledge block, and letting an identity double as one is how an
+	// agent ends up unable to read the page it was told to follow.
+	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Tracker project this unit owns. Not a credential, not a read scope."`
+	Space   string `yaml:"space,omitempty" json:"space,omitempty" desc:"Knowledge container this unit owns. Not a credential, not a read scope."`
 
 	Roles    []Role `yaml:"roles,omitempty" json:"roles,omitempty" desc:"Seats belonging to this unit."`
 	Children []Unit `yaml:"children,omitempty" json:"children,omitempty" desc:"Child units."`
@@ -689,22 +702,16 @@ func (u Unit) IdentityKey() string { return u.Name }
 // documentIdentified.
 func (Unit) identityIsDocumentWide() {}
 
-// UnitIntegrations is a unit's integration identity. Chat at the unit level
-// is the integration-neutral channel field, so it is deliberately not here.
-type UnitIntegrations struct {
-	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
-	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`
-}
-
-// IsZero lets an unset block drop out of a round trip.
-func (u UnitIntegrations) IsZero() bool {
-	return u.Jira == nil && u.Confluence == nil
-}
-
-// validate walks the unit's seats and children. A unit's own rules (its
-// name, its schedules) are the org model's, like a seat's.
+// validate walks the unit's seats and children, and its id. A unit's own
+// rules (its name, its schedules) are the org model's, like a seat's.
 func (u *Unit) validate(path Path) error {
 	var p problems
+	if id := strings.TrimSpace(u.ID); id != "" && !unitID.MatchString(id) {
+		p.add(at(path, "id"), ErrShape,
+			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+
+				"starting with a letter, up to 64 characters. It is chosen once "+
+				"and read by nobody, so it can be short and dull", id)
+	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -713,6 +720,14 @@ func (u *Unit) validate(path Path) error {
 	}
 	return p.err()
 }
+
+// unitID is what a unit id may look like.
+//
+// Narrow on purpose. The id is a KEY — it appears in durable rows, in filter
+// arguments a model types, and in a subject token path — so the character set
+// is the intersection of what every one of those carries safely rather than
+// what a name may contain.
+var unitID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
 // Unit transforms the authored unit into the runtime one, recursively.
 //
@@ -724,6 +739,7 @@ func (u *Unit) validate(path Path) error {
 func (u *Unit) Unit() *org.Unit {
 	unit := &org.Unit{
 		Name:          u.Name,
+		ID:            strings.TrimSpace(u.ID),
 		Type:          u.Type,
 		Purpose:       u.Purpose,
 		Lead:          u.Lead,
@@ -733,8 +749,8 @@ func (u *Unit) Unit() *org.Unit {
 		MCPEnv:        u.MCPEnv.Clone(),
 		Schedules:     append([]org.Schedule(nil), u.Schedules...),
 	}
-	unit.JiraProject, unit.ConfluenceSpace = identities(
-		u.Integrations.Jira, u.Integrations.Confluence)
+	unit.Project = strings.TrimSpace(u.Project)
+	unit.Space = strings.TrimSpace(u.Space)
 
 	for i := range u.Roles {
 		unit.Roles = append(unit.Roles, u.Roles[i].Seat())

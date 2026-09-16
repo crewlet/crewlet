@@ -31,6 +31,51 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 | Lease renew | **Holds, briefly** | Ambiguity is not loss. The watchdog is what bounds it — see [Seat Ownership](seat-ownership.md). |
 | Budget charge | **Fails closed** — stop the round | Money leaves the building for every token, and a counter that cannot be reached must not un-cap a company. An error is *not* a refusal, though: the caller fails the turn rather than telling an agent it is out of budget. |
 
+**A listing obeys the same rule**, and it is the place it is easiest to lose.
+Reading a whole bucket — the fleet's node statuses, the open channels, every
+node's log position — carries each key together with its value, ends on one
+explicit marker and only on it, and a read that stops before that marker is
+`unknown`, never a shorter list. The alternative is not hypothetical: a listing
+that reports what it managed to read, with no error, hands every caller "there
+are no more records" when the truth is "the store stopped answering". For the
+trim's published floor that reads as a fleet needing nothing, which deletes
+records a node is still replaying.
+
+It is also why a listing is not a name list followed by a fetch per name. That
+shape costs a round trip per key on top of an ephemeral consumer created and
+destroyed per call — paid continuously, since several of a node's fifteen-second
+duty loops read a bucket on every tick and the state-log write fence reads the
+position register on every first write to a subject.
+
+**A listing is ONE ORDERED PASS, carrying each key and its value together** —
+never a name list followed by a fetch per name, which is what it was. The
+batched direct get that would remove even the consumer is deliberately not
+used here: it is served by any replica, so a follower behind an acknowledged
+write can hide a row, and the trim floor is a *minimum* across rows — a row it
+cannot see raises the floor and deletes records a node still needs. Measured
+against a single-node broker it also returned empty answers for populated key
+classes, because a KV bucket keeps one message per subject and that churn
+leaves the server's per-subject index stale. An empty answer is the one this
+estate cannot survive, since "no rows" is legitimate everywhere it is asked.
+
+That is why a **resource name is segmented**. A lease is named
+`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon
+is the **class**; the key it becomes carries that class as a subject token of
+its own, so `seat` is a wildcard and the seats are addressable without the
+nodes. The two reads that pay for it run on a ticker: the membership read asks
+for the presence leases instead of every lease in the fleet, and the sweep's
+placement hints come from the `epochs` bucket — the one with no expiry at all,
+holding a record for every resource the deployment has ever leased, which used
+to be read whole every five seconds to find one node's seats.
+
+There is deliberately **no all-classes listing**. A class is one segment of a
+name, so the empty one addresses nothing, and a read of it would answer with
+an empty result rather than an error — which reads to a caller exactly like a
+class with no members. Asking for a class that cannot address a key is
+refused instead. For the same reason a resource may not have an empty segment:
+`seat:` builds a key nothing can decode, so the lease would be written and
+then returned by no listing at all, which every node reads as a free seat.
+
 ---
 
 ## What the fleet shares
@@ -54,6 +99,7 @@ flowchart LR
         SEC[("secrets<br/>the company's sealed credentials")]
         INT[("integrations<br/>reconcile status per surface")]
         MB[("mailboxes<br/>seat mailboxes that may exist")]
+        POS[("positions<br/>what the state log may delete")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -81,6 +127,8 @@ flowchart LR
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name. Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
 | `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records a handle before it creates the seat's durable subscription, because a removed seat's handle is gone from the org every node derives names from and the retirement's absence stamp and mark have nowhere else to live. A mailbox that escaped the record is found by listing the broker's subscriptions. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
+| `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none | [Retention](../guides/retention.md) |
+| `kb vectors` | Page and item embeddings, keyed on the source's version. **Its own slot because it is DERIVED** and its lifecycle says so: it can be dropped and rebuilt wholesale when the embedding provider or its width changes, which is a thing you must never do to the pages themselves. Absent entirely for a company that configured no embeddings | [Knowledge System](knowledge-system.md) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -111,9 +159,13 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations` and `mailboxes` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
+Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `kb vectors` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
+
+**Fixed when the bucket is created means fixed by whoever created it.** Every node opens every bucket at boot, and a node that finds one already there *adopts* it rather than rewriting its configuration — including the `leases` bucket, whose age is the lease TTL. So on a fleet the retentions in force are the ones the first node to boot asked for, and a peer configured differently logs `coord_kv_lease_ttl_differs` naming the value actually in force and then runs at it — its acquires, its heartbeat, the budget it spends giving seats back on a drain and the lag at which its [event-loop watchdog](seat-ownership.md#the-wedged-node-and-why-it-leaves) ends the process all derive from the live TTL rather than from its own file, because the bucket's age is what expires a lease and a node claiming longer than the bucket allows would have every acquire refused and hold no seats at all. The alternative — every node asserting its own Tier A on every boot — is N writes against a metadata group that is still electing, resolved by boot order, so the node that came up *last* would silently redefine how long every other node's leases lived. Changing a retention is therefore an operator gesture, not a restart: align the config across the fleet and delete the bucket while the fleet is down, so the next boot re-creates it.
+
+**Replication is the one adopted difference a node refuses to run with.** Everything else a running bucket can disagree with is *reported* — the lease TTL above is warned about and then honoured — because every other difference changes how the store behaves, and behaviour is visible. A replica count changes nothing until a node is lost, and then it changes everything: raise `stream.replicas` from 1 to 3 on a fleet that already ran and a rolling restart finds every bucket still there at one replica, adopts it, and goes on holding every lease, every fencing epoch and the company's secrets on a single disk while each node reports itself correctly configured for three. So a node that is short refuses to start, naming both counts. Equal or higher passes, so a single-replica development node against a replicated fleet's buckets still runs. Resizing is the same operator gesture as any other bucket change — a bucket *is* a stream, so `nats stream update --replicas=3` covers it.
 
 | Bucket | Age | Sized from |
 |---|---|---|
@@ -133,10 +185,12 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 | `integrations` | none | A status is standing state, not a recent event: it says what the last pass found, and it is true until the next one. One that expired would make a converged surface read as never-reconciled and send the loop to re-provision what is already there. It is bounded by the number of surfaces a company has rather than by a horizon, and a row leaves when its block leaves the company document |
 | `mailboxes` | none | A record's age cannot tell a seat that is still in the company from one that left, so an age would forget a mailbox that still exists and leave it retaining mail for a seat nobody runs. It is bounded by the handles a company has ever used, and a record leaves when the [maintenance duty](seat-ownership.md#singleton-duties) retires its mailbox |
+| `kb vectors` | none | An embedding is keyed on its source's version, so a bucket age would reap a vector while the page it describes was still current — and search would silently stop finding that page by meaning. It leaves when its source does |
+| `positions` | none | The sharpest case in the table. A node's position is what the trim reads to decide what every other node may delete, so a key that expired would read as a node that has applied **nothing** — which either pins the trim for ever or, read the other way round, lets it delete records that node still needs. A row leaves by an operator's audited eviction, never by a clock |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for any of them: the broker expires the records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Three ageless buckets are exceptions, for the reason their rows give: nothing expires them, so removal is a decision somebody takes. `channels` and `mailboxes` are the maintenance duty's; `integrations` is the reconcile loop's own, which forgets a surface whose block has left the company document on the tick that notices.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` and `positions` wait for an operator, one by an unset and the other by an audited eviction; `kb vectors` leave when their source does; and `sandbox runs` end at their own pause reaper or a terminal delete.
 
 ---
 

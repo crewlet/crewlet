@@ -38,9 +38,8 @@ var log = logging.Get("coord.memory")
 // contract's third answer — "no answer" — which a caller retries loudly
 // instead of acting on a lie about a peer that does not exist.
 var (
-	errNoResource = errors.New("coord: resource is required")
-	errNoOwner    = errors.New("coord: owner is required")
-	errBadTTL     = errors.New("coord: ttl must be positive")
+	errNoOwner = errors.New("coord: owner is required")
+	errBadTTL  = errors.New("coord: ttl must be positive")
 )
 
 // Backend is the in-memory lease store. The zero value is ready to use and
@@ -259,6 +258,14 @@ func (b *Backend) release(resource, owner string, epoch int64) bool {
 
 // Get reads a resource's live lease, or nil when nothing holds it.
 func (b *Backend) Get(ctx context.Context, resource string) (*coord.Lease, error) {
+	// The twin has no key encoding to be defeated by an empty segment, so
+	// this refusal buys it nothing on its own — it is here because the
+	// twin's job is to answer what the real backend answers, and a twin
+	// that accepted a name the store refuses would certify a contract
+	// nothing keeps.
+	if err := coord.CheckResource(resource); err != nil {
+		return nil, err
+	}
 	if err := unavailable(ctx); err != nil {
 		return nil, err
 	}
@@ -283,13 +290,32 @@ func (b *Backend) ListOwned(ctx context.Context, owner string) ([]coord.Lease, e
 	})
 }
 
-// ListLive returns live leases under prefix. ListLive(coord.NodePrefix) is
+// ListLive returns the live leases of one class. ListLive(coord.ClassNode) is
 // the membership read: counting live presence leases is how a node learns the
 // fleet size it divides the seats by.
-func (b *Backend) ListLive(ctx context.Context, prefix string) ([]coord.Lease, error) {
+//
+// The twin matches on the class PREFIX where the real backend narrows at the
+// broker, and the two must select the same set — which is why the class is
+// refused here too rather than quietly matching nothing.
+func (b *Backend) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	if err := checkClass(class); err != nil {
+		return nil, err
+	}
 	return b.list(ctx, func(r *record, now time.Time) bool {
-		return strings.HasPrefix(r.resource, prefix) && r.live(now)
+		return class.Holds(r.resource) && r.live(now)
 	})
+}
+
+// checkClass refuses a class that cannot address a key, so the twin and the
+// real backend refuse the same arguments — a twin that answered where the
+// broker-backed store refused would certify a contract nothing keeps.
+func checkClass(class coord.Class) error {
+	if class.Valid() {
+		return nil
+	}
+	return fmt.Errorf("coord/memory: %q is not a resource class: a class is the "+
+		"leading segment of a resource name, so it must be non-empty and "+
+		"contain no %q", string(class), coord.ResourceSeparator)
 }
 
 func (b *Backend) list(ctx context.Context, keep func(*record, time.Time) bool) ([]coord.Lease, error) {
@@ -314,11 +340,14 @@ func (b *Backend) list(ctx context.Context, keep func(*record, time.Time) bool) 
 	return out, nil
 }
 
-// PreferredResources returns resources under prefix whose hint names nodeID,
+// PreferredResources returns resources of this class whose hint names nodeID,
 // lapsed ones included — that is the hint's whole purpose. A live-only read
 // would answer nothing in exactly the case it exists for: a node coming back
 // from a restart looking for the seats it had warm.
-func (b *Backend) PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error) {
+func (b *Backend) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
+	if err := checkClass(class); err != nil {
+		return nil, err
+	}
 	if err := unavailable(ctx); err != nil {
 		return nil, err
 	}
@@ -326,7 +355,7 @@ func (b *Backend) PreferredResources(ctx context.Context, prefix, nodeID string)
 	defer b.mu.Unlock()
 	out := map[string]struct{}{}
 	for _, r := range b.rows {
-		if strings.HasPrefix(r.resource, prefix) && r.preferred == nodeID {
+		if class.Holds(r.resource) && r.preferred == nodeID {
 			out[r.resource] = struct{}{}
 		}
 	}
@@ -370,11 +399,16 @@ func unavailable(ctx context.Context) error {
 }
 
 // validate checks the identity every call carries.
+//
+// The resource goes through [coord.CheckResource] rather than an emptiness
+// test, because a name with an empty SEGMENT is the one that fails silently:
+// it builds a key nothing can decode, so the lease is written and then
+// returned by no listing at all — which reads to every node as a free seat.
 func validate(resource, owner string) error {
-	switch {
-	case resource == "":
-		return errNoResource
-	case owner == "":
+	if err := coord.CheckResource(resource); err != nil {
+		return err
+	}
+	if owner == "" {
 		return errNoOwner
 	}
 	return nil

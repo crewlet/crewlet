@@ -29,7 +29,7 @@ func runTurn(t *testing.T, prov *scriptedProvider) (turn.Result, *scriptedProvid
 	t.Helper()
 	r, p, _ := fixture(t, prov)
 	res, err := turn.Run(context.Background(), r, settings(),
-		turn.Input{TurnID: "t-golden", Reply: turn.ReplyTool})
+		turn.Input{TurnID: "t-golden", Reply: turn.ToolReply("")})
 	if err != nil {
 		t.Fatalf("turn.Run: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestGoldenNoActionOnAnUnaddressedTurnEndsItSilently(t *testing.T) {
 			`{"outcome":"no_action","summary":"this was addressed to the CTO"}`)},
 	})
 	res, err := turn.Run(context.Background(), r, settings(),
-		turn.Input{TurnID: "t-golden", Reply: turn.ReplyNone})
+		turn.Input{TurnID: "t-golden", Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("turn.Run: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestGoldenEveryPhaseRunsOnItsOwnConfiguredModel(t *testing.T) {
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)}
 
 	r := runnerWithModels(t, entries)
-	res, err := turn.Run(context.Background(), r, settings(), turn.Input{Reply: turn.ReplyTool})
+	res, err := turn.Run(context.Background(), r, settings(), turn.Input{Reply: turn.ToolReply("")})
 	if err != nil {
 		t.Fatalf("turn.Run: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestGoldenPhaseModelsAreNotSilentlyCrossed(t *testing.T) {
 	}
 	r := runnerWithModels(t, []phase.Entry{{Key: "default", Provider: only}})
 	if _, err := turn.Run(context.Background(), r, settings(),
-		turn.Input{Reply: turn.ReplyTool}); err != nil {
+		turn.Input{Reply: turn.ToolReply("")}); err != nil {
 		t.Fatalf("turn.Run: %v", err)
 	}
 	seen := map[string]bool{}

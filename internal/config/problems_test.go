@@ -243,6 +243,10 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 		{"duplicate seat name",
 			"name: Acme\nroles:\n  - name: Dev\n    handle: a\n  - name: Dev\n    handle: b\n", "conflict"},
 		{"duplicate unit name", "name: Acme\nunits:\n  - name: Eng\n  - name: Eng\n", "conflict"},
+		// A collision an id carried names no duplicate name and so carries
+		// only the key sentinel, which is the entry the table lost.
+		{"duplicate unit key", "name: Acme\nunits:\n  - name: Platform\n  - name: Product\n    id: platform\n",
+			"conflict"},
 		{"agent-only field set on a human seat",
 			"name: Acme\nroles:\n  - name: Sarah\n    " + human + "    token_budget: 5\n", "conflict"},
 		{"human-only field set on an agent seat",
@@ -417,10 +421,15 @@ units:
 		}
 	}
 
-	// And Warnings is the references first, then these.
-	all := cfg.Warnings()
-	if !reflect.DeepEqual(all, append(cfg.ReferenceWarnings(), warnings...)) {
-		t.Errorf("Warnings = %+v, want the reference warnings then the admission ones", all)
+	// And Warnings is ONE list in a fixed order: the references, then
+	// these, then the advisories. A caller that renders it top to bottom
+	// reads what the document points at nothing before what it merely
+	// leaves unsaid.
+	want := append(cfg.ReferenceWarnings(), warnings...)
+	want = append(want, cfg.AdvisoryWarnings()...)
+	if all := cfg.Warnings(); !reflect.DeepEqual(all, want) {
+		t.Errorf("Warnings = %+v,\nwant the references, then the admission warnings, then the advisories:\n%+v",
+			all, want)
 	}
 }
 

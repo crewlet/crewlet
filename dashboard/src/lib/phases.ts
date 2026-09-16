@@ -134,8 +134,26 @@ export interface PhaseRecord {
   } | null;
   /** When the phase finished, or when the live call last moved. */
   at: string;
-  /** When a live call BEGAN. Never moves — `at` does, on every round. */
+  /**
+   * When a live call BEGAN. Never moves — `at` does, on every round.
+   *
+   * A LIVE record's only instant of its own. A finished one reports
+   * `durationMs` instead and leaves this equal to `at`: the engine measures
+   * the phase where the clock is and puts the answer on the record, so
+   * nothing here subtracts two timestamps that may have been stamped by two
+   * processes.
+   */
   startedAt: string;
+  /**
+   * How long this phase took, in milliseconds, as the engine measured it.
+   *
+   * Straight off `agent_phase_completed.duration_ms`. Zero on a live record,
+   * which has not finished, and on a record the engine could not measure —
+   * an agent-mode executor whose rounds ran inside a coding CLI's own loop,
+   * in another process. Read it through [phaseDuration], never directly:
+   * "no duration" and "took no time" must not render alike.
+   */
+  durationMs: number;
   /** The event id, when this came from the store — for a deep link. */
   eventId: string;
 }
@@ -326,6 +344,10 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
     startedAt: call.started_at || call.updated_at,
+    // A running phase has not taken a length yet. Its elapsed time is read
+    // off `startedAt` against the clock, which keeps ticking; this is the
+    // engine's final measurement and does not exist until it lands.
+    durationMs: 0,
     eventId: "",
   };
 }
@@ -379,8 +401,11 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     codingAgent: String(p.coding_agent ?? ""),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,
-    // A finished phase has one instant that matters — when it landed.
+    // A finished phase has one instant that matters — when it landed. How
+    // long it took is a measurement rather than a second instant, and it
+    // arrives on the same record.
     startedAt: ev.timestamp,
+    durationMs: num(p.duration_ms),
     eventId: ev.id,
   };
 }
@@ -419,65 +444,56 @@ export function streamedPhases(
 }
 
 /**
- * Fold each phase's START instant onto the record of its finish.
+ * The four fields a phase's own clock is read from.
  *
- * `agent_phase_started` and `agent_phase_completed` are the same phase: they
- * carry the same `turn_id|phase|iteration`, which IS the phase key. Read
- * apart, the started event is a log line saying nothing the finished card does
- * not — six of them on a three-round turn, which is what made the Turn
- * screen's event list read as a duplicate of its phase list.
- *
- * Read together they are the one thing the finished record cannot say alone:
- * `agent_phase_completed` carries only the instant it landed, so a completed
- * phase had no duration anywhere on the dashboard. On a turn that
- * self-iterated three times and cost 290k tokens, "which round took ninety
- * seconds" was derivable from two events sitting in the same query answer and
- * shown by neither.
- *
- * Only the turn's OWN phases publish a start — a sub-agent, a judge and a
- * learning worker nest under a host phase that is already showing one — so a
- * nested record keeps `startedAt === at` and reports no duration rather than a
- * wrong one.
+ * Declared so the two readers below, and `turnSpan` on the Turn screen, can
+ * be exercised against the instants alone. A pure function over a value is
+ * testable; one that demands a whole forty-field record to answer "when did
+ * this begin" is a function nobody re-measures.
  */
-export function withStarts(phases: PhaseRecord[], starts: Map<string, string>): PhaseRecord[] {
-  return phases.map((rec) => {
-    const at = starts.get(rec.key);
-    // A LIVE phase already knows when it began, from the overlay's own
-    // `started_at`, and that value is the one that keeps ticking correctly if
-    // the started event never reached this tab. Never overwrite it.
-    if (!at || rec.live) return rec;
-    // Guarded on ordering rather than trusted: a start stamped after the
-    // finish is a clock the page cannot reconcile, and a negative duration
-    // reads as a bug in the engine rather than in the two timestamps.
-    if (tsKey(at) > tsKey(rec.at)) return rec;
-    return { ...rec, startedAt: at };
-  });
+export type Timed = Pick<PhaseRecord, "live" | "at" | "startedAt" | "durationMs">;
+
+/**
+ * How long a phase took, or null when nothing measured it.
+ *
+ * STRAIGHT OFF THE RECORD. This used to subtract the phase's own
+ * `agent_phase_started` timestamp from its completion instant, folded on by a
+ * `withStarts` pass over a `phaseStarts` map — and that reconstruction needed
+ * BOTH events in one reader's hands, which three readers never have:
+ *
+ *  - A turn deep-linked WHILE IT RUNS asks the `turn` query before its phases
+ *    start, and the only envelopes buffered afterwards are
+ *    `agent_phase_completed` ones. So the map was built from a slice that
+ *    could not contain a single start, and every phase on the screen this
+ *    exists for reported no duration at all.
+ *  - A NESTED phase — a delegate's worker, the round-cap judge — publishes no
+ *    start by design, so no worker of a fan-out ever had a duration and
+ *    "which one was slow" had no answer anywhere.
+ *  - A phase started on one node and completed on another subtracts two
+ *    clocks nothing reconciles.
+ *
+ * The engine measures the phase where the clock is and puts the answer on the
+ * record. Zero is "not measured", never "took no time" — see
+ * [PhaseRecord.durationMs].
+ */
+export function phaseDuration(rec: Timed): number | null {
+  if (rec.live) return null;
+  return rec.durationMs > 0 ? rec.durationMs : null;
 }
 
 /**
- * The start instant of every phase named by an `agent_phase_started` event,
- * keyed the same way the phase itself is.
+ * When a phase BEGAN, as a timestamp, or 0 where nothing can say.
+ *
+ * A live record knows its own start. A finished one is the completion instant
+ * less what the engine measured — derived rather than published, because the
+ * record carries a duration and a landing instant and a third field would be
+ * a third thing to keep consistent with the other two.
  */
-export function phaseStarts(events: readonly EventRecord[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const ev of events) {
-    if (ev.type !== "agent_phase_started") continue;
-    const p = ev.payload as Record<string, unknown> | undefined;
-    if (!p) continue;
-    const key = phaseKey(String(p.turn_id ?? ""), String(p.phase ?? ""), num(p.iteration));
-    // FIRST wins. A phase that was extended re-enters its tool loop, and a
-    // second start would move the phase's beginning forward past work it
-    // already did.
-    if (!out.has(key)) out.set(key, ev.timestamp);
-  }
-  return out;
-}
-
-/** How long a phase took, or null when only one of its two instants is known. */
-export function phaseDuration(rec: PhaseRecord): number | null {
-  if (rec.live) return null;
-  const ms = tsKey(rec.at) - tsKey(rec.startedAt);
-  return ms > 0 ? ms : null;
+export function phaseStart(rec: Timed): number {
+  if (rec.live) return tsKey(rec.startedAt);
+  const at = tsKey(rec.at);
+  if (at <= 0) return 0;
+  return rec.durationMs > 0 ? at - rec.durationMs : at;
 }
 
 /**
@@ -564,10 +580,18 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
       // The EARLIEST start across the turn's phases. A turn is "running for"
       // as long as its first phase has been going, not its newest round.
-      const startedAt = ordered.reduce(
-        (min, r) => (min === "" || tsKey(r.startedAt) < tsKey(min) ? r.startedAt : min),
-        "",
-      );
+      //
+      // Through [phaseStart], so a FINISHED phase contributes the instant it
+      // began rather than the instant it landed. Reading `startedAt` off the
+      // record put a completed phase's own end into the minimum, and on the
+      // shape this matters for — a turn whose first rounds have landed and
+      // whose newest one is live — that reported the turn as beginning where
+      // its opening phase FINISHED.
+      const from = ordered.reduce((min, r) => {
+        const t = phaseStart(r);
+        return t > 0 && (min === 0 || t < min) ? t : min;
+      }, 0);
+      const startedAt = from > 0 ? new Date(from).toISOString() : "";
       return {
         turnId,
         role: ordered[0]?.role ?? "",

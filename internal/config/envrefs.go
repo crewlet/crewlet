@@ -87,46 +87,14 @@ func ReferencedNames(payload any) []string {
 // reference the reference index can see is a silent failure on the half that
 // decides whether a config change is a change at all.
 //
-// Unexported fields are skipped: reflection cannot read them, and nothing
-// in a config payload hides a reference behind one — the one type with
-// unexported state (org.Toggle) holds no strings at all.
+// It is the READ-ONLY half of [mapStrings], which is that one walk — the
+// same argument reaches one field further now, because Tier A's
+// normalization has to agree about reachability too: a string the trim
+// cannot see keeps the drift [Bootstrap.normalize] describes, exactly as a
+// string this cannot see is a ${VAR} nothing reports.
 func walkStrings(v reflect.Value, path Path, visit func(path Path, s string)) {
-	if !v.IsValid() {
-		return
-	}
-	switch v.Kind() {
-	case reflect.String:
-		visit(path, v.String())
-	case reflect.Pointer, reflect.Interface:
-		if !v.IsNil() {
-			walkStrings(v.Elem(), path, visit)
-		}
-	case reflect.Slice, reflect.Array:
-		for i := range v.Len() {
-			walkStrings(v.Index(i), idx(path, i), visit)
-		}
-	case reflect.Map:
-		iter := v.MapRange()
-		for iter.Next() {
-			// Keys too: an mcp_env server name or a skill variable is a
-			// key, and while neither should carry a reference, missing one
-			// that did would make the fingerprint blind to it. A key is
-			// reported at the entry's OWN path rather than the map's,
-			// because that is where the operator finds the text.
-			member := entry(path, iter.Key().String())
-			walkStrings(iter.Key(), member, visit)
-			walkStrings(iter.Value(), member, visit)
-		}
-	case reflect.Struct:
-		// A yaml.Node's own Value carries the scalar text; its Content
-		// carries the children. Walking the struct generically reaches
-		// both, so there is no special case to keep in sync.
-		t := v.Type()
-		for i := range v.NumField() {
-			if t.Field(i).PkgPath != "" {
-				continue // unexported
-			}
-			walkStrings(v.Field(i), at(path, jsonName(t.Field(i))), visit)
-		}
-	}
+	mapStrings(v, path, func(path Path, s string) string {
+		visit(path, s)
+		return s // read-only: an unchanged string writes nothing back
+	})
 }

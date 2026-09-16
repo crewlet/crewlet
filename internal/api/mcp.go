@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -72,4 +73,26 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	mux := http.NewServeMux()
 	mountBridge(mux, bridge)
 	return pagepolicy.Apply(auth.New(bootstrap).Middleware(mux))
+}
+
+// mountOperator registers the operator MCP surface, or says why it did not.
+//
+// A nil server is an ordinary configuration — a company on Jira and
+// Confluence has no native record for this to manage — and the route is then
+// ABSENT rather than answering 404 from a registered handler: an endpoint
+// that exists and lists no tools reads to an operator as broken, while one
+// that is not there matches what their config says.
+func (a *App) mountOperator(mux *http.ServeMux, server *opsmcp.Server) {
+	if server == nil {
+		return
+	}
+	// EVERY METHOD, for the reason the bridge takes every method: streamable
+	// HTTP is a GET for the server-to-client stream and a DELETE to end a
+	// session.
+	mux.Handle(opsmcp.Path, server.Handler())
+	log.Info("operator_mcp_mounted", "path", opsmcp.Path,
+		"tools", server.Tools(),
+		"detail", "an operator's own AI assistant can read and write the "+
+			"company's tracker and knowledge base here, authenticated with "+
+			"an api.auth.tokens entry")
 }

@@ -51,7 +51,7 @@ func TestTheSystemPromptEnvVarReachesTheChildPointingAtTheText(t *testing.T) {
 func TestTheSystemPromptFileBehindTheEnvVarIsPrivate(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	pair, err := systemEnv("GEMINI_SYSTEM_MD", "the seat's whole identity", dir)
+	pair, err := systemEnv("GEMINI_SYSTEM_MD", nil, "the seat's whole identity", dir)
 	if err != nil {
 		t.Fatal(err)
 	}

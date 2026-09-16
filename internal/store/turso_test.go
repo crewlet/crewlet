@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,35 @@ import (
 // that is the only thing the loader reads.
 const tursoChildEnv = "CREWLET_TEST_TURSO_CHILD"
 
+// childRan is printed by every child half and REQUIRED by every parent.
+//
+// Without it these cases have a vacuous pass in them. A parent selects its
+// child with `-test.run=^TestSomeChild$` and reads the exit status, and a
+// pattern that matches NOTHING makes `go test` print "testing: warning: no
+// tests to run", report PASS and exit 0. So renaming a child — or renaming the
+// parent's copy of the name — leaves the parent seeing success from a process
+// that ran no assertion at all, and the concurrency and broken-cache gates go
+// quiet together with nothing to notice it.
+//
+// Measured: building this package's test binary and running it with
+// `-test.run='^TestNoSuchTestAtAll$' -test.count=1` prints that warning, prints
+// PASS, and exits 0.
+const childRan = "CREWLET_CHILD_RAN"
+
+// requireChildRan fails unless the child both succeeded AND actually ran.
+func requireChildRan(t *testing.T, what string, out []byte, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", what, err, out)
+	}
+	if !strings.Contains(string(out), childRan) {
+		t.Fatalf("%s: the child exited 0 without running — `go test` reports a "+
+			"pass over a -test.run pattern that matches nothing, so this case "+
+			"certified nothing. The child test was renamed and its parent's "+
+			"copy of the name was not.\n%s", what, out)
+	}
+}
+
 // TestTursoLibraryPreparedByAChildProcess is the child half of the
 // concurrency case: one process preparing one cache root.
 func TestTursoLibraryPreparedByAChildProcess(t *testing.T) {
@@ -40,6 +70,7 @@ func TestTursoLibraryPreparedByAChildProcess(t *testing.T) {
 	if err := prepareTursoLibraryNow(); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
+	fmt.Println(childRan)
 }
 
 // CONCURRENT PROCESSES ON ONE COLD CACHE ALL SUCCEED.
@@ -61,8 +92,13 @@ func TestConcurrentStartsDoNotCorruptTheLibraryCache(t *testing.T) {
 				"-test.run=^TestTursoLibraryPreparedByAChildProcess$", "-test.count=1")
 			cmd.Env = append(os.Environ(),
 				tursoChildEnv+"=1", tursoCacheEnv+"="+root)
-			if out, err := cmd.CombinedOutput(); err != nil {
+			out, err := cmd.CombinedOutput()
+			switch {
+			case err != nil:
 				failures[i] = err.Error() + ": " + string(out)
+			case !strings.Contains(string(out), childRan):
+				// See [childRan]: a -test.run that matches nothing exits 0.
+				failures[i] = "the child exited 0 without running: " + string(out)
 			}
 		})
 	}
@@ -290,9 +326,8 @@ func TestOpenReportsABrokenLibraryCacheInsteadOfPanicking(t *testing.T) {
 	cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 		"-test.run=^TestOpenWithABrokenLibraryCacheInAChildProcess$", "-test.count=1")
 	cmd.Env = append(os.Environ(), tursoChildEnv+"=1", tursoCacheEnv+"="+root)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("Open did not report the broken cache: %v\n%s", err, out)
-	}
+	out, err := cmd.CombinedOutput()
+	requireChildRan(t, "Open did not report the broken cache", out, err)
 }
 
 // TestOpenWithABrokenLibraryCacheInAChildProcess is the child half of the case
@@ -309,4 +344,5 @@ func TestOpenWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 	if !strings.Contains(err.Error(), os.Getenv(tursoCacheEnv)) {
 		t.Fatalf("error = %v; it must name the cache an operator has to look at", err)
 	}
+	fmt.Println(childRan)
 }

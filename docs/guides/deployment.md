@@ -97,12 +97,62 @@ stream:
     peers:                             # the others' route URLs
       - "nats://crewlet-2.internal:6222"
       - "nats://crewlet-3.internal:6222"
+    host: 10.0.0.11                    # bind the route port to the private
+                                       #   interface, not to all of them
   replicas: 3                          # a publish is committed by a quorum
                                        #   before Publish returns
 
 coordination:
   type: embedded-kv                    # the leases ride the stream's own
                                        #   connection; nothing else to set
+```
+
+**Bind the route port to the network the peers are on.** `cluster.host` is the
+interface the route listener binds, and leaving it unset binds every
+interface. A route port is how a member JOINS — and a member that joins reads
+and writes every stream and every coordination bucket — so on a host with a
+public interface an unset `host` publishes unauthenticated access to the
+company's whole event history. Set it to the private address, or keep the port
+off the public interface with a firewall; the engine cannot tell which of a
+host's addresses is the private one, so it does not guess.
+
+**A cluster block without a name is refused, because it would do nothing.**
+The embedded server takes its route port, its bind interface, its advertise
+address and its peer list only from a *named* cluster, so anything under
+`cluster:` with no `cluster.name` starts a solo node that binds no route
+listener and forms no cluster — while every other reading of the same file
+(the provisioning budgets, the topology validation) calls it clustered. Tier A
+names the missing field instead.
+
+**A route port something else already holds is refused at startup, by name.**
+This is the one clustering failure with no other symptom: NATS does not fail
+when its route listener cannot bind — it logs the error and carries on serving
+clients, so the node comes up, answers `/health`, and simply never forms a
+route to a peer. Left to report itself, that surfaced two minutes later as a
+readiness timeout blaming peer reachability, which is a network path that is
+fine. The engine now probes the port before it starts the server and refuses:
+
+```
+stream.cluster.port 6222 is already in use on 10.0.0.11, so this member's
+route listener cannot bind and it could never form a route to a peer — free
+that port or give this node a different one
+```
+
+**`cluster.advertise` is for when what a member binds is not what its peers can
+dial.** Members learn about each other from the members they already have: when
+node 1 accepts a route from node 2 it tells node 3 where to find node 2, and
+node 3 dials that address itself. With nothing configured that address is
+derived from the connection's own remote address, which is correct on a flat
+network and wrong wherever the address a member is seen from is not one anybody
+else can use — a container with a mapped port, a NAT, a member behind a load
+balancer. There, set `advertise` to the address peers should dial (host and
+port, or a bare host to keep this member's own route port):
+
+```yaml
+stream:
+  cluster:
+    host: 0.0.0.0                      # inside the container, bind everything
+    advertise: "crewlet-1.internal:6222"  # outside it, this is the address
 ```
 
 **`node.id` is this member's identity in the cluster, and it has to survive a
@@ -132,10 +182,30 @@ than hanging.** Accepting connections is not the same as being able to serve
 JetStream: a member answers its client port as soon as it is listening, while
 the metadata group takes seconds to elect a leader — measured at around eight
 on a quiet three-member cluster — and until it has one, creating a replicated
-stream *blocks* instead of failing. So a node waits for its own JetStream to
-become current, up to 60 seconds, and then retries placement for as long as
-the cluster answers "no suitable peers", inside a 30-second provisioning
-deadline per stream. Every other error is returned at once: a bad subject or
+stream *blocks* instead of failing.
+
+There are therefore two waits at boot, in order, and they fail for different
+reasons:
+
+| Wait | Budget | What is happening |
+|---|---|---|
+| **Accepting connections** | 30s solo, **2 min clustered** | The member recovers its file store and, in a cluster, stands up its route listener while its peers are booting too |
+| **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
+
+Then placement retries for as long as the cluster answers "no suitable
+peers", inside the per-create provisioning budget — **30 seconds** on a solo
+node and **2 minutes** on a member with peers, because the two creates are not
+the same call underneath. See *A clustered node is given longer to create
+them* below.
+
+The clustered accept budget is four times the solo one because a member
+starting alongside its peers is competing with them for the same disk and the
+same scheduler, and the asymmetry is stark: failing this wait fails the
+**whole boot**, so a budget that is too short turns a busy host into a node
+that refuses to start and then works on the retry — which during a rolling
+restart is how one slow member takes out the restart. Too long only means a
+genuinely broken server is reported later, and the wait is cancellable, so
+Ctrl-C returns immediately. Every other error is returned at once: a bad subject or
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 
@@ -145,6 +215,17 @@ anything else: a restart loses that member's replicas, and the same server
 holds the KV buckets carrying the fleet's shared records — the token counter,
 the completion ledger, open agent-to-agent asks, claimed scheduled fires,
 detached (and billed) sandbox runs.
+
+**On the native backends it is the company's own record.** With
+`tracker.backend: native` or `knowledge.backend: native` — the defaults — every
+work item and every page lives in those same buckets. An unset `store_dir`
+then means the whole tracker and the whole wiki are gone on the next restart,
+and nothing reports a loss: the company simply appears to have no work. The
+engine logs `native_backend_on_an_ephemeral_stream` at error level on every
+boot that is in that state, and it is the one startup line worth grepping for.
+It is not refused, because a test and an ingress-only node legitimately run
+this way and nothing here can tell them from a deployment somebody forgot to
+finish.
 
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**
@@ -229,16 +310,53 @@ hand this node's seats to a peer, and that is the intended behaviour rather
 than something a reconnect policy should paper over.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the five engine streams
+uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_DLQ`), a stream per extra subject namespace a
-company publishes under, one durable consumer per seat mailbox (an ordinary
-API call, measured at 1.7 ms), and the sixteen `crewlet_*` KV buckets:
-three in the lease store, holding the seat and presence leases, the duty leases
-and the fencing epochs, and thirteen in the fleet store holding the shared
-records. A credential
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
+`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+publishes under, one durable consumer per seat mailbox (an ordinary API
+call, measured at 1.7 ms), and the seventeen `crewlet_*` KV buckets:
+three in the lease store, holding the seat and presence leases, the duty
+leases and the fencing epochs, and fourteen in the fleet store holding the
+shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
+
+**A coordination read costs one ordered pass, and an account needs the
+consumer API.** A node reads a whole coordination bucket constantly — several
+fifteen-second duty loops on every tick, and the state-log write fence on every
+first write to a subject — and each of those is one pass over a temporary
+consumer, which on a replicated bucket is two metadata-raft proposals. The
+engine deliberately does **not** use the batched direct get that would avoid
+the consumer: it is served by any replica, and this estate has reads whose
+answer is acted on with nothing to arbitrate them. So a credential scoped only
+to publishing and consuming is not enough; the account needs the consumer API
+alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
+consumer churn is what produces a steady stream of `JetStream connection
+closed: Client Closed` lines — see `stream.debug`, which is off by default for
+exactly this reason.
+
+**A clustered node is given longer to create them than a solo one.** Every
+one of those creates is a local file-store setup on a solo node and a raft
+round trip on a member of a cluster, against a metadata group whose peers are
+themselves still booting — so the budget branches: **30 seconds** per create
+solo, **2 minutes** clustered, with the whole coordination bring-up bounded at
+**2 minutes** and **5 minutes** respectively. The flat 30 seconds these replaced was
+measured failing: a fleet booting together would lose one create, and because
+each object discovers a slow cluster independently the failure landed on a
+different stream or bucket every time. A node that exhausts the budget fails
+to start rather than running against a group it cannot reach, and the error
+names the object it was creating.
+
+**A create that is taking a while says so while it is happening.** Provisioning
+was otherwise silent — a node opens fifteen buckets and several streams in a
+row and logged nothing between them, so one that hung emitted nothing at all
+until its budget expired and the log could not say which object it was on. Any
+create still running after 10 seconds now writes one `WARN` naming it
+(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`).
+One line per object, deliberately: whether more lines follow is what tells a
+slow bring-up from a wedged one.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
@@ -374,6 +492,56 @@ draining, and rolling upgrades. The two things that bite hardest:
 > fleet's leases with it. Against an external NATS cluster the quorum is that
 > cluster's to provide rather than the engine's to count; see
 > [An external NATS server](#an-external-nats-server).
+>
+> **Raising it on a fleet that already ran needs the existing objects resized.**
+> Nothing the engine provisions is ever rewritten by a booting node — a
+> shared stream's configuration has one writer and it is not whichever node
+> started last — so a rolling restart after raising `stream.replicas` finds
+> every stream and bucket already there at the old count and adopts it. A node
+> that is short refuses to start and says so, naming both counts: a stream
+> because an acknowledged publish would be proving fewer copies than
+> `stream.replicas` promises, and a coordination bucket because the leases,
+> the fencing epochs and the company's secrets would be on fewer disks than
+> the config claims. Resize the objects deliberately (`nats stream update
+> --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
+> stand the fleet up fresh.
+
+### What an acknowledged publish has reached
+
+**`stream.sync` decides, and it defaults to `always` at every replica count.**
+Every write is fsynced before the broker acknowledges it, so a publish that
+returned is on the disk of the member that took it — which is what the
+`EventQueue` contract's "durable" means, and what the company's own records
+depend on. The cost is one fsync per write: **1–3 ms on NVMe**, and 15–40 ms
+at the 99th percentile on a network-attached volume.
+
+**It is deliberately not inferred from `replicas`.** The tempting inference —
+a replicated member has a quorum instead of a disk, so it can skip the fsync —
+is true of *one* failure class and there are five:
+
+| What fails | Does a quorum survive it? |
+|---|---|
+| One host loses power | Yes — the other two hold the write |
+| The process is killed, or panics | Yes — the page cache is the kernel's, and the kernel lives |
+| An orderly shutdown | Yes — the store is flushed on the way out |
+| A rack or an availability zone loses power | **No** — a majority can go together |
+| Correlated power loss across every member | **No** — three copies of one unflushed page cache is one copy |
+
+A three-node fleet in one rack, which is what a first production deployment
+usually looks like, is exposed to the bottom two rows by construction.
+
+**Declining the fsync is a legitimate trade and it is made explicitly.** Set
+`sync` to a duration — `30s` — and that duration is the window: the most an
+acknowledged write may be behind the disk. Tier A refuses the value in the
+three places where it would be recorded and then not honoured:
+
+- **against `stream.type: nats`**, because the field configures the embedded
+  server's file store and an external cluster stores its own data (set
+  `sync_interval` on that cluster instead);
+- **below `replicas: 3`**, because the disk being traded away is the only copy
+  there is, so the window buys nothing;
+- **on a cluster whose peers are all on this host**, because the majority the
+  window trades for shares one power supply and one page cache.
 
 Give each node a distinct id — `node.id` in the Tier A file, or the
 `CREWLET_NODE_ID` environment variable, which is how a container orchestrator
@@ -449,7 +617,7 @@ all in the [coordination slot](../concepts/coordination.md) instead.
 
 The load-bearing tables:
 
-- **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — the knowledge base is searched live at query time; see [knowledge system](../concepts/knowledge-system.md).
+- **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy at all; see [knowledge system](../concepts/knowledge-system.md).
 - **`episodes`** — vector-indexed, one row per completed turn, raw and LLM-compacted shapes in the same table. Drained by the episode-lifecycle duty.
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
@@ -507,29 +675,29 @@ from that map — a guard test fails if the two drift.
 
 | Category | Event types |
 |---|---|
-| `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_delivered`, `a2a_message_sent` |
-| `communication` | `message_sent` |
+| `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_sent` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
-| `knowledge` | `document_created`, `document_updated` |
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
-| `lifecycle` | `agent_reassigned`, `agent_spawned`, `agent_terminated`, `config_revision_activated`, `config_revision_applied`, `org_started`, `org_stopped`, `role_updated` |
+| `lifecycle` | `config_revision_activated`, `config_revision_applied`, `org_started`, `org_stopped` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
 | `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
-| `task` | `sandbox_clarification_requested`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned`, `task_completed`, `task_created`, `task_delegated`, `task_failed`, `task_started` |
+| `task` | `sandbox_clarification_requested`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
 
 **The map is also the admission list.** A type that is not in it is not written
-and does not reach the activity feed, so the five exclusions below are
+and does not reach the activity feed — so the exclusions below are
 deliberate and each one says why, and a *new* type that nobody placed fails a
 test rather than vanishing quietly.
 
 | Excluded type | Why |
 |---|---|
 | `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
-| `budget_reported` | A snapshot of **live**, in-memory meters whose values mean nothing outside the engine run that produced them. Persisting it lets a dashboard hydrate a dead process's counters and render them as the current ones, a number that is not merely stale but describes a different run. The live projection reads it, but nothing in this build publishes it. |
+| `agent_spawned` | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
+| `agent_terminated` | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
+| `budget_reported` | A **rollup** of live meters on a 15-second tick, so a durable row per tick is about two million a year to answer a question the live projection answers for free. What the audit log holds instead is the per-turn spend the rollup is a sum *of* — `agent_turn_completed` rows — so "what did we spend last month" is answerable and "what were the meters reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events
 
@@ -912,6 +1080,49 @@ untouched. `crewlet run` ignores all three — its level, shape and file come
 from Tier A and its own flags. See
 [Environment Variables](../reference/environment-variables.md#logging).
 Nothing silences a warning.
+
+#### The embedded broker's own logs
+
+The NATS server the engine embeds logs through the engine's logger, under the
+component `queue.nats.server`, so what the **broker** said is always
+distinguishable from what the engine said about it. Anything it reports as
+wrong — a JetStream write error, a slow consumer, stream recovery after an
+unclean shutdown, cluster election trouble — keeps its own severity and
+reaches the log whatever else is configured. Its boot narration ("Starting
+nats-server", the JetStream storage line, "Server is ready") is `debug`: a
+dozen lines describing infrastructure you deliberately did not deploy.
+
+Its **own debug output is a separate switch**, `stream.debug`, and it is off
+by default:
+
+```yaml
+stream:
+  debug: true     # only when the BROKER is what you are diagnosing
+```
+
+`logging.level: debug` and `-debug` say how loud the *engine* is. They are
+what you want to watch a turn — the prompt, the tool calls, the review — and
+they deliberately do not turn this on, because nats-server's debug output is
+per *internal client* rather than per event, and the engine's own coordination
+reads manufacture those continuously. Every coordination key listing is an
+ordered consumer created and then deleted, and deleting one writes two lines
+like:
+
+```
+DEBUG queue.nats.server  nats_server detail="JETSTREAM - JetStream connection closed: Client Closed"
+```
+
+Two of a node's fifteen-second duty loops list keys on every tick, so that is
+a constant background stream on a node doing nothing at all. `Client Closed`
+is the *graceful* close reason and nothing is leaking; it is simply the
+broker narrating its own housekeeping.
+
+Both switches have to agree for these to appear: `stream.debug` decides
+whether nats-server produces them, and a destination at `debug` decides
+whether anything records them. `crewlet validate` warns when the first is set
+and the second is not. `stream.debug` is **refused** for `stream.type: nats` —
+an external cluster logs wherever its own operator configured it to, so a flag
+here would reach nothing.
 
 ### Per-Agent Token Tracking
 

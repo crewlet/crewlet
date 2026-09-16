@@ -379,3 +379,42 @@ func closedPosture() config.Bootstrap {
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	return b
 }
+
+// THE APP ANSWERS A PREFLIGHT WITHOUT A CREDENTIAL.
+//
+// The browser posture has to wrap the credential one, and that is not a style
+// choice: a preflight is an `OPTIONS` the browser sends itself with no
+// Authorization header, because it will not attach one until it has been told
+// the origin is permitted. Wired inside the guard, every preflight to a
+// guarded route answers 401, the browser reports a CORS failure, and the real
+// request is never sent — so the allow-list would be as unreachable as it was
+// when nothing read it at all.
+func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "s3cret"}}
+	a := newApp(t, api.Options{Bootstrap: &b})
+
+	// `/config` is one of the two prefixes never eligible for
+	// allow_anonymous_read, so it is exactly the route whose preflight the
+	// guard would answer 401.
+	r := httptest.NewRequest(http.MethodOptions, "/config", nil)
+	r.Header.Set("Origin", "https://ops.example.com")
+	r.Header.Set("Access-Control-Request-Method", "PATCH")
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, r)
+
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatal("the preflight was answered by the guard, which the browser " +
+			"cannot put a token on — so every cross-origin write to a guarded " +
+			"route fails before it is sent")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://ops.example.com" {
+		t.Errorf("the preflight permitted %q — an allow-list nothing stamps "+
+			"onto a response is one the browser never sees", got)
+	}
+	if n := a.CORS().Origins(); n != 1 {
+		t.Errorf("the app reports %d permitted origin(s), want 1", n)
+	}
+}

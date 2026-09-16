@@ -23,23 +23,18 @@ func catalogue() []events.Payload {
 	return []events.Payload{
 		// org.go
 		OrgStarted{}, OrgStopped{}, AgentSpawned{}, AgentTerminated{},
-		AgentReassigned{}, RoleUpdated{},
 		// config.go
 		ConfigRevisionActivated{}, ConfigRevisionApplied{},
 		// task.go
-		TaskCreated{}, TaskAssigned{}, TaskStarted{}, TaskCompleted{},
-		TaskFailed{}, TaskDelegated{},
+		TaskAssigned{},
 		// schedule.go
 		ScheduledTaskFired{},
 		// notification.go
-		MessageSent{}, ExternalNotification{}, TurnTriggerSkipped{},
+		ExternalNotification{}, TurnTriggerSkipped{},
 		NotificationsCoalesced{}, NotificationSkipped{},
 		// a2a.go
 		A2ARequest{}, A2AMessage{},
-		A2AChannelOpened{}, A2AMessageSent{}, A2AMessageDelivered{},
-		A2AChannelClosed{},
-		// knowledge.go
-		DocumentCreated{}, DocumentUpdated{},
+		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
 		// budget.go
 		BudgetExhausted{}, BudgetReported{},
 		// provider.go
@@ -71,12 +66,10 @@ var wireTypes = []string{
 	"a2a_channel_closed",
 	"a2a_channel_opened",
 	"a2a_message",
-	"a2a_message_delivered",
 	"a2a_message_sent",
 	"a2a_request",
 	"agent_phase_completed",
 	"agent_phase_started",
-	"agent_reassigned",
 	"agent_spawned",
 	"agent_terminated",
 	"agent_turn_completed",
@@ -88,12 +81,9 @@ var wireTypes = []string{
 	"config_revision_activated",
 	"config_revision_applied",
 	"counterparty_profile_updated",
-	"document_created",
-	"document_updated",
 	"episode_written",
 	"external_notification",
 	"llm_unavailable",
-	"message_sent",
 	"notification_skipped",
 	"notifications_coalesced",
 	"org_started",
@@ -105,7 +95,6 @@ var wireTypes = []string{
 	"provider_fallback",
 	"raw_webhook",
 	"reflection_completed",
-	"role_updated",
 	"sandbox_clarification_requested",
 	"sandbox_run_completed",
 	"sandbox_run_failed",
@@ -121,11 +110,6 @@ var wireTypes = []string{
 	"skill_used",
 	"subagent_batched",
 	"task_assigned",
-	"task_completed",
-	"task_created",
-	"task_delegated",
-	"task_failed",
-	"task_started",
 	"turn.guard_breach",
 	"turn_completed",
 	"turn_trigger_skipped",
@@ -320,7 +304,7 @@ func TestFailed(t *testing.T) {
 		tagFailed     bool
 		want          bool
 	}{
-		{"failure by type alone", "task_failed", false, false, true},
+		{"failure by type alone", "sandbox_run_failed", false, false, true},
 		{"llm chain exhausted", "llm_unavailable", false, false, true},
 		{"budget refused a charge", "budget_exhausted", false, false, true},
 		{"guard breach", "turn.guard_breach", false, false, true},
@@ -361,22 +345,21 @@ func TestDescribeTriggerWithNoTrigger(t *testing.T) {
 
 func TestDescribeTriggerCompactDescriptor(t *testing.T) {
 	t.Parallel()
-	event := events.New(TaskCreated{Title: "Build API", TargetRole: "Engineer"},
-		events.TraceContext{})
+	// AN EVENT WITH NO ROLE OF ITS OWN, so the actor falls back to the
+	// envelope's source — which is the link this case is about.
+	event := events.New(OrgStarted{OrgName: "Acme"}, events.TraceContext{})
 	event.Source = "PM"
 
 	trigger := DescribeTrigger(event)
 	if trigger.ID != event.ID.String() {
 		t.Errorf("id = %q, want %q", trigger.ID, event.ID.String())
 	}
-	if trigger.Type != "task_created" {
+	if trigger.Type != "org_started" {
 		t.Errorf("type = %q", trigger.Type)
 	}
 	if trigger.Summary != event.Summary() {
 		t.Errorf("summary = %q, want the event's own %q", trigger.Summary, event.Summary())
 	}
-	// The actor falls back to the envelope's source, which is where a task
-	// creator's identity lives.
 	if trigger.Actor != "PM" {
 		t.Errorf("actor = %q, want PM", trigger.Actor)
 	}
@@ -445,7 +428,7 @@ func TestDescribeTriggerOmitsUnnamedSender(t *testing.T) {
 // reads as the turn's source, and survives the wire path to get there.
 func TestTriggerRidesOnPhaseEvents(t *testing.T) {
 	t.Parallel()
-	source := events.New(TaskCreated{Title: "Build API"}, events.TraceContext{})
+	source := events.New(TaskAssigned{Description: "Build API"}, events.TraceContext{})
 	source.Source = "PM"
 	trigger := DescribeTrigger(source)
 
@@ -499,12 +482,12 @@ func TestPhaseEventsDefaultToNoTrigger(t *testing.T) {
 // fails to decode.
 func TestTriggerToleratesAnUnparseableTimestamp(t *testing.T) {
 	t.Parallel()
-	raw := []byte(`{"id":"x","type":"task_created","timestamp":"last tuesday"}`)
+	raw := []byte(`{"id":"x","type":"org_started","timestamp":"last tuesday"}`)
 	var trigger Trigger
 	if err := json.Unmarshal(raw, &trigger); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if trigger.ID != "x" || trigger.Type != "task_created" {
+	if trigger.ID != "x" || trigger.Type != "org_started" {
 		t.Errorf("the other fields were lost: %+v", trigger)
 	}
 	if !trigger.Timestamp.IsZero() {

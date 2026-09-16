@@ -48,8 +48,11 @@ package textcut
 
 import "unicode/utf8"
 
-// Ellipsis is the common case: at most max bytes, cut on a rune boundary,
-// with a marker where it was cut.
+// Ellipsis is the common case: at most max bytes of CONTENT, cut on a rune
+// boundary, with a marker where it was cut.
+//
+// Where the budget is a ceiling something enforces rather than a guide, the
+// marker has to fit inside it — that is [Within].
 //
 // The marker matters wherever a reader could mistake the remainder for the
 // whole — a severed tool argument read as a different argument, an error whose
@@ -64,6 +67,36 @@ func Ellipsis(s string, max int) string {
 		return s
 	}
 	return Bytes(s, max) + "…"
+}
+
+// Within is at most max bytes INCLUDING the marker, cut on a rune boundary.
+//
+// [Ellipsis] deliberately does not count its marker against max — "the cap
+// bounds the content" — and that is right wherever the budget is advisory. It
+// is wrong wherever the budget is a CEILING somebody enforces: a tracker
+// notification's excerpt is refused at MaxExcerpt by
+// [github.com/crewlet/crewlet/internal/tracker.Notify.Validate], so a marker
+// that pushed a cut excerpt three bytes over would turn every long comment
+// into a REFUSED WRITE rather than a marked one.
+//
+// This existed by hand at four call sites before it had a name, each reducing
+// the budget and appending "…" itself — which is the shape this package was
+// written to end. Two of those four did not reduce the budget at all, so they
+// were Ellipsis with extra steps and could exceed their own limit.
+//
+// A max too small to hold the marker yields the marker ALONE rather than the
+// empty string, and that falls out of [Bytes] rather than being guarded for:
+// a non-positive budget there is already the empty string, so the marker is
+// what is left. It is the right answer either way — something was cut, and a
+// reader shown nothing cannot tell that from a value that was empty to begin
+// with — but it is worth saying, because it is the one case where the result
+// is longer than max.
+func Within(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	const marker = "…"
+	return Bytes(s, max-len(marker)) + marker
 }
 
 // Bytes is at most max bytes, cut on a rune boundary, with no marker.

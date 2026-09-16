@@ -10,7 +10,6 @@ package livestate
 func mergeOverlay(row map[string]any, o Overlay) {
 	row["state"] = o.State
 	row["runtime_id"] = o.RuntimeID
-	row["current_task"] = o.CurrentTask
 	row["current_phase"] = o.CurrentPhase
 	row["current_iteration"] = o.CurrentIteration
 	row["input_tokens"] = o.InputTokens

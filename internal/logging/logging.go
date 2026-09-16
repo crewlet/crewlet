@@ -5,7 +5,7 @@
 // into the message string, so a log stream stays greppable by event name and
 // filterable by field. The rule that buys that:
 //
-//	log.Info("task_created", "task_id", id, "creator", who)   // yes
+//	log.Info("agent_phase_started", "task_id", id, "creator", who)   // yes
 //	log.Info(fmt.Sprintf("created task %s", id))              // never
 //
 // Loggers are obtained through Get, which binds a component= attribute so

@@ -156,7 +156,7 @@ var protocolCases = []testCase{
 		h.claim(coord.NodeResource("new"), coord.AcquireOptions{
 			Owner: "new:1", TTL: LongTTL, Protocol: 2, Ungated: true,
 		})
-		h.requireResources("membership", h.listLive(coord.NodePrefix), "node:old", "node:new")
+		h.requireResources("membership", h.listLive(coord.ClassNode), "node:old", "node:new")
 	}},
 
 	{"an_ungated_claim_still_records_its_own_protocol", func(h *harness) {

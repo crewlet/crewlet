@@ -18,10 +18,10 @@ import (
 // prompt.
 //
 // It OWNS THE FLEET, which is what makes a live config apply coherent. A
-// seat's token, username or channel can change on an apply, and the socket,
-// the outbound client and the typing indicator all have to change with it —
+// seat's token or username can change on an apply, and the socket, the
+// authenticated client and the typing indicator all have to change with it —
 // so one object holds all three and rebuilds them together. Split across
-// three owners, an apply leaves a node posting as a revoked identity through
+// three owners, an apply leaves a node acting as a revoked identity through
 // a socket nobody rebuilt.
 
 // Config is what the engine hands this transport.
@@ -45,13 +45,21 @@ type Config struct {
 }
 
 // SeatConfig is one agent's bot, as configured.
+//
+// NO CHANNEL, deliberately. The seat's `integrations.mattermost.channel` is a
+// PROVISIONING input — [joinChannels] adds the bot to it, on the reconcile's
+// own cadence and off the live org — and this transport has never aimed a
+// message anywhere: an agent speaks through the Mattermost MCP server on this
+// same token. Carried here it was read by nothing except the engine's rebuild
+// fingerprint, so renaming a channel dropped and re-opened every seat's
+// websocket, and each one replayed its backfill window, to rebuild a transport
+// that could not tell the difference.
 type SeatConfig struct {
 	Handle string
 	Token  string
 	// Username defaults to the handle. Set only when the account already
 	// exists under another name.
 	Username string
-	Channel  string
 }
 
 // Resolve fills the defaults a seat's config leaves open.
@@ -380,25 +388,14 @@ func (t *Transport) Handles() []string {
 	return out
 }
 
-// Send posts a message as one seat.
+// Client exposes a seat's authenticated client, keyed by handle.
 //
-// The seat's OWN bot, which is the whole point of a bot per agent: a shared
-// identity would make every agent's message come from one account, and a
-// company whose members are indistinguishable is not a company.
-func (t *Transport) Send(ctx context.Context, handle, channel, thread, message string) (Post, error) {
-	t.mu.Lock()
-	s, ok := t.seats[handle]
-	t.mu.Unlock()
-	if !ok {
-		return Post{}, fmt.Errorf("mattermost: no bot running for seat %q", handle)
-	}
-	return s.client.CreatePost(ctx, PostRequest{
-		ChannelID: channel, RootID: thread, Message: message,
-	})
-}
-
-// Client exposes a seat's authenticated client, for the tools and workers
-// that read on a seat's behalf.
+// ONE PER SEAT and never shared, which is the whole point of a bot per
+// agent: every call carries that seat's own token, so the instance
+// attributes it to the agent rather than to one company-wide account.
+// Nothing here creates a post — an agent speaks through the Mattermost MCP
+// server, on this same token — so what this client does is read, and raise
+// the seat's typing indicator.
 func (t *Transport) Client(handle string) (*Client, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -494,7 +491,6 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 			Handle:   role.Handle(),
 			Token:    token,
 			Username: envref.Resolve(role.Mattermost.Username, lookup),
-			Channel:  envref.Resolve(role.Mattermost.Channel, lookup),
 		}.Resolve())
 	}
 	return out

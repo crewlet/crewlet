@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,7 @@ func TestAResumedTurnRecordsWhatItSaidToTheConversation(t *testing.T) {
 
 	e.recordResume(ctx, resumed("slack:C1"), turn.Result{
 		Decision:   phase.Done,
+		Delivered:  true,
 		Artifact:   "shipped the branch and opened the MR",
 		LastReview: &turn.Review{CompletedWork: "MR !42 is up"},
 	})
@@ -184,7 +186,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
-	got := tel.runnerTurn(company, "wk-1", 0, nil, "fix the failing test", turn.ReplyTool)
+	got := tel.runnerTurn(company, "wk-1", 0, nil, "fix the failing test", turn.ToolReply(""))
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}
@@ -194,7 +196,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	if got.Context.Task != "fix the failing test" {
 		t.Errorf("turn context task = %q", got.Context.Task)
 	}
-	if got.Context.Reply != string(turn.ReplyTool) {
+	if got.Context.Reply != turn.ToolReply("").String() {
 		t.Errorf("turn context reply = %q, want the delivery obligation", got.Context.Reply)
 	}
 }
@@ -229,5 +231,48 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "resume round 1") {
 		t.Fatalf("resumeTurn() = %v, want the turn to reach its first round: a runner "+
 			"built from the engine's current company is refused before it", err)
+	}
+}
+
+// A PARKED ROW OUTLIVES THE BUILD THAT WROTE IT, so who is waiting for a
+// resumed turn is read off it defensively.
+//
+// An ABSENT value is [turn.NoReply], the reading [sandbox.PendingRun] states
+// for it: `reply` is an omitempty column, nothing rewrites a parked row, and a
+// run launched before the field existed simply has none. Refused instead, those
+// runs could never be resumed, so a box that had already done the work was
+// collected and its answer dropped.
+//
+// A value this build does not recognise is a ROUTING refusal rather than a
+// default, so the completion reaches a peer that can read it instead of being
+// settled here against a guess at who is waiting.
+func TestAParkedRunsReplyIsReadOffItsRowDefensively(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stored string
+		want   turn.Reply
+	}{
+		{"a row written before the field existed", "", turn.NoReply()},
+		{"nobody is waiting", "none", turn.NoReply()},
+		{"somebody is waiting, on no surface the trigger named", "tool", turn.ToolReply("")},
+		{"somebody is waiting on a named surface", "tool:mattermost", turn.ToolReply("mattermost")},
+		{"a colleague asked over A2A", "engine", turn.EngineReply()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: tc.stored})
+			if err != nil {
+				t.Fatalf("resumeReply(%q) = %v", tc.stored, err)
+			}
+			if got != tc.want {
+				t.Errorf("resumeReply(%q) = %+v, want %+v", tc.stored, got, tc.want)
+			}
+		})
+	}
+	_, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: "whisper"})
+	if !errors.Is(err, sandbox.ErrResumeUnavailable) {
+		t.Fatalf("a reply kind this build does not know = %v, want a routing refusal so "+
+			"the completion reaches a node that can read it", err)
 	}
 }

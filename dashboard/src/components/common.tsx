@@ -8,7 +8,7 @@
  * zero callers beside another with all of them.
  */
 
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -35,6 +35,7 @@ import {
   EmptyValue,
   formatRelative,
   InlineCode,
+  Link,
   RelativeTime,
   Stack,
   tableColumns,
@@ -43,18 +44,23 @@ import {
   VisuallyHidden,
 } from "@crewlethq/ui";
 import type {
+  ButtonSize,
+  ButtonVariant,
   DataTableItemsPerPage,
   DataTableProps,
   DataTableSortState,
   DataViewColumn,
 } from "@crewlethq/ui";
 import {
+  ArrowDownwardGlyph,
+  CheckGlyph,
   DatabaseGlyph,
   ErrorGlyph,
   InboxGlyph,
   InfoGlyph,
   KeyGlyph,
   ScheduleGlyph,
+  WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 
 /**
@@ -429,18 +435,21 @@ export function SeatChip({
 }) {
   const target = handle || name;
   return (
-    <a
-      // `seat-chip`, not a bare link: a seat's name is IDENTITY, and the
-      // accent is reserved for saying where the reader is. A name rendered in
-      // the accent everywhere it appears is identity-colouring by accident.
-      // The affordance is the hover state and the cursor.
-      className="row seat-chip"
+    <Link
+      // SUBTLE, which is the design system's word for this exact case: a seat's
+      // name is IDENTITY, and the accent is reserved for saying where the
+      // reader is. A name rendered in the accent everywhere it appears is
+      // identity-colouring by accident, which is what a bare anchor does, since
+      // the document baseline paints every one of them in the accent ink. The
+      // affordance is the hover state and the cursor.
+      variant="subtle"
+      className="row"
       style={{ gap: "var(--spacing-2)", minWidth: 0 }}
       href={href(["seats", target])}
     >
       <Avatar name={name} size={size} variant={human ? "dashed" : "solid"} decorative />
       <span className="truncate">{name}</span>
-    </a>
+    </Link>
   );
 }
 
@@ -677,6 +686,35 @@ export function QueryState({
       </Callout>
     );
   }
+  if (error === "bad_params") {
+    return (
+      <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
+        <span>
+          The engine refused this request: something it needs was missing or not a value it accepts.
+          Retrying sends the same request, so this is the screen's bug to fix rather than a fault on
+          the node.
+        </span>
+      </Callout>
+    );
+  }
+  if (error === "unavailable") {
+    return (
+      <Callout variant="neutral" icon={<ScheduleGlyph size="sm" />}>
+        <span>
+          This node has not finished reading the company's own records yet, so its projection is
+          still catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+          <strong> This is not an empty company.</strong>
+        </span>
+      </Callout>
+    );
+  }
+  if (error === "not_found") {
+    return (
+      <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
+        <span>There is no such record. The link may point at something that was removed.</span>
+      </Callout>
+    );
+  }
   if (error === "timeout") {
     return (
       <Callout variant="warning" icon={<ScheduleGlyph size="sm" />}>
@@ -706,4 +744,281 @@ export function QueryState({
     );
   }
   return <>{children}</>;
+}
+
+/**
+ * How long the download's confirmation holds before the control offers its
+ * action again.
+ *
+ * Long enough to be read at a glance, short enough that a reader who wants it
+ * twice is not waiting on it. A REFUSAL is not on this clock, for the reason
+ * in the click handler below.
+ */
+const DOWNLOAD_HOLD_MS = 2000;
+
+export interface DownloadButtonProps {
+  /**
+   * The text, or a THUNK that produces it.
+   *
+   * The thunk is not a convenience. On a live record the thing worth saving is
+   * assembled from everything on the screen, and a screen that pushes twice
+   * per tool round would serialize the whole record on every push for a button
+   * nobody has pressed. Resolved on the press, it costs nothing until it is
+   * asked for.
+   */
+  text: string | (() => string);
+  /** The name to offer it under. Sanitised here, see [safeFilename]. */
+  filename: string;
+  /** What the file is, for the browser that has to open it again. */
+  mime?: string | undefined;
+  /** The label at rest. */
+  label?: string | undefined;
+  /** The label once the browser has taken the file. */
+  startedLabel?: string | undefined;
+  /** The label when the browser refused. */
+  failedLabel?: string | undefined;
+  /** Read out on success. Names the file by default, which is the useful half. */
+  startedMessage?: string | undefined;
+  /** Read out on failure. */
+  failedMessage?: string | undefined;
+  size?: ButtonSize | undefined;
+  variant?: ButtonVariant | undefined;
+  title?: string | undefined;
+  className?: string | undefined;
+}
+
+/**
+ * Hand the same text to the reader as a FILE, and say whether it landed.
+ *
+ * THE SIBLING OF UILET'S `CopyButton`, over the same bytes and in the same
+ * prop shape, because the two things an operator does with a record are
+ * different: one is pasted into a thread, the other is attached to a bug
+ * report and opened weeks later. A clipboard also holds exactly one thing, so
+ * copying two turns to compare them is not a gesture that exists.
+ *
+ * It lives here rather than in `@crewlethq/ui` because the design system has
+ * no download control at 0.3.0, and everything below is behaviour rather than
+ * appearance: it composes the package's own Button and adds no styling of its
+ * own. The moment uilet gains one, this becomes a call to it.
+ *
+ * Two failure modes, both checked up front rather than assumed, and one of
+ * them is worse than a dead button:
+ *
+ *  1. **No `URL.createObjectURL`** leaves nothing to point a saveable link
+ *     at, and a `data:` URL is the wrong fallback: several engines cap it
+ *     around two megabytes and a self-iterating turn's JSON goes past that,
+ *     so it would work on the small records nobody needs it for and fail
+ *     silently on the large ones.
+ *  2. **No `download` attribute** makes the click NAVIGATE to the payload
+ *     instead of saving it, which looks enough like something happening that
+ *     nobody checks.
+ *
+ * What it reports is a HAND-OFF and never a saved file: there is no completion
+ * event on an `<a download>`, and a browser's automatic-multiple-download gate
+ * can stop it silently after the click. The NAME is the half that is true and
+ * the half worth saying, since a reader who cannot see the download shelf has
+ * nothing else to tell them what to open.
+ */
+export function DownloadButton({
+  text,
+  filename,
+  mime = "application/json;charset=utf-8",
+  label = "Download",
+  startedLabel = "Downloading",
+  failedLabel = "Download failed",
+  startedMessage,
+  failedMessage = "the browser refused the download",
+  size = "small",
+  variant = "secondary",
+  title,
+  className = "row gap-1",
+}: DownloadButtonProps) {
+  // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
+  // running is not a DOM change and a live region announces changes only. A
+  // second refusal would otherwise leave a reader who cannot see the button
+  // with silence. Keyed on the count, the status node is REPLACED rather than
+  // re-rendered, which is a change.
+  const [{ state, attempt }, setOutcome] = useState<{
+    state: "idle" | "done" | "failed";
+    attempt: number;
+  }>({ state: "idle", attempt: 0 });
+  // The confirmation's timeout outlives the component otherwise, and a screen
+  // left during the seconds after a click would set state on something
+  // unmounted. The hand-off itself is synchronous, so there is nothing else
+  // in flight to guard.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const name = safeFilename(filename);
+  const onClick = useCallback(() => {
+    const ok = saveTextFile(typeof text === "function" ? text() : text, name, mime);
+    setOutcome((prior) => ({ state: ok ? "done" : "failed", attempt: prior.attempt + 1 }));
+    clearTimeout(timer.current);
+    // A CONFIRMATION SETTLES BACK. A REFUSAL DOES NOT. Two seconds after a
+    // download the reader is looking at the browser's shelf rather than at
+    // the button, and a control that has reverted to offering its action is
+    // indistinguishable from one that was never pressed. So a refusal holds
+    // until the next click, which is the gesture a reader who wants to retry
+    // makes anyway.
+    if (ok) {
+      timer.current = setTimeout(
+        () => setOutcome((prior) => ({ ...prior, state: "idle" })),
+        DOWNLOAD_HOLD_MS,
+      );
+    }
+  }, [text, name, mime]);
+
+  const said =
+    state === "done"
+      ? (startedMessage ?? `download started, ${name}`)
+      : state === "failed"
+        ? failedMessage
+        : "";
+
+  return (
+    <span className={className}>
+      <Button
+        variant={variant}
+        size={size}
+        leadingIcon={
+          state === "done" ? (
+            <CheckGlyph />
+          ) : state === "failed" ? (
+            <ErrorGlyph />
+          ) : (
+            <ArrowDownwardGlyph />
+          )
+        }
+        onClick={onClick}
+        title={state === "failed" ? said : title}
+      >
+        {state === "done" ? startedLabel : state === "failed" ? failedLabel : label}
+      </Button>
+      {/* Announced, not just drawn: the icon swap is the only signal a sighted
+          reader gets, and a screen reader gets none of it.
+
+          A SIBLING of the button, never a child. A button's accessible name is
+          computed from its contents, so inside it this would name the control
+          "Downloading download started, turn-t-1.json". */}
+      <VisuallyHidden>
+        <span role="status">
+          <span key={attempt}>{said}</span>
+        </span>
+      </VisuallyHidden>
+    </span>
+  );
+}
+
+/**
+ * Save `text` to the reader's machine as `filename`, and report whether the
+ * browser took it.
+ *
+ * The blob URL is revoked on the NEXT macrotask rather than here: the click
+ * only QUEUES the download, and freeing the entry inside the same task races
+ * the fetch that is about to read it. Not revoking at all is the other
+ * failure, since the blob is a second copy of the whole record held for the
+ * life of the tab, and a reader comparing records clicks this several times.
+ */
+function saveTextFile(text: string, filename: string, mime: string): boolean {
+  if (typeof URL.createObjectURL !== "function" || !("download" in HTMLAnchorElement.prototype)) {
+    return false;
+  }
+  let url = "";
+  try {
+    url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    // In the document for the one synchronous call: not every engine
+    // dispatches an activation behaviour on a node that is in no document,
+    // and there is no state to leave behind either way.
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+/** Longer than any extension in use, so a `.` deep inside a name is not read
+ *  as one when a long name has to be cut. */
+const MAX_EXTENSION = 12;
+/**
+ * Every filesystem a reader of this dashboard is on allows at least 255
+ * BYTES, and the browser appends its own " (1)" to deduplicate against what
+ * is already in the folder; eCryptfs stops at 143. 120 clears all three with
+ * room to spare.
+ */
+const MAX_FILENAME = 120;
+
+/**
+ * A filename the reader will actually get, out of whatever the caller had.
+ *
+ * The name is composed from data, since a turn id comes off the URL, and the
+ * `download` attribute is only a SUGGESTION: the browser sanitises it its own
+ * way, stripping path separators and whatever else each engine dislikes.
+ * Deciding it here means a name that arrived as `../etc/passwd` or with a
+ * newline in it never reaches that guess.
+ *
+ * UNICODE-AWARE, and that is not a nicety. `\w` is ASCII-only, so an
+ * ASCII-only class collapses a whole non-Latin stem to a single `-` and the
+ * leading strip below then takes that hyphen AND the extension's own
+ * separator with it. What has to be excluded is the separators and the
+ * invisibles, and not one of those is a letter, a mark or a number in any
+ * script.
+ */
+function safeFilename(name: string): string {
+  const cleaned = name.replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, "-").replace(/-{2,}/g, "-");
+  // An extension is a dot with SOMETHING after it and not much: a `.` deep
+  // inside a long name is part of the name, and a trailing one is not an
+  // extension at all, as well as being illegal on Windows.
+  const dot = cleaned.lastIndexOf(".");
+  const tail = cleaned.length - dot;
+  const ext = dot >= 0 && tail >= 2 && tail <= MAX_EXTENSION ? cleaned.slice(dot) : "";
+  // THE STEM IS WHAT GETS STRIPPED AND WHAT GETS CUT, never the extension: a
+  // name that loses its `.json` opens in the wrong application on every
+  // desktop there is. Leading dots are what make `..` a traversal and `.turn`
+  // a hidden file, and they can only ever be in the stem.
+  const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
+  if (!stem) return `download${ext}`;
+  return cutToBytes(stem, MAX_FILENAME - byteLength(ext)) + ext;
+}
+
+const encoder = new TextEncoder();
+
+/** How many BYTES a string takes on a filesystem, which is what limits it. */
+function byteLength(s: string): number {
+  return encoder.encode(s).length;
+}
+
+/**
+ * Cut to a byte budget, on whole characters.
+ *
+ * `MAX_FILENAME` is a BYTE limit and `slice` counts UTF-16 code units, which
+ * are the same thing only for ASCII. The sanitizer above deliberately keeps
+ * letters in every script, so the gap is not hypothetical: 120 units of
+ * Japanese is 360 bytes, past ext4's 255 and well past eCryptfs's 143.
+ *
+ * Iterated with `for…of`, which walks CODE POINTS rather than units: a cut
+ * that lands between the halves of a surrogate pair leaves a lone surrogate,
+ * which is not valid UTF-8 and reaches the disk as a replacement character.
+ */
+function cutToBytes(s: string, max: number): string {
+  if (max <= 0) return "";
+  if (byteLength(s) <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = byteLength(ch);
+    if (used + n > max) break;
+    out += ch;
+    used += n;
+  }
+  return out;
 }

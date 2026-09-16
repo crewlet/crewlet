@@ -34,7 +34,6 @@ func init() {
 	events.Register[A2AMessage]()
 	events.Register[A2AChannelOpened]()
 	events.Register[A2AMessageSent]()
-	events.Register[A2AMessageDelivered]()
 	events.Register[A2AChannelClosed]()
 }
 
@@ -169,25 +168,6 @@ func (e A2AMessageSent) SummaryFor(actor string) string {
 		phrase += " → " + e.Recipient
 	}
 	return lead(who, phrase)
-}
-
-// A2AMessageDelivered marks messages being read by the target agent.
-type A2AMessageDelivered struct {
-	ChannelID          string `json:"channel_id"`
-	Recipient          string `json:"recipient"`
-	Sender             string `json:"sender"`
-	MessageCount       int    `json:"message_count"`
-	TotalContentLength int    `json:"total_content_length"`
-}
-
-// EventType is the "a2a_message_delivered" wire type.
-func (A2AMessageDelivered) EventType() string { return "a2a_message_delivered" }
-
-// Summary leads with the recipient, because delivery is something that happened
-// TO a seat: it is the read, not the send.
-func (e A2AMessageDelivered) Summary() string {
-	return lead(e.Recipient, fmt.Sprintf("received %d A2A message(s) from %s on %s",
-		e.MessageCount, e.Sender, e.ChannelID))
 }
 
 // A2AChannelClosed marks a channel closing — the exchange is over, and a

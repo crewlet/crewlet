@@ -107,11 +107,20 @@ linters:
       - path: _test\.go
         linters: [errcheck, gocritic, unparam]
 
-      # The certification suites live in *test packages rather than
-      # _test.go files, because several backends run the same cases. They
-      # are test code by every measure that matters here: a helper whose
-      # parameter takes one value today is a helper the next case widens.
-      - path: (a2atest|coordtest|storetest|queuetest|scheduletest|sandboxtest)/
+      # The certification suites and shared test harnesses live in *test
+      # packages rather than _test.go files, because several backends run
+      # the same cases. They are test code by every measure that matters
+      # here: a helper whose parameter takes one value today is a helper
+      # the next case widens.
+      #
+      # THE LIST IS EVERY DIRECTORY MATCHING `internal/**/*test/`, and it
+      # was six of nine. `statelogtest` and `integrationtest` are named in
+      # CLAUDE.md as being in this exact idiom, and `jetstreamtest` starts
+      # a real embedded cluster for the same reason the others exist —
+      # they were simply never added. A rule the config states and applies
+      # to two thirds of its subject is one the next author cannot tell
+      # from a deliberate exception.
+      - path: (a2atest|coordtest|storetest|queuetest|jetstreamtest|scheduletest|sandboxtest|statelogtest|integrationtest)/
         linters: [unparam, errcheck, gocritic]
 
       # A test's own HTTP call has no caller to cancel it and no connection

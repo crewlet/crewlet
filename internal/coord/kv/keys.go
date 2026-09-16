@@ -1,122 +1,73 @@
 package kv
 
-import "strings"
+import (
+	"strings"
 
-// Resource names carry a colon (seat:alice, node:node-0, worker:scheduler)
-// and NATS KV keys do not allow one: a key must match [-/_=.A-Za-z0-9]+,
-// because it becomes a subject token under $KV.<bucket>. So a resource is
-// escaped on the way in and unescaped on the way out, and the mapping has to
-// be INJECTIVE in both directions — two resources that collided on one key
-// would share one lease, which is two nodes holding one seat.
+	"github.com/crewlet/crewlet/internal/coord"
+)
+
+// How a name becomes a NATS KV key, and why there are two shapes of it.
 //
-// The scheme is percent-encoding with '=' as the escape byte, which is the
-// one punctuation character NATS allows that is also vanishingly rare in a
-// handle. Everything outside [A-Za-z0-9_-] travels as =HH, '=' itself
-// included — escaping the escape is what makes the mapping injective, and
-// leaving '.' out of the literal set is deliberate: a dot in a key is a
-// SUBJECT SEPARATOR, so an unescaped one would split a key into two tokens
-// and quietly change what a filtered watch matches.
+// A key must match [-/_=.A-Za-z0-9]+ because it becomes a subject token path
+// under $KV.<bucket>, and the names this engine keys on carry bytes that are
+// not in that set — a colon in a resource, a pipe in a ledger key, a space or
+// a non-ASCII letter in a page title. So a name is escaped on the way in and
+// unescaped on the way out, by [coord.DocumentKey] and [coord.DocumentSegments]
+// — the ONE grammar, shared with the fleet buckets, rather than a second copy
+// of the same rule here. It was a second copy once, byte-identical to the
+// first, which is the arrangement that ends with the two disagreeing.
 //
-// The result stays legible to an operator running `nats kv ls`:
-// seat:alice -> seat=3Aalice.
-const escapeByte = '='
+// The two shapes differ only in how many segments the name has:
+//
+//   - [encodeKey] is for a bucket whose keys are ONE opaque name — a budget
+//     scope, a node id, a secret name, a turn id. Nothing filters inside such
+//     a bucket, because the bucket IS the class.
+//
+//   - [encodeResource] is for the LEASE and EPOCH buckets, whose keys name
+//     resources of several classes at once. A resource's segments become the
+//     key's segments, so its class is a subject token of its own and a whole
+//     class is a wildcard the broker can match. That is what lets the
+//     membership read ask for the nodes rather than reading every lease in the
+//     fleet, and the sweep ask for the seat hints rather than reading every
+//     epoch the deployment has ever minted.
+//
+// Both mappings are INJECTIVE in both directions, which is the property that
+// matters rather than the encoding: two resources that collided on one key
+// would share one lease, and that is two nodes holding one seat.
 
-const hexDigits = "0123456789ABCDEF"
+// encodeKey maps one opaque name onto a key.
+func encodeKey(name string) string { return coord.DocumentKey(name) }
 
-// literalKeyByte reports whether b may appear in a key as itself.
-func literalKeyByte(b byte) bool {
-	switch {
-	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
-		return true
-	case b == '_' || b == '-':
-		return true
-	}
-	return false
-}
-
-// encodeKey maps a resource name onto a NATS KV key.
-func encodeKey(resource string) string {
-	needsEscape := false
-	for i := 0; i < len(resource); i++ {
-		if !literalKeyByte(resource[i]) {
-			needsEscape = true
-			break
-		}
-	}
-	if !needsEscape {
-		return resource
-	}
-	var b strings.Builder
-	// Worst case every byte escapes; sizing for it costs one allocation
-	// and this runs on every lease operation.
-	b.Grow(len(resource) * 3)
-	for i := 0; i < len(resource); i++ {
-		c := resource[i]
-		if literalKeyByte(c) {
-			b.WriteByte(c)
-			continue
-		}
-		b.WriteByte(escapeByte)
-		b.WriteByte(hexDigits[c>>4])
-		b.WriteByte(hexDigits[c&0x0f])
-	}
-	return b.String()
-}
-
-// decodeKey recovers the resource name from a key, reporting false for a key
-// this backend did not write.
+// decodeKey recovers an opaque name, reporting false for a key this backend
+// did not write — including a MULTI-SEGMENT one, which is a resource key and
+// belongs to another bucket.
 //
 // A malformed key is skipped rather than guessed at: a listing that invented
-// a resource name would put a seat nobody owns into a capacity calculation.
+// a name would put a record nobody wrote into a projection.
 func decodeKey(key string) (string, bool) {
-	if key == "" {
+	segments, ok := coord.DocumentSegments(key)
+	if !ok || len(segments) != 1 {
 		return "", false
 	}
-	if !strings.ContainsRune(key, escapeByte) {
-		for i := 0; i < len(key); i++ {
-			if !literalKeyByte(key[i]) {
-				return "", false
-			}
-		}
-		return key, true
-	}
-	var b strings.Builder
-	b.Grow(len(key))
-	for i := 0; i < len(key); i++ {
-		c := key[i]
-		if c != escapeByte {
-			if !literalKeyByte(c) {
-				return "", false
-			}
-			b.WriteByte(c)
-			continue
-		}
-		if i+2 >= len(key) {
-			return "", false
-		}
-		hi, ok := unhex(key[i+1])
-		if !ok {
-			return "", false
-		}
-		lo, ok := unhex(key[i+2])
-		if !ok {
-			return "", false
-		}
-		b.WriteByte(hi<<4 | lo)
-		i += 2
-	}
-	return b.String(), true
+	return segments[0], true
 }
 
-func unhex(c byte) (byte, bool) {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0', true
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10, true
+// encodeResource maps a resource name onto a key, one segment per part.
+//
+// THE CLASS BECOMES A SUBJECT TOKEN, which is the whole point — see the file
+// doc. The parts are [coord.ResourceSegments]', so `seat:alice` is the two
+// segments `seat` and `alice` and lands on the key `seat.alice`, which
+// `seat.>` matches and `node.>` does not.
+func encodeResource(resource string) string {
+	return coord.DocumentKey(coord.ResourceSegments(resource)...)
+}
+
+// decodeResource recovers a resource name, reporting false for a key this
+// backend did not write.
+func decodeResource(key string) (string, bool) {
+	segments, ok := coord.DocumentSegments(key)
+	if !ok {
+		return "", false
 	}
-	// Lower-case hex is rejected on purpose. encodeKey only ever emits
-	// upper case, so accepting both would make two different keys decode to
-	// one resource — the collision this mapping exists to rule out.
-	return 0, false
+	return strings.Join(segments, coord.ResourceSeparator), true
 }

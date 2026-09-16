@@ -14,8 +14,17 @@
 # switched on in the repository settings rather than here, and are not held
 # back by this schedule.
 #
-# Each entry pins its own `commit-message.prefix`, which is the one knob here
-# beyond the schedule. It earns its place because these pull requests
+# Beyond the schedule there are two knobs here, and each is written down where
+# it is set. Every entry pins its own `commit-message.prefix`; one entry — npm —
+# also carries two `groups:` rules, because two families there are broken unless
+# their packages move in one pull request. A group raises the members that have
+# an update TOGETHER, in one pull request titled for the group rather than for
+# any package in it — so it costs a less precise subject on every bump, and it
+# puts one member's bad release in front of the rest. Pay that only where the
+# split is genuinely broken; everything matching no group still gets its own
+# pull request, so grouping narrows nothing.
+#
+# The prefix earns its place because these pull requests
 # auto-merge (.github/workflows/dependabot-merge.yml): the title Dependabot
 # writes becomes the squashed commit's subject and a line in the generated
 # release notes, with no reviewer in between to correct it. Left unset,
@@ -67,12 +76,93 @@ updates:
   # dependabot-core#13722 is the devEngines case, #12535 / #13741 the
   # engine-strict one. ci.yml installs `latest`; no node version is pinned
   # anywhere in the tree, so there is nothing here to keep in step.
+  #
+  # THE REACT FAMILY MOVES AS ONE PULL REQUEST, and it is the reason there is
+  # a `groups:` key here at all: it is the one family where a split bump is
+  # red in BOTH directions. react-dom carries a runtime assertion that `react` and
+  # `react-dom` have the EXACT same version — not a compatible one — so no
+  # version range anywhere can express what it needs.
+  #
+  # Ungrouped, React 19.3.0 arrived as two pull requests, (react,
+  # @types/react) and (react-dom, @types/react-dom), because Dependabot pairs
+  # a package with its own @types and knows nothing of the edge BETWEEN the
+  # pairs. Both halves failed, in different phases, which is what makes this
+  # worth a comment rather than a retry:
+  #
+  #   - The react-dom half (#116) could not INSTALL. @types/react-dom@19.3.0
+  #     peers `@types/react: ^19.3.0` against 19.2.18, and react-dom@19.3.0
+  #     peers `react: ^19.3.0` against 19.2.8 — two unsatisfied edges, though
+  #     `npm ci` prints only the first it reaches. It died in one second,
+  #     before a single gate behind it ran.
+  #   - The react half (#115) installed CLEANLY and then failed `npm test`,
+  #     19 suites of 36, on react-dom's exact-version check: react 19.3.0
+  #     against react-dom 19.2.8. It resolves only because react-dom@19.2.8's
+  #     peer is the caret `^19.2.8`, which a newer minor satisfies — so npm
+  #     cannot catch this direction at all, and the DefinitelyTyped range was
+  #     equally permissive (`^19.2.0`) before 19.3.0 tightened it.
+  #
+  # So there was no merge order that got either one green, and no rebase that
+  # would have helped: each needed versions sitting in the other pull request.
+  # Grouping is the only shape that makes the four arrive together.
+  #
+  # The patterns are literal names rather than `react*`: the wildcard would
+  # also match `react-is`, a dev transitive at 17.0.2 today, which has no
+  # business being pinned by this entry on the day it becomes direct.
+  # `@testing-library/react` is deliberately NOT in the group — its react and
+  # react-dom peers are `^18.0.0 || ^19.0.0`, wide enough to ride a React
+  # minor without moving, so grouping it would hold a bump behind a release it
+  # does not need. `@vitejs/plugin-react` is out for a different reason: it
+  # declares no react peer AT ALL, only `vite: ^8.0.0`, so it belongs to the
+  # vite group below and not to this one. Its name is the only React-shaped
+  # thing about it.
+  #
+  # THE VITE FAMILY IS GROUPED FOR THE SAME REASON, one major out. `vite` is
+  # peered REQUIRED by two direct dependencies — `@vitejs/plugin-react@6.1.1`
+  # at `^8.0.0` and `vitest@5.0.0` at `^6.4.0 || ^7.0.0 || ^8.0.0` — so a lone
+  # `vite` 9 bump violates both ceilings at once and ERESOLVEs exactly as the
+  # react-dom half did. Minors are fine and always were (8.2.2 -> 8.3.0 landed
+  # on its own), so this buys nothing until the major, and then it buys the
+  # whole thing. The cost is paid in the meantime and is worth stating: a
+  # `vitest`-only bump now arrives titled for the group rather than for
+  # `vitest`, and the packages it moved are in the body instead of the subject.
+  #
+  # NOTHING ELSE IS GROUPED, and the peer graph is why rather than taste. The
+  # only other REQUIRED edges a bump here could split are
+  # @testing-library/react's: on react and react-dom at `^18.0.0 || ^19.0.0`,
+  # which ride a minor, and on @testing-library/dom, a transitive it brings
+  # itself and Dependabot therefore moves with it. The @csstools chain is
+  # transitive throughout, and every vite peer outside the group above
+  # (@vitest/mocker's, vite's own on @types/node and the bundlers) is
+  # OPTIONAL — npm does not fail on an unsatisfied optional peer. So a third
+  # group would buy nothing and cost a vaguer subject on every bump in it.
+  #
+  # `applies-to` is left at its default of version-updates on both: a security
+  # advisory must not wait for the rest of a family to have a release.
+  #
+  # Of twelve direct dependencies, seven are grouped; the remaining five —
+  # @testing-library/react, @types/node, jsdom, prettier, typescript — still
+  # arrive one pull request each.
   - package-ecosystem: npm
     directory: "/dashboard"
     schedule:
       interval: weekly
     commit-message:
       prefix: "build(deps)"
+    groups:
+      # The identifier names the branch and the pull request title, so it is
+      # short on purpose: it has to leave the generated subject under the
+      # 72-character limit CONTRIBUTING.md sets for every other commit.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      vite:
+        patterns:
+          - "vite"
+          - "vitest"
+          - "@vitejs/plugin-react"
 
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither

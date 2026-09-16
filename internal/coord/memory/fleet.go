@@ -42,6 +42,14 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
+	positions    map[string]coord.NodePositions
+	holds        map[string]coord.TrimHold
+	floors       map[string]coord.TrimFloor
+	backups      map[string]coord.BackupPoint
+	maintenance  map[string]coord.MaintenanceOperation
+	admissions   map[string]coord.Admission
+	maintAcks    map[string]coord.MaintenanceAck
+	maintRev     uint64
 
 	// version is the one counter every versioned write draws from, sandbox
 	// runs and mailbox records alike. Store-wide rather than per record, as

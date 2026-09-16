@@ -11,6 +11,7 @@ import { QueryState, RecordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
+import { RetentionPanels } from "./Retention.tsx";
 import {
   Callout,
   Card,
@@ -424,6 +425,12 @@ export function Fleet() {
           </Card>
         )}
       </QueryState>
+
+      {/* THE REPLICATION HALF, on this screen rather than its own. "Why is
+          nothing being trimmed" and "which node is behind" are the same
+          investigation, and a separate screen would make an operator hold two
+          polls in their head to answer one question. */}
+      <RetentionPanels thisNode={data?.this_node} />
     </>
   );
 }

@@ -19,13 +19,14 @@
  *     stat strip and as a raw JSON dump. The reader who called it "kinda a
  *     duplicate of the phases" was reading it correctly.
  *
- *     Those rows are not dropped. A phase start is folded onto its own phase
- *     card (`withStarts`), where it stops being a duplicate and becomes the
- *     missing half of a fact: `agent_phase_completed` carries only the instant
- *     the phase LANDED, so until now no completed phase had a duration
- *     anywhere on this dashboard — on a turn that self-iterated three times
- *     and cost 290k tokens, "which round took ninety seconds" was derivable
- *     from two events in the same query answer and shown by neither.
+ *     Those rows are not dropped — they are REDUNDANT. A phase start says
+ *     which phase opened, and its own completed record says that and
+ *     everything else, its duration included: `agent_phase_completed` carries
+ *     `duration_ms`, measured where the clock is. The pairing this screen
+ *     used to do instead — fold the start onto the finish, subtract — needed
+ *     both events in one reader's hands, which is exactly what a turn
+ *     deep-linked WHILE IT RUNS does not have, and it is the screen this
+ *     panel exists for. See `phaseDuration` in ./lib/phases.ts.
  *
  *  2. **Everything left had the same weight.** `reflection_completed` is a
  *     sentinel whose own payload doc says it deliberately carries no outcome.
@@ -46,10 +47,11 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
+import { PhaseTag } from "~/components/PhaseTag.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -65,15 +67,23 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
-  phaseStarts,
+  phaseStart,
   streamedPhases,
-  withStarts,
   type PhaseRecord,
+  type Timed,
 } from "~/lib/phases.ts";
-import { prefetchBlocks, tellStory, type PrefetchBlock } from "~/lib/turnstory.ts";
+import {
+  prefetchBlocks,
+  promptWeights,
+  tellStory,
+  TURN_STOP,
+  type PrefetchBlock,
+  type PromptWeight,
+} from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
 import {
+  ArrowDownwardGlyph,
   BoltGlyph,
   Book2Glyph,
   CheckGlyph,
@@ -87,6 +97,7 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
   TokenGlyph,
+  WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -126,6 +137,24 @@ function str(event: EventRecord | undefined, key: string): string {
 }
 
 /**
+ * The word for a turn nothing has recorded an outcome for, and the design
+ * system's tone for each word [outcomeOf] answers with.
+ *
+ * KEPT APART because they answer different questions. What a turn's records
+ * say about how it ended is a decision about two events, exercised as a pure
+ * function over them and therefore in the engine's own vocabulary; how the
+ * tile is painted, and what a marked absence looks like, is the design
+ * system's. The two meet where the tile is built and nowhere else.
+ */
+const NO_OUTCOME = "—";
+
+const OUTCOME_TONE: Record<"positive" | "caution" | "critical", StatCardTone> = {
+  positive: "success",
+  caution: "warning",
+  critical: "danger",
+};
+
+/**
  * How a turn ended, in the two words that mean different things.
  *
  * `outcome` is the EXECUTOR's own last word — delivered / no_action / blocked,
@@ -135,24 +164,30 @@ function str(event: EventRecord | undefined, key: string): string {
  * disagree. Showing only the second made a turn that delivered nothing and a
  * turn that delivered look identical whenever the reviewer accepted both.
  */
-function outcomeOf(rec: TurnRecord): {
-  word: ReactNode;
-  tone: StatCardTone | undefined;
+export function outcomeOf(rec: TurnRecord): {
+  word: string;
+  tone: "positive" | "caution" | "critical" | undefined;
   sub: string;
 } {
   const failed = field(rec.summary, "failed") === true;
   const review = str(rec.learning, "review_outcome") || str(rec.summary, "decision");
   const executor = str(rec.learning, "outcome");
-  if (!review && !executor)
-    return { word: <EmptyValue label="No outcome recorded" />, tone: undefined, sub: "" };
-  const kind = str(rec.summary, "error_kind");
+  // THE FLAG IS AN ANSWER, so it is read BEFORE an absence of words is taken
+  // for an absence of record. A turn the engine stopped before any phase
+  // decided anything carries `failed: true` and no word at all — `decision`
+  // and `review_outcome` are both the zero `phase.Decision` — and this used
+  // to fall through the no-outcome return three lines below, which the caller
+  // then captioned "no turn record", printed directly above the panel
+  // rendering that very record.
   if (failed || review === "failed") {
+    const kind = str(rec.summary, "error_kind");
     return {
       word: "failed",
-      tone: "danger",
+      tone: "critical",
       sub: kind ? `the engine stopped it: ${kind}` : "the turn will not retry",
     };
   }
+  if (!review && !executor) return { word: NO_OUTCOME, tone: undefined, sub: "" };
   const label: Record<string, string> = {
     delivered: "delivered the work",
     no_action: "nothing to do, so it ended silently",
@@ -161,10 +196,77 @@ function outcomeOf(rec: TurnRecord): {
   };
   return {
     word: review === "done" ? "done" : review || executor,
-    tone: review === "done" ? "success" : "warning",
+    tone: review === "done" ? "positive" : "caution",
     sub:
       label[executor] ?? (executor ? `the executor said ${executor}` : "the reviewer's decision"),
   };
+}
+
+/**
+ * How many problems this turn had, counted as the page can show them.
+ *
+ * ONE STOP IS ONE PROBLEM, however many records the engine wrote about it.
+ * `agent_turn_completed.failed` and the dedicated record behind it — a guard
+ * breach, an exhausted chain, an unavailable provider — are published in the
+ * same breath about the SAME stop (`internal/engine/telemetry.go` closes a
+ * failed turn with `publishEvent` and then `publishFailure`), so adding the
+ * flag to the rows counted that one event twice: the header badge said
+ * "2 problems" over a panel holding one row, and the reader went looking for
+ * a second that is nowhere on the page.
+ *
+ * The flag is deduped against THAT RECORD, never against the row count. A
+ * turn the reviewer decided against carries the flag with no dedicated record
+ * behind it — `publishFailure` writes nothing when no guard fired and no
+ * error was returned — and it can carry an unrelated `provider_fallback` in
+ * the same breath. Against the count, the flag would have been swallowed by
+ * that fallback and a genuinely failed turn reported as one problem rather
+ * than two; against the count and with no rows at all, `clean` would have
+ * gone on to claim "nothing went wrong" about it.
+ */
+export function problemCount(wentWrong: readonly EventRecord[], failed: boolean): number {
+  const stopped = wentWrong.some((e) => TURN_STOP.has(e.type));
+  return wentWrong.length + (failed && !stopped ? 1 : 0);
+}
+
+/**
+ * The window this page can see the turn through.
+ *
+ * THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
+ * Read off `events` only, a turn whose phases all arrived on the stream
+ * reported no duration at all beside a phase list several minutes long.
+ *
+ * The start is a minimum over EVERY phase, never over `phases[0]`. That list
+ * is ordered by when each phase LANDED, so its first element is the earliest
+ * FINISHER — and a worker a delegate spawned lands inside the window of the
+ * execute round that spawned it. On the one case the span exists for, a turn
+ * deep-linked while it runs (no query answer to supply the other term), that
+ * made the window open at the first worker's start and "Took" under-report
+ * the whole stretch before the fan-out.
+ *
+ * Each phase's start comes from [phaseStart], which is the live record's own
+ * instant or the finished record's landing less what the engine measured.
+ * Reading `startedAt` off a finished record put its END into the minimum.
+ *
+ * A zero is dropped rather than taken as a minimum: `tsKey` answers 0 for a
+ * timestamp it cannot parse, and 0 is the epoch — one unreadable instant
+ * would report a turn that has been running since 1970.
+ */
+export function turnSpan(
+  events: readonly { timestamp: string }[],
+  phases: readonly Timed[],
+): { from: number; to: number } {
+  const live = (instants: number[]) => instants.filter((t) => t > 0);
+  // EVERY instant on both sides, never the first and last of either. Indexing
+  // would make the caller's sort order a precondition this function cannot
+  // state or check, and it is the precondition the phase list already broke.
+  const stamps = events.map((e) => tsKey(e.timestamp));
+  const starts = live([...stamps, ...phases.map(phaseStart)]);
+  const ends = live([...stamps, ...phases.map((p) => tsKey(p.at))]);
+  // Both or neither: a start with no end would render a duration measured
+  // against nothing, which is worse than the marked absence the caller falls
+  // back to.
+  if (!starts.length || !ends.length) return { from: 0, to: 0 };
+  return { from: Math.min(...starts), to: Math.max(...ends) };
 }
 
 /**
@@ -228,7 +330,14 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
 }
 
 /**
- * The six context blocks the executor's prompt was built from.
+ * What went INTO the prompt, from both directions: the six context blocks the
+ * executor's prompt was assembled from, and what each phase's prompt then came
+ * to. Two halves of one question, whether a heavy prompt is heavy because of
+ * what was prefetched or in spite of it, and either alone leaves it open.
+ *
+ * Either half can be absent. A turn whose prefetch record fell out of the
+ * store still has its `prompt.size` rows, and the reverse holds too, so the
+ * panel renders whichever it has rather than gating both on the first.
  *
  * A BLOCK THAT FOUND NOTHING DID NOT FAIL, and the first version of this panel
  * said it did: a ✓/✗ column, four crosses down the left, reading as four
@@ -247,7 +356,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
  * versus a quiet turn, and it is the whole reason the engine puts
  * `trigger_requires_recon` on the wire.
  */
-function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
+function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWeight[] }) {
   const got = blocks.filter((b) => b.hit);
   const gated = blocks.filter((b) => !b.hit && b.gated);
   const empty = blocks.filter((b) => !b.hit && !b.gated);
@@ -255,13 +364,19 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
     <Card as="section">
       <Card.Header
         icon={<Book2Glyph size="sm" />}
-        subtitle="the context blocks its prompt was assembled from"
+        subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
       >
         <Card.Title>What the turn was given</Card.Title>
       </Card.Header>
       <Card.Body padding="sm">
         <div className="col gap-2">
-          {got.length > 0 ? (
+          {blocks.length === 0 && (
+            <span className="t-caption">
+              No prefetch record for this turn, so there is no breakdown of where the prompt&rsquo;s
+              context came from, only what each phase&rsquo;s prompt came to.
+            </span>
+          )}
+          {blocks.length > 0 && got.length > 0 ? (
             <div className="col gap-1">
               {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
                   The grid's second track starts at 120px, so a byte count sat
@@ -283,10 +398,12 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
               ))}
             </div>
           ) : (
-            <span className="t-caption">
-              The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
-              alone. No stored context reached it.
-            </span>
+            blocks.length > 0 && (
+              <span className="t-caption">
+                The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s
+                trigger alone. No stored context reached it.
+              </span>
+            )
           )}
           {gated.length > 0 && (
             <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
@@ -302,9 +419,95 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
               Nothing to add from {list(empty.map((b) => b.label))}.
             </span>
           )}
+          {weights.length > 0 && <PromptWeights rows={weights} />}
         </div>
       </Card.Body>
     </Card>
+  );
+}
+
+/**
+ * A figure's own column, because three figures in a row are not three columns.
+ *
+ * `.row` is a flex line with a gap and nothing else, so a trailing figure
+ * after a `.spacer` lands wherever its own text ends. That is right for ONE
+ * figure (the spacer pushes the heading and the value to the same right edge)
+ * and wrong the moment there is a second: three figures of differing widths
+ * sit adjacent, and the headings above them sit adjacent at their own widths,
+ * so nothing lines up with anything.
+ *
+ * Written here rather than as a class: the rule lived in the engine's own
+ * component stylesheet, which went with the component layer it styled, and
+ * this panel was its only caller. 5.5rem holds a six-figure token count at
+ * the caption step with room for the separators.
+ */
+const NUM_COL = { flex: "none", width: "5.5rem", textAlign: "right" } as const;
+
+/**
+ * What each phase's prompt came to, off the engine's own measurement.
+ *
+ * `prompt.size` exists so prompt-slimming progress is measurable rather than
+ * argued about, and six small integers per phase have been reaching this
+ * browser and rendering nowhere: the screen read one event out of the `given`
+ * band and dropped the rest, so the only route to the number was the raw
+ * payload of a row in the residual list. It belongs here, beside the blocks
+ * the prompt was assembled FROM, and the pair is what says whether a heavy
+ * prompt is heavy because of what was prefetched or in spite of it.
+ *
+ * PER PHASE AND PER ROUND, never summed. A prompt is re-sent on every round of
+ * the tool loop, so a total here would be neither the turn's input bill (which
+ * is what the token tiles above already report) nor any single thing that was
+ * ever sent. What the number answers is "how big is the frame this phase
+ * reasons in", and that is a per-phase question.
+ */
+function PromptWeights({ rows }: { rows: PromptWeight[] }) {
+  return (
+    <div className="col gap-1">
+      <div className="row gap-2">
+        <span className="t-label spacer">Prompt sent</span>
+        <span className="t-label" style={NUM_COL}>
+          System
+        </span>
+        <span className="t-label" style={NUM_COL}>
+          User
+        </span>
+        <span className="t-label" style={NUM_COL}>
+          Approx. tokens
+        </span>
+      </div>
+      {rows.map((w, i) => (
+        <div key={`${w.phase}|${w.iteration}|${i}`} className="row gap-2">
+          <PhaseTag phase={w.phase} />
+          {w.iteration > 1 && (
+            <span className="t-caption" title="self-iterate round">
+              iter {w.iteration}
+            </span>
+          )}
+          <span className="spacer" />
+          <span
+            className="mono t-num t-caption"
+            style={NUM_COL}
+            title="characters in the system prompt"
+          >
+            {fmtBytes(w.systemChars)}
+          </span>
+          <span
+            className="mono t-num t-caption"
+            style={NUM_COL}
+            title="characters in the user message"
+          >
+            {fmtBytes(w.userChars)}
+          </span>
+          <span
+            className="mono t-num t-caption"
+            style={NUM_COL}
+            title="the engine's own approximation"
+          >
+            {fmtCount(w.approximateTokens)}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -383,6 +586,253 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
   );
 }
 
+/**
+ * How long the download's confirmation holds before the control offers its
+ * action again.
+ *
+ * Long enough to be read at a glance, short enough that a reader who wants it
+ * twice is not waiting on it. A REFUSAL is not on this clock, for the reason
+ * in the click handler below.
+ */
+const DOWNLOAD_HOLD_MS = 2000;
+
+/**
+ * Hand the turn to the reader as a FILE, beside the control that copies it.
+ *
+ * The two things an operator does with a turn are different: one is pasted
+ * into a thread, the other is attached to a bug report and opened weeks
+ * later. A clipboard also holds exactly one thing, so copying two turns to
+ * compare them is not a gesture that exists.
+ *
+ * It composes the design system's Button rather than drawing a control of its
+ * own: uilet has no download control yet, and everything below is behaviour
+ * rather than appearance. The moment uilet gains one this becomes a call to
+ * it.
+ *
+ * Two failure modes, both checked up front rather than assumed, and one of
+ * them is worse than a dead button:
+ *
+ *  1. **No `URL.createObjectURL`** leaves nothing to point a saveable link
+ *     at, and a `data:` URL is the wrong fallback: several engines cap it
+ *     around two megabytes and a self-iterating turn's JSON goes past that,
+ *     so it would work on the small turns nobody needs it for and fail
+ *     silently on the large ones.
+ *  2. **No `download` attribute** makes the click NAVIGATE to the JSON
+ *     instead of saving it, which looks enough like something happening that
+ *     nobody checks.
+ *
+ * What it reports is a HAND-OFF and never a saved file: there is no completion
+ * event on an `<a download>`, and a browser's automatic-multiple-download gate
+ * can stop it silently after the click. The NAME is the half that is true and
+ * the half worth saying, since a reader who cannot see the download shelf has
+ * nothing else to tell them what to open.
+ */
+function DownloadTurnButton({
+  text,
+  filename,
+  title,
+}: {
+  /** A THUNK, never the string. On a live turn the bytes are assembled from
+      every phase and every streamed frame, and `agents` is pushed twice per
+      tool round, so a string prop would re-serialize the whole turn twice a
+      round for a button nobody has clicked. */
+  text: () => string;
+  /** The name to offer it under. Sanitised here, see [safeFilename]. */
+  filename: string;
+  title: string;
+}) {
+  // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
+  // running is not a DOM change and a live region announces changes only. A
+  // second refusal would otherwise leave a reader who cannot see the button
+  // with silence. Keyed on the count, the status node is REPLACED rather than
+  // re-rendered, which is a change.
+  const [{ state, attempt }, setOutcome] = useState<{
+    state: "idle" | "done" | "failed";
+    attempt: number;
+  }>({ state: "idle", attempt: 0 });
+  // The confirmation's timeout outlives the component otherwise, and a screen
+  // left during the seconds after a click would set state on something
+  // unmounted. The hand-off itself is synchronous, so there is nothing else
+  // in flight to guard.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const name = safeFilename(filename);
+  const onClick = useCallback(() => {
+    const ok = saveTextFile(text(), name);
+    setOutcome((prior) => ({ state: ok ? "done" : "failed", attempt: prior.attempt + 1 }));
+    clearTimeout(timer.current);
+    // A CONFIRMATION SETTLES BACK. A REFUSAL DOES NOT. Two seconds after a
+    // download the reader is looking at the browser's shelf rather than at
+    // the button, and a control that has reverted to offering its action is
+    // indistinguishable from one that was never pressed. So a refusal holds
+    // until the next click, which is the gesture a reader who wants to retry
+    // makes anyway.
+    if (ok) {
+      timer.current = setTimeout(
+        () => setOutcome((prior) => ({ ...prior, state: "idle" })),
+        DOWNLOAD_HOLD_MS,
+      );
+    }
+  }, [text, name]);
+
+  const said =
+    state === "done"
+      ? `download started, ${name}`
+      : state === "failed"
+        ? "the browser refused the download"
+        : "";
+
+  return (
+    <span className="row gap-1">
+      <Button
+        variant="secondary"
+        size="small"
+        leadingIcon={
+          state === "done" ? (
+            <CheckGlyph />
+          ) : state === "failed" ? (
+            <ErrorGlyph />
+          ) : (
+            <ArrowDownwardGlyph />
+          )
+        }
+        onClick={onClick}
+        title={state === "failed" ? said : title}
+      >
+        {state === "done"
+          ? "Downloading"
+          : state === "failed"
+            ? "Download failed"
+            : "Download turn"}
+      </Button>
+      {/* Announced, not just drawn: the icon swap is the only signal a sighted
+          reader gets, and a screen reader gets none of it.
+
+          A SIBLING of the button, never a child. A button's accessible name is
+          computed from its contents, so inside it this would name the control
+          "Downloading download started, turn-t-1.json". */}
+      <span className="sr-only" role="status" aria-live="polite">
+        <span key={attempt}>{said}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Save `text` to the reader's machine as `filename`, and report whether the
+ * browser took it.
+ *
+ * The blob URL is revoked on the NEXT macrotask rather than here: the click
+ * only QUEUES the download, and freeing the entry inside the same task races
+ * the fetch that is about to read it. Not revoking at all is the other
+ * failure, since the blob is a second copy of the whole turn held for the
+ * life of the tab, and a reader comparing turns clicks this several times.
+ */
+function saveTextFile(text: string, filename: string): boolean {
+  if (typeof URL.createObjectURL !== "function" || !("download" in HTMLAnchorElement.prototype)) {
+    return false;
+  }
+  let url = "";
+  try {
+    url = URL.createObjectURL(new Blob([text], { type: "application/json;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    // In the document for the one synchronous call: not every engine
+    // dispatches an activation behaviour on a node that is in no document,
+    // and there is no state to leave behind either way.
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+/** Longer than any extension in use, so a `.` deep inside a name is not read
+ *  as one when a long name has to be cut. */
+const MAX_EXTENSION = 12;
+/**
+ * Every filesystem a reader of this dashboard is on allows at least 255
+ * BYTES, and the browser appends its own " (1)" to deduplicate against what
+ * is already in the folder; eCryptfs stops at 143. 120 clears all three with
+ * room to spare.
+ */
+const MAX_FILENAME = 120;
+
+/**
+ * A filename the reader will actually get, out of whatever the caller had.
+ *
+ * The name is composed from data, since a turn id comes off the URL, and the
+ * `download` attribute is only a SUGGESTION: the browser sanitises it its own
+ * way, stripping path separators and whatever else each engine dislikes.
+ * Deciding it here means a name that arrived as `../etc/passwd` or with a
+ * newline in it never reaches that guess.
+ *
+ * UNICODE-AWARE, and that is not a nicety. `\w` is ASCII-only, so an
+ * ASCII-only class collapses a whole non-Latin stem to a single `-` and the
+ * leading strip below then takes that hyphen AND the extension's own
+ * separator with it. What has to be excluded is the separators and the
+ * invisibles, and not one of those is a letter, a mark or a number in any
+ * script.
+ */
+function safeFilename(name: string): string {
+  const cleaned = name.replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, "-").replace(/-{2,}/g, "-");
+  // An extension is a dot with SOMETHING after it and not much: a `.` deep
+  // inside a long name is part of the name, and a trailing one is not an
+  // extension at all, as well as being illegal on Windows.
+  const dot = cleaned.lastIndexOf(".");
+  const tail = cleaned.length - dot;
+  const ext = dot >= 0 && tail >= 2 && tail <= MAX_EXTENSION ? cleaned.slice(dot) : "";
+  // THE STEM IS WHAT GETS STRIPPED AND WHAT GETS CUT, never the extension: a
+  // name that loses its `.json` opens in the wrong application on every
+  // desktop there is. Leading dots are what make `..` a traversal and `.turn`
+  // a hidden file, and they can only ever be in the stem.
+  const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
+  if (!stem) return `download${ext}`;
+  return cutToBytes(stem, MAX_FILENAME - byteLength(ext)) + ext;
+}
+
+const encoder = new TextEncoder();
+
+/** How many BYTES a string takes on a filesystem, which is what limits it. */
+function byteLength(s: string): number {
+  return encoder.encode(s).length;
+}
+
+/**
+ * Cut to a byte budget, on whole characters.
+ *
+ * `MAX_FILENAME` is a BYTE limit and `slice` counts UTF-16 code units, which
+ * are the same thing only for ASCII. The sanitizer above deliberately keeps
+ * letters in every script, so the gap is not hypothetical: 120 units of
+ * Japanese is 360 bytes, past ext4's 255 and well past eCryptfs's 143.
+ *
+ * Iterated with `for…of`, which walks CODE POINTS rather than units: a cut
+ * that lands between the halves of a surrogate pair leaves a lone surrogate,
+ * which is not valid UTF-8 and reaches the disk as a replacement character.
+ */
+function cutToBytes(s: string, max: number): string {
+  if (max <= 0) return "";
+  if (byteLength(s) <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = byteLength(ch);
+    if (used + n > max) break;
+    out += ch;
+    used += n;
+  }
+  return out;
+}
+
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
   const { data, loading, error } = useQuery("turn", { turn_id: turnId });
@@ -391,6 +841,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const phaseEvents = usePhaseEvents();
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
+  // THE STORE STOPPED AT ITS CAP, not at the end of the turn. The answer
+  // recovers the turn's ENDING beside its opening — that is where the two
+  // records this header reads its outcome, its clock and its plan summary off
+  // live, and without them a cut turn was indistinguishable from one that
+  // died — so what is missing is the MIDDLE. Every claim below that is made
+  // over the whole turn rather than over a record has to be weakened anyway:
+  // a guard breach in the gap is one this page cannot see.
+  const cut = Boolean(data?.truncated);
 
   // The phases the `turn` query knew about, plus the ones that have landed on
   // the stream since it was answered, plus whichever phase is running now.
@@ -411,12 +869,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       .map((a) => fromLiveCall(a.live_call!, a.role));
     // Within a turn, oldest first: a turn is read forwards. `mergePhases`
     // orders newest first, which is right for a feed and wrong here.
-    const merged = mergePhases([...streamed, ...answered], live).sort(
-      (a, b) => tsKey(a.at) - tsKey(b.at),
-    );
-    // The starts come from BOTH halves for the same reason the phases do: a
-    // turn opened while it runs has no query answer to read them off.
-    return withStarts(merged, phaseStarts([...events, ...phaseEvents]));
+    return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
   }, [events, phaseEvents, agents, turnId]);
 
   // A NESTED call belongs UNDER the phase that made it. `host_phase` and
@@ -448,31 +901,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     () => prefetchBlocks(story.given.find((e) => e.type === "prefetch_summary")),
     [story],
   );
+  // The other half of the `given` band, and until now the half nothing read.
+  const weights = useMemo(() => promptWeights(story.given), [story]);
 
   const role = phases[0]?.role ?? (rec.summary?.actor || "");
   const trigger = phases.find((p) => p.trigger)?.trigger ?? null;
   const outcome = outcomeOf(rec);
-  const trouble = story.wentWrong.length + (field(rec.summary, "failed") === true ? 1 : 0);
-  // Only claimable on a FINISHED turn with a record to claim it from. A
-  // running turn has not been asked about since it started, and a turn whose
-  // events fell out of the store's window has nothing to say either way —
-  // "nothing went wrong" and "nothing was read" must not render alike.
-  const clean = trouble === 0 && !running && Boolean(rec.summary || rec.learning);
+  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
+  // Only claimable on a FINISHED turn with a record to claim it from, and
+  // over the WHOLE turn. A running turn has not been asked about since it
+  // started; a turn whose events fell out of the store's window has nothing
+  // to say either way; and a turn read to the store's cap has rows this page
+  // never saw, any of which could be the failure — "nothing went wrong",
+  // "nothing was read" and "not everything was read" must not render alike.
+  const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
-  // THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
-  // Read off `events` only, a turn whose phases all arrived on the stream
-  // reported a duration of "—" beside a phase list several minutes long.
-  const first = phases[0];
-  const last = phases[phases.length - 1];
-  const from = Math.min(
-    ...[
-      events.length ? tsKey(events[0]!.timestamp) : Infinity,
-      first ? tsKey(first.startedAt) : Infinity,
-    ],
-  );
-  const to = Math.max(
-    ...[events.length ? tsKey(events[events.length - 1]!.timestamp) : 0, last ? tsKey(last.at) : 0],
-  );
+  const { from, to } = turnSpan(events, phases);
   // THE ENGINE'S OWN WALL CLOCK, off the record that actually carries it.
   // `agent_turn_completed` has no `duration_ms` — that field is on
   // `turn_completed`, published in the same breath — so reading it off the
@@ -507,6 +951,16 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           trace_id: traceId || null,
           running,
           duration_ms: durationMs,
+          // WHAT THE SCREEN SAYS, THE FILE SAYS TOO. The page marks a capped
+          // turn with a badge and a banner because its opening and ending
+          // without its middle is indistinguishable from a turn that died
+          // early — which is the ambiguity this whole read exists to remove.
+          // Exported without the flag, the file reproduced it exactly: a
+          // reader attaches `turn-<id>.json` to a bug report and whoever
+          // opens it has no way to tell an incomplete turn from a complete
+          // one. Top level, beside `running`, because this is what the page
+          // assembled; `record` below is what the engine published.
+          truncated: cut,
           record: {
             agent_turn_completed: rec.summary?.payload ?? null,
             turn_completed: rec.learning?.payload ?? null,
@@ -517,7 +971,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         null,
         2,
       ),
-    [turnId, role, traceId, running, durationMs, rec, phases, events],
+    [turnId, role, traceId, running, durationMs, cut, rec, phases, events],
   );
   // Memos here rather than thunks: both ARE rendered, so they are computed
   // either way, and `rec` only changes when the turn ends.
@@ -565,6 +1019,20 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 nothing went wrong
               </Tag>
             )}
+            {/* WHAT THE VIEW IS MISSING, in the header, because every other
+                badge beside it is a claim made from these rows. The `trace`
+                answer has carried this flag all along and its screen renders
+                it; `turn` did not carry one at all, so a cut turn looked
+                exactly like a short one. */}
+            {cut && (
+              <Tag
+                variant="warning"
+                leadingIcon={<WarningGlyph />}
+                title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
+              >
+                middle not shown
+              </Tag>
+            )}
           </>
         }
         actions={
@@ -593,7 +1061,17 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               variant="secondary"
               text={turnJSON}
               label="Copy turn"
-              title="the whole turn as JSON, its record and its phases and everything else it published"
+              title="the whole turn as JSON — its record, its phases and everything else it published"
+            />
+            {/* THE SAME BYTES, out of the same thunk. A turn is pasted into a
+                thread and ATTACHED to a bug report, and the second one is not
+                a clipboard gesture: an incident is read weeks later, a
+                clipboard holds exactly one thing, and a self-iterating turn's
+                JSON is past what anyone wants inline. */}
+            <DownloadTurnButton
+              text={turnJSON}
+              filename={`turn-${turnId}.json`}
+              title="the same JSON, saved as a file"
             />
           </>
         }
@@ -618,6 +1096,24 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
         }
       >
+        {/* ABOVE EVERYTHING, because it is a statement about the rows every
+            panel below is built from rather than about the turn. Named
+            precisely: this is not "some events are missing", it is "the ones
+            that are missing are the ending", which is the difference between
+            a reader distrusting the page and a reader distrusting the turn. */}
+        {cut && (
+          <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
+            <span>
+              This turn published more than the store returns for one turn. What is here is its{" "}
+              <strong>opening and its ending</strong> ({events.length} events, so the records below
+              are the turn&rsquo;s own), and what is missing is the middle. Phases from the middle
+              of a long self-iterating turn are not on this page, and neither is anything that went
+              wrong in them.{" "}
+              {traceId ? "The trace carries the same work from the trigger down." : ""}
+            </span>
+          </Callout>
+        )}
+
         <StatGroup columns={4}>
           <StatCard
             icon={<PersonGlyph />}
@@ -648,12 +1144,19 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 <EmptyValue label="Not measured" />
               )
             }
+            // A CUT VIEW HOLDS BOTH ENDS, so the span is the turn's real
+            // window, but it is the window rather than the engine's own
+            // measurement, and on the branch below the record that carries
+            // that measurement is missing from a turn that has both its ends.
+            // Say which of the two the number is.
             sub={
               durationMs != null
                 ? "the engine's own measurement"
                 : running
                   ? "still running"
-                  : "spanning the turn's first and last event"
+                  : cut
+                    ? "spanning the turn's ends, and its own record is not among them"
+                    : "spanning the turn's first and last event"
             }
           />
           <StatCard
@@ -678,9 +1181,26 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <StatCard
             icon={<CheckGlyph />}
             label="Outcome"
-            value={outcome.word}
-            tone={outcome.tone}
-            sub={outcome.sub || (running ? "still running" : "no turn record")}
+            value={
+              outcome.word === NO_OUTCOME ? (
+                <EmptyValue label="No outcome recorded" />
+              ) : (
+                outcome.word
+              )
+            }
+            tone={outcome.tone ? OUTCOME_TONE[outcome.tone] : undefined}
+            // "no turn record" is a claim about the TURN, and on a cut view it
+            // would be a claim about the READ. The answer recovers the turn's
+            // ending precisely so that branch is rare: reaching it means the
+            // records are genuinely absent from a view that holds both ends.
+            sub={
+              outcome.sub ||
+              (running
+                ? "still running"
+                : cut
+                  ? "no turn record, and this view holds both ends"
+                  : "no turn record")
+            }
           />
         </StatGroup>
 
@@ -704,7 +1224,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Card>
         )}
 
-        {prefetch.length > 0 && <Prefetch blocks={prefetch} />}
+        {(prefetch.length > 0 || weights.length > 0) && (
+          <Given blocks={prefetch} weights={weights} />
+        )}
 
         <Card as="section">
           <Card.Header icon={<NeurologyGlyph size="sm" />} count={own.length}>
@@ -799,7 +1321,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                         // {thread}", which external thread this turn was
                         // answering, and it used to be an unexplained
                         // truncated string under the seat's name.
-                        <span className="row gap-2" style={{ alignItems: "baseline" }}>
+                        <span className="row gap-2 baseline">
                           <InlineCode>{conversation}</InlineCode>
                           <span className="t-caption">the external thread this turn served</span>
                         </span>,

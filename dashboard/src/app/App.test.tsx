@@ -11,9 +11,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
-import { Router } from "./router.tsx";
+import { buildHash, Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ALL_NAV } from "./nav.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -146,29 +147,25 @@ describe("routing", () => {
     vi.unstubAllGlobals();
   });
 
+  // DERIVED FROM THE NAV, not a hand-written list. The list was one, and a
+  // hand-written one covers exactly the screens somebody remembered to add to
+  // it — so a new nav entry that renders a blank ships green, which is the one
+  // failure this test exists to catch.
   test("every nav route renders a screen rather than a blank", () => {
     // An engine with no company yet: the state a builder's create mode opens
     // on, and the one every REST read has to render honestly.
     stubFetch((path) =>
       path === "/config" ? answer(404, { error: "no_active_revision" }) : answer(200, {}),
     );
-    for (const hash of [
-      "#/people",
-      "#/org",
-      "#/org?lens=builder",
-      "#/runs",
-      "#/conversations",
-      "#/schedules",
-      "#/model",
-      "#/activity",
-      "#/knowledge",
-      "#/spend",
-      "#/fleet",
-      "#/integrations",
-      "#/tools",
-      "#/config",
-      "#/secrets",
-    ]) {
+    const visited = ALL_NAV.map((item) => buildHash(item.path));
+    // The two newest screens are the reason the list is derived: a hand-written
+    // one would not have them.
+    expect(visited).toContain(buildHash(["work"]));
+    expect(visited).toContain(buildHash(["pages"]));
+    // The builder is reached from the org chart rather than from the nav, so
+    // no derivation covers it, and it is the lens most likely to blank: it
+    // reads its document over REST before it draws anything.
+    for (const hash of [...visited, buildHash(["org"], { lens: "builder" })]) {
       location.hash = hash;
       const { view } = mount();
       // THE SCREEN'S OWN CONTENT, found through the one scroll container the

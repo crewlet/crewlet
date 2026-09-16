@@ -59,7 +59,7 @@ func inbound(addressed bool) *events.Event {
 // seat that stopped answering the one thing it was asked.
 func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 	t.Parallel()
-	want := map[string]turn.Reply{
+	want := map[string]turn.ReplyKind{
 		types.A2ARequestType:                     turn.ReplyEngine,
 		types.A2AMessageType:                     turn.ReplyNone,
 		types.TaskAssigned{}.EventType():         turn.ReplyTool,
@@ -72,7 +72,7 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 		}
 	}
 	for kind, expect := range want {
-		if got := ReplyFor([]*events.Event{wake(t, kind)}); got != expect {
+		if got := ReplyFor([]*events.Event{wake(t, kind)}); got.Kind != expect {
 			t.Errorf("ReplyFor(%s) = %s, want %s", kind, got, expect)
 		}
 	}
@@ -85,7 +85,7 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	t.Parallel()
 	addressed := inbound(true)
-	if got := ReplyFor([]*events.Event{addressed}); got != turn.ReplyTool {
+	if got := ReplyFor([]*events.Event{addressed}); got.Kind != turn.ReplyTool {
 		t.Errorf("an addressed notification = %s, want tool", got)
 	}
 	// AND ACROSS THE WIRE. The dispatch that reads this flag routinely runs
@@ -100,14 +100,14 @@ func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got := ReplyFor([]*events.Event{&back}); got != turn.ReplyTool {
+	if got := ReplyFor([]*events.Event{&back}); got.Kind != turn.ReplyTool {
 		t.Errorf("an addressed notification off the wire = %s, want tool", got)
 	}
 	// ABSENT DECODES AS UNADDRESSED, which is the safe half: an event
 	// written by a build that predates the field is a freedom to stay
 	// silent rather than an obligation nobody recorded.
 	older := &events.Event{Type: types.ExternalNotification{}.EventType()}
-	if got := ReplyFor([]*events.Event{older}); got != turn.ReplyNone {
+	if got := ReplyFor([]*events.Event{older}); got.Kind != turn.ReplyNone {
 		t.Errorf("an event with no flag = %s, want none", got)
 	}
 }
@@ -121,7 +121,7 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	asked := inbound(true)
 	ask := wake(t, types.A2ARequestType)
 
-	if got := ReplyFor([]*events.Event{passing, asked}); got != turn.ReplyTool {
+	if got := ReplyFor([]*events.Event{passing, asked}); got.Kind != turn.ReplyTool {
 		t.Errorf("a burst carrying one ask = %s, want tool", got)
 	}
 	// A TOOL OBLIGATION OUTRANKS THE ENGINE'S. The tool one is what the
@@ -132,21 +132,21 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	// never sees. And the answer cannot depend on which event came first,
 	// or it would depend on the broker.
 	for _, order := range [][]*events.Event{{asked, ask}, {ask, asked}, {ask, passing, asked}} {
-		if got := ReplyFor(order); got != turn.ReplyTool {
+		if got := ReplyFor(order); got.Kind != turn.ReplyTool {
 			t.Errorf("a partition carrying an A2A ask and an addressed notification = %s, want tool", got)
 		}
 	}
 	for _, order := range [][]*events.Event{{passing, ask}, {ask, passing}} {
-		if got := ReplyFor(order); got != turn.ReplyEngine {
+		if got := ReplyFor(order); got.Kind != turn.ReplyEngine {
 			t.Errorf("a partition carrying an A2A ask and a passing mention = %s, want engine", got)
 		}
 	}
 	// And the counterfactual, or every assertion here passes for a
 	// function that hardcodes an obligation.
-	if got := ReplyFor([]*events.Event{passing, passing}); got != turn.ReplyNone {
+	if got := ReplyFor([]*events.Event{passing, passing}); got.Kind != turn.ReplyNone {
 		t.Errorf("a burst nobody addressed = %s, want none", got)
 	}
-	if got := ReplyFor(nil); got != turn.ReplyNone {
+	if got := ReplyFor(nil); got.Kind != turn.ReplyNone {
 		t.Errorf("an empty partition = %s, want none", got)
 	}
 }
@@ -155,7 +155,7 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 // comes off a broker and the loop reads it before anything has vetted it.
 func TestReplyForSkipsNilEvents(t *testing.T) {
 	t.Parallel()
-	if got := ReplyFor([]*events.Event{nil, wake(t, types.A2ARequestType)}); got != turn.ReplyEngine {
+	if got := ReplyFor([]*events.Event{nil, wake(t, types.A2ARequestType)}); got.Kind != turn.ReplyEngine {
 		t.Errorf("ReplyFor with a nil entry = %s", got)
 	}
 }

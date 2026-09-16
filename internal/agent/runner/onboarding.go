@@ -274,6 +274,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Onboarding, Iteration: onboardingIteration,
 		System: system, User: user, Result: res.Result, Exhausted: res.Exhausted,
+		Elapsed:  res.Elapsed,
 		Decision: decision, Notes: notes, Available: surface.Active(),
 	})
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",

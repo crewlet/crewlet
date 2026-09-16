@@ -783,8 +783,8 @@ function queriedClasses(source: string): string[] {
 
 test("the vacuous-assertion scan reads selectors, and finds the stylesheets", () => {
   expect(drawnClassNames().size).toBeGreaterThan(50);
-  // A class with no rule behind it is still drawn, so it still counts.
-  expect(drawnClassNames().has("org-builder-live")).toBe(true);
+  // A class a case queries for is still drawn, so it still counts.
+  expect(drawnClassNames().has("org-builder-toolbar")).toBe(true);
   // And one spelled inside a template literal with an interpolation in it.
   expect(classAttributes('className={on ? `tier tier--${x}` : "tier"}')).toEqual([
     "tier tier-- ",
@@ -925,7 +925,13 @@ test("no stylesheet rule waits for a class nothing writes", () => {
  * it, and the names are who owns them.
  */
 const SHEET_BUDGET: Record<string, number> = {
-  "styles/base.css": 165,
+  // Raised from 165 when main's two layout rungs merged in: `.baseline`, the
+  // third alignment beside centre and flex-start, and `.gap-2`, the rung the
+  // scale had skipped. Both are layout utilities this sheet is the home for,
+  // and both replaced something worse (an inline `alignItems` that had drifted
+  // to a class nothing declared, and twenty-one sites writing a gap that fell
+  // through to the browser's zero on a grid).
+  "styles/base.css": 181,
   "styles/live.css": 160,
   "styles/records.css": 570,
   "styles/org.css": 610,

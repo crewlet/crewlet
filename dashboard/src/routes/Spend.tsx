@@ -191,8 +191,15 @@ export function Spend() {
             <Meter
               value={org.used}
               max={org.max}
-              label={`${fmtPct(org.used, org.max, 1)} of the meter used`}
-              valueText={`${fmtExact(org.used)} / ${fmtExact(org.max)}`}
+              // A NOUN, and the reading beside it. `label` is the bar's own
+              // accessible name, so the percentage that used to stand here
+              // named the meter after its own value: a screen reader landing
+              // on the bar was told "94% of the meter used" and never what was
+              // being measured. The reading moves to the legend's trailing
+              // edge, where it was already drawn.
+              label="Company token budget"
+              hint={`${fmtPct(org.used, org.max, 1)} used · ${fmtExact(org.used)} / ${fmtExact(org.max)}`}
+              valueText={`${fmtExact(org.used)} of ${fmtExact(org.max)} tokens`}
               tone={org.refused_at ? "danger" : undefined}
             />
             {org.refused_at && (

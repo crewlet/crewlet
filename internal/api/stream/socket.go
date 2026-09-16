@@ -30,13 +30,50 @@ const (
 	CodeUnknownQuery = "unknown_query"
 	CodeUnauthorized = "unauthorized"
 	CodeQueryFailed  = "query_failed"
+
+	// CodeNotFound is a question this node understood, about a record it
+	// does not hold. DISTINCT FROM query_failed, because a client acts on
+	// them differently: "no such item" is a dead link to show the person,
+	// and "the query failed" is a retry.
+	CodeNotFound = "not_found"
+
+	// CodeBadParams is a question this node understood and REFUSED: a
+	// parameter missing, malformed, or outside the set the field accepts.
+	//
+	// DISTINCT FROM query_failed because the fault is the caller's, and
+	// the two are acted on in opposite directions — a query_failed is
+	// retried, a bad_params never succeeds however many times it is sent.
+	// Collapsed into query_failed it was a client bug rendered to a person
+	// as an engine fault, retried on every poll, and logged as a WARNING
+	// by the node being asked wrong.
+	//
+	// The reason still does not travel — this envelope carries codes and
+	// not prose, for the reason stated above — so the refusal's own
+	// message, which names the field and the values it would have
+	// accepted, is logged at DEBUG instead: available to whoever is
+	// debugging the screen, absent from the operator's log when nobody is.
+	CodeBadParams = "bad_params"
+
+	// CodeUnavailable is a question this node cannot answer YET or at all
+	// — a projection still catching up, a surface not wired in this
+	// process.
+	//
+	// It is the code that must never be flattened into an empty result.
+	// "This company has no work" is an answer a person acts on: they file
+	// the duplicate, they conclude the migration failed. A node whose
+	// boot reconcile is still running has to be able to say "ask me in a
+	// moment" rather than "there is nothing".
+	CodeUnavailable = "unavailable"
 )
 
-// ErrUnknownQuery and ErrUnauthorized are the two failures a query surface
-// reports precisely; everything else is a query_failed.
+// The failures a query surface reports precisely; everything else is a
+// query_failed.
 var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
 	ErrUnauthorized = errors.New("stream: query requires an operator")
+	ErrNotFound     = errors.New("stream: no such record")
+	ErrBadParams    = errors.New("stream: query refused")
+	ErrUnavailable  = errors.New("stream: not available on this node yet")
 )
 
 // Query answers one client question.
@@ -276,6 +313,18 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		client.send(queryError(req, CodeUnknownQuery))
 	case errors.Is(err, ErrUnauthorized):
 		client.send(queryError(req, CodeUnauthorized))
+	case errors.Is(err, ErrNotFound):
+		client.send(queryError(req, CodeNotFound))
+	case errors.Is(err, ErrBadParams):
+		// DEBUG, NOT WARN: it is not this node's failure, and a poll
+		// behind a bad request writes a line per tick for as long as the
+		// screen is open. The message is worth keeping — it names the
+		// field the caller got wrong, which is the whole of the fix —
+		// but only to somebody who turned debug on to look for it.
+		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
+		client.send(queryError(req, CodeBadParams))
+	case errors.Is(err, ErrUnavailable):
+		client.send(queryError(req, CodeUnavailable))
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket

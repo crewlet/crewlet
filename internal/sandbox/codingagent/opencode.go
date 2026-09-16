@@ -88,30 +88,51 @@ func openCodeFamily(providerType string) string {
 	}
 }
 
-// WriteConfig renders opencode.json: the custom provider and the scoped MCP
-// surface.
+// WriteConfig renders opencode.json: the run's posture, the custom provider
+// and the scoped MCP surface.
 //
 // THE API KEY IS NEVER IN THE PAYLOAD. It rides the run env and the config
 // references it through OpenCode's own {env:VAR} interpolation, so the secret
 // is not written into a file inside the box where the agent could read it back
 // and echo it into its report.
+//
+// IT IS WRITTEN ON EVERY RUN, including one that names no provider and no
+// server. The posture keys below are not decoration a minimal run can go
+// without — and because this CLI takes no config flag, the file's LOCATION is
+// the wiring, so a run that writes nothing does not run on the vendor's
+// defaults: it runs on whatever the PREVIOUS run left in the checkout, which
+// on a reused box is that run's MCP block with its dead per-run bridge URL in
+// it.
 func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	cfg := map[string]any{
 		// Sharing is disabled: a run's transcript is company work, and
 		// OpenCode's share feature publishes it to a URL.
 		"share": "disabled",
+		// ALLOW, STATED RATHER THAN INHERITED. `opencode run` is headless,
+		// so a gate left at `ask` has nobody to answer it and is refused —
+		// the run does not stop, it loses the call and carries on, which
+		// reads as an agent that would not do the work. `external_directory`
+		// is the one that bites without looking like a permission at all: a
+		// checkout that is not the CLI's own cwd is gated behind it.
+		//
+		// The box is the boundary here exactly as it is for claude-code's
+		// --permission-mode bypassPermissions (see [ClaudeCode.Command]):
+		// what the agent may reach was decided engine-side, before it
+		// started, by which MCP servers and credentials the run carries. And
+		// a vendor default is not a posture to rest on — it is a value that
+		// moves between releases, which is the assumption every profile in
+		// internal/providers/llm/cliagent is built on.
+		"permission": "allow",
+		// A CLI that updates itself mid-run swaps the tool under the brief
+		// between launch and result, needs network a box may not have, and
+		// does both while a seat's turn is suspended waiting on it.
+		"autoupdate": false,
 	}
 	if req.LLM != nil && req.LLM.BaseURL != "" && req.LLM.Model != "" {
 		cfg["provider"] = openCodeProvider(*req.LLM)
 	}
 	if len(req.MCPServers) > 0 {
 		cfg["mcp"] = openCodeMCP(req.MCPServers)
-	}
-	if len(cfg) == 1 {
-		// Only the share setting, which the CLI defaults sensibly enough:
-		// writing a config for it alone would put a file on a reused box
-		// that a later run with real settings then has to overwrite.
-		return "", nil
 	}
 	blob, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -372,9 +393,8 @@ func firstLine(s string, limit int) string {
 	if limit <= 0 || len(line) <= limit {
 		return line
 	}
-	// Not [textcut.Ellipsis]: that one does not count its marker against
-	// max, and this limit bounds what reaches the phase event, marker
-	// included. So the budget is reduced first and the cut taken with
-	// [textcut.Bytes].
-	return textcut.Bytes(line, max(limit-len("…"), 0)) + "…"
+	// [textcut.Within] rather than Ellipsis: that one does not count its
+	// marker against max, and this limit bounds what reaches the phase
+	// event, marker included.
+	return textcut.Within(line, limit)
 }

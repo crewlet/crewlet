@@ -2,10 +2,15 @@
 
 Crewlet is the engine; the surfaces your agents work on — the LLM, the
 work-item tracker, the knowledge base, the code host, chat, the code sandbox —
-are external services you pick and connect. Every one of them has a hosted and
-a self-hosted path. This page is the decision guide: what each choice implies,
+are services you pick and connect. Every one of them has a hosted and a
+self-hosted path. This page is the decision guide: what each choice implies,
 what you must create **yourself** in the external service, and where the
 detailed setup steps live.
+
+**Only the LLM is required.** The tracker and the knowledge base ship with the
+engine and are on by default; everything else is a surface you add when you
+want your company working where your people already are. A company with an API
+key and nothing else runs.
 
 A useful mental model: for each integration there is usually
 
@@ -33,7 +38,7 @@ A useful mental model: for each integration there is usually
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
 | **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
 | **A gateway or proxy in front of a vendor** | `base_url` on `anthropic` / `openai` | `base_url` is not an `openai-compatible`-only field. It is merely *required* there. On a vendor entry it redirects that vendor's own wire format at an egress proxy, an Anthropic-API gateway, or a subscription OAuth proxy. The last of those has terms and trade-offs worth reading first: [Subscription LLM Backends § the proxy shape](../concepts/subscription-llm-backends.md#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry). |
-| **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives a coding CLI already installed on the engine host — the `claude`, `codex`, `gemini`, `qwen`, `opencode`, `cursor-agent`, `copilot`, `grok` or `muse` **binary** — on the operator's own subscription. `cli.agent` names the profile rather than the binary (`claude-code`, `gemini-cli`, `muse-code`, …); [Supported CLIs](../concepts/subscription-llm-backends.md#supported-clis) pairs them up. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
+| **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives a coding CLI already installed on the engine host — the `claude`, `codex`, `gemini`, `qwen`, `opencode`, `cursor-agent`, `copilot`, `grok`, `muse`, `kimi`, `hermes` or `pi` **binary** — on the operator's own subscription. `cli.agent` names the profile rather than the binary (`claude-code`, `gemini-cli`, `kimi-code`, …); [Supported CLIs](../concepts/subscription-llm-backends.md#supported-clis) pairs them up. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
 
 You can configure several named providers and pick per role (`role.llm`), plus
 a cheap auxiliary model per role (`role.llm_auxiliary`) for reflection and
@@ -99,14 +104,51 @@ everything genuinely shared lives in coordination instead. See
 
 ## Work-item tracker + knowledge base
 
-Agents file and pick up work in a tracker, and search a shared knowledge base
-at query time.
+Agents file and pick up work in a tracker, and search a shared knowledge base.
 
-The **tracker** has options — Jira, or the issue tracker of whichever code
-host you run ([GitLab](../integrations/gitlab.md) /
-[GitHub](../integrations/github.md) issues route the same way). The
-**knowledge base** is Confluence: the engine wires exactly one
-`knowledge.Searcher`, and Confluence is the backend behind it.
+**You do not have to bring either one.** The engine ships its own, and they
+are the default:
+
+```yaml
+tracker:
+  backend: native      # the default
+knowledge:
+  backend: native      # the default
+```
+
+That is the whole setup. Items and pages live in the fleet's own store, there
+is a board and a page browser on the dashboard, seats get eighteen tools for
+them — thirteen over the tracker and five over the pages — and your own AI
+assistant can reach them over
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant).
+Nothing to create, nothing to provision, no per-seat accounts, no webhook.
+
+### Which to choose
+
+| | Native | Atlassian |
+|---|---|---|
+| Setup | none | a site, a project, a space, a per-seat account each, webhooks |
+| Where the record lives | your own deployment | Atlassian's |
+| People can use it | through the Crewlet dashboard | through Jira and Confluence, which they may already live in |
+| Workflows, custom fields, sprints, permission schemes | no | yes |
+| Existing tickets | none — it starts empty | whatever you already have |
+
+**Take the native one unless you have a reason not to.** The reasons are real
+and they are all about the people rather than the agents: a team that already
+works in Jira should not be asked to watch a second board, and an existing
+backlog does not migrate (there is deliberately no migration path — see
+below). If neither applies, the vendor path costs you a provisioning afternoon
+and buys nothing the agents use.
+
+Either way, the org chart is the same. A unit's `project` and `space` name its
+project and its container on whichever backend the company runs — which is why
+the fields are not called `jira_project` and `confluence_space`.
+
+> **No migration between them.** Switching `tracker.backend` does not move
+> anything, in either direction, and the engine does not offer to: a
+> half-migrated tracker where some items answer to one system and some to the
+> other is worse than either, and it is a state nothing can detect from the
+> outside. Choose once, per company.
 
 ### Atlassian (Jira + Confluence Cloud or Data Center)
 
@@ -131,17 +173,21 @@ What **you** do, by hand:
      extra).
    - **Data Center** — register webhooks directly against
      `POST /webhooks/jira` / `POST /webhooks/confluence` with an HMAC secret.
-4. **Create the spaces/projects** your units use (`integrations.jira.project`
-   / `integrations.confluence.space` per unit) and an `Onboarding` page per
-   space.
+4. **Create the spaces/projects** your units use (`project` / `space` per
+   unit) and an `Onboarding` page per space.
 
 Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).
 
-> **One knowledge backend per company**: the engine wires exactly one
-> `knowledge.Searcher`. It stays an interface with one implementation, so a
-> second backend is a new implementation rather than a rewrite of everything
-> that searches. See [Knowledge System](../concepts/knowledge-system.md).
+> **One knowledge backend per company**, and validation enforces it: a company
+> that sets `knowledge.backend: native` *and* declares
+> `integrations.confluence` is refused. "What do we already know about this"
+> must not depend on which searcher was asked. See
+> [Knowledge System](../concepts/knowledge-system.md).
+>
+> An empty `backend` **derives**: declare `integrations.confluence` and you get
+> `confluence`; declare nothing and you get `native`. So an Atlassian company
+> that has not read this page keeps the backend it had.
 
 ---
 
@@ -331,15 +377,19 @@ the same network.
 
 Two bundled **Nimbus examples** model the same seven-seat company at opposite
 ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
-is the **reference**: a pick from every row — Jira, Confluence, GitLab,
-Mattermost, a metered `openai-compatible` key, a sandbox its engineers push
-merge requests from. Read it to see what a full stack looks like written out.
+is the **reference**: a pick from every row — GitLab, Mattermost, a metered
+`openai-compatible` key, a sandbox its engineers push merge requests from, and
+the engine's own tracker and knowledge base rather than a vendor's. Read it to
+see what a full stack looks like written out, and
+[Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
+for the blocks that move those two halves to Atlassian.
 
 `examples/nimbus-claude-cli.company.yaml` + `examples/nimbus-claude-cli.config.yaml`
 is the **short path**: every pick that costs nothing extra to stand up — chat
-on **Mattermost**, the model a **coding CLI on your own subscription**, and the
-code sandbox on the **engine host** (`run_in: direct`), which reuses that same
-subscription login rather than needing an account of its own. Its three
+on **Mattermost**, the model a **coding CLI on your own subscription**, the
+tracker and knowledge base the **engine's own**, and the code sandbox on the
+**engine host** (`run_in: direct`), which reuses that same subscription login
+rather than needing an account of its own. Its three
 engineering seats run that CLI in
 [agent mode](../concepts/subscription-llm-backends.md#agent-mode), so their
 executor *is* the CLI's own agentic loop with a real shell. The rows that need

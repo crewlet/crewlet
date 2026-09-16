@@ -74,7 +74,7 @@ func seats(handle string) (slack.Seat, bool) {
 	if handle != "swe" {
 		return slack.Seat{}, false
 	}
-	return slack.Seat{Handle: "swe", BotUserID: botUser, AppID: botApp, Channel: "C0DEFAULT"}, true
+	return slack.Seat{Handle: "swe", BotUserID: botUser, AppID: botApp}, true
 }
 
 func parser(t *testing.T, store notify.FollowStore) *slack.Parser {

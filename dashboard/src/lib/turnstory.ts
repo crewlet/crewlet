@@ -12,9 +12,9 @@
  *     says EXECUTE, iter 2, its model, its rounds, its tokens and its outcome.
  *     A seventh was `agent_turn_completed`, which the same screen also renders
  *     as the stat strip AND as a JSON dump. The list read as a duplicate
- *     because it largely was one. Those rows are not dropped — a phase start
- *     is folded onto its own phase card (see `withStarts` in ./phases.ts),
- *     where it is the missing half of that phase's duration.
+ *     because it largely was one — a phase start says which phase opened, and
+ *     its own completed record says that, its duration included (see
+ *     `phaseDuration` in ./phases.ts).
  *
  *  2. **Everything left had the same weight.** `reflection_completed` is a
  *     sentinel whose own payload doc says it carries no per-worker outcome
@@ -77,6 +77,20 @@ const WENT_WRONG = new Set([
   "skill_telemetry_write_failed",
 ]);
 
+/**
+ * The three records `publishFailure` writes for a turn the engine STOPPED.
+ *
+ * A subset of WENT_WRONG, and the distinction is the whole of it: these are
+ * the rows that describe the same stop `agent_turn_completed.failed` already
+ * reports, so a reader counting problems must not count both. Everything else
+ * in WENT_WRONG — a recovered provider fallback, a refused tool skill, a
+ * failed sandbox run — is an INDEPENDENT problem that happens to share a turn
+ * with the stop. `sandbox_run_failed` is deliberately not here although it is
+ * a failure: `internal/engine/telemetry.go` does not publish it, so it never
+ * describes the turn's own stop.
+ */
+export const TURN_STOP = new Set(["turn.guard_breach", "budget_exhausted", "llm_unavailable"]);
+
 /** What the turn's prompt was assembled from, before the first phase ran. */
 const GIVEN = new Set(["prefetch_summary", "prompt.size"]);
 
@@ -100,14 +114,8 @@ const DID = new Set([
   "skill_used",
   "a2a_channel_opened",
   "a2a_message_sent",
-  "a2a_message_delivered",
   "a2a_channel_closed",
-  "message_sent",
-  "task_created",
   "task_assigned",
-  "task_delegated",
-  "task_completed",
-  "task_failed",
 ]);
 
 /**
@@ -188,6 +196,48 @@ export function tellStory(events: readonly EventRecord[]): Story {
     }
   }
   return story;
+}
+
+/** One phase's final prompt, as the engine measured it. */
+export interface PromptWeight {
+  phase: string;
+  iteration: number;
+  /** The engine's own approximation, off `prompt.size`. */
+  approximateTokens: number;
+  systemChars: number;
+  userChars: number;
+}
+
+/**
+ * What each phase's prompt actually weighed.
+ *
+ * `prompt.size` exists so prompt-slimming is measurable rather than argued
+ * about, and it is addressed like every other phase event precisely so the
+ * size a TURN paid is readable on that turn. It was banded into `given` here
+ * and then read by nobody: the Turn screen took one event out of that band
+ * (`prefetch_summary`) and dropped the rest, so six small integers per phase
+ * reached the browser and went nowhere. The only way to the number was the
+ * raw payload of a row in the residual list.
+ *
+ * Rows come back in the order they were published — one per phase run, so a
+ * self-iterating turn contributes one per round and they read down the page
+ * beside the phases they belong to.
+ */
+export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
+  const out: PromptWeight[] = [];
+  for (const event of events) {
+    if (event.type !== "prompt.size") continue;
+    const p = event.payload as Record<string, unknown> | undefined;
+    if (!p) continue;
+    out.push({
+      phase: String(p.phase ?? ""),
+      iteration: Number(p.iteration ?? 0),
+      approximateTokens: Number(p.approximate_tokens ?? 0),
+      systemChars: Number(p.system_chars ?? 0),
+      userChars: Number(p.user_chars ?? 0),
+    });
+  }
+  return out;
 }
 
 /** One prefetch block: what it is called, whether it hit, and how big it was. */

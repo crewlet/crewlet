@@ -36,6 +36,16 @@ type classified struct {
 	why      string
 }
 
+// A tracker project and a knowledge space are the decision here that is not
+// about credentials: `project` and `space` hold neither a secret nor a ${VAR},
+// and both are guarded anyway. A project key or a space key names a
+// THIRD-PARTY CONTAINER, so handing one to an anonymous reader says where this
+// company files its work and writes its pages, and what to go looking at. It
+// is the reasoning internal/api/setupapi's package doc records for guarding
+// even its reads: what a company has wired up, and to what, is a map of what
+// to attack. They are read with the rest of the integration picture instead,
+// through the operator-only `config` and `integrations` answers.
+
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{
 	"Name":                 {exposurePublic, "the seat's identity in the chart"},
@@ -63,23 +73,27 @@ var roleFields = map[string]classified{
 	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential"},
 	"Placement":            {exposureGuarded, "node ids and labels describing the deployment"},
 	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets"},
+	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in"},
+	"Space":                {exposureGuarded, "a knowledge container key: where this seat writes pages"},
 	"Schedules":            {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
 }
 
 // unitFields classifies every field of config.Unit.
 var unitFields = map[string]classified{
-	"Name":         {exposurePublic, "the unit's identity in the chart"},
-	"Type":         {exposurePublic, "an informational label"},
-	"Purpose":      {exposurePublic, "founder prose"},
-	"Lead":         {exposurePublic, "the structure the chart draws"},
-	"Goals":        {exposurePublic, "founder prose"},
-	"Channel":      {exposurePublic, "where the unit talks, which a colleague needs to know"},
-	"Knowledge":    {exposurePublic, "free-text references, not a read scope"},
-	"MCPEnv":       {exposureGuarded, "tool credentials inherited by members"},
-	"Integrations": {exposureGuarded, "tracker and wiki identities, read with the rest of the integrations"},
-	"Roles":        {exposurePublic, "the tree itself"},
-	"Children":     {exposurePublic, "the tree itself"},
-	"Schedules":    {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
+	"Name":      {exposurePublic, "the unit's identity in the chart"},
+	"ID":        {exposureGuarded, "a durable key rather than a name: everything filed against the unit keys on it (org.Unit.Key) and nobody reads it, while the chart draws Name"},
+	"Type":      {exposurePublic, "an informational label"},
+	"Purpose":   {exposurePublic, "founder prose"},
+	"Lead":      {exposurePublic, "the structure the chart draws"},
+	"Goals":     {exposurePublic, "founder prose"},
+	"Channel":   {exposurePublic, "where the unit talks, which a colleague needs to know"},
+	"Knowledge": {exposurePublic, "free-text references, not a read scope"},
+	"MCPEnv":    {exposureGuarded, "tool credentials inherited by members"},
+	"Project":   {exposureGuarded, "a tracker project key: the container this unit's work is filed in"},
+	"Space":     {exposureGuarded, "a knowledge container key: where this unit's pages are written"},
+	"Roles":     {exposurePublic, "the tree itself"},
+	"Children":  {exposurePublic, "the tree itself"},
+	"Schedules": {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
 }
 
 // EVERY AUTHORED FIELD HAS A DECISION, and the public ones are exactly what

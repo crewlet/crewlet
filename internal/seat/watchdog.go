@@ -91,10 +91,15 @@ type Stall struct {
 // successor serves everything published after that point normally; it is the
 // already-fetched batch that waits.
 //
-// The threshold is deliberately NOT a config knob. It is the same number the
-// lease TTL is: past it the node is provably not the owner, and letting the
-// two drift is how a process gets to be simultaneously "not the owner" and
-// "still holding the mail".
+// The threshold is deliberately NOT a config knob OF ITS OWN. It is the same
+// number the lease TTL is: past it the node is provably not the owner, and
+// letting the two drift is how a process gets to be simultaneously "not the
+// owner" and "still holding the mail". So it FOLLOWS the lease TTL — which
+// means the one this deployment is running, not the shipped constant. Built
+// from [SeatLeaseTTL] it was exactly the drift this paragraph forbids: a node
+// leasing its seats for twenty seconds went on holding their mail for
+// forty-five, and one leasing them for two minutes was killed while it still
+// provably owned them.
 type Watchdog struct {
 	threshold time.Duration
 	poll      time.Duration
@@ -117,10 +122,16 @@ type namedPulse struct {
 	pulse Pulse
 }
 
-// NewWatchdog builds a watchdog at the lease TTL. It watches nothing until
-// [Watchdog.Watch] is called, and a watchdog with no live duty stands down
-// rather than firing — there is no such thing as an unprovoked exit here.
-func NewWatchdog() *Watchdog { return newWatchdog(SeatLeaseTTL, nil, nil) }
+// NewWatchdog builds a watchdog at leaseTTL, which must be the TTL the seats
+// it guards are actually leased for — see the type's doc for why those are one
+// number. Zero takes [SeatLeaseTTL], for a caller with no host to ask.
+//
+// It watches nothing until [Watchdog.Watch] is called, and a watchdog with no
+// live duty stands down rather than firing — there is no such thing as an
+// unprovoked exit here.
+func NewWatchdog(leaseTTL time.Duration) *Watchdog {
+	return newWatchdog(leaseTTL, nil, nil)
+}
 
 // newWatchdog is the constructor with the two seams tests need: a tight
 // threshold and an on-stall that does not end the test binary. Unexported so

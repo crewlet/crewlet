@@ -28,8 +28,50 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"negative pool", "store:\n  max_open_conns: -1\n", "store.max_open_conns", ErrOutOfRange},
 
 		{"unknown stream type", "stream:\n  type: kafka\n", "stream.type", ErrUnknownValue},
+		// A CLUSTER BLOCK WITHOUT A NAME CONFIGURES NOTHING: the embedded
+		// server takes its route port, its bind interface, its advertise
+		// address and its peers only from a NAMED cluster, so a node
+		// written this way starts solo, binds no route listener and forms
+		// no cluster — while every other reading of the same file calls it
+		// clustered.
+		//
+		// EVERY FIELD, because the guard first shipped naming two of them:
+		// host and advertise, the two an operator reaches for after
+		// reading this block's own warnings about unauthenticated cluster
+		// access and about NAT, were the two it silently accepted.
+		{
+			"cluster port with no cluster name",
+			"stream:\n  cluster:\n    port: 6222\n",
+			"stream.cluster.name", ErrMissing,
+		},
+		{
+			"cluster peers with no cluster name",
+			"stream:\n  cluster:\n    peers: [\"nats://a:6222\"]\n",
+			"stream.cluster.name", ErrMissing,
+		},
+		{
+			"cluster host with no cluster name",
+			"stream:\n  cluster:\n    host: 10.0.0.4\n",
+			"stream.cluster.name", ErrMissing,
+		},
+		{
+			"cluster advertise with no cluster name",
+			"stream:\n  cluster:\n    advertise: nat.example.com:6222\n",
+			"stream.cluster.name", ErrMissing,
+		},
 		{"external stream with no url", "stream:\n  type: nats\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},
 		{"embedded stream with a url", "stream:\n  url: nats://localhost:4222\n", "stream.url", ErrConflict},
+		// `debug` starts the EMBEDDED server verbose. Against an external
+		// cluster it reaches nothing, so it is refused for the reason
+		// `url` and `store_dir` are refused the other way round: a flag
+		// nobody reads is the classic "I configured it and nothing
+		// happened".
+		{
+			"external stream with the embedded broker's debug flag",
+			"stream:\n  type: nats\n  url: nats://x:4222\n  debug: true\n" +
+				"coordination:\n  type: embedded-kv\n",
+			"stream.debug", ErrConflict,
+		},
 
 		{"unknown coordination type", "coordination:\n  type: zookeeper\n", "coordination.type", ErrUnknownValue},
 
@@ -53,6 +95,23 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
 		{"duplicate token id", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: founder, token: b}\n", "api.auth.tokens[1].id", ErrConflict},
 
+		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
+		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
+		// with no path and no trailing slash. Every shape below is one an
+		// operator plausibly writes and no browser can ever equal, so
+		// accepting it produces an allow-list that looks configured and a
+		// fetch that fails in a console this engine never sees.
+		// THE WILDCARD IS REFUSED RATHER THAN HONOURED, and the refusal
+		// says what honouring it would expose: it was this field's own
+		// previous default, and what it does is let any site a logged-in
+		// operator visits read LLM transcripts, diary entries and the
+		// whole event stream.
+		{"wildcard origin", "api:\n  auth:\n    allowed_origins: ['*']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with no scheme", "api:\n  auth:\n    allowed_origins: [ops.example.com]\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a trailing slash", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com/']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a path", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com/dashboard']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"empty origin", "api:\n  auth:\n    allowed_origins: ['']\n", "api.auth.allowed_origins[0]", ErrMissing},
+
 		{"active key names nothing", "secrets:\n  active_key_id: nope\n  keys:\n    - {id: k1, material: bWF0}\n", "secrets.active_key_id", ErrUnknownValue},
 		{"keys with no active id", "secrets:\n  keys:\n    - {id: k1, material: bWF0}\n", "secrets.active_key_id", ErrMissing},
 		{"key id with a colon", "secrets:\n  active_key_id: \"a:b\"\n  keys:\n    - {id: \"a:b\", material: bWF0}\n", "secrets.keys[0].id", ErrUnknownValue},
@@ -72,6 +131,25 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 // The two-slot rules. Each of these fails LATER as something that looks
 // like a different problem entirely, which is why they are decided here
 // where both halves of the deployment are named in one file.
+// AND THE WILDCARD'S REFUSAL NAMES WHAT IT WOULD COST.
+//
+// Every other bad origin here is a typo. `*` is a DECISION — the one an
+// operator makes on purpose, having read that CORS is blocking them — so the
+// refusal has to be the place they learn what it opens, or they will reach
+// for `api.auth.disabled` instead.
+func TestTheWildcardOriginRefusalSaysWhatItWouldExpose(t *testing.T) {
+	t.Parallel()
+	_, err := ParseBootstrap([]byte("api:\n  auth:\n    allowed_origins: ['*']\n"), EnvOnly())
+	if err == nil {
+		t.Fatal("a wildcard origin was accepted")
+	}
+	for _, want := range []string{"any site", "https://ops.example.com"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
 func TestBootstrapTopologyRules(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

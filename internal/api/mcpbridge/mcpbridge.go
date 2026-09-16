@@ -51,6 +51,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -540,6 +541,17 @@ func (s *Session) sync() {
 			Name:        def.Name,
 			Description: def.Description,
 			InputSchema: def.Parameters,
+			// AND THE HINTS THE REGISTRY HOLDS, which this bridge
+			// advertised none of: a box was handed a seat's whole
+			// grant with every tool unannotated, so a coding agent's
+			// client could not tell `get_work_item` from
+			// `remove_work_item` and had nothing to ask a person on
+			// before an irreversible call. Read off the SURFACE
+			// rather than recomputed, so an MCP tool's own
+			// advertised hints travel too — a bridged tool is not
+			// necessarily a builtin.
+			Annotations: crewletmcp.SDKAnnotations(
+				s.Surface.AnnotationsOf(def.Name)),
 		}, s.handler(def.Name))
 		s.advertised[def.Name] = struct{}{}
 	}

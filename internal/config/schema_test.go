@@ -3,8 +3,6 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -374,7 +372,7 @@ units:
   - name: Core
     lead: CTO
     mcp_env: {gitlab: {GITLAB_TOKEN: "${GL_SHARED}"}}
-    integrations: {jira: {project: ENG}}
+    project: ENG
     roles:
       - name: CTO
         handle: cto
@@ -434,7 +432,7 @@ units:
 		// express, because it turns on a block's mere presence.
 		{
 			name: "a confluence knowledge base", tier: TierCompany,
-			yaml: "name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
+			yaml: "name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\nknowledge:\n  scope: [HANDBOOK]\n",
 		},
 		// The hosted chat surface, which IS served. Neither layer may
 		// refuse it: the schema because it would underline a working
@@ -486,11 +484,16 @@ units:
 		},
 		{
 			// validatorOnly, and for one reason: the schema cannot express
-			// "this list needs that block" — the rule turns on a block's
-			// mere presence, and a clause that guessed at what "present"
-			// means would underline configs the engine runs.
-			name: "a confluence read scope with no confluence", tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
+			// "this setting needs that backend" — the rule turns on a value
+			// elsewhere in the document, and a clause that guessed would
+			// underline configs the engine runs.
+			//
+			// A scope with no backend NAMED is deliberately not this case
+			// any more: it derives the native backend, where a curated
+			// floor over the company's own pages is ordinary.
+			name: "a read scope for a knowledge base that is switched off",
+			tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nknowledge:\n  backend: none\n  scope: [HANDBOOK]\n",
 		},
 		{
 			name: "unknown bootstrap key", tier: TierBootstrap, editorCatches: true,
@@ -562,10 +565,7 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			data, err := os.ReadFile(filepath.Join(repoRoot, "examples", name))
-			if err != nil {
-				t.Skipf("the example tree is not in this checkout: %v", err)
-			}
+			data := readRepoFile(t, "examples", name)
 			if err := schema.Validate(asJSON(t, string(data))); err != nil {
 				t.Fatalf("examples/%s does not satisfy its own schema:\n%v", name, err)
 			}

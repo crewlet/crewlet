@@ -32,8 +32,9 @@ know a single concrete tool name.
 The [MCP spec](https://modelcontextprotocol.io) lets a server advertise
 behavioural *hints* per tool. Crewlet captures them as `mcp.Annotations`
 (`internal/mcp/annotations.go`), carries them on every bridged tool
-(`mcp.Tool.Annotations`), and files them beside the tool in the registry
-(`tools.Entry.Annotations`):
+(`mcp.Tool.Annotations`) and beside the tool in the registry
+(`tools.Entry.Annotations`), and advertises them again on the two MCP
+surfaces it *serves*:
 
 | Field | MCP hint | Meaning |
 |---|---|---|
@@ -45,24 +46,43 @@ behavioural *hints* per tool. Crewlet captures them as `mcp.Annotations`
 
 Every hint has **three values**, `mcp.Yes`, `mcp.No` and `mcp.Unknown`
 (the server did not say). `Unknown` is never coerced to `No`: "unknown"
-and "explicitly safe" are different, and the classifiers depend on the
-distinction. A value that is not a JSON boolean is read as `Unknown`.
+and "explicitly safe" are different facts, and every classifier below
+depends on the distinction. The MCP Go SDK's own struct cannot hold it
+(two of its four hint fields are plain booleans), so Crewlet reads a
+server's annotations off the wire rather than out of the decoded struct
+and trusts only an explicit `true`. A value that is not a JSON boolean is
+read as `Unknown`.
 
 First-party builtins declare their own annotations in code, registered
 with `tools.Registry.RegisterWith`, so the same classification works for
 them.
 
-### Where annotations come from
+### Where annotations come from, and where they go
 
 ```mermaid
 flowchart TD
-    MCP["MCP server"] -->|"advertises (read from the raw JSON)"| ANN["mcp.Annotations"]
+    MCP["an MCP server Crewlet dials"] -->|"advertises (read from the raw JSON)"| ANN["mcp.Annotations"]
     ANN --> OVR["operator override from tool_annotations (optional)<br/>Annotations.Merge"]
     OVR --> WRAP["mcp.Tool.Annotations"]
-    BUILTIN["first-party builtin"] -->|RegisterWith| ENTRY
+    BUILTIN["a first-party builtin"] -->|RegisterWith| ENTRY
     WRAP -->|RegisterMCP| ENTRY["tools.Entry.Annotations"]
     ENTRY --> Q["engine capability questions<br/>(mcp.WritesToSharedSurface, the delivery check)"]
+    ENTRY --> OUT["the surfaces Crewlet SERVES<br/>/operator/mcp and the sandbox bridge"]
 ```
+
+**The outbound half is not optional.** Both MCP surfaces this engine serves —
+`/operator/mcp`, which hands a company's tracker and knowledge base to an
+operator's own assistant, and the sandbox bridge, which hands a seat's tools to
+a coding agent — advertise each tool's hints alongside its schema. A surface
+that published only names and schemas would give those clients no way to tell
+`search_work_items` from `remove_work_item`: a client that asks a person before
+an irreversible call would have nothing to ask on, and one that skips the
+prompt for a read would prompt on every one.
+
+A tool the engine has **not** classified advertises no annotations at all,
+rather than four "false" hints it would be read as having asserted. Only an
+explicit yes ever sets a hint on the wire, in the same direction and for the
+same reason as the inbound rule above.
 
 ---
 
@@ -102,12 +122,16 @@ would come back with nothing to resume into.
 ### The delivery check: did this answer reach anybody?
 
 The [delivery check](turn-engine.md#three-checks-in-increasing-cost) asks
-the opposite question and fails closed: a successful call counts as a
-possible delivery when the tool is backed by an MCP server and **not
-positively** annotated read-only (`turn.Deliverable`). An unannotated
-tool therefore counts. A fence that reused `!WritesToSharedSurface` here
-would admit every under-annotated write tool, which is why
-`mcp.ReadOnlyProven` exists beside it.
+the opposite question and fails closed. `turn.Deliverable` is one
+membership test against the map `tools.Registry.Deliveries` computes, and
+two kinds of tool are in it: an MCP-served tool whose own annotations do
+**not positively** call it a read, and a first-party tool the engine
+registered as one that reaches somebody. So an unannotated server tool
+counts, and so does commenting on a native work item, while a diary write
+does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
+beside `mcp.WritesToSharedSurface` precisely because the two questions fail
+in opposite directions: reusing the worker guard's answer here would read
+every under-annotated write tool as having reached nobody.
 
 ### `open_world` is a tri-state, and unset is not `false`
 
@@ -124,15 +148,21 @@ server's annotations off the wire because the MCP Go SDK flattens the absent cas
 `readOnlyHint` and `idempotentHint`, which would otherwise make every
 under-annotated tool look exactly like a public write.
 
-It is a trap for **first-party** tools, and Crewlet fell into it: three
+It is a trap for **first-party** tools, and Crewlet fell into it twice. Three
 builtins that write nothing but the agent's own memory (`reflect_and_persist`,
-`refine_skill`, `mark_onboarded`) declared `read_only: false` and said
-nothing about `open_world`, so the guard denied them to workers their
-parent had explicitly granted them — blaming a write to a shared surface
-that never happens. They say `open_world: false` now. The same applies to
-`tool_annotations`: a server tool that genuinely stays inside your network
-needs the key written out, because omitting it is a claim in the other
-direction.
+`refine_skill`, `mark_onboarded`) declared `read_only: false` and said nothing
+about `open_world`, so the guard denied them to workers their parent had
+explicitly granted them — blaming a write to a shared surface that never
+happens. The three person tools (`mark_inbox`, `set_pins`, `set_priorities`)
+did the same: each is written only on behalf of the person whose it is, so
+there is no second party to be surprised by one. All six say what they mean
+now, and `set_priorities` is the one that genuinely *is* open-world — a lead
+may set the queue of somebody in their line, and that person opens their day on
+work they did not choose.
+
+The same applies to `tool_annotations`: a server tool that genuinely stays
+inside your network needs the key written out, because omitting it is a claim
+in the other direction.
 
 ---
 

@@ -3,6 +3,8 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Hint is one MCP behavioural hint, and it has THREE values, not two.
@@ -185,3 +187,54 @@ func WritesToSharedSurface(a Annotations) bool {
 // negation of WritesToSharedSurface and the two disagree for every
 // unannotated tool, which is the whole point.
 func ReadOnlyProven(a Annotations) bool { return a.ReadOnly == Yes }
+
+// SDKAnnotations is the OUTBOUND conversion — the engine's own tri-state as
+// the SDK's struct, for a surface this engine SERVES rather than dials.
+//
+// # Why this exists
+//
+// Both MCP surfaces the engine serves published every tool with nothing but a
+// name, a description and a schema. `annotationsFor` in internal/agent/builtin
+// decides each builtin's hints carefully, the registry carries them, the
+// sub-agent guard reads them — and the two places that hand the catalogue to
+// somebody else's client dropped them on the floor. An operator's assistant
+// and a sandboxed coding agent therefore saw a company's whole tool surface
+// unannotated, which is the shape a client cannot distinguish a read from an
+// irreversible write in: `search_work_items` and `remove_work_item` arrived
+// identical.
+//
+// # The lossy pair, and what is done about it
+//
+// The SDK declares DestructiveHint and OpenWorldHint as *bool, where absence
+// survives, and ReadOnlyHint and IdempotentHint as plain bool, where it does
+// not — see [annotationsFromSDK] for the inbound half of the same problem.
+// Outbound the asymmetry is harmless in one direction and not the other: an
+// UNKNOWN read-only hint and an explicit FALSE serialize identically, so a
+// tool this engine has not classified is advertised as "not read-only", which
+// is the conservative reading a client should already default to. What must
+// never happen is the reverse — advertising `readOnlyHint: true` for something
+// the engine did not say was a read — and that cannot, because only [Yes]
+// sets it.
+//
+// A wholly unknown set returns nil rather than a zero struct, so a tool with
+// no decision advertises no annotations at all instead of four false hints it
+// would be read as having asserted.
+func SDKAnnotations(a Annotations) *sdk.ToolAnnotations {
+	if a == (Annotations{}) {
+		return nil
+	}
+	out := &sdk.ToolAnnotations{
+		Title:          a.Title,
+		ReadOnlyHint:   a.ReadOnly == Yes,
+		IdempotentHint: a.Idempotent == Yes,
+	}
+	if a.Destructive != Unknown {
+		out.DestructiveHint = boolPtr(a.Destructive == Yes)
+	}
+	if a.OpenWorld != Unknown {
+		out.OpenWorldHint = boolPtr(a.OpenWorld == Yes)
+	}
+	return out
+}
+
+func boolPtr(b bool) *bool { return &b }

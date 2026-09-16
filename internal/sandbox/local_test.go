@@ -1067,34 +1067,65 @@ func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 
 // `docker run` spawning a stuck child is precisely the case: killing the CLI
 // alone would leave it behind.
+//
+// THE FIXTURE IS WAITED FOR, NOT RACED. This ran the tree under a 1s timeout
+// and then read the pid file, with a t.Skip when it was not there yet — so the
+// assertion switched ITSELF OFF whenever the machine was too loaded for a fork
+// and an `echo` to land inside a second. That is the worst shape a skip can
+// have: least likely to be present exactly when process-tree teardown is most
+// likely to be wrong, and invisible, because a skipped subtest is not printed
+// without -v.
+//
+// So the timeout is made generous enough never to fire, readiness is WAITED
+// for, and the teardown is triggered by CANCELLING the context — which reaches
+// the identical path in [runHost], whose select has one `<-ctx.Done()` case
+// for both. A grandchild that never records its pid is now a failure, because
+// that is what it is: the fixture did not come up.
 func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "child.pid")
-	// The command waits for the grandchild to record itself before it
-	// hangs, so the timeout can only land on a tree that is fully there.
-	script := "sh -c 'echo $$ > " + pidFile + "; sleep 300' & " +
-		"while [ ! -s " + pidFile + " ]; do sleep 0.01; done; sleep 300"
-	result, err := runHost(t.Context(), hostCommand{
-		argv:    []string{"/bin/sh", "-c", script},
-		timeout: 2 * time.Second,
-		env:     map[string]string{"PATH": os.Getenv("PATH")},
-	})
-	if err != nil {
-		t.Fatalf("runHost: %v", err)
-	}
-	if result.ExitCode != 124 {
-		t.Fatalf("ExitCode = %d, want 124: the command was not the one the timeout ended", result.ExitCode)
-	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runHost(ctx, hostCommand{
+			// THE PATH TRAVELS IN THE ENVIRONMENT, quoted where it is used,
+			// rather than being pasted into the shell source. t.TempDir() is
+			// derived from TMPDIR and from the test's own name, so it can
+			// carry a space or a shell metacharacter — and interpolated, that
+			// writes the pid somewhere else or fails to start, which this
+			// case would then report as a process tree that survived its
+			// teardown. A quoting bug must not be able to look like the
+			// defect under test.
+			argv: []string{"/bin/sh", "-c", `sh -c 'echo $$ > "$PIDFILE"; sleep 300' & sleep 300`},
+			// Long enough that it is never what ends this command: the
+			// cancel below is, and a timeout racing it would reintroduce
+			// exactly the flake this case was rewritten to remove.
+			timeout: time.Minute,
+			env:     map[string]string{"PATH": os.Getenv("PATH"), "PIDFILE": pidFile},
+		})
+		done <- err
+	}()
+
+	waitFor(t, 30*time.Second, func() bool { return fileSize(pidFile) > 0 },
+		"the grandchild never recorded its pid, so the fixture never came up")
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
-		t.Fatalf("the grandchild never recorded its pid within the %s timeout: %v", 2*time.Second, err)
+		t.Fatalf("read the grandchild's pid: %v", err)
 	}
 	child, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil {
 		t.Fatalf("pid: %v", err)
 	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runHost: %v", err)
+	}
 	if !procgrouptest.AwaitGone(t, child, 5*time.Second) {
-		t.Fatal("a timed-out control command left its child running")
+		t.Fatal("a cancelled control command left its grandchild running")
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -86,6 +87,18 @@ type Config struct {
 	// can deliver, or the first message starts a second turn beside a
 	// coding job that is still going.
 	SeatReady func(ctx context.Context, handle string, lease coord.Lease) error
+
+	// SeatsAdmitted reports whether this node may take on NEW seats right
+	// now. Nil always admits. It gates the CLAIM only — see
+	// [seat.Config.Ready] for why it is neither the seat list nor the
+	// acquire hook.
+	SeatsAdmitted func() bool
+
+	// SeatsServiceable reports whether this node may KEEP the seats it
+	// holds, and names what stopped it when the answer is no. Nil keeps
+	// them. It is the opposite direction from SeatsAdmitted and fires on a
+	// different class of fault — see [seat.Config.Serviceable].
+	SeatsServiceable func() (bool, string)
 
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
@@ -166,6 +179,8 @@ func New(cfg Config) (*Node, error) {
 		Owner:             cfg.Owner,
 		NodeID:            cfg.NodeID,
 		Seats:             cfg.Seats,
+		Ready:             cfg.SeatsAdmitted,
+		Serviceable:       cfg.SeatsServiceable,
 		Profile:           cfg.Profile,
 		Status:            cfg.Status,
 		Hooks:             n,
@@ -246,6 +261,22 @@ func (n *Node) Start(ctx context.Context) error {
 // still in the company or, found through the broker's subscription listing,
 // already gone.
 func (n *Node) EnsureMailboxes(ctx context.Context) {
+	// ONE CEILING OVER THE WHOLE PASS, because this is one replicated
+	// create PER SEAT in a row and each carries its own per-create budget.
+	// A company of thirty seats on a wedged metadata group would otherwise
+	// hold the boot for thirty of them, serially — the product again,
+	// which is the bound [jsprovision.SequenceBudget] exists to replace.
+	//
+	// It reads the topology off the queue, so a solo node keeps the short
+	// one and nothing here has to be told which it is.
+	if c, ok := n.cfg.Queue.(interface {
+		Clustered() jsprovision.Clustered
+	}); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Clustered().SequenceBudget())
+		defer cancel()
+	}
+
 	created := 0
 	// ONE READ of the seat list for the walk and the line that reports it. Two
 	// reads straddled an apply that changed the seats, and the log then
@@ -292,7 +323,13 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 			created++
 		}
 	}
-	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "created", created)
+	// "provisioned" RATHER THAN "created", because on a fleet booting
+	// together this counts what THIS node found absent and then made —
+	// and two members that create one mailbox in the same instant are
+	// both handed it, with no way to tell which one's create did it. See
+	// [queue.EventQueue.EnsureSubscription]. Reading these lines across a
+	// fleet, the counts can sum to more than the company has seats.
+	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "provisioned", created)
 }
 
 // Stop gives up every seat and stops consuming.
@@ -320,21 +357,27 @@ const drainLogInterval = 10 * time.Second
 
 // seatReleaseBudget bounds the give-back at the end of a drain.
 //
-// ONE HEARTBEAT INTERVAL — SeatLeaseTTL/3, 15 s at the shipped 45 s TTL —
-// which is the largest budget that is still strictly inside the lease it is
-// racing. Giving a lease back is a handful of coordination writes, so this is
-// a guard against a store that has stopped answering rather than a real
-// allowance; past it the seat lapses on its TTL, which is the same outcome as
-// not trying, only later.
+// ONE HEARTBEAT INTERVAL — the TTL over [seat.HeartbeatRatio], 15 s at the
+// shipped 45 s TTL — which is the largest budget that is still strictly inside
+// the lease it is racing. Giving a lease back is a handful of coordination
+// writes, so this is a guard against a store that has stopped answering rather
+// than a real allowance; past it the seat lapses on its TTL, which is the same
+// outcome as not trying, only later.
 //
 // A budget rather than the caller's context, because the caller's is very
 // often already expired by the time the wait above ends — Drain's own doc
 // invites a deadline — and a release that inherits it does nothing at all,
 // leaving every seat dark for a full TTL instead of being taken over at once.
-// Derived from the TTL rather than written as a duration, for the reason
-// HeartbeatRatio gives: a deployment that shortens its lease must not end up
-// with a release budget longer than the lease it is inside.
-const seatReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
+//
+// A FUNCTION OF THIS NODE'S OWN TTL rather than a constant, which is what the
+// reason [seat.HeartbeatRatio] gives actually requires and what this budget
+// claimed while being derived from the shipped number: a deployment that
+// shortened its lease to ten seconds spent fifteen giving the seats back — a
+// budget strictly OUTSIDE the lease it is inside, which is the arrangement
+// the whole ratio exists to prevent.
+func (n *Node) seatReleaseBudget() time.Duration {
+	return n.host.TTL() / seat.HeartbeatRatio
+}
 
 // Drain performs this node's graceful departure and returns once its seats
 // are handed back.
@@ -408,7 +451,7 @@ func (n *Node) Drain(ctx context.Context) {
 	}
 
 	releaseCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(ctx), seatReleaseBudget)
+		context.WithoutCancel(ctx), n.seatReleaseBudget())
 	defer cancel()
 	n.host.ReleaseAll(releaseCtx, seat.ReasonDrain)
 	n.log.Info("drain_complete", "still_held", len(n.host.Held()))

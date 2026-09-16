@@ -193,6 +193,19 @@ var ErrNotLive = errors.New("queue: not live")
 // there is no ack, and a handler's failure is logged, never redelivered.
 type StreamHandler func(ctx context.Context, topic string, ev *events.Event)
 
+// AnswerFunc answers one scattered request.
+//
+// AN ERROR ANSWERS NOTHING. The asker learns that this server did not answer
+// and nothing else — the same fact as a server that was down, slow or absent,
+// and deliberately so: an asker able to tell a server's failure from its
+// absence would have two cases to handle where the honest answer is one. What
+// a failure is worth saying is said in the server's own log, where the server
+// is.
+//
+// The context is the ANSWERER's, cancelled when its registration ends. The
+// asker's deadline is enforced by the asker, because only the asker knows it.
+type AnswerFunc func(ctx context.Context, request []byte) ([]byte, error)
+
 // Unsubscribe cancels a stream subscription and releases backend resources.
 type Unsubscribe func(ctx context.Context) error
 
@@ -281,8 +294,20 @@ type EventQueue interface {
 
 	// EnsureSubscription creates the durable subscription if absent,
 	// with NO consumer attached, positioned at the earliest message.
-	// Reports whether this call created it; creating an existing
-	// subscription is success.
+	// Creating an existing subscription is success.
+	//
+	// The bool reports whether this call found it absent AND then
+	// provisioned it. That is exact on a backend with one writer, and on
+	// a fleet it is the closest thing to an answer there is: two nodes
+	// that create the same subscription in the same instant both receive
+	// it, because a broker that returns the object either way gives a
+	// client no way to tell "I made this" from "this was already here".
+	// So on a simultaneous boot more than one node can report true.
+	//
+	// Deliberately NOT a three-valued answer, and nothing in the engine
+	// branches on it: it is a count in a log line. A tri-state nobody
+	// reads would be machinery invented to describe a race the broker
+	// does not expose, rather than an answer anyone could act on.
 	EnsureSubscription(ctx context.Context, topic, group string) (bool, error)
 
 	// DeleteSubscription destroys the subscription and its retained
@@ -320,6 +345,47 @@ type EventQueue interface {
 	// AddPublishListener registers a listener called inline on every
 	// publish.
 	AddPublishListener(l PublishListener)
+
+	// Ask scatters one request to every process serving subject and
+	// collects the replies, returning when want of them have arrived or
+	// when ctx is done, whichever comes first. want of 0 waits out the
+	// deadline, which is what a caller that does not know how many
+	// answerers exist has to do.
+	//
+	// EPHEMERAL, and that is why it is a verb of its own rather than a
+	// Publish and a Subscribe. Nothing here is retained, redelivered or
+	// recorded: no stream, no consumer group, no ack, no publish
+	// listener, no event-store row. A request nobody serves is a request
+	// that never existed, and a reply that arrives after its asker left
+	// is dropped rather than held for the next one. The durable verbs are
+	// the wrong shape for a query: a search fan-out that wrote two
+	// records and an audit row per keystroke would make the audit log a
+	// function of how often somebody typed.
+	//
+	// FEWER REPLIES THAN want IS NOT AN ERROR. A peer that is slow, gone,
+	// or simply not serving this subject is the ordinary case, and only
+	// the caller knows what a missing answer costs it — an error would
+	// force every caller to unwrap one to find out how many it got. An
+	// error means the ask could not be made at all.
+	//
+	// THE REPLIES ARE UNORDERED and carry no sender. What a reply means
+	// is inside its own bytes, because the transport cannot say: a
+	// scatter has no roster, so "who did not answer" is a question only
+	// the payload can answer.
+	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
+
+	// Serve makes this process one of subject's answerers.
+	//
+	// EVERY SERVER OF A SUBJECT SEES EVERY REQUEST — the opposite of
+	// Subscribe's competing consumers, and the reason this is not a
+	// consumer group: a scatter divides work by what the request NAMES,
+	// so a broker that handed each request to one member would divide it
+	// twice and cover a fraction.
+	//
+	// An answerer that returns an error answers NOTHING. Its asker sees a
+	// server that did not answer, which is the same fact as a server that
+	// was not running — see AnswerFunc.
+	Serve(ctx context.Context, subject string, h AnswerFunc) (Unsubscribe, error)
 
 	// Start connects the backend and begins consuming.
 	//

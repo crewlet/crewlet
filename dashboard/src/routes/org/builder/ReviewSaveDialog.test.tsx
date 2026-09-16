@@ -67,7 +67,7 @@ describe("the save", () => {
     const toaster = toastHost()!;
     expect(toaster.textContent).toContain("Saved.");
     expect(toaster.closest(".org-builder")).not.toBeNull();
-    expect(document.querySelector(".org-builder-live")!.textContent).not.toContain("Saved.");
+    expect(document.querySelector("[data-live-region]")!.textContent).not.toContain("Saved.");
     // The stored revision is loaded, and the kept draft is gone with the work saved.
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"'));
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();

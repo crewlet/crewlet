@@ -8,15 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 )
 
-// SERVER-BACKED AND NOT A KNOWN READ. A delivery to a shared surface only ever
-// comes from an MCP server, so a first-party builtin never counts however much
-// it writes — and "not a known read" is POSITIVE, so an unannotated tool
-// counts, which is the fail-closed direction.
+// REGISTERED AS REACHING SOMEBODY. An MCP-served tool counts unless it is
+// positively annotated read-only — "not a known read" is POSITIVE, so an
+// unannotated tool counts, which is the fail-closed direction — and a
+// first-party tool counts only where it was declared to deliver.
 func TestDeliverableIsServerBackedAndNotAKnownRead(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
-		Catalogue:  []string{"slack_post", "slack_history", "reflect_and_persist", "tracker_do"},
-		MCPTools:   []string{"slack_post", "slack_history", "tracker_do"},
+		Catalogue: []string{"slack_post", "slack_history", "reflect_and_persist", "tracker_do"},
+		// The registry computed this: slack_history is annotated read-only
+		// so it is absent, and reflect_and_persist is a first-party tool
+		// registered without tools.DeliversTo().
+		Deliveries: map[string]string{"slack_post": "test", "tracker_do": "test"},
 		KnownReads: []string{"slack_history"},
 	}
 	for name, want := range map[string]bool{
@@ -36,7 +39,7 @@ func TestDeliverableIsServerBackedAndNotAKnownRead(t *testing.T) {
 // close the check on exactly the turn that needs to iterate.
 func TestDeliveredIgnoresFailedCalls(t *testing.T) {
 	t.Parallel()
-	s := turn.Surface{MCPTools: []string{"slack_post"}}
+	s := turn.Surface{Deliveries: map[string]string{"slack_post": "test"}}
 	if turn.Delivered([]ledger.Call{{Name: "slack_post", Failed: true}}, s) {
 		t.Error("a failed call counted as a delivery")
 	}
@@ -61,13 +64,13 @@ func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
 			"slack_post", "slack_history", "tracker_do", "submit_work",
 			"activate_tool", "reflect_and_persist", "a2a_ask", "run_sandbox",
 		},
-		MCPTools:       []string{"slack_post", "slack_history", "tracker_do"},
+		Deliveries:     map[string]string{"slack_post": "test", "tracker_do": "test"},
 		KnownReads:     []string{"slack_history"},
 		KnownOpenWorld: []string{"a2a_ask", "run_sandbox"},
 	}
 	for name, want := range map[string]bool{
-		"slack_post":    true,  // a server-backed write reached a person
-		"tracker_do":    true,  // server-backed and unannotated — Deliverable's own rule
+		"slack_post":    true,  // a declared deliverable reached a person
+		"tracker_do":    true,  // declared a deliverable at registration
 		"a2a_ask":       true,  // a builtin, but it woke a colleague
 		"run_sandbox":   true,  // a builtin, but it started a billed box
 		"slack_history": false, // positively read-only
@@ -92,7 +95,7 @@ func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
 func TestActedIgnoresFailedCalls(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
-		MCPTools:       []string{"slack_post"},
+		Deliveries:     map[string]string{"slack_post": "test"},
 		KnownOpenWorld: []string{"a2a_ask"},
 	}
 	if turn.Acted([]ledger.Call{{Name: "slack_post", Failed: true}}, s) {
@@ -113,7 +116,7 @@ func TestActedAndDeliveredDisagreeOnPurpose(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
 		Catalogue:      []string{"a2a_ask", "tracker_do"},
-		MCPTools:       []string{"tracker_do"},
+		Deliveries:     map[string]string{"tracker_do": "test"},
 		KnownOpenWorld: []string{"a2a_ask"},
 	}
 	ask := []ledger.Call{{Name: "a2a_ask"}}
@@ -132,7 +135,7 @@ func TestActedAndDeliveredDisagreeOnPurpose(t *testing.T) {
 func TestAwaitedIsEveryReplyButNone(t *testing.T) {
 	t.Parallel()
 	for r, want := range map[turn.Reply]bool{
-		turn.ReplyNone: false, turn.ReplyTool: true, turn.ReplyEngine: true,
+		turn.NoReply(): false, turn.ToolReply(""): true, turn.EngineReply(): true,
 	} {
 		if got := r.Awaited(); got != want {
 			t.Errorf("%s.Awaited() = %v, want %v", r, got, want)
@@ -158,5 +161,149 @@ func TestAppendCorrectionPutsTheEnginesWordLast(t *testing.T) {
 	}
 	if got := turn.AppendCorrection("   ", "fix it"); got != "fix it" {
 		t.Errorf("with blank notes = %q", got)
+	}
+}
+
+// THE INCIDENT, AS A TEST.
+//
+// A founder asked the CEO seat a question in a Mattermost DM. The seat created
+// a work item and told nobody. Every layer passed: a tracker write is a real
+// delivery, so the flat check saw one and the reviewer's `done` stood. The
+// founder was left holding a clarification question they had already been
+// answered out from under.
+func TestATrackerWriteDoesNotAnswerSomebodyWaitingInChat(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue: []string{"create_work_item", "mattermost_post_message"},
+		Deliveries: map[string]string{
+			"create_work_item":        "tracker",
+			"mattermost_post_message": "mattermost",
+		},
+	}
+	asked := turn.ToolReply("mattermost")
+	filedATask := []ledger.Call{{Name: "create_work_item"}}
+
+	if turn.DeliveredTo(filedATask, s, asked) {
+		t.Error("a tracker write answered a founder waiting in a chat thread")
+	}
+	// The flat question still says yes, and that is exactly the gap: the
+	// turn DID reach somebody, just not the person who asked.
+	if !turn.Delivered(filedATask, s) {
+		t.Error("the flat check no longer sees the tracker write at all — " +
+			"this narrowed the wrong question")
+	}
+	// The post on the awaited surface is what counts.
+	if !turn.DeliveredTo([]ledger.Call{{Name: "mattermost_post_message"}}, s, asked) {
+		t.Error("a post on the surface the ask arrived from did not count")
+	}
+	// And the correction has to NAME the surface, because "no tool was
+	// called" reads as false to a model looking at its own successful write.
+	w := turn.Work{Outcome: turn.OutcomeDelivered, Calls: filedATask}
+	override, correction := turn.OverrideDone(w, asked, s)
+	if !override {
+		t.Fatal("the reviewer's done stood over a turn that answered nobody waiting")
+	}
+	if !strings.Contains(correction, "mattermost") {
+		t.Errorf("correction = %q, want it to name the surface", correction)
+	}
+}
+
+// NARROWED ONLY WHERE IT CAN BE — the two fallbacks, which are what keep this
+// from being stricter than a seat can satisfy.
+func TestTheSurfaceCheckFallsBackWhereItCannotJudge(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue:  []string{"create_work_item"},
+		Deliveries: map[string]string{"create_work_item": "tracker"},
+	}
+	filedATask := []ledger.Call{{Name: "create_work_item"}}
+
+	// An obligation the engine could not place. An assignment is the honest
+	// example: the answer may land on the item, on the ticket, or in the
+	// thread the work came from, and nothing here can pick.
+	if !turn.DeliveredTo(filedATask, s, turn.ToolReply("")) {
+		t.Error("an obligation with no named surface was judged against one anyway")
+	}
+	// A surface this seat holds no tool for. It could not have answered
+	// there however many rounds it spent, so there is nothing to enforce —
+	// and insisting would turn an operator's missing integration into a
+	// seat that fails every turn.
+	if !turn.DeliveredTo(filedATask, s, turn.ToolReply("mattermost")) {
+		t.Error("a seat was held to a surface it holds no tool for, which it " +
+			"can only satisfy by never finishing")
+	}
+}
+
+// The refusal a model reads has to list the tools that would ACTUALLY have
+// counted. Listing every deliverable is how it was told to cite
+// create_work_item at a founder waiting in a chat thread — a citation that
+// would have produced a clean `delivered`, a clean `done`, and the same
+// silence.
+func TestDeliverersForNamesOnlyTheAwaitedSurface(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Deliveries: map[string]string{
+			"create_work_item":        "tracker",
+			"write_page":              "pages",
+			"mattermost_post_message": "mattermost",
+		},
+	}
+	got := turn.DeliverersFor(s, turn.ToolReply("mattermost"))
+	if len(got) != 1 || got[0] != "mattermost_post_message" {
+		t.Errorf("DeliverersFor = %v, want only the tool that reaches the asker", got)
+	}
+	// Where the engine cannot judge, everything is citable — the same
+	// fallback the check itself takes, because the two must agree or a model
+	// is told one thing at submission and judged by another.
+	if got := turn.DeliverersFor(s, turn.ToolReply("")); len(got) != 3 {
+		t.Errorf("DeliverersFor with no surface = %v, want every deliverable", got)
+	}
+	if got := turn.DeliverersFor(s, turn.ToolReply("teams")); len(got) != 3 {
+		t.Errorf("DeliverersFor on an unreachable surface = %v, want every deliverable", got)
+	}
+}
+
+// A Reply is stored as a string on a suspended coding run's row and read back
+// by whatever build resumes it, which may be days and a restart later.
+func TestAReplyRoundTripsThroughItsStoredForm(t *testing.T) {
+	t.Parallel()
+	for _, want := range []turn.Reply{
+		turn.NoReply(), turn.EngineReply(), turn.ToolReply(""), turn.ToolReply("mattermost"),
+	} {
+		if got := turn.ParseReply(want.String()); got != want {
+			t.Errorf("ParseReply(%q) = %+v, want %+v", want.String(), got, want)
+		}
+	}
+	// A value this build does not know comes back as unset rather than as a
+	// guess, so Run refuses it by the same rule as any other invalid input.
+	if got := turn.ParseReply("carrier-pigeon:aviary"); got.Valid() {
+		t.Errorf("an unknown kind parsed as valid: %+v", got)
+	}
+}
+
+// ONLY A TOOL OBLIGATION IS A QUESTION ABOUT TOOL CALLS. The ledger asks
+// whether the asker has this turn's answer, and for two of the three
+// obligations the tool record cannot say: an A2A ask is answered by the engine
+// on the channel it opened, and an unprompted turn has nobody to answer at
+// all. Reading the record on all three filed both as "this never reached
+// anyone" — the same false record the Unsent field exists to prevent, pointed
+// the other way, and it broke a resumed coding turn's history.
+func TestAnsweredOnlyConsultsTheRecordWhenAToolOwesTheAnswer(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{Deliveries: map[string]string{"slack_post": "slack"}}
+	nothing := []ledger.Call{{Name: "run_sandbox"}}
+
+	if !turn.Answered(nothing, s, turn.NoReply()) {
+		t.Error("a turn nobody asked for was recorded as having failed to reply")
+	}
+	if !turn.Answered(nothing, s, turn.EngineReply()) {
+		t.Error("an A2A answer the engine itself carries back was recorded as unsent")
+	}
+	// The one case the record CAN settle, in both directions.
+	if turn.Answered(nothing, s, turn.ToolReply("slack")) {
+		t.Error("a turn that owed a post and made none counted as answered")
+	}
+	if !turn.Answered([]ledger.Call{{Name: "slack_post"}}, s, turn.ToolReply("slack")) {
+		t.Error("a post on the awaited surface did not count as answered")
 	}
 }

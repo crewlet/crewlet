@@ -2,9 +2,13 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -313,4 +317,85 @@ func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
 	if len(TraceOf(ctx).TraceID) != 32 {
 		t.Error("ids stopped working when the collector was unreachable")
 	}
+}
+
+// A CONFIGURE THAT FAILS MUST NOT HAVE INSTALLED ANYTHING.
+//
+// The failure below is the one an operator can actually reach: a metrics
+// endpoint with a protocol this build does not speak. The traces half never
+// looks at the protocol (it has no endpoint of its own here), so the refusal
+// comes from the metrics half — AFTER the TracerProvider has been built. Left
+// installed, that provider is published to every span site in the process
+// while the caller holds no flush for it; its batch processor and exporter run
+// on for the life of a boot that failed.
+//
+// Mutation: install the provider where it is built (`otel.SetTracerProvider(tp)`
+// immediately after `sdktrace.NewTracerProvider`) and this goes red on the
+// identity check — the global is the half-built provider nothing can flush.
+func TestAFailedConfigureLeavesTheInstalledProviderAlone(t *testing.T) {
+	// Establish the precondition explicitly: a working provider, installed.
+	// Every test in this file that needs one does the same, because the
+	// previous test's cleanup leaves the global terminated.
+	configure(t, nil)
+	before := otel.GetTracerProvider()
+
+	_, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
+		MetricsEndpointVar: "http://127.0.0.1:1/v1/metrics",
+		ProtocolVar:        "otlp",
+	})})
+	if err == nil {
+		t.Fatal("a protocol this build cannot speak was accepted by the metrics half")
+	}
+	if !strings.Contains(err.Error(), ProtocolVar) {
+		t.Errorf("the error does not name the variable to change: %v", err)
+	}
+	if got := otel.GetTracerProvider(); got != before {
+		t.Error("a failed Configure installed its half-built TracerProvider — " +
+			"the caller got no Shutdown, so nothing can ever flush or stop it")
+	}
+
+	// And the process is still tracing. A terminated or no-op provider mints
+	// no span of its own, which is the state the package doc says every
+	// event in the store depends on not being in.
+	ctx, span := Start(context.Background(), "test", "op")
+	defer span.End()
+	if !span.SpanContext().IsValid() {
+		t.Error("tracing stopped working after a failed Configure")
+	}
+	if len(TraceOf(ctx).SpanID) != 16 {
+		t.Errorf("span id = %q, want 16 hex", TraceOf(ctx).SpanID)
+	}
+}
+
+// WHAT A FAILED CONFIGURE BUILT IS STOPPED, not dropped on the floor. The
+// batch processor's goroutine and the exporter's connection start when the
+// provider is constructed, so the pointer this frame is about to lose is a
+// live exporter.
+//
+// Mutation: return `cause` from [abandon] without calling shutdownTracer, and
+// this goes red — the exporter is never shut down.
+func TestAnAbandonedProviderStopsItsExporter(t *testing.T) {
+	exp := &stubExporter{}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
+
+	cause := errors.New("the metrics half refused a protocol")
+	if err := abandon(context.Background(), tp, cause); !errors.Is(err, cause) {
+		t.Errorf("abandon returned %v, want the cause %v — the operator acts on "+
+			"what they typed, not on a flush that failed behind it", err, cause)
+	}
+	if !exp.stopped.Load() {
+		t.Error("the exporter was left running by a Configure that failed")
+	}
+}
+
+// stubExporter is a SpanExporter that records having been shut down. A real
+// one would need a collector; what is under test is the teardown, not an
+// export.
+type stubExporter struct{ stopped atomic.Bool }
+
+func (e *stubExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error { return nil }
+
+func (e *stubExporter) Shutdown(context.Context) error {
+	e.stopped.Store(true)
+	return nil
 }

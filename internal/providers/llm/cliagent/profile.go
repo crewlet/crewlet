@@ -146,6 +146,45 @@ type LimitMarker struct {
 	ResetUnit string `yaml:"reset_unit,omitempty"`
 }
 
+// MarkerScope says WHERE a CLI's failure prose can appear, and therefore
+// where [LimitMarker] and [AuthMarker] sentinels may be matched.
+//
+// The default searches the model's ANSWER as well as stderr, and it has to:
+// Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
+// about the plan standing where the answer should be, so a marker that
+// searched stderr alone would never fire and the fallback chain would never
+// carry the seat onto a metered key.
+//
+// It is also a false-positive surface, and a real one rather than a
+// theoretical one: the haystack is the model's own words, so a seat ASKED
+// about rate limits — "what is our quota?" — can answer in prose that trips a
+// generic sentinel, and a KindRateLimit benches a perfectly good credential.
+// This file already lost a "429" sentinel to exactly that.
+//
+// So a CLI that reports its failures on STDERR and nowhere else says so, and
+// its markers stop being matched against anything the model said. That is not
+// a guess per profile: kimi-code writes `provider.rate_limit: …` to stderr
+// with the answer stream empty, pi writes `<status>: <the provider's JSON>`
+// to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
+// there — all three measured. A profile only narrows this when the vendor's
+// own behaviour makes the answer an impossible place for the report.
+type MarkerScope string
+
+const (
+	// MarkerScopeAnswerAndStderr searches the model's answer and stderr.
+	// The default, and what a CLI that reports a spent plan AS its answer
+	// requires.
+	MarkerScopeAnswerAndStderr MarkerScope = "answer-and-stderr"
+	// MarkerScopeStderr searches stderr only, for a CLI whose failures
+	// never reach the answer.
+	MarkerScopeStderr MarkerScope = "stderr"
+)
+
+// Valid reports whether s is a scope this package knows.
+func (s MarkerScope) Valid() bool {
+	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr
+}
+
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
@@ -225,6 +264,54 @@ func (f SeedFile) scope() SeedScope {
 		return SeedHome
 	}
 	return f.In
+}
+
+// SystemPromptFile shapes the file a `{file}` system-prompt channel writes,
+// for the vendors whose prompt channel takes a STRUCTURED file rather than a
+// bare one.
+//
+// Without it the file is the system prompt and nothing else, which is what
+// every other `{file}` profile wants. Kimi Code is the first that cannot take
+// that: its only per-call prompt channel is `--agent-file`, an agent
+// definition whose YAML frontmatter declares the agent's name, its
+// description — REQUIRED — and its tool allowlist, with the BODY as the
+// system prompt. Handed a bare prompt the CLI does not degrade: it "reports
+// the error and exits", so every call fails.
+//
+// Which makes the frontmatter load-bearing twice over. It is also the only
+// place that CLI can be told which of its own tools to keep, so the file is
+// where this backend's tool denial lives for it — and that is why a profile
+// declaring one passes the channel on EVERY call, including a request that
+// carries no system prompt at all (`crewlet llm doctor`'s isolation probes
+// are two). Passing it only when there is text to put in it would hand the
+// vendor's default agent, and every tool it has, to exactly the calls that
+// exist to prove the tools are off.
+type SystemPromptFile struct {
+	// Name is the file to write in the per-call working directory. Empty
+	// takes the default. A bare name, never a path: a vendor that keys on
+	// the extension (`--agent-file` wants `.md`) is the only reason to set
+	// it.
+	Name string `yaml:"name,omitempty"`
+
+	// Template is the file's content, with `{system}` substituted by the
+	// seat's system prompt. Empty writes the prompt alone.
+	Template string `yaml:"template,omitempty"`
+}
+
+// render returns the bytes to write for one call's system prompt.
+func (f *SystemPromptFile) render(system string) string {
+	if f == nil || f.Template == "" {
+		return system
+	}
+	return strings.ReplaceAll(f.Template, "{system}", system)
+}
+
+// fileName returns the name to write under.
+func (f *SystemPromptFile) fileName() string {
+	if f == nil || f.Name == "" {
+		return systemPromptFile
+	}
+	return f.Name
 }
 
 // AuthMarker recognises a login the CLI has stopped honouring.
@@ -332,6 +419,11 @@ type Profile struct {
 	// the CLI its system prompt twice — and [Profile.validate] refuses it.
 	SystemPromptEnv string `yaml:"system_prompt_env,omitempty"`
 
+	// SystemPromptFile shapes the file either `{file}` channel writes —
+	// see [SystemPromptFile]. Nil writes the prompt alone, which is what
+	// every vendor but Kimi Code takes.
+	SystemPromptFile *SystemPromptFile `yaml:"system_prompt_file,omitempty"`
+
 	// PromptArgs introduces the prompt in argv mode, for a CLI that takes it
 	// as a FLAG'S VALUE rather than as a positional argument. Empty appends
 	// the prompt bare, which is what every other argv profile wants.
@@ -389,8 +481,28 @@ type Profile struct {
 	// exiting zero.
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
 
-	// Usage locates the token counts.
+	// Usage locates the token counts, in the CLI's stdout — or, where
+	// [Profile.UsageFileArgs] is set, in the report that field names.
 	Usage UsagePaths `yaml:"usage,omitempty"`
+
+	// UsageFileArgs asks the CLI to write its token counts to a FILE,
+	// carrying the path through the `{usage_file}` placeholder. Empty
+	// reads them out of stdout, which is what every other profile does.
+	//
+	// It exists because a CLI can report usage honestly and still not put
+	// it in the answer. Hermes's one-shot entry is `-z`, whose whole
+	// contract is "single prompt in, final response text out, NOTHING else
+	// on stdout or stderr" — so there is no envelope for a usage path to
+	// walk, and the counts ride `--usage-file` instead. Estimating them
+	// would be the alternative, and an estimate is what the budget cascade
+	// then spends against.
+	//
+	// The file is written in the per-call working directory and read after
+	// the process exits; when it is absent or unreadable the counts fall
+	// back to whatever stdout said, because the vendor writes it "even
+	// when the run fails" and a broken usage write must never mask the
+	// run's own outcome.
+	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
 	// under the seat's home. Without it a CLI reads the engine user's real
@@ -449,6 +561,11 @@ type Profile struct {
 	// AuthMarkers recognise an expired login.
 	AuthMarkers []AuthMarker `yaml:"auth_markers,omitempty"`
 
+	// MarkerScope is where the two marker sets above may be matched —
+	// see [MarkerScope]. Empty searches the answer and stderr, which is
+	// what a CLI reporting a spent plan as its answer needs.
+	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
+
 	// HostCredentialPaths are where this CLI keeps its login in a human's
 	// own home directory, for `crewlet llm login --from-host` to adopt.
 	// Paths are relative to that home.
@@ -488,6 +605,46 @@ func IsCredentialName(name string) bool {
 		}
 	}
 	return false
+}
+
+// markerScope is the scope with its default applied.
+func (p *Profile) markerScope() MarkerScope {
+	if p.MarkerScope == "" {
+		return MarkerScopeAnswerAndStderr
+	}
+	return p.MarkerScope
+}
+
+// hasSystemChannel reports whether this profile carries the system prompt on
+// a channel of its own rather than leaving it in the transcript.
+func (p *Profile) hasSystemChannel() bool {
+	return len(p.SystemPromptArgs) > 0 || p.SystemPromptEnv != ""
+}
+
+// writesSystemPromptFile reports whether this profile's system-prompt channel
+// puts the text in a FILE — either `{file}` on argv, or the env-var channel,
+// which is a path by construction.
+func (p *Profile) writesSystemPromptFile() bool {
+	if p.SystemPromptEnv != "" {
+		return true
+	}
+	return hasPlaceholder(p.SystemPromptArgs, "{file}")
+}
+
+// hasPlaceholder reports whether any entry of an argv template carries one.
+func hasPlaceholder(template []string, placeholder string) bool {
+	return slices.ContainsFunc(template, func(arg string) bool {
+		return strings.Contains(arg, placeholder)
+	})
+}
+
+// isBareFileName reports whether name is a single path element that stays put
+// when joined onto a directory.
+func isBareFileName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
 }
 
 // validate reports what is wrong with a profile, naming the override field an
@@ -538,9 +695,7 @@ func (p *Profile) validate(name string) error {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
 			"on argv and there is none to introduce", p.mode())
 	}
-	if p.mode() == PromptFile && !slices.ContainsFunc(p.PromptArgs, func(arg string) bool {
-		return strings.Contains(arg, "{file}")
-	}) {
+	if p.mode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
 		// Refused rather than defaulted to a bare append: a file-mode
 		// profile whose argv never carries the path runs the CLI with no
 		// prompt, which a vendor answers by opening an interactive
@@ -569,6 +724,69 @@ func (p *Profile) validate(name string) error {
 		// business rather than something this profile can state.
 		add("system_prompt_args and system_prompt_env are both set — a CLI takes " +
 			"its system prompt on ONE channel; drop whichever this build does not use")
+	}
+	// AND ONE PLACEHOLDER OR THE OTHER WITHIN system_prompt_args, which is
+	// the same rule one level down and was the hole: the renderer writes the
+	// private file for `{file}` and then substitutes `{system}` into argv on
+	// the SAME pass, so `["--agent-file", "{file}", "--system-prompt",
+	// "{system}"]` wrote the seat's identity to a 0600 file and ALSO put
+	// every byte of it in /proc/<pid>/cmdline, where any account on the
+	// machine reads it. The shipped profiles are held to this by a test;
+	// nothing held an operator's cli.overrides to it, and overrides are
+	// exactly where a hand-written argv appears.
+	if hasPlaceholder(p.SystemPromptArgs, "{file}") && hasPlaceholder(p.SystemPromptArgs, "{system}") {
+		add("system_prompt_args names both {file} and {system} — the first writes the " +
+			"seat's system prompt to a private file and the second puts the same text " +
+			"on argv, where /proc/<pid>/cmdline exposes it to every account on the " +
+			"machine; keep the {file} form and drop {system}")
+	}
+	if p.SystemPromptFile != nil {
+		if !p.writesSystemPromptFile() {
+			// A template with no file to write is not a harmless
+			// extra: on a `{system}` profile the seat's identity goes
+			// on argv bare, and an operator who wrote frontmatter
+			// meant it to reach the CLI.
+			add("system_prompt_file is set but no system-prompt channel writes a " +
+				"file — set system_prompt_args with a {file} placeholder, or " +
+				"system_prompt_env")
+		}
+		if tpl := p.SystemPromptFile.Template; tpl != "" && !strings.Contains(tpl, "{system}") {
+			add("system_prompt_file.template has no {system} placeholder — every " +
+				"call would hand the CLI the same fixed file and no seat's identity")
+		}
+		// `fileName` rather than `name`, which is this function's own
+		// parameter: the PROFILE's name. Two different names in one
+		// validator whose every message is about the profile is worth a
+		// second word.
+		if fileName := p.SystemPromptFile.Name; fileName != "" && !isBareFileName(fileName) {
+			// The path is joined onto the per-call working directory,
+			// and this field is operator-overridable.
+			add("system_prompt_file.name %q must be a plain file name, with no "+
+				"directory separator", fileName)
+		}
+	}
+	if len(p.UsageFileArgs) > 0 {
+		if !hasPlaceholder(p.UsageFileArgs, "{usage_file}") {
+			add("usage_file_args carries no {usage_file} placeholder — there is " +
+				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
+		}
+		// BOTH PROMPT COUNTS, because [extracted.applyUsageFile] accepts a
+		// report only when both resolve — a partial overlay would pair one
+		// source's input with another's output, and the sum is what a
+		// budget is charged. A profile declaring one of them (or only the
+		// cache paths) therefore estimates on EVERY call while
+		// [Profile.ReadsUsage] and `crewlet llm doctor` report it as using
+		// the vendor's own figures, which is the one thing that report
+		// exists to settle.
+		if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
+			add("usage_file_args is set but usage.input and usage.output are not both " +
+				"declared — the report is only read when both counts resolve, so every " +
+				"call would fall back to an estimate while the doctor reports otherwise")
+		}
+	}
+	if p.MarkerScope != "" && !p.MarkerScope.Valid() {
+		add("marker_scope %q (want %s or %s)",
+			p.MarkerScope, MarkerScopeAnswerAndStderr, MarkerScopeStderr)
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
@@ -684,13 +902,22 @@ func sentinelProblem(sentinel string) string {
 // is a one-line override, and the JSON paths it inherits from the built-in
 // profile are simply inert afterwards.
 //
+// THE USAGE FILE IS THE EXCEPTION TO THE TEXT RULE, and it is the whole
+// reason that channel exists: a report the CLI writes to a path of its own is
+// decoded whatever stdout carries, so a `text` profile declaring
+// [Profile.UsageFileArgs] reports real counts. Reading the text rule first
+// would answer "estimated" for exactly the profile that went to the trouble.
+//
 // It exists so `crewlet llm doctor` and the extractor answer the same
 // question. Doctor asked a narrower one — "are usage paths declared" — and so
 // reported "reported by CLI" for a provider whose every call estimates, which
 // is precisely the question that report exists to settle.
 func (p *Profile) ReadsUsage() bool {
-	if p.output() == OutputText {
+	if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 {
 		return false
 	}
-	return len(p.Usage.Input) > 0 || len(p.Usage.Output) > 0
+	if len(p.UsageFileArgs) > 0 {
+		return true
+	}
+	return p.output() != OutputText
 }
