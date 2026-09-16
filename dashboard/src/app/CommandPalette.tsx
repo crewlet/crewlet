@@ -20,6 +20,7 @@ import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
+import { QueryState } from "~/components/common.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 
 interface Hit {
@@ -142,11 +143,40 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   // ranked search over the company's items cannot be folded into an index of
   // screens and seats, and running it on every keystroke of an unscoped query
   // would put a search on the wire for somebody typing "settings".
-  const work = useQuery(
-    "work_search",
-    { q: term, limit: 8 },
-    { enabled: sigil === "#" && term.length >= 2 },
-  );
+  const asked = sigil === "#" && term.length >= 2;
+  const work = useQuery("work_search", { q: term, limit: 8 }, { enabled: asked });
+
+  // WHICH TERM THE ANSWER ON HAND IS FOR.
+  //
+  // `useQuery` keeps the previous answer across a change of parameters and
+  // across a failure, which is right for a polled table — replacing a rendered
+  // table with a skeleton every tick is how a polled screen becomes unreadable
+  // — and wrong for a search box, where the question changes on every
+  // keystroke. Without this the palette listed `auth`'s items as hits for
+  // `authz` with nothing saying a query was in flight, and a refusal raised by
+  // one term was read as a refusal of the next.
+  //
+  // Recorded against the ANSWER'S OWN IDENTITY rather than against a timer:
+  // `socket.query` builds a fresh object per answer and `useQuery` drops the
+  // answer of a superseded generation, so a change of identity is this term's
+  // answer arriving and nothing else. The answer itself carries no echo of the
+  // query, which is why the term has to be remembered here.
+  const settled = useRef<{ data: unknown; error: string | null; term: string }>({
+    data: null,
+    error: null,
+    term: "",
+  });
+  if (settled.current.data !== work.data || settled.current.error !== work.error) {
+    settled.current = { data: work.data, error: work.error, term };
+  }
+  const answers = asked && settled.current.term === term;
+  // THE THREE STATES OF A SERVER QUERY, kept apart. A read that failed is not
+  // a company with no such work — `internal/api/queries` splits them itself
+  // (an unregistered `work_search` is `unknown_query`, a building index is
+  // `available:false`, a store fault is an error) and a palette that collapses
+  // them tells the reader to file a duplicate for work that already exists.
+  const refusal = answers ? work.error : null;
+  const searching = asked && !answers;
 
   const hits = useMemo<Hit[]>(() => {
     const query = term.toLowerCase();
@@ -173,7 +203,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     if (sigil === "#") {
-      for (const [i, item] of (work.data?.hits ?? []).entries()) {
+      // Only the answer to THIS term is a hit for it; a refusal has none.
+      for (const [i, item] of (answers && !refusal ? (work.data?.hits ?? []) : []).entries()) {
         push(
           {
             id: `work-${item.key}`,
@@ -186,7 +217,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           i,
         );
       }
-      if (term.length >= 2 && !work.loading && (work.data?.hits ?? []).length === 0) {
+      // "NOTHING MATCHED" IS AN ANSWER, so it is claimed only when this term
+      // has one: not while a query is in flight, and never over a refusal —
+      // the banner beside the list says what went wrong instead.
+      if (answers && !refusal && (work.data?.hits ?? []).length === 0) {
         push(
           {
             id: "work-none",
@@ -241,11 +275,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "gitBranch",
           label: query,
           hint: "as a trace — every event that carries it",
-          // A TRACE HAS NO PAGE OF ITS OWN any more, and it never should have
-          // had one: a trace is a set of events, and the event log already
-          // filters on it. The screen that existed for it could show nothing
-          // the log could not.
-          go: () => nav.to(["activity", "events"], { trace: query }),
+          // THE TRACE PAGE, which is the only screen that assembles one: it
+          // reads every event carrying the id and draws the span tree they
+          // form. This pointed at the event log with `?trace=` instead, a
+          // parameter `routes/activity/Activity.tsx` reads nowhere — so the
+          // reader landed on the UNFILTERED log, which reads as a trace that
+          // touched everything.
+          go: () => nav.to(["activity", "traces", query]),
         },
         -2,
       );
@@ -306,8 +342,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     for (const unit of index.units) {
-      const s = query ? score(unit.name, query) : Infinity;
-      if (s < 0 || !Number.isFinite(s)) continue;
+      // AN EMPTY QUERY LISTS EVERY UNIT, exactly as it lists every seat and
+      // every destination. `Infinity` is the seat loop's per-field no-match
+      // sentinel, which `Math.min` folds there and nothing folds here: copied
+      // in, it made the finiteness guard drop every unit whenever the box was
+      // empty, so typing `@` showed the whole roster and no units at all under
+      // a footer promising "seats and units only".
+      const s = query ? score(unit.name, query) : 0;
+      if (s < 0) continue;
       push(
         {
           id: `unit-${unit.name}`,
@@ -365,7 +407,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       .sort((a, b) => a.rank - b.rank)
       .slice(0, 40)
       .map((r) => r.hit);
-  }, [term, sigil, index, agents, tools, nav, recents, work.data, work.loading, prefs, route]);
+  }, [term, sigil, index, agents, tools, nav, recents, work.data, answers, refusal, prefs, route]);
 
   useEffect(() => setCursor(0), [q]);
   useEffect(() => {
@@ -412,19 +454,26 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         <div className="palette-results" ref={listRef} role="listbox">
           {/* A SCOPE THAT IS WAITING IS NOT A SCOPE THAT FOUND NOTHING, and
               the work scope is the only one that can be either: it is a
-              server query, so "no hits yet" covers a query in flight, a term
-              too short to run one, and a company with no such work. */}
+              server query, so "no hits yet" covers FOUR states — a term too
+              short to run one, a query in flight, a read the engine refused
+              or could not complete, and a company with no such work. Each
+              sends the reader somewhere different, so each says so. */}
           {!hits.length && sigil === "#" && term.length < 2 && (
             <div className="palette-item" style={{ color: "var(--text-muted)" }}>
               Type at least two characters to search the company&rsquo;s work.
             </div>
           )}
-          {!hits.length && sigil === "#" && term.length >= 2 && work.loading && (
+          {!hits.length && searching && (
             <div className="palette-item" style={{ color: "var(--text-muted)" }}>
               Searching…
             </div>
           )}
-          {!hits.length && !(sigil === "#" && (term.length < 2 || work.loading)) && (
+          {/* THE REFUSAL ITSELF, through the one table that says what each
+              code means — `components/common.tsx`. A second wording here is
+              how "the engine does not serve this answer" and "the socket went
+              away" ended up both reading as "nothing matched". */}
+          {refusal && <QueryState error={refusal} loading={false} />}
+          {!hits.length && !(sigil === "#" && (term.length < 2 || searching || !!refusal)) && (
             <div className="palette-item" style={{ color: "var(--text-muted)" }}>
               Nothing matches “{term || q}”.
             </div>

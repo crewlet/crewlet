@@ -145,6 +145,90 @@ describe("routing", () => {
     expect(screen.getByText(/there is no such screen/)).toBeDefined();
   });
 
+  // A TAIL NOTHING ROUTES IS NOT THE WORKSPACE'S LANDING SCREEN. `cost` had a
+  // two-valued test — `budgets` or the spend screen — so `#/cost/budget`, the
+  // obvious typo and the shape of a stale bookmark, drew the spend tables
+  // under a trail reading "Cost / budget": the address, the trail and the
+  // screen each naming something different. Every sibling workspace in this
+  // file ends its switch with Not Found; this one now does too.
+  test("a tail under Cost that names no screen says so", () => {
+    location.hash = "#/cost/budget";
+    mount();
+    expect(screen.getByText(/there is no such screen/)).toBeDefined();
+    // …and the two addresses that DO exist are untouched.
+    cleanup();
+    location.hash = "#/cost";
+    mount();
+    expect(screen.queryByText(/there is no such screen/)).toBeNull();
+    cleanup();
+    location.hash = "#/cost/budgets";
+    mount();
+    expect(screen.queryByText(/there is no such screen/)).toBeNull();
+  });
+
+  // THE SAME SHAPE ONE CASE OVER. `revisions/{id}` is the only tail Config
+  // has, and reading it as `tail[0] === "revisions"` alone rendered the config
+  // screen with the segment dropped for everything else.
+  test("a tail under Config that names no screen says so", () => {
+    location.hash = "#/admin/config/nonsense";
+    mount();
+    expect(screen.getByText(/there is no such screen/)).toBeDefined();
+  });
+
+  /**
+   * A TOOL NAME IS A THIRD PARTY'S STRING, and `servers` is a legal one.
+   *
+   * `#/admin/tools/servers/{name}` filters the catalogue by origin and
+   * `#/admin/tools/{name}` is one tool's page — the address `objects.ts`
+   * builds and where a tool row's `Open ↗` goes. Discriminating on the WORD
+   * took the page away from a tool actually called `servers` and dropped the
+   * reader on the unfiltered catalogue, which is the regression the switch's
+   * own comment says it fixed. The tail's LENGTH is what tells them apart:
+   * the router encodes each segment whole, so a tool page is always exactly
+   * one tail segment and the filter always two.
+   */
+  test("a tool named `servers` keeps its page, and the origin filter keeps its", () => {
+    const annotations = {
+      read_only: "yes",
+      destructive: "no",
+      idempotent: "yes",
+      open_world: "no",
+    } as const;
+    const catalogue = [
+      { name: "servers", description: "", source: "mcp:acme", annotations, delivers: "" },
+      { name: "create_issue", description: "", source: "mcp:github", annotations, delivers: "" },
+    ];
+
+    location.hash = "#/admin/tools/servers";
+    const one = mount();
+    one.store.applyTools(catalogue);
+    one.view.rerender(
+      <ClientContext.Provider value={{ store: one.store, socket: new LiveSocket(one.store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    // The addressed tool is drawn above the catalogue in its own header.
+    expect(one.view.container.querySelector(".object-head")).not.toBeNull();
+    one.view.unmount();
+    cleanup();
+
+    location.hash = "#/admin/tools/servers/github";
+    const two = mount();
+    two.store.applyTools(catalogue);
+    two.view.rerender(
+      <ClientContext.Provider value={{ store: two.store, socket: new LiveSocket(two.store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    // Two segments is the FILTER, so no tool is addressed and the catalogue
+    // stands alone.
+    expect(two.view.container.querySelector(".object-head")).toBeNull();
+  });
+
   test("a seat that does not exist explains itself", () => {
     location.hash = "#/company/people/ghost";
     mount();

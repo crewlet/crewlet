@@ -97,6 +97,47 @@ const TWO_ROUNDS = phase({
   ],
 });
 
+describe("a settled phase's zero is a number", () => {
+  /**
+   * ABSENT AND ZERO ARE DIFFERENT FACTS, and a dash claims the first about the
+   * second.
+   *
+   * A phase run on a subscription CLI backend reports no usage at all, and one
+   * the engine stopped before its first call came back has a `total_tokens` of
+   * 0 on a record that is settled. `totalTokens ? … : "—"` printed "not
+   * recorded" for both, on the card an operator opens precisely to find out
+   * which phase was expensive — and the same card already prints the
+   * delegation total through `fmtCount` unconditionally, so the file
+   * contradicted itself.
+   */
+  test("a phase that spent nothing says 0, not “not recorded”", () => {
+    const { container } = render(<PhaseCard record={phase({ totalTokens: 0, failed: true })} />);
+    const tokens = container.querySelector('[title="total tokens"]');
+    expect(tokens?.textContent).toBe("0");
+  });
+
+  test("and the same for the rounds it never took", () => {
+    const { container } = render(<PhaseCard record={phase({ roundNum: 0, failed: true })} />);
+    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0r");
+  });
+
+  // THE DASH SURVIVES WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
+  // running has not reported its usage yet, which is not the same as having
+  // spent nothing.
+  test("a live phase's zero is still an absence", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ live: true, totalTokens: 0, roundNum: 0 })} />,
+    );
+    expect(container.querySelector('[title="total tokens"]')).toBeNull();
+    expect(
+      container.querySelector('[title="this phase has not reported its usage yet"]')?.textContent,
+    ).toBe("—");
+    expect(
+      container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
+    ).toBe("—");
+  });
+});
+
 describe("a round is one block", () => {
   test("a round's thinking, speech and calls all sit inside that round", () => {
     const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);

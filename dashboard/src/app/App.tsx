@@ -126,27 +126,40 @@ function AdminRoutes({ rest }: { rest: string[] }) {
       return <Fleet key={tail[0] ?? ""} node={tail[0]} />;
     case "integrations":
       return <Integrations key={tail[0] ?? ""} kind={tail[0]} />;
-    case "tools":
+    case "tools": {
       // TWO SHAPES UNDER ONE SEGMENT, and they do not overlap: `servers/{name}`
       // is a FILTER on the catalogue's origin, and a bare `{name}` is one TOOL
       // — which is what `objects.ts` calls a tool's page and where a tool
       // peek's `Open ↗` goes. The bare form used to fall through with the
       // segment dropped, so that link landed on the unfiltered catalogue and a
       // reader lost the tool they had open.
-      return (
-        <Tools
-          key={tail.join("/")}
-          server={tail[0] === "servers" ? tail[1] : undefined}
-          tool={tail[0] && tail[0] !== "servers" ? tail.join("/") : undefined}
-        />
-      );
-    case "config":
-      return (
-        <ConfigScreen
-          key={tail.join("/")}
-          revision={tail[0] === "revisions" ? tail[1] : undefined}
-        />
-      );
+      //
+      // DISCRIMINATED ON LENGTH, not on the word. A tool name comes from a
+      // third-party MCP server — `tool_prefix` is optional, so the catalogue
+      // holds whatever the server called it — and `nav.ts`'s reserved-segment
+      // rule ("everything the engine mints is a uuid or an uppercase key") does
+      // not cover one. Reading `tail[0] === "servers"` as the filter therefore
+      // took the page away from a tool literally named `servers`, which is the
+      // same regression one sentence up. `router.tsx` encodes each segment
+      // whole, so a tool page is always exactly ONE tail segment and the
+      // origin filter always two — a test nothing else can fake.
+      const server = tail.length === 2 && tail[0] === "servers" ? tail[1] : undefined;
+      const tool = tail.length === 1 ? tail[0] : undefined;
+      if (tail.length > 0 && server === undefined && tool === undefined) {
+        return <NotFound what={`“${tail.join("/")}” under Tools`} />;
+      }
+      return <Tools key={tail.join("/")} server={server} tool={tool} />;
+    }
+    case "config": {
+      // `revisions/{id}` IS THE ONLY TAIL, so anything else is an address the
+      // product does not have — and rendering the config screen with the
+      // segment dropped leaves the trail naming a page nobody routed to.
+      if (!tail[0]) return <ConfigScreen />;
+      if (tail[0] === "revisions" && tail.length <= 2) {
+        return <ConfigScreen key={tail.join("/")} revision={tail[1]} />;
+      }
+      return <NotFound what={`“${tail.join("/")}” under Config`} />;
+    }
     case "credentials":
       return <Secrets key={tail[0] ?? ""} name={tail[0]} />;
     default:
@@ -189,7 +202,18 @@ function Screen() {
     case "activity":
       return <ActivityRoutes rest={rest} />;
     case "cost":
-      return rest[0] === "budgets" ? <Budgets /> : <Spend />;
+      // A CLOSED SET OF TWO, so an unknown tail is Not Found rather than the
+      // spend screen. A two-valued test read every other tail as `#/cost`, so
+      // `#/cost/budget` — the obvious typo, and the shape of a stale bookmark
+      // — drew the spend tables under a trail reading "Cost / budget": the
+      // address, the trail and the screen each naming something different,
+      // with nothing telling the reader the route does not exist.
+      if (!rest[0]) return <Spend />;
+      return rest[0] === "budgets" && rest.length === 1 ? (
+        <Budgets />
+      ) : (
+        <NotFound what={`“${rest.join("/")}” under Cost`} />
+      );
     case "admin":
       return <AdminRoutes rest={rest} />;
     default:

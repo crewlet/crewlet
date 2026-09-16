@@ -58,22 +58,24 @@ import { useKeyChords } from "~/lib/keys.ts";
  * What a screen tells the frame about itself.
  *
  * A SCREEN NEVER RENDERS CHROME. It publishes what the chrome needs — the
- * labels the route cannot supply, the coverage of the answer it drew from, the
- * actions that belong to this object — and the frame draws all of it in the
- * same place on every screen. The alternative, which this replaces, is twenty
- * screens each drawing their own header, and five of them quietly dropping the
- * coverage badge.
+ * labels the route cannot supply, and the coverage of the answer it drew from
+ * — and the frame draws both in the same place on every screen. The
+ * alternative, which this replaces, is twenty screens each drawing their own
+ * header, and five of them quietly dropping the coverage badge.
+ *
+ * A SCREEN'S CONTROLS DO NOT COME THROUGH HERE. They are a portal —
+ * `frame/PageActions.tsx`, whose own doc argues the case — and this interface
+ * briefly carried a `setActions` beside it that no screen ever called, so the
+ * documented route rendered nothing while the working one sat next door.
  */
 export interface PageContext {
   setLabels: (labels: Labels) => void;
   setCoverage: (coverage: CoverageFacts | null) => void;
-  setActions: (actions: ReactNode) => void;
 }
 
 const noop: PageContext = {
   setLabels: () => {},
   setCoverage: () => {},
-  setActions: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -102,7 +104,23 @@ export function usePageLabels(labels: Labels): void {
   }, [key, setLabels]);
 }
 
-/** Publish the coverage of the answer this screen was drawn from. */
+/**
+ * Publish the coverage of the answer this screen was drawn from.
+ *
+ * THE COVERAGE BELONGS TO THE SCREEN AND THE FRAME OUTLIVES IT, which is why
+ * the effect returns a reset. The Shell never unmounts — only the screen
+ * inside it does — so without one the inbox's freshness badge and its "this
+ * answer is incomplete" banner stayed in the state bar over every screen the
+ * reader visited afterwards, as claims about data those screens never read.
+ * On Admin > Credentials, which somebody opens precisely to judge whether what
+ * they are seeing is trustworthy, that is the worst possible stale value.
+ *
+ * A reset in the Shell keyed on the route would not do: React flushes a
+ * child's effects before a parent's, so it would wipe the coverage the
+ * incoming screen had just published. A cleanup here runs in the right order —
+ * the outgoing screen's destroy before the incoming screen's create — and
+ * both writes land in one batch, so nothing flickers through null.
+ */
 export function usePageCoverage(coverage: CoverageFacts | null | undefined): void {
   const { setCoverage } = usePageContext();
   const level = coverage?.read_level;
@@ -111,6 +129,7 @@ export function usePageCoverage(coverage: CoverageFacts | null | undefined): voi
   const seq = coverage?.log_seq;
   useEffect(() => {
     setCoverage(coverage ?? null);
+    return () => setCoverage(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [level, complete, applied, seq, setCoverage]);
 }
@@ -169,7 +188,6 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
-  const [actions, setActions] = useState<ReactNode>(null);
 
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
   const inbox = useQuery(
@@ -238,10 +256,7 @@ export function Shell({ children }: { children: ReactNode }) {
     remember({ path, label: where, workspace: workspaceOf(path) || "" });
   }, [path, where]);
 
-  const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setActions }),
-    [setLabels, setCoverage, setActions],
-  );
+  const page: PageContext = useMemo(() => ({ setLabels, setCoverage }), [setLabels, setCoverage]);
 
   const working = agents.filter((a) => a.state === "working").length;
   const badges: Partial<Record<Workspace, RailBadge | null>> = {
@@ -314,7 +329,6 @@ export function Shell({ children }: { children: ReactNode }) {
             crumbs={crumbs}
             actions={
               <>
-                {actions}
                 <StarPage path={path} label={where} workspace={workspaceOf(path) || ""} />
                 <CopyLink />
               </>

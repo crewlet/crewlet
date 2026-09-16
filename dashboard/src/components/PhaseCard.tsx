@@ -325,14 +325,38 @@ export function PhaseCard({
         )}
 
         <span className="phase-meta mono">{record.model || "—"}</span>
-        <span className="phase-meta t-num" title="tool rounds used">
-          {ledger.length || record.roundNum > 0
-            ? `${Math.max(ledger.length, record.roundNum)}r`
-            : "—"}
-        </span>
-        <span className="phase-meta t-num" title="total tokens">
-          {record.totalTokens ? fmtCount(record.totalTokens) : "—"}
-        </span>
+        {/* AND THE SAME RULE ONE FIELD EARLIER. A settled phase whose
+            `rounds_used` is 0 took no tool round — which is what a phase that
+            died before its first call came back looks like, and is the fact
+            that explains the failure below it. Rendering "—" there said the
+            engine had not recorded the rounds when it recorded none. */}
+        {record.live && !ledger.length && record.roundNum === 0 ? (
+          <span className="phase-meta" title="this phase has not finished a round yet">
+            —
+          </span>
+        ) : (
+          <span className="phase-meta t-num" title="tool rounds used">
+            {`${Math.max(ledger.length, record.roundNum)}r`}
+          </span>
+        )}
+        {/* ZERO IS A NUMBER, AND ONLY A LIVE PHASE'S ZERO IS AN ABSENCE. This
+            read `totalTokens ? … : "—"`, so a phase that genuinely spent
+            nothing — one on a subscription CLI backend, which reports no
+            usage at all, or one the engine stopped before its first call came
+            back — rendered as "not recorded" on the card an operator opens to
+            find out which phase was expensive. `TurnCard` states the rule for
+            the turn header above it: absent and zero are different facts and a
+            dash claims the first about the second. The dash stays for the one
+            case where the zero really is an absence. */}
+        {record.live && record.totalTokens === 0 ? (
+          <span className="phase-meta" title="this phase has not reported its usage yet">
+            —
+          </span>
+        ) : (
+          <span className="phase-meta t-num" title="total tokens">
+            {fmtCount(record.totalTokens)}
+          </span>
+        )}
         {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
             engine measures the phase where the clock is and puts the answer
             on the record. On a self-iterating turn that is the number that
