@@ -302,7 +302,7 @@ describe("the tree", () => {
   test("a seat's kind is drawn once and said once", () => {
     mount();
     const card = item("Dev");
-    expect(card.textContent).toBe("DevAgent seat@dev");
+    expect(card.textContent).toBe("DevAgent seatoffline@dev");
     expect(card.getAttribute("title")).toBe("Agent seat, @dev");
   });
 
@@ -348,19 +348,7 @@ describe("the tree", () => {
     expect(item("Dev").querySelector("svg")?.getAttribute("width")).toBe("1em");
   });
 
-  /*
-   * A NODE SAYS WHAT IT IS, NOT HOW IT IS DOING. The chart drew the engine's
-   * problem count and the seat's live state in the label's trailing slot on
-   * every node, which is a column of "idle" down a company where nothing is
-   * running and an empty box beside every node with no problem. Neither is a
-   * fact about the ORGANIZATION, which is what this chart draws.
-   *
-   * WHERE THEY ARE STILL READ: the toolbar counts the whole draft's problems,
-   * and the table draws a live state per row. The per-node COUNT has no other
-   * home on this build, which is stated here so that bringing it back is a
-   * decision somebody makes rather than a regression nobody noticed.
-   */
-  test("a node carries no live state and no problem count", () => {
+  test("the problems the last check placed are counted on the node in the critical tone", () => {
     const doc = fixtureCompany();
     const state = answered(checkedEdit(doc), {
       status: "problems",
@@ -371,20 +359,56 @@ describe("the tree", () => {
           kind: "missing",
           message: "units[1].roles[0].name is required",
         },
+        {
+          path: "units[1].type",
+          segments: ["units", 1, "type"],
+          kind: "unknown_value",
+          message: "units[1].type is not a unit type",
+        },
       ],
       derived: fixtureDerived(doc, PLACED),
       code: "validation_error",
       hint: "",
     });
-    mount(state);
-    // The node the problem is on says nothing about it, and neither does any
-    // other: no count, and no slot kept for one.
+    const { probe } = mount(state);
+    /*
+     * THE COUNT, NOT THE SENTENCE. A node is one rank tall and as wide as its
+     * own name, and the slot a push arrives in is a fixed width: "1 problem"
+     * written out was clipped inside it. What is drawn is the number, and the
+     * sentence is the badge's own name and its tooltip, so both readers are
+     * told the same thing.
+     */
+    const badge = within(item("Account Executive")).getByLabelText("1 problem");
+    expect(badge.textContent).toBe("1");
+    // The claim is the VARIANT the builder passes, so the element is compared
+    // against the one uilet draws for it rather than against a class name.
+    expect(
+      isDrawnAs(
+        badge.closest(".bnode-count")!.firstElementChild!,
+        Tag,
+        { variant: "danger", children: 1 },
+        { children: 1 },
+      ),
+    ).toBe(true);
+    expect(within(item("Sales")).getByLabelText("1 problem")).toBeDefined();
+    expect(within(item("Engineering")).queryByLabelText(/problem/)).toBeNull();
+    // IN THE NODE'S TRAILING SLOT, which stays when a check is out and the
+    // count with it: the node is the same size either way, so it keeps its
+    // place and so does every node beside it.
+    const slot = badge.closest(".bnode-count")!;
+    expect(slot.parentElement).toBe(nodeTrailing(item("Account Executive")));
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: {
+          type: "updateSeat",
+          target: seatKey("dev"),
+          set: [{ path: ["goal"], value: "x" }],
+        },
+      }),
+    );
     expect(within(item("Account Executive")).queryByLabelText(/problem/)).toBeNull();
-    for (const name of ["Account Executive", "Dev", "Engineering", "Acme"]) {
-      expect(nodeTrailing(item(name))).toBeNull();
-    }
-    // And no seat says how it is doing.
-    expect(within(item("Dev")).queryByText("offline")).toBeNull();
+    expect(nodeTrailing(item("Account Executive"))!.querySelector(".bnode-count")).not.toBeNull();
   });
 
   test("a unit whose lead names no seat is marked with the engine's warning", () => {
@@ -1267,36 +1291,59 @@ describe("focus", () => {
 });
 
 describe("live state", () => {
-  /*
-   * A PUSH NEVER MOVES THE CHART. Nothing a push carries is drawn on a node
-   * any more, so this is now the stronger claim: an agents push changes
-   * nothing at all here, and every card, branch and the view are identical
-   * across it.
-   */
-  test("an agents push never moves the chart", () => {
+  test("an agents push changes a badge and never the layout", () => {
     const { rerender, container } = mount();
     const layout = () => ({
       boxes: chartCards(container).map((b) => [b, b.style.transform]),
       world: canvasWorld(container).style.transform,
       links: chartLinks(container).innerHTML,
-      says: chartCards(container).map((b) => b.textContent),
     });
     const before = layout();
+    expect(within(item("Dev")).getByText("offline")).toBeDefined();
+
     rerender({
       agents: [{ id: "a1", role: "Dev", handle: "dev", state: "working" }],
     });
+    expect(within(item("Dev")).getByText("working")).toBeDefined();
+    // The same card elements, at the same places, under the same view.
     expect(layout()).toEqual(before);
   });
 
-  /*
-   * WHICH SEAT HAS A LIVE STATE is no longer a question about this chart: a
-   * node says what it is and not how it is doing, and the state is drawn in
-   * the TABLE. The rule it followed (only a saved agent seat has one, found by
-   * the handle it runs with rather than by the name the draft gives it) is
-   * `LiveState`'s own and still holds where it is drawn, but no suite covers
-   * it any more: the table's do not, and the case that did was this one.
-   * Reported to the owners of `nodeMarks.tsx` and `TableView.tsx`.
-   */
+  test("a live state is shown only for a saved agent seat, found by its saved handle", () => {
+    const state = record(checkedEdit(fixtureCompany()), {
+      type: "renameSeat",
+      target: seatKey("dev"),
+      name: "Builder",
+    });
+    mount(state);
+    // Renamed in the draft, still found under the handle it runs with.
+    expect(within(item("Builder")).getByText("offline")).toBeDefined();
+    const added = record(state, {
+      type: "addSeat",
+      key: "new:s2",
+      placement: { parent: unitKey("Sales"), after: null },
+      data: { name: "Closer" },
+    });
+    cleanup();
+    mount(added);
+    expect(within(item("Closer")).queryByText("offline")).toBeNull();
+
+    // A saved seat that becomes human in this draft will not run, and says
+    // nothing live; nor does a seat the saved company already holds as human.
+    const doc = fixtureCompany();
+    doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
+    const human = record(checkedEdit(doc), {
+      type: "changeKind",
+      target: seatKey("dev"),
+      kind: "human",
+      contact: { slack: "U0DEV" },
+    });
+    cleanup();
+    mount(human);
+    expect(within(item("Dev")).queryByText("offline")).toBeNull();
+    expect(within(item("CEO")).queryByText("offline")).toBeNull();
+    expect(within(item("SRE")).getByText("offline")).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1539,15 +1586,12 @@ describe("adding a node in the chart", () => {
     item("Engineering").focus();
     view.rerender({ adding: adding(unitKey("Engineering")).request });
     /*
-     * ON THE FIRST CONTROL IN THE FORM, which is the kind: the decision the
-     * add opens on. The form's own `autoFocus` on the name cannot place it,
-     * because the ghost is not laid out yet on the tick the form mounts and a
-     * hidden element cannot be focused at all, so what lands is the chart's
-     * own answer once the card is placed.
+     * ON THE NAME, which is the field the reader came to type in. The form
+     * asks for it (`autoFocus` on the name field, as the dialog does), and the
+     * chart leaves a form that is already holding focus alone rather than
+     * pulling it back to the first control in the box.
      */
-    expect(document.activeElement).toBe(
-      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
-    );
+    expect(document.activeElement).toBe(within(ghost("Add to Engineering")).getByLabelText("Name"));
     view.rerender({ adding: null });
     expect(focused()).toBe(unitKey("Engineering"));
   });

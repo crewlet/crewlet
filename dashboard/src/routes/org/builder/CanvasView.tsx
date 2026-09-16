@@ -41,19 +41,11 @@
  * Shift+F10 opens the node's whole menu, and the toolbar mirrors the selected
  * node.
  *
- * WHAT A NODE SAYS IS WHAT IT IS, and not how it is doing. A node carries its
- * name, its kind and the marks that say how it is wired, and nothing that
- * arrives from a push: the live state and the problem count were drawn in the
- * label's trailing slot on every node of the chart, which meant a column of
- * "idle" dots down a company where nothing was running and an empty box beside
- * every node with no problem. Both are still read where they are the subject
- * rather than the decoration: the toolbar counts the problems of the whole
- * draft, the table draws a column of each, and a seat's own screen has its
- * state. The wiring marks stay, as fixed-size glyphs on the caption, because
- * they say what the node IS.
- *
- * WHAT NEVER MOVES A NODE. The canvas lays nodes out by measuring them, so a
- * name that would wrap truncates rather than growing the card.
+ * WHAT NEVER MOVES A NODE. The canvas lays nodes out by measuring them, so
+ * everything that arrives from a push or a check sits in a slot whose room is
+ * kept: the live state and the problem count in the label's trailing slot, the
+ * wiring marks as fixed-size glyphs on the caption. A name that would wrap
+ * truncates instead.
  *
  * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
  * does not open a dialog over the picture: the chart makes room in the rank
@@ -649,6 +641,12 @@ function StructureCard({
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
+            trailing={
+              <>
+                <LiveState api={api} view={view} compact />
+                <ProblemCount api={api} nodeKey={view.key} />
+              </>
+            }
           />
           <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
@@ -674,6 +672,7 @@ function StructureCard({
             icon={<NodeGlyph kind="company" />}
             name={view.name || "Unnamed company"}
             caption="Company"
+            trailing={<ProblemCount api={api} nodeKey={id} />}
           />
           <VisuallyHidden>{counts}</VisuallyHidden>
         </div>
@@ -699,6 +698,7 @@ function StructureCard({
           name={view.name}
           caption={unitTypeLabel(view)}
           captionMarks={<UnitMarks view={view} />}
+          trailing={<ProblemCount api={api} nodeKey={id} />}
         />
         <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
@@ -767,6 +767,12 @@ function ReportingCard({
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}
+          trailing={
+            <>
+              {seat && <LiveState api={api} view={seat} compact />}
+              {seat && <ProblemCount api={api} nodeKey={seat.key} />}
+            </>
+          }
         />
         <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
