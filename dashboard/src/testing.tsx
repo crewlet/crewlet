@@ -100,9 +100,14 @@ export function isDrawnAs<T extends ElementType>(
  * are taken from a reference chart rendered here instead: one place that knows
  * them, and it learns them from the component rather than from a comment.
  *
- * Rendered with no ResizeObserver, which is what jsdom has: the component then
- * draws every card with nothing measured yet, which is all that is needed to
- * read a class off each.
+ * MEASURED, with an observer this file installs for the length of the render.
+ * It used to be rendered with no ResizeObserver at all, on the reasoning that
+ * an unmeasured chart still draws a class on every part: it does not. The
+ * connectors are drawn only once there is a layout to draw them from, so with
+ * nothing measured the chart has no connector element, `querySelector("svg")`
+ * found the first glyph of the canvas's own zoom bar instead, and every suite
+ * reaching for the connectors got that glyph. Nothing said so, because the one
+ * assertion over them compared the element with itself across a push.
  */
 export function treeCanvasParts(): {
   card: string;
@@ -138,20 +143,28 @@ function referenceChart(outline: boolean): {
   // RENDERED THE WAY EVERY SUITE RENDERS, into the document, because this one
   // is a whole chart rather than a single element: it holds a layer host that
   // portals into a node it has to be able to find, and a viewport whose layout
-  // effects read the element they are on.
+  // effects read the element they are on. And MEASURED, so the chart has a
+  // layout and therefore connectors to name: see the doc above.
+  const stop = measuring();
   const { container: host, unmount } = render(
     createElement(TreeCanvas, {
       label: "Reference chart",
-      nodes: [{ id: "a", label: "A" }],
-      cards: () => [{ id: "a", children: [] }],
+      nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
+      cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
       cardOf: (id: string) => id,
       cardOutline: () => outline,
-      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), "A"),
+      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
     }),
   );
+  stop();
   const item = host.querySelector("[role='treeitem']");
   const tree = host.querySelector("[role='tree']");
-  const svg = host.querySelector("svg");
+  // THE CONNECTORS ARE THE CHART'S OWN SVG, which is a child of the element
+  // the cards are placed in rather than merely the first svg in the document:
+  // the canvas draws a zoom bar of glyphs, and each of those is an svg too.
+  const svg =
+    [...(tree?.parentElement?.children ?? [])].find((el) => el.tagName.toLowerCase() === "svg") ??
+    null;
   // The treeitem is the caller's own element here, drawn with no class, so the
   // card is simply what holds it.
   const card = item?.parentElement ?? null;
@@ -175,6 +188,39 @@ function referenceChart(outline: boolean): {
   };
   unmount();
   return read;
+}
+
+/**
+ * A ResizeObserver that answers at once, for the length of one render.
+ *
+ * The reference chart has to be MEASURED to draw its connectors, and it is
+ * rendered before any suite's own observer is installed. Every box gets one
+ * size, which is all a chart of two cards needs to have a layout at all.
+ */
+function measuring(): () => void {
+  const real = globalThis.ResizeObserver;
+  class Immediate {
+    constructor(private readonly report: ResizeObserverCallback) {}
+    observe(el: Element): void {
+      const box = { width: 100, height: 40 };
+      this.report(
+        [
+          {
+            target: el,
+            contentRect: box,
+            borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
+          },
+        ] as unknown as ResizeObserverEntry[],
+        this as unknown as ResizeObserver,
+      );
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = Immediate as unknown as typeof ResizeObserver;
+  return () => {
+    globalThis.ResizeObserver = real;
+  };
 }
 
 /** An element's first class, or "" when it has none. */

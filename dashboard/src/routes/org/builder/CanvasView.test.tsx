@@ -23,7 +23,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
-import { CanvasView } from "./CanvasView.tsx";
+import { CanvasView, type Adding } from "./CanvasView.tsx";
 import { OrgNodeLabel, Tag } from "@crewlethq/ui";
 import { isDrawnAs } from "~/testing.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
@@ -64,17 +64,23 @@ afterEach(() => {
 interface Mounted {
   spies: BuilderSpies;
   probe: HarnessProbe;
-  rerender: (props?: { agents?: AgentRow[]; readOnly?: boolean }) => void;
+  rerender: (props?: { agents?: AgentRow[]; readOnly?: boolean; adding?: Adding | null }) => void;
   container: HTMLElement;
 }
 
 function mount(
   initial: BuilderState = checkedEdit(fixtureCompany()),
-  { chart = "structure", readOnly = false }: { chart?: ChartKind; readOnly?: boolean } = {},
+  {
+    chart = "structure",
+    readOnly = false,
+    adding = null,
+  }: { chart?: ChartKind; readOnly?: boolean; adding?: Adding | null } = {},
 ): Mounted {
   const spies = builderSpies();
   const probe = harnessProbe();
-  const tree = (props: { agents?: AgentRow[]; readOnly?: boolean } = {}) => (
+  const tree = (
+    props: { agents?: AgentRow[]; readOnly?: boolean; adding?: Adding | null } = {},
+  ) => (
     <BuilderHarness
       initial={initial}
       spies={spies}
@@ -82,7 +88,7 @@ function mount(
       readOnly={props.readOnly ?? readOnly}
       agents={props.agents}
     >
-      <CanvasView chart={chart} />
+      <CanvasView chart={chart} adding={props.adding === undefined ? adding : props.adding} />
     </BuilderHarness>
   );
   const utils = render(tree());
@@ -1436,3 +1442,208 @@ describe("a surface opened about one node", () => {
     expect(view()).toBe(before);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Adding a node in the chart
+// ---------------------------------------------------------------------------
+
+/*
+ * WHAT THESE PROTECT. Picking a kind from the Add draws the engine's own add
+ * form in the ghost of the node about to exist, rather than a dialog over a
+ * blurred chart:
+ *
+ * - it hangs off the parent it will hang off, in the rank it will land in;
+ * - the tree it is drawn in is untouched by it: the counts a screen reader is
+ *   told, the keys and the selection are what they were;
+ * - focus goes into the form and comes back to the node it was added to;
+ * - Escape cancels, and the chart is given back;
+ * - every refusal, every help and the collision suggestion the dialog could
+ *   show are still shown, and the add it records is the same operation.
+ */
+
+/** An add of `kind` under `parent`, and what the chart was told about closing it. */
+function adding(parent: string | null, kind: "unit" | "agent" | "human" = "agent") {
+  const closed: number[] = [];
+  const request: Adding = {
+    parent,
+    kind,
+    opening: 1,
+    onClose: () => closed.push(1),
+  };
+  return { request, closed };
+}
+
+/** The ghost, found the way a reader meets it: a named region holding a form. */
+const ghost = (name: string) => screen.getByRole("group", { name });
+
+describe("adding a node in the chart", () => {
+  test("the form is drawn in the chart, under the node it is added to", () => {
+    const view = mount();
+    const branches = () => chartLinks(view.container).querySelectorAll("path").length;
+    const before = branches();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    const form = ghost("Add to Engineering");
+    // No dialog: the chart itself is where the question is asked, so the
+    // picture behind it is neither covered nor pushed back.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // A card of the chart, placed by the same layout as every other one, and
+    // below the parent it hangs from.
+    expect(translate(chartCard(form)).y).toBeGreaterThan(
+      translate(chartCard(item("Engineering"))).y,
+    );
+    // AND THE BRANCH INTO IT IS DRAWN, which is what makes this a chart saying
+    // where the node goes rather than a form that happens to be drawn nearby.
+    expect(branches()).toBe(before + 1);
+  });
+
+  test("the tree is what it was: the ghost is no node of the draft", () => {
+    const shape = () =>
+      screen
+        .getAllByRole("treeitem")
+        .map((el) =>
+          [
+            el.getAttribute("data-tree-id"),
+            el.getAttribute("aria-level"),
+            el.getAttribute("aria-posinset"),
+            el.getAttribute("aria-setsize"),
+          ].join("/"),
+        );
+    const view = mount();
+    const before = shape();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    expect(ghost("Add to Engineering")).toBeDefined();
+    expect(shape()).toEqual(before);
+  });
+
+  test("no key of the chart lands on the ghost", () => {
+    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+    item("Engineering").focus();
+    press("ArrowDown");
+    const reached: (string | null | undefined)[] = [];
+    for (let step = 0; step < 12; step += 1) {
+      reached.push(focused());
+      press("ArrowDown");
+    }
+    expect(reached.every((id) => id !== undefined && id !== null)).toBe(true);
+    // Every stop is a node of the draft. The ghost has no `data-tree-id` at
+    // all, so a stop on it would read as nothing here.
+    expect(
+      reached.every(
+        (id) => id!.startsWith("seat:") || id!.startsWith("unit:") || id === COMPANY_KEY,
+      ),
+    ).toBe(true);
+  });
+
+  test("focus goes into the form and back to the node it was added to", () => {
+    const view = mount();
+    item("Engineering").focus();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    // The first control a Tab would reach, which in a radio group is the one
+    // that is checked: the kind the Add was opened on.
+    expect(document.activeElement).toBe(
+      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
+    );
+    view.rerender({ adding: null });
+    expect(focused()).toBe(unitKey("Engineering"));
+  });
+
+  test("Escape in the form closes the add", () => {
+    const { request, closed } = adding(unitKey("Engineering"));
+    mount(undefined, { adding: request });
+    fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
+      key: "Escape",
+    });
+    expect(closed).toHaveLength(1);
+  });
+
+  test("the chart eases onto the ghost and gives the view back", () => {
+    const view = mount();
+    const world = () => canvasWorld(view.container).style.transform;
+    const before = world();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    expect(world()).not.toBe(before);
+    view.rerender({ adding: null });
+    expect(world()).toBe(before);
+  });
+
+  /*
+   * THE SAME ADD, RECORDED THE SAME WAY. The ghost is a shell around the form
+   * the dialog also draws, so what it records is the reducer's own operation
+   * with the key the lens minted: a second, quieter add drawn in the chart is
+   * exactly what this arrangement must not become.
+   */
+  test("the form records the add and closes", () => {
+    const { request, closed } = adding(unitKey("Engineering"), "unit");
+    const view = mount(undefined, { adding: request });
+    const form = ghost("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Add unit" }));
+    expect(closed).toHaveLength(1);
+    const recorded = view.spies.dispatched.at(-1);
+    expect(recorded).toMatchObject({
+      type: "record",
+      intent: { type: "addUnit", placement: { parent: unitKey("Engineering") } },
+    });
+  });
+
+  /*
+   * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. The collision
+   * suggestion is the one a reader meets most, and it is a CONTROL rather than
+   * a sentence: it has to be in the ghost or the way out of a name clash is
+   * gone from the chart's add.
+   */
+  test("a name already taken offers the next free one, in the ghost", () => {
+    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+    const form = ghost("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
+    expect(within(form).getByText(/A seat named Dev already exists/)).toBeDefined();
+    fireEvent.click(within(form).getByRole("button", { name: "Use Dev 2" }));
+    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Dev 2");
+  });
+
+  test("a read-only draft says so in the ghost and records nothing", () => {
+    const { request } = adding(unitKey("Engineering"));
+    const view = mount(undefined, { adding: request, readOnly: true });
+    const form = ghost("Add to Engineering");
+    expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(view.spies.dispatched).toHaveLength(0);
+  });
+
+  /*
+   * A GHOST ON A BRANCH THAT IS NOT THERE IS NOT DRAWABLE, so the chart draws
+   * none. The Builder is what falls back to the dialog in that case, where the
+   * refusal saying so is drawn; here the guard is only that the chart does not
+   * hang a form off nothing.
+   */
+  test("no ghost where the parent has left the draft", () => {
+    const view = mount();
+    const cards = chartCards(view.container).length;
+    view.rerender({ adding: adding(unitKey("Gone")).request });
+    /*
+     * NOT ONE MORE CARD ON THE CHART, which is the only honest way to ask
+     * this. A ghost whose parent is no card of the chart hangs off nothing, so
+     * the layout never places it and it is drawn at `visibility: hidden`: every
+     * query by role then answers "absent" whether the chart drew it or not,
+     * and a guard written that way passed with the form drawn off the company
+     * instead of the missing unit. What the chart may not do is draw a card
+     * for it at all.
+     */
+    expect(chartCards(view.container)).toHaveLength(cards);
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
+  });
+
+  test("the company's own add is named after the company", () => {
+    mount(undefined, { adding: adding(null).request });
+    expect(ghost("Add to Acme")).toBeDefined();
+  });
+});
+
+/** Where the layout put a card, read off the transform the chart writes. */
+function translate(card: HTMLElement): { x: number; y: number } {
+  const match = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform);
+  if (!match) throw new Error(`this card is not placed: ${card.style.transform}`);
+  return { x: Number(match[1]), y: Number(match[2]) };
+}

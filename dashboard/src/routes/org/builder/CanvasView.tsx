@@ -47,6 +47,19 @@
  * wiring marks as fixed-size glyphs on the caption. A name that would wrap
  * truncates instead.
  *
+ * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
+ * does not open a dialog over the picture: the chart makes room in the rank
+ * the new node will land in, reaches a dashed branch into that place, eases
+ * onto it and draws the add form THERE, in the ghost of the node about to
+ * exist. It is the design system's `composing` (a card the layout knows about
+ * and the draft does not), so the tree's counts, keys and focus are untouched
+ * by it, and it is the console chart's own gesture. The form is the engine's,
+ * in `AddNodeDialog.tsx`, and so is the one case that cannot be drawn this
+ * way: an add asked while the TABLE or the REPORTING chart is on screen, where
+ * there is no place in the drawing for a unit's next child, still opens the
+ * dialog (`Builder.tsx` decides which, because only it knows which view is
+ * mounted).
+ *
  * The chart's reading of the draft is `chartModel.ts`, every action is
  * `nodeActions.tsx`, and which hue a seat takes is `nodeTone.ts`.
  */
@@ -61,7 +74,13 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
-import { useBuilder, useBuilderView, type BuilderApi, type ChartKind } from "./BuilderContext.tsx";
+import {
+  useBuilder,
+  useBuilderView,
+  type AddKind,
+  type BuilderApi,
+  type ChartKind,
+} from "./BuilderContext.tsx";
 import {
   CYCLE_GROUP,
   type NodeView,
@@ -70,6 +89,7 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
+import { AddNodeGhostForm } from "./AddNodeDialog.tsx";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
@@ -120,6 +140,7 @@ import {
   type TreeCardContext,
   type TreeCardInput,
   type TreeCardTone,
+  type TreeComposing,
   type TreeInput,
   type TreeItemAction,
   type TreeModel,
@@ -137,6 +158,7 @@ export function CanvasView({
   chart,
   chrome = {},
   about = null,
+  adding = null,
 }: {
   chart: ChartKind;
   chrome?: Chrome;
@@ -154,6 +176,11 @@ export function CanvasView({
    * reader who asked for less motion is moved without an animation.
    */
   about?: string | null;
+  /**
+   * An add the Builder has handed to the chart to draw, rather than opening a
+   * dialog for it. Only the structure chart takes one: see [Adding].
+   */
+  adding?: Adding | null;
 }) {
   const api = useBuilder();
   const open = useOpenScreen();
@@ -164,9 +191,38 @@ export function CanvasView({
     );
   }
   return (
-    <StructureChart api={api} structure={structure} open={open} chrome={chrome} about={about} />
+    <StructureChart
+      api={api}
+      structure={structure}
+      open={open}
+      chrome={chrome}
+      about={about}
+      adding={adding}
+    />
   );
 }
+
+/**
+ * An add drawn in the chart: which parent it hangs from, which kind it opened
+ * on, which opening of it this is, and how it ends.
+ *
+ * ONE MOUNT PER OPENING, keyed on `opening`, for the reason the Builder's own
+ * dialog host keys on it: every opening builds its form afresh (another node,
+ * or the same node again), while the node it is about may be re-keyed under it
+ * by the first check without the form being torn down and its focus thrown
+ * away.
+ */
+export interface Adding {
+  /** A unit's key, or `null` for the company root. */
+  parent: NodeKey | null;
+  kind?: AddKind;
+  opening: number;
+  onClose: () => void;
+}
+
+/** The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
+ *  mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else. */
+const ADD_GHOST = "adding:";
 
 /**
  * What the PAGE hangs in the canvas's own control group.
@@ -197,14 +253,46 @@ function StructureChart({
   open,
   chrome,
   about,
+  adding,
 }: {
   api: BuilderApi;
   structure: Structure;
   open: OpenScreen;
   chrome: Chrome;
   about: string | null;
+  adding: Adding | null;
 }) {
   const reorder = useReorder(api, structure);
+  /*
+   * THE GHOST OF THE NODE ABOUT TO EXIST. The parent is a card of this chart,
+   * so a ghost is only asked for where the parent is still in the draft: an
+   * add left open across a delete of its own parent has nothing to hang from,
+   * and the form then falls back to nothing rather than to a card floating at
+   * the origin. The refusal a reader needs in that case is in the form itself
+   * ("That unit is no longer in the draft"), which is why it stays in the
+   * fields rather than in the dialog shell.
+   */
+  const composing: TreeComposing | null = useMemo(() => {
+    if (adding === null) return null;
+    const parent = adding.parent ?? COMPANY_KEY;
+    const view = structure.nodes.get(parent);
+    if (!view) return null;
+    const where = view.name || "the company";
+    return {
+      id: ADD_GHOST,
+      parent,
+      label: `Add to ${where}`,
+      onCancel: adding.onClose,
+      render: () => (
+        <AddNodeGhostForm
+          key={adding.opening}
+          parent={adding.parent}
+          {...(adding.kind ? { kind: adding.kind } : {})}
+          onClose={adding.onClose}
+        />
+      ),
+    };
+  }, [adding, structure]);
   const cards = useCallback(
     (model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
       const card = (id: string): TreeCardInput => {
@@ -236,6 +324,7 @@ function StructureChart({
       label="Structure chart"
       chrome={chrome}
       about={about}
+      composing={composing}
       nodes={structure.tree}
       cards={cards}
       cardOf={(id) => id}
@@ -405,6 +494,7 @@ function Chart({
   label,
   chrome,
   about,
+  composing = null,
   nodes,
   cards,
   cardOf,
@@ -421,6 +511,8 @@ function Chart({
   label: string;
   chrome: Chrome;
   about: string | null;
+  /** A node being composed in the chart: the design system draws the ghost. */
+  composing?: TreeComposing | null;
   nodes: readonly TreeInput[];
   cards: (model: TreeModel, expanded: ReadonlySet<string>) => TreeCardInput[];
   cardOf: (id: string) => string;
@@ -484,8 +576,12 @@ function Chart({
         hasNodeMenu={hasNodeMenu}
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
         // being decided has the part of the chart it is about behind it rather
-        // than a veil over a picture nobody can see any more.
+        // than a veil over a picture nobody can see any more. An add is NOT
+        // such a surface any more: it is drawn IN the chart, so the chart
+        // stays sharp and pannable behind the form and the reader can read the
+        // organization they are adding to while they fill it in.
         dimmed={about !== null}
+        composing={composing}
         // THE CHART'S OWN CHROME, in the chart's own corner: the design system
         // puts the zoom bar at the top right in this appearance and stacks
         // what the page hands in under it, which is the arrangement the chart
