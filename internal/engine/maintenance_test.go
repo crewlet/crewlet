@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -211,12 +212,30 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	if held, err := leases.Get(ctx, duty); err != nil || held == nil || held.Owner != owner {
 		t.Fatalf("precondition: the sweep's tick did not leave %s held by this node: (%v, %v)", duty, held, err)
 	}
+	// A HOLD NO PRODUCTION PATH CAN CLAIM, which is the other half of making
+	// this observable. What the rule is about is the PREFIX — a `worker:`
+	// lease that is not a recorded duty — and any name satisfies that. But a
+	// real `setup-provision-<kind>` is the lease held while ANYTHING writes
+	// at that integration, a tick of the reconcile loop included
+	// ([setupDutyName]), and this engine takes it under the very owner below.
+	// Named for a live kind, the hold is not this test's: a reconcile tick
+	// landing in the window renews it and releases it when its work ends, so
+	// the assertion fails on a second writer rather than on the rule. The
+	// suffix is deliberately not an [integration.Kind], and the guard keeps
+	// it that way — a kind added later would quietly restore the collision.
+	const holdName = "setup-provision-no-such-surface"
+	for _, kind := range integration.Kinds {
+		if holdName == "setup-provision-"+string(kind) {
+			t.Fatalf("%q now names a real integration surface, whose reconcile "+
+				"tick takes this lease: pick a suffix that is not a kind", holdName)
+		}
+	}
 	// THE LEASE IS CHECKED, not just the error. A refused claim is the
 	// ordinary (nil, nil) here — a peer holding it, or the duty layout gate
 	// — so a precondition reading only err calls a refusal success and
 	// leaves the assertion below failing for a reason that is not the rule
 	// it is about.
-	hold := coord.WorkerResource("setup-provision-github")
+	hold := coord.WorkerResource(holdName)
 	if got, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
 	}); err != nil || got == nil {
