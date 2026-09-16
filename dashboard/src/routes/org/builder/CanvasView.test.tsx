@@ -230,8 +230,9 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
 
-    // The lead chip is drawn in the same hidden strip.
-    pointerPress("VP Engineering");
+    // The lead chip is drawn in the same hidden strip. It says the word
+    // itself, as the chart this is drawn from does: see `leadChipLabel`.
+    pointerPress("Lead: VP Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
@@ -660,15 +661,21 @@ describe("what a node offers a pointer", () => {
   test("the node's own edge carries Edit and Delete, and nothing else", () => {
     const { spies } = mount();
     expect(controls("Engineering")).toEqual([
+      // THE EXPANDER FIRST, on the node's leading edge, which is where every
+      // hierarchy a reader has used puts a disclosure. It shared the branch
+      // strip with the Add, where the add pill splitting open into its three
+      // kinds covered it, and that is the one gesture a reader makes next to
+      // it.
+      "Collapse Engineering",
       "Edit Engineering",
       "Delete Engineering",
       "Actions for Engineering",
       // The lead along the bottom edge, which stays drawn: it is a fact about
       // the organization rather than a tool for changing it. The X inside it
       // is the tool, and it is quiet with the rest of them.
-      "VP Engineering",
+      "Lead: VP Engineering",
       "Clear the lead of Engineering",
-      "Collapse Engineering",
+      // And the branch below is the Add, alone.
       "Add to Engineering",
     ]);
     pointerPress("Edit Engineering");
@@ -681,20 +688,20 @@ describe("what a node offers a pointer", () => {
   test("the company has no Delete, and a read-only draft has none at all", () => {
     mount();
     expect(controls("Acme")).toEqual([
+      "Collapse Acme",
       "Edit Acme",
       "Actions for Acme",
-      "Collapse Acme",
       "Add to Acme",
     ]);
     cleanup();
     mount(undefined, { readOnly: true });
     expect(controls("Engineering")).toEqual([
+      "Collapse Engineering",
       "Edit Engineering",
       "Actions for Engineering",
-      "Collapse Engineering",
     ]);
     // The lead is still READ on a read-only draft; it is simply not a control.
-    expect(within(chartCard(item("Engineering"))).getByText("VP Engineering")).toBeDefined();
+    expect(within(chartCard(item("Engineering"))).getByText("Lead: VP Engineering")).toBeDefined();
   });
 
   /*
@@ -859,7 +866,10 @@ describe("menus", () => {
         seats: { "roles[1]": { placed_by_ref: true, unit_path: "units[0].children[0]" } },
       }),
     );
-    const chip = screen.getByRole("button", { name: /VP Engineering \(inherited\)/, hidden: true });
+    const chip = screen.getByRole("button", {
+      name: /^Lead: VP Engineering \(inherited\)$/,
+      hidden: true,
+    });
     fireEvent.click(chip);
     const answers = screen.getAllByRole("menuitemradio");
     expect(answers.map((a) => [a.textContent, a.getAttribute("aria-checked")])).toEqual([
@@ -874,7 +884,7 @@ describe("menus", () => {
     // Engineering's own lead is unchanged, and so is what the check said of it.
     expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
     // Now declared, the choice says so, and No lead offers the parent's lead.
-    fireEvent.click(screen.getByRole("button", { name: "SRE", hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Lead: SRE", hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -947,7 +957,7 @@ describe("menus", () => {
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: "CEO", hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: "Lead: CEO", hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -965,11 +975,12 @@ describe("menus", () => {
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
     const { probe, spies } = mount();
     // Engineering declares VP Engineering; Sales declares no lead.
-    fireEvent.click(screen.getByRole("button", { name: "VP Engineering", hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Lead: VP Engineering", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: "No lead", hidden: true }));
+    // An empty pill still says the word: "Lead", as that chart writes it.
+    fireEvent.click(sales.getByRole("button", { name: "Lead", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
     expect(spies.dispatched).toEqual([]);
     expect(probe.state.refusal).toBeNull();
@@ -993,6 +1004,42 @@ describe("the reporting chart", () => {
       "roles[3]": { manager: "a" },
     },
   };
+
+  /*
+   * THE EXPANDER IS BESIDE THE NODE ON BOTH CHARTS, and nothing hangs on the
+   * branch here at all: the reporting chart adds nothing, so the strip under a
+   * card would be an empty band on every node of it. Both charts of one
+   * organization draw one shape, which is the rule this whole module exists
+   * for, and the cycle GROUP is a node a reader collapses like any other.
+   */
+  test("a node's expander is drawn beside it, and the branch carries nothing", () => {
+    const { container } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
+    for (const name of ["Chief", "Reporting cycle", "A"]) {
+      const collapse = within(chartCard(item(name))).getByRole("button", {
+        name: `Collapse ${name === "Reporting cycle" ? "the reporting cycles" : name}`,
+        hidden: true,
+      });
+      // Beside the treeitem, never inside it: a tree's items hold nothing
+      // focusable, and the whole chart is held to that a few cases above.
+      expect(collapse.closest("[role='treeitem']")).toBeNull();
+    }
+    // A LEAF HAS NONE. Ops is the bottom of its branch, so its card is drawn
+    // with no disclosure rather than with an empty one.
+    expect(
+      within(chartCard(item("Ops"))).queryByRole("button", {
+        name: /^(Collapse|Expand) /,
+        hidden: true,
+      }),
+    ).toBeNull();
+    // And it still collapses, from the control that is there.
+    pointerPress("Collapse Chief");
+    expect(item("Chief").getAttribute("aria-expanded")).toBe("false");
+    // Nothing hangs on a branch of this chart: it adds nothing, so a strip
+    // there would be an empty band under every node of it.
+    expect(
+      within(container).queryAllByRole("button", { name: /^Add /, hidden: true }),
+    ).toHaveLength(0);
+  });
 
   test("draws the forest with no-manager tops and the cycle group, and changes nothing itself", () => {
     const { spies, probe } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
@@ -1560,9 +1607,15 @@ describe("adding a node in the chart", () => {
     const view = mount();
     const world = () => canvasWorld(view.container).style.transform;
     const before = world();
+    // eslint-disable-next-line no-console
+    console.log("PROBE before:", before, "cards:", chartCards(view.container).length);
     view.rerender({ adding: adding(unitKey("Engineering")).request });
+    // eslint-disable-next-line no-console
+    console.log("PROBE onto:", world(), "cards:", chartCards(view.container).length);
     expect(world()).not.toBe(before);
     view.rerender({ adding: null });
+    // eslint-disable-next-line no-console
+    console.log("PROBE back:", world(), "cards:", chartCards(view.container).length);
     expect(world()).toBe(before);
   });
 

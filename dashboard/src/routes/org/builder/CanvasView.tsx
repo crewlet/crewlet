@@ -95,7 +95,7 @@ import {
   addSections,
   cardMenu,
   isDeletable,
-  leadLabel,
+  leadChipLabel,
   leadMenu,
   leadSentence,
   moveKey,
@@ -133,6 +133,7 @@ import {
   Kbd,
   Menu,
   type MenuEntry,
+  OrgNodeDisclosure,
   OrgNodeLabel,
   OrgNodeLead,
   TreeCanvas,
@@ -357,19 +358,18 @@ function StructureChart({
           reorder={reorder}
         />
       )}
-      // THE ADD IS ON THE BRANCH, under the node whose children it makes. It
-      // used to be a third button crowding the node's own name, where "add a
-      // unit under Engineering" was a menu on Engineering's top right corner
-      // rather than a control on the line its units hang from.
-      renderUnder={(id, card) => {
+      // THE ADD IS ON THE BRANCH, under the node whose children it makes, and
+      // it is ALONE there. It used to be a third button crowding the node's
+      // own name, where "add a unit under Engineering" was a menu on
+      // Engineering's top right corner rather than a control on the line its
+      // units hang from; then the expander shared the strip with it, and an
+      // add pill splitting open covered the expander. The expander is on the
+      // node's leading edge now (`leading` on every label below), which is
+      // where every hierarchy a reader has used puts a disclosure.
+      renderUnder={(id) => {
         const view = structure.nodes.get(id);
-        if (!view) return null;
-        return (
-          <>
-            <ToggleButton card={card} id={id} name={view.name || "the company"} />
-            {view.type !== "seat" && !api.readOnly && <AddButton api={api} view={view} />}
-          </>
-        );
+        if (!view || view.type === "seat" || api.readOnly) return null;
+        return <AddButton api={api} view={view} />;
       }}
     />
   );
@@ -456,7 +456,6 @@ function ReportingChart({
         const item = chart.items.get(id);
         return item ? seatTone(item.kind, item.key ?? undefined) : undefined;
       }}
-      renderUnder={(id, card) => <ToggleButton card={card} id={id} name={nameOfItem(chart, id)} />}
       renderCard={(id, card) =>
         id === CYCLE_GROUP ? (
           <CycleGroupCard card={card} count={chart.cycles.length} />
@@ -651,6 +650,7 @@ function StructureCard({
           />
           <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
+        <ToggleButton card={card} id={id} name={view.name} />
         <NodeActions
           api={api}
           card={card}
@@ -676,6 +676,7 @@ function StructureCard({
           />
           <VisuallyHidden>{counts}</VisuallyHidden>
         </div>
+        <ToggleButton card={card} id={id} name={view.name || "the company"} />
         <NodeActions
           api={api}
           card={card}
@@ -702,6 +703,7 @@ function StructureCard({
         <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
+      <ToggleButton card={card} id={id} name={view.name} />
       <NodeActions
         api={api}
         card={card}
@@ -775,6 +777,7 @@ function ReportingCard({
         <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
       </div>
+      <ToggleButton card={card} id={item.id} name={item.name} />
       <div {...card.actions(item.id)}>
         {seat && (
           <KeyboardMenu
@@ -802,6 +805,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
         />
         <VisuallyHidden>{note}</VisuallyHidden>
       </div>
+      <ToggleButton card={card} id={CYCLE_GROUP} name="the reporting cycles" />
     </>
   );
 }
@@ -825,10 +829,13 @@ function nameOfItem(chart: { items: ReadonlyMap<string, ReportingItem> }, id: st
  * on the node, the toolbar, which mirrors the selected node, and the Add on
  * the branch below.
  *
- * THE EXPANDER IS NOT HERE, it is on the branch beside the Add. Both are about
- * a node's CHILDREN rather than about the node, and the branch below the node
- * is where its children hang from; in the column they were a third cell, which
- * on one rank is 16px a pointer cannot land on.
+ * THE EXPANDER IS NOT HERE EITHER, it is on the node's LEADING edge. In this
+ * column it was a third cell, which on one rank is 16px a pointer cannot land
+ * on; on the branch below, beside the Add, it was covered whenever the add
+ * pill split open into its three kinds, which is the one gesture a reader
+ * makes right next to it. The card's leading edge is where every hierarchy a
+ * reader has used puts a disclosure, and it leaves the branch to the Add
+ * alone, which is what the chart this is drawn from draws there.
  *
  * THE MENU IS STILL MOUNTED even though nothing visible opens it: a menu the
  * key can open has to have somewhere to be, and `KeyboardMenu` is that anchor,
@@ -931,21 +938,44 @@ function FullscreenHint() {
   );
 }
 
+/**
+ * The control that opens and closes what hangs under a node, on its leading
+ * edge.
+ *
+ * BESIDE THE TREEITEM, NEVER INSIDE IT, which is what `OrgNodeDisclosure` is
+ * for: a tree's items hold nothing focusable, so the design system draws this
+ * as a sibling of the node's own item, exactly where the actions strip goes,
+ * and places it on the card's boundary from there. It used to hang on the
+ * BRANCH beside the Add, where the add pill splitting open into its three
+ * kinds covered it, which is the one gesture a reader makes right next to it.
+ *
+ * A NODE WITH NOTHING UNDER IT DRAWS NONE, so a leaf of the chart is a card
+ * with no disclosure rather than one with an empty slot.
+ *
+ * AND THE PRESS LANDS ON THE NODE, never in the control: `card.press` is what
+ * the actions strip gets from `card.actions`, and this is the same kind of
+ * region, so it takes the same behaviour explicitly. Focus in a subtree hidden
+ * from assistive technology is focus nowhere, so a press that left it on the
+ * expander would leave the chart with no announced position at all.
+ */
 function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; name: string }) {
   if (!card.expandable(id)) return null;
   const expanded = card.expanded(id);
   return (
-    <IconButton
-      label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-      icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
-      size="sm"
-      variant="ghost"
-      tabIndex={-1}
-      onClick={(e) => {
-        e.stopPropagation();
-        card.toggle(id);
-      }}
-    />
+    <OrgNodeDisclosure>
+      <IconButton
+        label={expanded ? `Collapse ${name}` : `Expand ${name}`}
+        icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
+        size="sm"
+        variant="ghost"
+        tabIndex={-1}
+        {...card.press(id)}
+        onClick={(e) => {
+          e.stopPropagation();
+          card.toggle(id);
+        }}
+      />
+    </OrgNodeDisclosure>
   );
 }
 
@@ -1042,6 +1072,11 @@ function LeadChip({
   unit: UnitView;
   card: TreeCardContext;
 }) {
+  // THE PILL SAYS THE WORD "LEAD" ITSELF (`leadChipLabel`), as the chart this
+  // is drawn from does: "Lead: VP Engineering" set, "Lead" not. The table's
+  // own column keeps `leadLabel`, which says the name alone, because there the
+  // word is already the column heading and the pill's wording would double it.
+  //
   // THE PILL IS DRAWN EMPTY where the unit has no lead, and it still SAYS
   // which of the two nothings it is. The chart this is drawn from writes
   // "Lead" in every pill with nothing in it; this builder has a third answer
@@ -1083,14 +1118,14 @@ function LeadChip({
           : {})}
       >
         {api.readOnly ? (
-          <span className="truncate">{leadLabel(unit)}</span>
+          <span className="truncate">{leadChipLabel(unit)}</span>
         ) : (
           <Menu
             label={`Lead of ${unit.name}`}
             items={leadMenu(api, structure, unit)}
             triggerTabIndex={-1}
             onOpenChange={(opened) => opened && card.activate(unit.key)}
-            trigger={leadLabel(unit)}
+            trigger={leadChipLabel(unit)}
           />
         )}
       </OrgNodeLead>
