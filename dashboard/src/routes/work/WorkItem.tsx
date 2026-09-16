@@ -9,6 +9,13 @@
  * quietly fell behind — and a reader who clicked through from the panel to the
  * page to see "the whole thing" would find less than they started with.
  *
+ * That is now true of the HEADER as well as of the body: both frames open with
+ * the same [ObjectHeader] over the same [itemFacts], so the status, priority,
+ * type, assignee, sprint and due date are read in one order wherever the task
+ * appears. The page had no title at all before it — it published a status
+ * badge into the page bar and went straight to its panels, so the one screen
+ * about one task never said which task it was about.
+ *
  * # Read-only, like the board it opens from
  *
  * A task is moved by a seat's own tools or by an operator through MCP, both
@@ -16,7 +23,7 @@
  * is not a person and cannot be asked why.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -43,15 +50,18 @@ import {
   fieldValueState,
   fieldValueText,
   fmtMinutes,
+  typeIcon,
   typeName,
 } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
-import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
+import { ObjectHeader, type Fact, type SetBy } from "~/app/frame/ObjectHeader.tsx";
+import { usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import type {
   WorkChange,
@@ -85,6 +95,136 @@ function linkHeading(link: WorkLink): string {
   }
 }
 
+/**
+ * The flags a task wears beside its title, and nothing else.
+ *
+ * ONLY WHAT IS EXCEPTIONAL — something else is holding this one up, and the
+ * record has been archived. The status itself is a FACT rather than a flag,
+ * because every task has one and a badge every task wears says nothing; these
+ * two are drawn only for the tasks they are true of, which is what makes them
+ * worth the reader's eye. Same argument and same shape as `sprintFlags`.
+ *
+ * IT TAKES THE DETAIL RATHER THAN THE TASK, because `blocked` is DERIVED and
+ * lives on the answer: whether any dependency is still open is a fact about
+ * other rows, computed in the same transaction as this one — see
+ * [WorkItemDetail.blocked]. A task carries its links, never their states.
+ *
+ * `undefined` rather than an empty element, because an empty child still takes
+ * its gap in the header row: an ordinary task would sit with a hole beside its
+ * title where a state it is not in would have been.
+ */
+function itemFlags(detail: WorkItemDetail): ReactNode {
+  const item = detail.task;
+  if (!detail.blocked && !item.archived) return undefined;
+  return (
+    <span className="row gap-1">
+      {detail.blocked && (
+        <Badge tone="critical" outline>
+          Blocked
+        </Badge>
+      )}
+      {item.archived && <Badge outline>Archived</Badge>}
+    </span>
+  );
+}
+
+/**
+ * The six facts a task is read by, in one order, on its page and in the rail.
+ *
+ * ONE FUNCTION rather than two lists that happen to agree today. The page and
+ * the peek are one definition of what a task shows — see this file's own doc —
+ * and a header written twice is two orders as soon as somebody adds a seventh
+ * fact, with the drift landing on the page nobody reads forty times a day.
+ *
+ * THEY ARE THE PROPERTIES RAIL'S OWN LEADING ROWS, in the rail's own order:
+ * status, priority and type out of State, the assignee out of People, the
+ * sprint and the due date out of Plan. A reader who scans the header and then
+ * the rail below it is reading one object rather than re-learning it.
+ *
+ * NO `setBy` HERE, deliberately, although a [Fact] carries one: who last moved
+ * a field is what the rail answers row by row, and the same attribution drawn
+ * twice on one screen would put a second, quieter copy of the history under a
+ * line that exists to be scanned in a second.
+ *
+ * AN ABSENT PRIORITY, TYPE OR DUE DATE IS DROPPED rather than dashed — a
+ * [FactLine] renders no line for an undefined value — because a fresh task has
+ * none of the three and a header of em dashes says less than a shorter one.
+ * The assignee and the sprint are the exception and are always drawn: nobody
+ * holding a task and a task nobody has planned are the two answers a reader
+ * comes to this line for, and both are stated in the rail's own words.
+ */
+function itemFacts({
+  detail,
+  chrome,
+  now,
+}: {
+  detail: WorkItemDetail;
+  chrome: RowChrome;
+  now: number;
+}): Fact[] {
+  const item = detail.task;
+  const seatName = chrome.seatName ?? ((handle: string) => handle);
+  return [
+    { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
+    {
+      label: "Priority",
+      // THE RAIL'S OWN CONDITION. `none` is the absence of a priority and
+      // `normal` is a priority somebody chose, which is why the word is asked
+      // for: a properties line answering "what is this set to" reads "normal"
+      // where a board card draws nothing at all.
+      value:
+        item.priority && item.priority !== "none" ? (
+          <PriorityMark priority={item.priority} word />
+        ) : undefined,
+    },
+    {
+      label: "Type",
+      value: item.type ? (
+        <span className="row gap-1">
+          <TypeIcon type={item.type} types={chrome.types} />
+          {typeName(item.type, chrome.types)}
+        </span>
+      ) : undefined,
+    },
+    {
+      label: "Assignee",
+      // NOT LINKED THROUGH THE FACT'S OWN `path`: a [SeatChip] is already the
+      // one way a person appears in a list, avatar and link together, and
+      // wrapping it in a second anchor would nest one link inside another.
+      value: item.assignee ? (
+        <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
+      ) : (
+        <span className="muted">Unassigned</span>
+      ),
+    },
+    {
+      label: "Sprint",
+      value:
+        item.sprint !== undefined ? (
+          `Sprint ${item.sprint}`
+        ) : (
+          <span className="muted">Backlog</span>
+        ),
+      // THE SPRINT'S OWN PAGE, not the project's sprint report: `#/work/ENG/
+      // sprints/3` addresses one sprint and is where the rail's `Open ↗` for
+      // it goes, so a link to the whole report would land a reader on every
+      // sprint and leave them to find the one they clicked.
+      path:
+        item.sprint !== undefined
+          ? ["work", item.project, "sprints", String(item.sprint)]
+          : undefined,
+    },
+    {
+      label: "Due",
+      // NO OVERDUE MARK HERE. A task carries no `overdue` — it is DERIVED per
+      // row and lives on the row that carries it, precisely so no renderer
+      // re-derives it differently and one screen calls a task overdue where
+      // the next does not.
+      value: item.due_at ? <DueMark due={item.due_at} now={now} /> : undefined,
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------------
@@ -116,38 +256,55 @@ export function WorkItem({ id }: { id: string }) {
     statuses: project.data?.statuses,
   };
 
+  // THE TRAIL IS THE PAGE BAR'S. This screen drew its own — workspace, project,
+  // key — above the title, so a reader had two breadcrumbs on one page,
+  // disagreeing about where they were the moment either one changed.
+  //
+  // AND THE ADDRESSED SEGMENT IS OFTEN A UUID: `work_item` takes either
+  // spelling and every internal link carries the id, so a trail reading
+  // `work / 4f3c…` told a reader nothing they did not already have from the URL
+  // bar. This is what the comment that stood here has always claimed was
+  // happening and nothing was doing — the same gap `#/goals/{id}` had beside it.
+  //
+  // THE KEY AND NOT THE TITLE, unlike the sprint's crumb and the goal's: a
+  // breadcrumb is the ADDRESS rather than a title, `ENG-42` is an address a
+  // person can read and paste, and the title is on the header immediately
+  // below it. `3` and a goal's uuid are addresses nobody can read, which is
+  // why those two spend their crumb on a name.
+  usePageLabels(item ? { [id]: item.key } : {});
+
   return (
     <>
+      {/* THE STATE IS THE HEADER'S, not the page bar's. The bar used to carry
+          the status, the blocked flag, the type and the archived badge, and
+          the header below now says all four — drawn in both places they are
+          one state with two renderings, which is exactly what one
+          [ObjectHeader] per object exists to end. What stays here is the way
+          OUT, which the header has no room for and the bar is for. */}
       <PageActions>
-        {item ? (
-          <>
-            <StatusBadge status={item.status} defs={project.data?.statuses} />
-            {state.data?.blocked && (
-              <Badge tone="critical" outline>
-                Blocked
-              </Badge>
-            )}
-            {item.type && <Badge outline>{typeName(item.type, project.data?.types)}</Badge>}
-            {item.archived && <Badge outline>Archived</Badge>}
-          </>
-        ) : undefined}
         {item ? (
           <a className="t-link" href={href(["work"], { project: item.project, item: item.key })}>
             Open on the board →
           </a>
         ) : undefined}
       </PageActions>
-      {/* THE TRAIL IS THE PAGE BAR'S. This screen drew its own — workspace,
-          project, key — above the title, so a reader had two breadcrumbs on
-          one page, disagreeing about where they were the moment either one
-          changed. `usePageLabels` below is what gives the real one this
-          item's project name and title. */}
 
       {state.loading && !state.data && <Skeleton rows={8} />}
 
       <QueryState error={state.error} loading={state.loading}>
         {state.data && item && (
           <>
+            <ObjectHeader
+              kind="Item"
+              // THE TASK'S OWN TYPE GLYPH in the eyebrow, and the type's WORD
+              // in the facts below: the icon is what a reader recognises a bug
+              // from across a board by, and it carries no label of its own.
+              icon={typeIcon(item.type)}
+              identifier={item.key}
+              title={item.title}
+              status={itemFlags(state.data)}
+              facts={itemFacts({ detail: state.data, chrome, now })}
+            />
             <Coverage answer={state.data} />
             <div className="work-item">
               <div className="work-item-main">
@@ -183,6 +340,10 @@ export function WorkItem({ id }: { id: string }) {
  * to the page and the close control are the same on every kind of object, and
  * a second copy of them here is how the tracker's peek came to be the only
  * peek in the product.
+ *
+ * AND THE HEADER IS THE PAGE'S, one size down — the same [ObjectHeader] over
+ * the same [itemFacts], so the two frames of one task cannot come to name the
+ * same six things in two orders.
  */
 export function ItemPeek({ itemKey, chrome }: { itemKey: string; chrome: RowChrome }) {
   const now = useNow();
@@ -204,36 +365,47 @@ export function ItemPeek({ itemKey, chrome }: { itemKey: string; chrome: RowChro
 
   return (
     <>
-      <div className="row gap-2">
-        {item && <TypeIcon type={item.type} types={inner.types} />}
-        <a className="mono t-link" href={href(["work", itemKey])}>
-          {itemKey}
-        </a>
-      </div>
-      <div className="col gap-3">
-        {state.loading && !state.data && <Skeleton rows={6} />}
-        <QueryState error={state.error} loading={state.loading}>
-          {state.data && item && (
+      {state.loading && !state.data && <Skeleton rows={6} />}
+      <QueryState error={state.error} loading={state.loading}>
+        {state.data &&
+          (item ? (
             <>
-              <div className="peek-title">{item.title}</div>
-              <div className="row wrap gap-2">
-                <StatusBadge status={item.status} defs={inner.statuses} />
-                {state.data.blocked && (
-                  <Badge tone="critical" outline>
-                    Blocked
-                  </Badge>
-                )}
-                <PriorityMark priority={item.priority} word />
-                <DueMark due={item.due_at} now={now} />
+              {/* THE PAGE'S OWN HEADER, one size down. It used to be a type
+                  glyph, a mono key, a title line and a row of badges written
+                  out here — four pieces of the page, re-drawn, which is how
+                  the two frames of one task came to say the same facts in two
+                  orders. */}
+              <ObjectHeader
+                size="peek"
+                kind="Item"
+                icon={typeIcon(item.type)}
+                identifier={item.key}
+                title={item.title}
+                status={itemFlags(state.data)}
+                facts={itemFacts({ detail: state.data, chrome: inner, now })}
+              />
+              <div className="col gap-3">
+                <Coverage answer={state.data} />
+                <ItemProps detail={state.data} chrome={inner} project={project.data} compact />
+                <ItemLinks detail={state.data} chrome={inner} flush />
+                <ItemBody detail={state.data} chrome={inner} now={now} flush />
               </div>
-              <Coverage answer={state.data} />
-              <ItemProps detail={state.data} chrome={inner} project={project.data} compact />
-              <ItemLinks detail={state.data} chrome={inner} flush />
-              <ItemBody detail={state.data} chrome={inner} now={now} flush />
             </>
-          )}
-        </QueryState>
-      </div>
+          ) : (
+            // NOT AN EMPTY PANEL, and not a spinner that never resolves. An
+            // answer carrying no task is what a build older or newer than this
+            // one can send, and the honest reply names the address that
+            // resolved to nothing rather than drawing a blank rail over the
+            // list. A refusal — `not_found` for a key nobody minted — is
+            // [QueryState]'s own sentence above.
+            <Empty
+              inline
+              icon="box"
+              title={`Nothing answers to “${itemKey}”`}
+              hint="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
+            />
+          ))}
+      </QueryState>
     </>
   );
 }
@@ -261,11 +433,24 @@ export function Subtasks({
   error,
   now,
   chrome,
+  peek,
 }: {
   rows: WorkSummary[];
   error?: string | null;
   now: number;
   chrome: RowChrome;
+  /**
+   * Open a child in the rail instead of navigating to it.
+   *
+   * ONE CALLBACK RATHER THAN A HOOK, for the reason `GoalPanel` and
+   * `SprintPanel` take one: this panel is rendered directly by its own suite,
+   * and `usePeekControls` reads the navigator, so reaching for it here would
+   * make every case in that file stand up a router it has no use for.
+   *
+   * ABSENT IS A REAL SETTING — the row stays the plain link it already is —
+   * and the peek passes nothing: see [ItemBody].
+   */
+  peek?: (row: WorkSummary) => void;
 }) {
   if (error) {
     return (
@@ -277,7 +462,13 @@ export function Subtasks({
   if (rows.length === 0) return null;
   return (
     <Panel title="Subtasks" count={rows.length} padding="none">
-      <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+      <RowList
+        rows={rows}
+        now={now}
+        chrome={chrome}
+        hrefOf={(row) => href(["work", row.key])}
+        onOpen={peek}
+      />
     </Panel>
   );
 }
@@ -301,6 +492,7 @@ export function ItemBody({
   // to. Here rather than passed in, because the peek renders this same body
   // and would otherwise have to thread it through for one line of prose.
   const viewer = useViewer();
+  const { open: openPeek } = usePeekControls();
   const [tab, setTab] = useParam("thread", "comments");
   // WHICH CHANGE'S ROUTING IS OPEN. A filter rather than a section: stepping
   // through the announced changes must not fill the back stack.
@@ -347,7 +539,20 @@ export function ItemBody({
         )}
       </Wrap>
 
-      <Subtasks rows={subtasks} error={children.error} now={now} chrome={chrome} />
+      {/* A CHILD PEEKS FROM THE PAGE AND NAVIGATES FROM THE RAIL, which is the
+          same split `SubUnitLinks` makes and for the same reason: the rail
+          holds one object at a time and `[` and `]` step the list it was
+          opened FROM, so a subtask swapped into it in place of its parent
+          would leave the stepper walking a list this task is not in. On the
+          page there is no such list to lose — the task stays behind the rail,
+          which is the whole of why a peek is not a navigation. */}
+      <Subtasks
+        rows={subtasks}
+        error={children.error}
+        now={now}
+        chrome={chrome}
+        peek={flush ? undefined : (row) => openPeek({ kind: "item", id: row.key })}
+      />
 
       {(item.checklists ?? []).map((list) => (
         <Panel key={list.id} title={list.name} icon="check" count={list.items?.length ?? 0}>
@@ -852,7 +1057,13 @@ export function ItemProps({
             ) : (
               <span className="muted">Backlog</span>
             ),
-          path: item.sprint !== undefined ? ["work", item.project, "sprints"] : undefined,
+          // THE SPRINT'S OWN PAGE, as in the header above: `#/work/ENG/
+          // sprints/3` addresses one sprint, so a row naming sprint 3 that
+          // landed on the whole report left a reader to find it again.
+          path:
+            item.sprint !== undefined
+              ? ["work", item.project, "sprints", String(item.sprint)]
+              : undefined,
           setBy: by("sprint"),
         },
         {

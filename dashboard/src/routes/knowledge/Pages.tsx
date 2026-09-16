@@ -37,6 +37,10 @@ import {
   cx,
 } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DateCell, KeyCell, NumberCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -44,7 +48,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import type { PageRevision } from "~/protocol/index.ts";
+import type { Page, PageRevision, PageSummary } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useViewer } from "~/lib/viewer.ts";
@@ -55,6 +59,182 @@ const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" |
   draft: "caution",
   trashed: "neutral",
 };
+
+/**
+ * A page's address, which is what the frame carries and what the engine reads.
+ *
+ * `CONTAINER/Title`, in one place: the `page` query takes exactly this string,
+ * `KINDS.page` splits it back into a route on the first slash, and the title
+ * is matched the way the fleet CLAIMED it — case-insensitively, whitespace
+ * collapsed. Written at each call site it would be spelled with a uuid
+ * somewhere, which resolves for the query and gives the rail a `peek=` token
+ * no reader can recognise and no grid row can be found by.
+ *
+ * EXPORTED for the Knowledge screen, whose ranked hits address the same pages
+ * and had the interpolation written out three times in one component — which
+ * is how the browse and the search come to open two different rails for one
+ * page the day either of them learns about a uuid.
+ */
+export function pageAddress(page: { container: string; title: string }): string {
+  return `${page.container}/${page.title}`;
+}
+
+/**
+ * The five facts a page is read by, in one order, on its page and in the rail.
+ *
+ * ONE FUNCTION rather than two lists that happen to agree today — the same
+ * argument `nodeFacts` makes on the fleet screen. A reader scans a page's
+ * place, its version, who wrote it, when, and who is watching, and a header
+ * written twice is two orders as soon as somebody adds a sixth fact.
+ *
+ * # `author` IS THE CREATOR, AND A SAVE NEVER MOVES IT
+ *
+ * `internal/pages/apply_page.go` sets `head.Author` on the CREATE and on no
+ * other path: a patch writes the revision with `at.record.Actor` and leaves
+ * the head's author exactly where the create put it. So the page's own author
+ * answers "who started this page", and the only record of who last SAVED it is
+ * the newest revision — which is why the version fact carries a `set by` line
+ * built from the history rather than from the page. This header said "Author"
+ * beside an "Updated" instant, and a label and a time that near each other are
+ * read as one sentence: on any page somebody else has since edited, that is
+ * the wrong name attached to the wrong change. "Started by" is the same value
+ * under the name it actually holds.
+ */
+function pageFacts({
+  page,
+  history,
+  now,
+  seatName,
+}: {
+  page: Page;
+  /** Newest first, as the `page` answer orders it. */
+  history: PageRevision[];
+  now: number;
+  seatName: (handle: string) => string;
+}): Fact[] {
+  const last = history[0];
+  return [
+    // THE CONTAINER IS A LINK, because it is the one fact here that is also a
+    // place: a reader who does not recognise the page recognises the tree it
+    // is filed in, and that tree is one click away.
+    { label: "Container", value: page.container, path: ["knowledge", page.container] },
+    {
+      label: "Version",
+      value: `v${page.version}`,
+      // NEVER "set by —": a page whose revisions this node no longer holds
+      // gets no line at all rather than one claiming a record the engine
+      // cannot produce. The instant is the SAVE'S own, not the page's
+      // `updated_at` — a comment or a label edit moves the page without
+      // writing a revision, and pairing this name with that time would
+      // credit the last writer with somebody else's change.
+      setBy: last
+        ? {
+            actor: last.author ? seatName(last.author) : "the engine",
+            at: last.created_at,
+            ago: relTime(last.created_at, now),
+          }
+        : undefined,
+    },
+    {
+      label: "Started by",
+      // NEVER A DASH. A page with no author was written by the ENGINE —
+      // a sync, a migration, the tool-skill catalogue — which is a fact
+      // rather than a missing one, and the history panel below has said so
+      // in those words since before this header existed.
+      value: page.author ? seatName(page.author) : "the engine",
+    },
+    {
+      label: "Updated",
+      value: <DateCell at={page.updated_at} now={now} />,
+      // WHY THIS IS NOT THE SAVE ABOVE IT. Ten kinds of change stamp a page —
+      // `internal/pages` writes a history entry for a comment, a rename, a
+      // move and a label edit as well as a save — so these two instants
+      // legitimately differ, and a reader who noticed would otherwise be left
+      // deciding which of them is broken.
+      note: last && last.created_at !== page.updated_at ? "any change, not only a save" : undefined,
+    },
+    {
+      label: "Watchers",
+      // ZERO IS THE HONEST READING, not an absence: the wire drops an empty
+      // watcher list (`omitempty`), so "nobody is watching" and "the field
+      // was not sent" are the same value and the first is what it means. A
+      // dash here would claim the engine keeps a record it does not.
+      value: <NumberCell value={page.watchers?.length ?? 0} />,
+    },
+  ];
+}
+
+/**
+ * The state a page wears beside its title — its status, and what KIND of page
+ * it is when it is not prose somebody wrote to be read.
+ *
+ * The tool-skill and onboarding marks sit here rather than in the facts
+ * because they change how the body below should be read: a tool skill is
+ * machinery the engine injects into a phase, and a reader who takes it for
+ * guidance has misread the page rather than missed a field.
+ */
+function pageFlags(page: Page): React.ReactNode {
+  return (
+    <span className="row gap-1">
+      <Badge tone={STATUS_TONE[page.status] ?? "neutral"} dot>
+        {page.status}
+      </Badge>
+      {page.skill && (
+        <Badge tone="info" title="Injected into a phase by the tool-skill registry">
+          tool skill
+        </Badge>
+      )}
+      {page.onboarding && (
+        <Badge tone="caution" title="Where a new seat's reading starts">
+          onboarding
+        </Badge>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A grid row's activation, for a grid whose `rowHref` is the object's page.
+ *
+ * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy of
+ * which clicks mean "open elsewhere" and it reads a mouse event; the `enter`
+ * chord carries no button at all and is never one of them.
+ */
+function peekRow<T>(
+  open: (row: T) => void,
+): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
+  return (row, e) => {
+    if (!("button" in e)) {
+      open(row);
+      return;
+    }
+    rowPeekHandler(() => open(row))?.(e);
+  };
+}
+
+/**
+ * A link to another page that opens it in the RAIL rather than navigating.
+ *
+ * Only ever drawn inside a peek, which is what makes the plain click right:
+ * the reader is already beside a list they came from, and walking a page's
+ * ancestors or its children by throwing that list away is the navigation the
+ * rail exists to avoid. The `href` is the page's own route, so ⌘-click, the
+ * middle button and the status bar all still say where it goes.
+ *
+ * EXPORTED for the container rail, which lists the pages written in a
+ * container and wants exactly this click: the two peeks are the only frames a
+ * page link is drawn in, and a second copy of "peek rather than navigate" is
+ * how one of them comes to forget the middle button.
+ */
+export function PageLink({ page }: { page: PageSummary }) {
+  const { open } = usePeekControls();
+  const ref = { kind: "page" as const, id: pageAddress(page) };
+  return (
+    <a className="t-link truncate" href={peekHref(ref)} onClick={rowPeekHandler(() => open(ref))}>
+      {page.title}
+    </a>
+  );
+}
 
 export function Pages({ container: fromPath }: { container?: string }) {
   const org = useOrg();
@@ -91,7 +271,19 @@ export function Pages({ container: fromPath }: { container?: string }) {
     () => (containers.data?.containers ?? []).map((c) => c.key).sort(),
     [containers.data],
   );
-  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const { open: openPeek } = usePeekControls();
+  // WHAT `[` AND `]` WALK: the pages this screen actually loaded, filtered by
+  // whatever the toolbar above is set to. Published rather than handed to the
+  // rail, because only the list knows that order; see `PeekHost`.
+  //
+  // THIS SCREEN'S OWN ORDER — newest first, which is also the grid's default
+  // sort. A column sort lives inside the grid and is not something this screen
+  // can read back, so a reader who re-sorts steps in updated order instead:
+  // one order both halves agree on beats a stepper that claims to follow a
+  // sequence it cannot see.
+  usePeekNeighbours(
+    useMemo(() => rows.map((r) => ({ kind: "page" as const, id: pageAddress(r) })), [rows]),
+  );
 
   return (
     <>
@@ -172,26 +364,45 @@ export function Pages({ container: fromPath }: { container?: string }) {
         }
       >
         <Panel>
-          <DataGrid
+          <DataGrid<PageSummary>
             rows={rows}
             rowKey={(r) => r.id}
             defaultSort="-updated"
+            // THE ROW IS A REAL LINK to the page, so ⌘-click, the middle button
+            // and the status bar all behave — and a plain click opens the page
+            // beside the list instead, because "is this the one I meant" is
+            // answered by the first paragraph and a browse is the one place
+            // where losing the list to read one title costs the most.
+            //
+            // THE FRAME'S OWN ANSWER to where a page lives rather than a second
+            // copy of the route: the rail's `Open ↗` is built from the same
+            // reference, so a row and the panel it opens can never name
+            // different pages.
+            rowHref={(r) => peekHref({ kind: "page", id: pageAddress(r) })}
+            onRowActivate={peekRow<PageSummary>((r) =>
+              openPeek({ kind: "page", id: pageAddress(r) }),
+            )}
             columns={[
               {
                 key: "title",
                 header: "Title",
                 sortValue: (r) => r.title,
-                cell: (r) => (
-                  <a href={href(["knowledge", r.container, r.title])} className="truncate">
-                    {r.title}
-                  </a>
-                ),
+                // NOT AN ANCHOR: the row is one now, and a title that was also
+                // a link would be the one part of the row where a plain click
+                // meant something different from everywhere else on it.
+                cell: (r) => <TextCell icon="file">{r.title}</TextCell>,
               },
               {
                 key: "container",
                 header: "Container",
                 shrink: true,
                 sortValue: (r) => r.container,
+                // A CHIP RATHER THAN A `KeyCell`, which is the one identifier
+                // cell and would otherwise be right: the containers above this
+                // grid are the filter for this very column, drawn as exactly
+                // this badge, and a column that spelled them differently would
+                // make the control and the thing it controls look like two
+                // different vocabularies.
                 cell: (r) => (
                   <Badge outline mono>
                     {r.container}
@@ -236,19 +447,27 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 shrink: true,
                 align: "right",
                 sortValue: (r) => r.version,
-                cell: (r) => <span className="mono">v{r.version}</span>,
+                // A VERSION IS AN IDENTIFIER, not a quantity: v10 does not
+                // mean ten of anything, so it wears the mono face a key wears
+                // rather than the tabular one a `NumberCell` counts in.
+                cell: (r) => <KeyCell value={`v${r.version}`} />,
               },
               {
                 key: "author",
                 header: "Author",
                 shrink: true,
                 sortValue: (r) => r.author ?? "",
-                cell: (r) =>
-                  r.author ? (
-                    <SeatChip name={seatName(r.author)} handle={r.author} />
-                  ) : (
-                    <span className="muted">—</span>
-                  ),
+                // HALF A CELL, and the other half is the reason: `SeatCell` is
+                // the one rendering of a person in a grid, and a page with no
+                // author was written by the ENGINE rather than by nobody. The
+                // `—` this column drew said the opposite — that the author is
+                // a thing nothing recorded — about every page the tool-skill
+                // catalogue publishes.
+                cell: (r) => {
+                  if (!r.author) return <span className="muted">the engine</span>;
+                  const who = index.byHandle.get(r.author);
+                  return <SeatCell handle={r.author} name={who?.name} kind={who?.kind} />;
+                },
               },
               {
                 key: "updated",
@@ -256,9 +475,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 shrink: true,
                 align: "right",
                 sortValue: (r) => tsKey(r.updated_at),
-                cell: (r) => (
-                  <span title={fmtDateTime(r.updated_at)}>{relTime(r.updated_at, now)}</span>
-                ),
+                cell: (r) => <DateCell at={r.updated_at} now={now} />,
               },
             ]}
           />
@@ -293,6 +510,11 @@ export function PageView({ container, title }: { container: string; title: strin
 
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
   const page = data?.page;
+  // NEWEST FIRST — `internal/pages` reads the revisions `ORDER BY version
+  // DESC`, and the header's "set by" line is the head of this list. Read once
+  // here so the panel below and the header cannot disagree about which save
+  // was the last one.
+  const history = data?.history ?? [];
 
   return (
     <>
@@ -331,6 +553,32 @@ export function PageView({ container, title }: { container: string; title: strin
       <QueryState error={error} loading={loading}>
         {page && (
           <>
+            {/* THE OBJECT'S OWN HEADER. The title used to be the page bar's
+                crumb and nothing else, so the screen opened straight into a
+                body with no statement of what it was — and of the five facts a
+                page is read by, two were a badge row, one was the breadcrumb,
+                one was a panel of chips, and WHO WROTE IT AND WHEN appeared
+                nowhere at all: the grid a reader arrived from showed both, and
+                the page they clicked into showed neither. They come out of the
+                same builder the rail uses, so a reader scans them in one order
+                wherever a page appears.
+
+                THE PAGE BAR KEEPS ITS OWN BADGES, which is not a duplicate
+                for the sake of one: the bar sits outside the scrolling region
+                and the header scrolls away with the body, so on a long page
+                the status is the one fact that must survive the scroll. */}
+            <ObjectHeader
+              kind="Page"
+              icon="file"
+              // NO IDENTIFIER BESIDE THE TITLE. A page is addressed by its
+              // container and its title — both are already here, one as the
+              // first fact and one as the title itself — and the only other
+              // id it has is the uuid nobody types.
+              title={page.title}
+              status={pageFlags(page)}
+              facts={pageFacts({ page, history, now, seatName })}
+            />
+
             <Panel>
               {page.body ? (
                 <div className="prose md">{renderMarkdown(page.body)}</div>
@@ -382,12 +630,7 @@ export function PageView({ container, title }: { container: string; title: strin
               )}
             </Panel>
 
-            <PageHistory
-              pageID={page.id}
-              history={data.history ?? []}
-              seatName={seatName}
-              now={now}
-            />
+            <PageHistory pageID={page.id} history={history} seatName={seatName} now={now} />
 
             <PageChanges pageID={page.id} seatName={seatName} now={now} />
             {/* WHAT IT WOULD TAKE TO EDIT THIS, since the dashboard does not.
@@ -397,6 +640,192 @@ export function PageView({ container, title }: { container: string; title: strin
               subject={{ kind: "page", id: page.id, version: page.version }}
               viewer={viewer.handle}
             />
+          </>
+        )}
+      </QueryState>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The peeks
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of a body the rail shows.
+ *
+ * FORTY LINES, which is about one screen of the panel at its default width —
+ * the rail is 420 px and prose in it wraps at roughly sixty characters. The
+ * question a peek answers is "is this the one I meant", and on a page written
+ * for people that is answered by its first heading and the paragraph under it.
+ * More would make the rail a narrow copy of the page, which is the one thing
+ * `peeks.tsx` says a peek must never become.
+ */
+const PEEK_LINES = 40;
+
+/**
+ * How many saves the rail lists before it stops and says how many are left.
+ *
+ * FOUR, because what this panel answers is "is this page still moving" — the
+ * last few edits and who made them. The whole list is on the page, where it
+ * is a history with diffs rather than a freshness signal.
+ */
+const PEEK_SAVES = 4;
+
+/**
+ * The head of a body, in LINES rather than characters.
+ *
+ * A markdown document cut at a character count stops mid-construct — half a
+ * link, a table row with no cells, an image with no closing paren — and the
+ * renderer draws the broken half as literal text, which is exactly the
+ * `white-space: pre-wrap` look `lib/markdown.ts` exists to have ended. Cut on
+ * a line boundary and every block it knows is either whole or absent. The one
+ * exception is a fence the cut leaves open, and `parseBlocks` is explicit
+ * about that case: it renders what the fence opened rather than dropping the
+ * rest of the document.
+ */
+function firstLines(body: string, max: number): { head: string; more: number } {
+  const lines = body.split("\n");
+  if (lines.length <= max) return { head: body, more: 0 };
+  return { head: lines.slice(0, max).join("\n"), more: lines.length - max };
+}
+
+/**
+ * One page, in the rail.
+ *
+ * ADDRESSED BY THE STRING THE PAGE ITSELF IS ADDRESSED BY. `CONTAINER/Title`
+ * is what the `page` query takes, so the rail's `peek=` id is handed straight
+ * over and this component never learns how a title is matched — which is what
+ * lets a pasted URL open the same page the grid row above it would have.
+ *
+ * WHAT IT ANSWERS: the first screen of the body, where the page sits, and
+ * whether anybody has touched it lately — recognition, place, freshness. What
+ * it deliberately does not answer is everything else the page has — the
+ * comments, the whole history with its diffs, the tool call that would edit
+ * it. A rail that grew those would be the page in a 420 px column, and the
+ * list behind it is the point.
+ */
+export function PagePeek({ id }: { id: string }) {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
+  const { data, loading, error } = useQuery("page", { id }, { enabled: id !== "", pollMs: 20_000 });
+  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const page = data?.page;
+  const excerpt = useMemo(() => firstLines(page?.body ?? "", PEEK_LINES), [page?.body]);
+  const ancestors = data?.ancestors ?? [];
+  const children = data?.children ?? [];
+  const history = data?.history ?? [];
+
+  // NOT FOUND IS NOT A FAILURE, and the shared refusal cannot say which
+  // address failed: it answers "there is no such record" about a page
+  // addressed by a name somebody TYPED or pasted. Naming the address is the
+  // whole difference between "that link is stale" and "I spelled the
+  // container wrong", and the rail is the one place a reader arrives at a
+  // page they never saw in a list.
+  if (error === "not_found") {
+    return (
+      <Empty
+        inline
+        icon="file"
+        title={`No page at “${id}”`}
+        hint="A page is addressed by its container and its title. It may have been renamed, moved to another container, or trashed — or this node's copy of the knowledge base has not caught up with it yet."
+      />
+    );
+  }
+
+  return (
+    <>
+      {loading && !data && <Skeleton rows={6} />}
+      <QueryState error={error} loading={loading}>
+        {page && (
+          <>
+            <ObjectHeader
+              size="peek"
+              kind="Page"
+              icon="file"
+              title={page.title}
+              status={pageFlags(page)}
+              facts={pageFacts({ page, history, now, seatName })}
+            />
+            <div className="col gap-3">
+              <Panel title="The page" icon="file">
+                {page.body ? (
+                  <>
+                    <div className="prose md">{renderMarkdown(excerpt.head)}</div>
+                    {excerpt.more > 0 && (
+                      <p className="t-caption faint">
+                        {plural(excerpt.more, "more line")} on the page.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  // DRAWN EVEN WITH NOTHING IN IT. "This page has no body" is
+                  // an answer to the question the rail was opened to ask; a
+                  // panel that simply vanished would read as a body the reader
+                  // failed to scroll to.
+                  <span className="muted">This page has no body.</span>
+                )}
+              </Panel>
+
+              <Panel title="Where it sits" icon="sitemap" count={children.length}>
+                <div className="col gap-2">
+                  {/* THE ANCESTOR CHAIN, outermost first — the same breadcrumb
+                      the page draws, because a title alone says nothing about
+                      which team's tree it is in and that is half of "is this
+                      the one I meant". */}
+                  <span className="row wrap gap-1">
+                    <a className="t-link" href={href(["knowledge", page.container])}>
+                      {page.container}
+                    </a>
+                    {ancestors.map((a) => (
+                      <span key={a.id} className="row gap-1">
+                        <span className="faint">/</span>
+                        <PageLink page={a} />
+                      </span>
+                    ))}
+                  </span>
+                  {children.length > 0 ? (
+                    <div className="col gap-1">
+                      {children.map((child) => (
+                        <PageLink key={child.id} page={child} />
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="muted">Nothing is filed under it.</span>
+                  )}
+                </div>
+              </Panel>
+
+              <Panel title="Saves" icon="clock" count={history.length}>
+                {history.length > 0 ? (
+                  <div className="col gap-2">
+                    {history.slice(0, PEEK_SAVES).map((rev) => (
+                      <span key={rev.version} className="row gap-2">
+                        <span className="mono">v{rev.version}</span>
+                        {/* THE ENGINE, not a dash — see [pageFacts]. */}
+                        <span className="truncate">
+                          {rev.author ? seatName(rev.author) : "the engine"}
+                        </span>
+                        {rev.message && <span className="muted truncate">{rev.message}</span>}
+                        <span className="spacer" />
+                        <DateCell at={rev.created_at} now={now} />
+                      </span>
+                    ))}
+                    {history.length > PEEK_SAVES && (
+                      <p className="t-caption faint">
+                        {plural(history.length - PEEK_SAVES, "older save")} on the page, with what
+                        each one changed.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <span className="muted">
+                    Only this version exists — nobody has saved over it.
+                  </span>
+                )}
+              </Panel>
+            </div>
           </>
         )}
       </QueryState>

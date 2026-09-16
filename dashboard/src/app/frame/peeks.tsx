@@ -35,6 +35,9 @@
 
 import type { ObjectKind, ObjectRef } from "./objects.ts";
 import { ItemPeek } from "~/routes/work/WorkItem.tsx";
+import { ProjectPeek } from "~/routes/work/Work.tsx";
+import { SprintPeek } from "~/routes/work/Sprints.tsx";
+import { GoalPeek } from "~/routes/work/Goals.tsx";
 import { SeatPeek } from "~/routes/company/Seat.tsx";
 import { UnitPeek } from "~/routes/company/Company.tsx";
 import { TurnPeek } from "~/routes/activity/Turn.tsx";
@@ -47,6 +50,8 @@ import { ToolPeek } from "~/routes/admin/Tools.tsx";
 import { IntegrationPeek } from "~/routes/admin/Integrations.tsx";
 import { CredentialPeek } from "~/routes/admin/Secrets.tsx";
 import { RevisionPeek } from "~/routes/admin/Config.tsx";
+import { PagePeek } from "~/routes/knowledge/Pages.tsx";
+import { ContainerPeek } from "~/routes/knowledge/Knowledge.tsx";
 
 /**
  * What every peek is handed.
@@ -62,13 +67,22 @@ export interface PeekProps {
 /**
  * The body for each kind, or `undefined` where a kind has no peek.
  *
- * A KIND WITH NO ENTRY IS NOT AN ERROR. `notice` is addressed — an inbox row
- * links to one — and its "peek" is the Inbox itself, where the notice is read
- * in place; `model` has no page at all, by the same argument that a page per
- * model id is a page per typo. The rail closes rather than opening empty.
+ * EIGHTEEN OF `objects.ts`'s NINETEEN, and the missing one is deliberate:
+ * `notice` is addressed — an inbox row links to one — and its "peek" IS the
+ * Inbox, where the notice is read in place and marked. A rail over it would
+ * be the same rows in a narrower column.
+ *
+ * A KIND WITH NO ENTRY IS NOT AN ERROR. [PeekHost] closes the rail rather
+ * than opening it empty, which is also what a `peek=` token naming a kind
+ * some future build addresses and this one cannot render must do.
  */
 export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.ReactNode>> = {
   item: ({ id }) => <ItemPeek itemKey={id} chrome={{}} />,
+  project: ({ id }) => <ProjectPeek projectKey={id} />,
+  sprint: ({ id }) => <SprintPeek id={id} />,
+  goal: ({ id }) => <GoalPeek id={id} />,
+  page: ({ id }) => <PagePeek id={id} />,
+  container: ({ id }) => <ContainerPeek id={id} />,
   seat: ({ id }) => <SeatPeek handle={id} />,
   unit: ({ id }) => <UnitPeek id={id} />,
   turn: ({ id }) => <TurnPeek turnId={id} />,

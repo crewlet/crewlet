@@ -32,18 +32,49 @@
  * `available: false` with a reason rather than as an error, because nothing is
  * wrong — and drawn as its own state, because a reader told "nothing matches"
  * files the duplicate.
+ *
+ * # A hit is opened beside the ranking, not instead of it
+ *
+ * Searching is a loop: you read the phrase back, open the third hit, decide it
+ * is not the one, and open the fifth. Every one of those used to be a
+ * navigation and a way back, which is the one journey a RANKED answer cannot
+ * afford — the ranking is the whole product of the question, and a reader who
+ * has to leave it to check a hit is being asked to remember it. So a plain
+ * click opens the item in the frame's rail with the list still behind it, and
+ * `[` and `]` step DOWN THE RANKING, because the order this screen publishes is
+ * the order the engine returned rather than anything the grid sorted.
  */
 
-import { useState } from "react";
-import { href, useParam } from "~/app/router.tsx";
+import { useMemo, useState } from "react";
+import { useParam } from "~/app/router.tsx";
+import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, TextCell } from "~/app/frame/cells.tsx";
+import { Dash, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Empty } from "~/ui/primitives.tsx";
+import { StatusBadge } from "~/components/work.tsx";
+import { Button, Empty } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
+
+/**
+ * HOW A HIT IS ADDRESSED, in the one spelling every consumer of it uses.
+ *
+ * A hit carries both an id and a key, and the key is what the tracker addresses
+ * an item by — so the key where there is one and the id where there is not,
+ * which is the rule this screen's row link already followed alone. It is a
+ * function now because FOUR things have to agree on it: the row's link, the
+ * peek a plain click opens, the order `[` and `]` step through, and which row
+ * is drawn as the open one. Four spellings of "which item is this" is how the
+ * rail comes to highlight a different row from the one it is showing.
+ */
+function itemId(hit: WorkRanked): string {
+  return hit.key || hit.id;
+}
 
 export function WorkSearch() {
   // THE QUERY IS IN THE URL, which is what makes a search shareable and what
@@ -54,7 +85,22 @@ export function WorkSearch() {
   const hits = useQuery("work_search", { q }, { enabled: q.trim() !== "" });
   usePageCoverage(undefined);
 
-  const rows = hits.data?.hits ?? [];
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+
+  // THE PEEK IS THE FRAME'S: the shell mounts one rail for every screen, so
+  // this one opens peeks and renders none.
+  const peek = usePeek();
+  const { open: openPeek } = usePeekControls();
+
+  const rows = useMemo(() => hits.data?.hits ?? [], [hits.data]);
+  // WHAT `[` AND `]` WALK: the ranked order, which on this screen is the whole
+  // answer — the arithmetic that produced it is finished before this grid sees
+  // it and nothing here re-sorts. Stepping the rail is therefore stepping DOWN
+  // THE RANKING, which is the gesture a reader working through hits makes.
+  usePeekNeighbours(
+    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemId(r) })), [rows]),
+  );
 
   return (
     <>
@@ -119,7 +165,27 @@ export function WorkSearch() {
           <DataGrid<WorkRanked>
             rows={rows}
             rowKey={(r) => r.id}
-            rowHref={(r) => href(["work", r.key || r.id])}
+            // THE FRAME'S OWN ANSWER to where an item lives, rather than a
+            // second copy of the route: the rail's `Open ↗` is built from the
+            // same reference, so the link a row carries and the way out of the
+            // panel it opens can never name different pages.
+            rowHref={(r) => peekHref({ kind: "item", id: itemId(r) })}
+            // A PLAIN CLICK PEEKS, because a ranked list is read by working
+            // DOWN it: a reader checking whether the third hit is the one they
+            // meant should not lose the other nine to find out.
+            onRowActivate={(r, e) => {
+              const go = () => openPeek({ kind: "item", id: itemId(r) });
+              // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the
+              // frame's one copy of "which clicks mean elsewhere" and reads a
+              // mouse event; the `enter` chord carries no button at all and is
+              // never one of them.
+              if (!("button" in e)) {
+                go();
+                return;
+              }
+              rowPeekHandler(go)?.(e);
+            }}
+            isSelected={(r) => peek?.kind === "item" && peek.id === itemId(r)}
             // NO DEFAULT SORT. The answer's own order IS the result, and a
             // grid that re-sorted it by title would throw away the only
             // thing this question produces.
@@ -147,32 +213,52 @@ export function WorkSearch() {
                 key: "key",
                 header: "Key",
                 shrink: true,
-                cell: (r) => (r.key ? <KeyCell value={r.key} /> : <span className="faint">—</span>),
+                // THE CELL OWNS THE ABSENCE. A hit whose key has not landed on
+                // this node yet is a dash that says so on hover, rather than a
+                // faint em dash of this screen's own that means whatever the
+                // next screen's faint em dash means.
+                cell: (r) => <KeyCell value={r.key} />,
               },
               {
                 key: "project",
                 header: "Project",
                 shrink: true,
-                cell: (r) =>
-                  r.project ? <Badge outline>{r.project}</Badge> : <span className="faint">—</span>,
+                // A PROJECT KEY IS AN IDENTIFIER, so it wears the mono face
+                // every other key in the product wears and links to the
+                // project rather than sitting in a chip. Colour is spent on
+                // state here, and which project an item is in is identity.
+                cell: (r) => <KeyCell value={r.project} path={["work", r.project]} />,
               },
               {
                 key: "status",
                 header: "Status",
                 shrink: true,
+                // THE TRACKER'S OWN STATUS BADGE, not a `StatusCell` and not
+                // the raw slug this column used to print. Six statuses with a
+                // tone each is a VOCABULARY rather than two lifecycle states,
+                // and a company may rename any of them — `StatusBadge` is the
+                // one place that resolves the label and the tone together, so
+                // a status reads the same here as it does on the board.
+                //
+                // WITHOUT THE PROJECT'S OWN LABELS, deliberately: a ranked
+                // answer spans every project and each may name the six
+                // differently, so the shipped word is the only one true of the
+                // whole list. The board, which is inside one project, passes
+                // that project's definitions.
                 cell: (r) =>
-                  r.status ? <Badge outline>{r.status}</Badge> : <span className="faint">—</span>,
+                  r.status ? <StatusBadge status={r.status} /> : <Dash title="no status" />,
               },
               {
                 key: "assignee",
                 header: "Assignee",
                 shrink: true,
-                cell: (r) =>
-                  r.assignee ? (
-                    <Badge outline>{r.assignee}</Badge>
-                  ) : (
-                    <span className="faint">unassigned</span>
-                  ),
+                // THE NAME, not the handle: a handle is the database's word
+                // for a person, and every other grid in the tree resolves it
+                // through the chart before showing it.
+                cell: (r) => {
+                  const who = r.assignee ? index.byHandle.get(r.assignee) : undefined;
+                  return <SeatCell handle={r.assignee} name={who?.name} kind={who?.kind} />;
+                },
               },
             ]}
             loadedNote={`${rows.length} ranked by relevance`}

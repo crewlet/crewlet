@@ -15,16 +15,27 @@
 
 import { useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState, Section } from "~/components/common.tsx";
+import { QueryState, Section, SeatChip } from "~/components/common.tsx";
 import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg } from "~/lib/seats.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { useMemo } from "react";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import { Dash, DateCell, NumberCell } from "~/app/frame/cells.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import type { PageContainer, PageSummary } from "~/protocol/index.ts";
+// THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
+// rather than a second one here: a hit, a grid row and a container's page list
+// must resolve to the same `peek=` token, or the stepper walks past the page
+// the reader just opened and one of the three forgets the middle button.
+import { pageAddress, PageLink } from "./Pages.tsx";
 
 export function Knowledge() {
   const org = useOrg();
@@ -36,6 +47,27 @@ export function Knowledge() {
   // rather than on every keystroke: a per-character search would put one
   // request per letter through the company's own credentials.
   const { data, loading, error } = useQuery("knowledge", { q }, { enabled: q.trim().length > 0 });
+
+  const { open: openPeek } = usePeekControls();
+  // WHAT `[` AND `]` WALK: the hits this search returned, in the engine's own
+  // ranked order — which is the order they are drawn in and the only order a
+  // reader of a ranked list is looking at.
+  //
+  // THE NATIVE HITS ONLY, and that leaves no gap in the middle: there is
+  // exactly ONE knowledge backend per company, so a result set is either all
+  // native (every hit a page this engine holds) or all vendor (every hit a URL
+  // in somebody else's wiki, which has no page here to peek at). On a vendor
+  // backend this publishes nothing and the rail gets no stepper, which is the
+  // honest answer rather than one that steps through something else.
+  usePeekNeighbours(
+    useMemo(
+      () =>
+        (data?.hits ?? [])
+          .filter((hit) => !hit.url && hit.container)
+          .map((hit) => ({ kind: "page" as const, id: pageAddress(hit) })),
+      [data],
+    ),
+  );
 
   return (
     <>
@@ -185,7 +217,21 @@ export function Knowledge() {
                     // fleet claimed it. A hit with no container has no page
                     // route, so it renders as text rather than as a link to
                     // nowhere.
-                    <a className="hit-title" href={href(["knowledge", hit.container, hit.title])}>
+                    //
+                    // A PLAIN CLICK PEEKS. A ranked list is read by comparing
+                    // the top few against each other, and the answer to "which
+                    // of these did I mean" is the first paragraph of each —
+                    // which is the one thing the snippet is capped too short to
+                    // be. The `href` is still the page's own route, built from
+                    // the frame's reference rather than a second copy of it, so
+                    // ⌘-click and the middle button open the page as before.
+                    <a
+                      className="hit-title"
+                      href={peekHref({ kind: "page", id: pageAddress(hit) })}
+                      onClick={rowPeekHandler(() =>
+                        openPeek({ kind: "page", id: pageAddress(hit) }),
+                      )}
+                    >
                       {hit.title}
                     </a>
                   ) : (
@@ -254,5 +300,338 @@ export function Knowledge() {
         )}
       </Section>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The container
+// ---------------------------------------------------------------------------
+
+/**
+ * How many pages a container's rail lists before it stops and points at the
+ * browse.
+ *
+ * EIGHT, which is what fits under the panels above it without the rail
+ * becoming a scroll of its own. The container's own browse is one click away
+ * and is where a reader goes to see all of them — the rail's job is to say
+ * what is being written here NOW, and eight is enough to recognise that.
+ */
+const PEEK_PAGES = 8;
+
+/**
+ * How many of a container's writers the rail names before it counts the rest.
+ *
+ * EIGHT, on the same reasoning and against the same width: past that the chips
+ * wrap into a block that is read as a crowd rather than as names, and the
+ * question this panel answers — "whose tree is this" — is answered by the
+ * first few.
+ */
+const PEEK_WRITERS = 8;
+
+/**
+ * The four facts a container is read by, in one order, wherever it appears.
+ *
+ * ONE BUILDER, which is `ObjectHeader`'s own rule. Two of the four are things
+ * the container document does NOT carry and no single read can state on its
+ * own — when it last moved, and who writes to it — so they are derived here,
+ * once, rather than assembled differently by whatever frame is drawing the
+ * container this time.
+ */
+function containerFacts({
+  container,
+  newest,
+  capped,
+  unread,
+  units,
+  now,
+}: {
+  container: PageContainer;
+  /** The newest `updated_at` among the pages this node returned, if any. */
+  newest?: string;
+  /** The page read came back at its own limit, so there may be more behind it. */
+  capped: boolean;
+  /** The page list has not answered — it is still in flight, or it failed. */
+  unread: boolean;
+  /** The units whose `space:` names this container. */
+  units: { name: string; key: string }[];
+  now: number;
+}): Fact[] {
+  const lead = units[0];
+  return [
+    // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
+    // into it, so one whose pages have all been trashed is a state an operator
+    // comes here for rather than an absence. Trashed pages are not counted —
+    // `internal/pages` says so where it counts them — which is why this read
+    // asks for the same set the list below shows.
+    { label: "Pages", value: <NumberCell value={container.pages} /> },
+    {
+      label: "Last written",
+      // A PAGE LIST THAT DID NOT ANSWER IS NOT AN EMPTY CONTAINER, which is
+      // the same rule the panel below keeps and matters more here: this value
+      // is DERIVED from that read alone, so a failed or in-flight one would
+      // otherwise render as `DateCell`'s "never" — a container nobody has ever
+      // written in, stated about a container nothing has been read about.
+      value: unread ? (
+        <Dash title="the container's page list has not answered, so nothing here says when it last moved" />
+      ) : (
+        <DateCell at={newest} now={now} />
+      ),
+      // WHAT THE VALUE COVERS, which is what a note is for. The engine orders
+      // a page list by container and TITLE, so a read that came back at its
+      // limit is an alphabetical slice rather than the newest pages — and the
+      // newest row in it is then a FLOOR on the real answer. Said plainly
+      // rather than silently: a date that is merely the best of what was read
+      // is indistinguishable from the truth until it is wrong.
+      note: capped ? "newest of the pages this read returned" : undefined,
+    },
+    {
+      // WHO WRITES HERE, from the CONFIG rather than from the pages: a unit's
+      // `space:` is what sends its seats' pages into this container, so it
+      // answers the question even for a container nobody has written in yet.
+      // The panel below answers the other half — who actually has.
+      label: "Filed by",
+      value:
+        units.length > 0 ? (
+          units.map((u) => u.name).join(", ")
+        ) : (
+          <Dash title="no unit names this container in its space:" />
+        ),
+      // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
+      // container is legal and happens — a shared space — and a fact line that
+      // linked the first of them would be a link that is right half the time.
+      path: units.length === 1 && lead ? ["company", "units", lead.key] : undefined,
+    },
+    { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
+  ];
+}
+
+/**
+ * One container, in the rail.
+ *
+ * A CONTAINER IS AN OBJECT rather than a filter value — it has a name, a
+ * purpose, a creation instant, a page count and a unit that files into it —
+ * and its "page" is the browse filtered to it, which states none of that. So
+ * the rail answers what the browse cannot: what this container is FOR, what
+ * has been written in it lately, and whose tree it is.
+ *
+ * # It lives here rather than beside the browse
+ *
+ * The browse renders a LIST of pages filtered to a container; it is not the
+ * container's own frame, and the fact it cannot state — who files here — comes
+ * from the ORG TREE rather than from any page read, which is the source this
+ * screen already holds.
+ *
+ * # Two reads, and only one of them may blank the panel
+ *
+ * The container itself comes from `containers` and its pages from `pages`, so
+ * a failed page list is a failed SUBTREE read rather than an empty container —
+ * the same rule the tracker's subtask panel keeps. It is drawn where the rows
+ * would have been, and only a read that actually answered is allowed to
+ * conclude that nothing has been written here.
+ */
+export function ContainerPeek({ id }: { id: string }) {
+  const org = useOrg();
+  const now = useNow();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const containers = useQuery("containers", undefined, { enabled: id !== "", pollMs: 60_000 });
+  // THE SAME SET THE COUNT COUNTS. `containers` excludes trashed pages from
+  // `pages` deliberately — "a reader clicks 12 and finds nine" is the reason
+  // in its own source — and an unfiltered list here would put the trashed ones
+  // back under a number that does not include them.
+  const list = useQuery(
+    "pages",
+    { container: id, status: "published,draft" },
+    { enabled: id !== "", pollMs: 20_000 },
+  );
+  const found = containers.data?.containers.find((c) => c.key === id);
+  // NEWEST FIRST, sorted here: the engine orders a page list by container and
+  // title, which is the order a browse wants and the opposite of what "what
+  // has been written lately" asks for.
+  const recent = useMemo(
+    () => [...(list.data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
+    [list.data],
+  );
+  // WHETHER THAT READ SAW THE WHOLE CONTAINER, off the answer's OWN limit
+  // rather than a number written here — and false until there IS an answer,
+  // since with no data `0 >= 0` would qualify a fact nothing has read yet.
+  const capped = Boolean(list.data && recent.length >= list.data.limit);
+  // A UNIT'S `space:` IS CASE-INSENSITIVE against the key, because the engine
+  // upper-cases a container key on the way in and a config file says whatever
+  // its author typed.
+  const units = useMemo(
+    () =>
+      index.units
+        .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
+        // The unit's own key, which is its id where it declares one and its
+        // name where it does not — `org.Unit.Key`'s rule, and what
+        // `UnitScreen` resolves a route by.
+        .map((u) => ({ name: u.name, key: u.id || u.name })),
+    [index, id],
+  );
+
+  return (
+    <>
+      {containers.loading && !containers.data && <Skeleton rows={6} />}
+      <QueryState error={containers.error} loading={containers.loading}>
+        {containers.data &&
+          (found ? (
+            <>
+              <ObjectHeader
+                size="peek"
+                kind="Container"
+                icon="folder"
+                // THE KEY IS THE IDENTIFIER and the name is the title, which
+                // are different strings often enough to matter: a container
+                // declared by a unit's `space:` carries the unit's name and is
+                // addressed by a short upper-case key nobody would guess from
+                // it.
+                identifier={found.key}
+                title={found.name || found.key}
+                facts={containerFacts({
+                  container: found,
+                  newest: recent[0]?.updated_at,
+                  capped,
+                  unread: !list.data,
+                  units,
+                  now,
+                })}
+              />
+              <div className="col gap-3">
+                {/* WHAT IT IS FOR, always drawn — including when nobody wrote
+                    one. "Is this the one I meant" is the question the rail
+                    answers, and a purpose missing from the panel reads as one
+                    the reader failed to scroll to. */}
+                <Panel title="Purpose" icon="target">
+                  {found.purpose ? (
+                    <p className="t-body measure">{found.purpose}</p>
+                  ) : (
+                    <span className="muted">No purpose is written for this container.</span>
+                  )}
+                </Panel>
+
+                <ContainerPages container={found} recent={recent} list={list} now={now} />
+                <ContainerWriters recent={recent} index={index} />
+              </div>
+            </>
+          ) : (
+            // AN ADDRESS THAT DID NOT RESOLVE, named. The rail is the one
+            // place a reader arrives at a container they never saw in a list —
+            // from a pasted URL, or from a sidebar row read before the key was
+            // renamed — and "no such record" would leave them unable to tell a
+            // stale link from a container this node has not caught up with.
+            <Empty
+              inline
+              icon="folder"
+              title={`No container called “${id}”`}
+              hint="A container is created the first time somebody writes into it — give a unit a `space` and its seats will have somewhere to file what they learn. This node may also simply not have caught up with one that exists."
+            />
+          ))}
+      </QueryState>
+    </>
+  );
+}
+
+/**
+ * What has been written in a container lately.
+ *
+ * ITS OWN `QueryState`, drawn WHERE THE ROWS WOULD HAVE BEEN: this is the only
+ * read that can see the container's pages, so a refusal rendered as no panel
+ * would say "nothing is filed here" about a container holding four hundred
+ * pages. Only a read that answered may conclude the container is empty.
+ */
+function ContainerPages({
+  container,
+  recent,
+  list,
+  now,
+}: {
+  container: PageContainer;
+  recent: PageSummary[];
+  list: { error: string | null; loading: boolean };
+  now: number;
+}) {
+  return (
+    <Panel title="Recent pages" icon="file" count={recent.length}>
+      <QueryState
+        error={list.error}
+        loading={list.loading}
+        empty={
+          recent.length
+            ? undefined
+            : {
+                title: "Nothing is filed here",
+                hint: "A container is created by the first write into it. Its pages may since have been trashed, or this node's copy has not caught up.",
+              }
+        }
+      >
+        <div className="col gap-1">
+          {recent.slice(0, PEEK_PAGES).map((page) => (
+            <span key={page.id} className="row gap-2">
+              <PageLink page={page} />
+              <span className="spacer" />
+              <DateCell at={page.updated_at} now={now} />
+            </span>
+          ))}
+          {recent.length > PEEK_PAGES && (
+            <a className="t-link t-caption" href={href(["knowledge", container.key])}>
+              {plural(recent.length - PEEK_PAGES, "more page")} in this container →
+            </a>
+          )}
+        </div>
+      </QueryState>
+    </Panel>
+  );
+}
+
+/**
+ * Who has actually written in this container.
+ *
+ * THE CREATORS, not the last editors, and the subtitle says so: a page's
+ * `author` is stamped by its create and no save moves it (see [pageFacts] in
+ * `Pages.tsx` for where that is decided in the engine). Naming them "writers"
+ * without that qualification would make a container whose pages one seat
+ * started and another has rewritten look like the first seat's tree.
+ */
+function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: OrgIndex }) {
+  const writers = useMemo(() => {
+    const seen: string[] = [];
+    for (const page of recent) {
+      if (page.author && !seen.includes(page.author)) seen.push(page.author);
+    }
+    return seen;
+  }, [recent]);
+
+  return (
+    <Panel
+      title="Who writes here"
+      icon="users"
+      count={writers.length}
+      subtitle="the seats that started these pages"
+    >
+      {writers.length > 0 ? (
+        <div className="row wrap gap-2">
+          {writers.slice(0, PEEK_WRITERS).map((handle) => (
+            <SeatChip
+              key={handle}
+              name={index.byHandle.get(handle)?.name ?? handle}
+              handle={handle}
+            />
+          ))}
+          {writers.length > PEEK_WRITERS && (
+            <span className="t-caption faint">+{writers.length - PEEK_WRITERS} more</span>
+          )}
+        </div>
+      ) : (
+        // TWO ABSENCES, told apart. A container with pages and no author on
+        // any of them was written by the ENGINE — the tool-skill catalogue
+        // publishes exactly that — and saying "nobody" about it would call a
+        // working sync an empty space.
+        <span className="muted">
+          {recent.length > 0
+            ? "Every page here was written by the engine — the tool-skill catalogue and the syncs carry no author."
+            : "Nothing has been written here yet."}
+        </span>
+      )}
+    </Panel>
   );
 }

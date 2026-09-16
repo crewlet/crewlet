@@ -226,6 +226,30 @@ export function indexOrg(org: OrgTree | null | undefined): OrgIndex {
 // Live state
 // ---------------------------------------------------------------------------
 
+/**
+ * Name a handle by what the chart calls it, and say which kind of seat it is.
+ *
+ * THE TWO THINGS [SeatCell] NEEDS AND A BARE HANDLE CANNOT SUPPLY, so it is
+ * wanted by every screen that renders a handle out of an answer — a sprint's
+ * assignees, a goal's owners, a saved view's author. It was written twice,
+ * once per file, with the two copies already differing in the name of a local
+ * variable; the next difference would have been which of them falls back to
+ * the handle.
+ *
+ * FALLS BACK TO THE HANDLE rather than to an em dash: a handle that is not in
+ * the chart is a seat that was renamed or removed, and the tracker still
+ * holds its work. The name it was filed under is what a reader needs to find
+ * that work, and a dash would lose it.
+ */
+export function seatLookup(
+  index: OrgIndex,
+): (handle: string) => { name: string; kind?: "agent" | "human" } {
+  return (handle) => {
+    const seat = index.byHandle.get(handle);
+    return seat ? { name: seat.name, kind: seat.kind } : { name: handle };
+  };
+}
+
 export type RunState =
   "working" | "awaiting_sandbox" | "idle" | "afk" | "failed" | "terminated" | "offline" | "human";
 

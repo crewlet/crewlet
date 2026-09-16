@@ -23,10 +23,14 @@
  */
 
 import { useMemo } from "react";
-import { useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Meter, Panel, Segmented, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { useParam } from "~/app/router.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { Badge, Meter, Panel, Segmented, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { Dash, DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
 import {
   BarList,
   Legend,
@@ -39,7 +43,6 @@ import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "~/lib/spend.ts
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer, TimeRange } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
@@ -197,9 +200,29 @@ function SpendOverTime({ range }: { range: TimeRange }) {
   );
 }
 
+/**
+ * A grid row's activation, for a grid whose `rowHref` is the object's page.
+ *
+ * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy of
+ * which clicks mean "open elsewhere" and it reads a mouse event; the `enter`
+ * chord carries no button at all and is never one of them. Written once here
+ * because this screen has two grids that both want it.
+ */
+function peekRow<T>(
+  open: (row: T) => void,
+): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
+  return (row, e) => {
+    if (!("button" in e)) {
+      open(row);
+      return;
+    }
+    rowPeekHandler(() => open(row))?.(e);
+  };
+}
+
 export function Spend() {
-  const nav = useNavigator();
   const pushed = useTokens();
+  const { open: openPeek } = usePeekControls();
   const orgBudget = useOrgBudget();
   const now = useNow();
   const range = useTimeRange(now, SPEND_OFFER);
@@ -219,7 +242,38 @@ export function Spend() {
   );
   const tokens = live ? pushed : (asked.data ?? pushed);
 
-  const budgets = useQuery("budgets", undefined, { pollMs: 30_000 });
+  // SORTED THE WAY EACH TABLE OPENS, which is what makes the stepper below
+  // honest: the grid applies its own `defaultSort` to whatever it is handed, so
+  // rows published in the answer's order would have `]` walking a sequence the
+  // table never showed. Sorted here to the same key, the grid's sort is
+  // idempotent over them and the two agree — until the reader sorts a column,
+  // which is grid state and leaves the stepper on the opening order rather than
+  // on a guess about it.
+  const seats = useMemo(
+    () => (tokens?.by_agent ?? []).slice().sort((a, b) => b.total_tokens - a.total_tokens),
+    [tokens],
+  );
+  const turns = useMemo(
+    () => (tokens?.by_turn ?? []).slice().sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
+    [tokens],
+  );
+  // WHAT `[` AND `]` WALK — BOTH tables, in the order this screen draws them.
+  //
+  // There is ONE publisher per screen and the last caller owns the stepper, so
+  // two `usePeekNeighbours` calls here would not give each grid a stepper of
+  // its own: they would race, and whichever list re-rendered last would
+  // silently take the other's. Concatenated, stepping past the last seat
+  // reaches the first turn — a walk down the screen, which is the one order
+  // both grids can agree on and the order the reader actually sees.
+  usePeekNeighbours(
+    useMemo(
+      () => [
+        ...seats.map((a) => ({ kind: "seat" as const, id: a.handle || a.role })),
+        ...turns.map((t) => ({ kind: "turn" as const, id: t.turn_id })),
+      ],
+      [seats, turns],
+    ),
+  );
 
   const phase = useMemo(
     () =>
@@ -379,31 +433,54 @@ export function Spend() {
         </Panel>
       )}
 
-      <Panel title="By seat" icon="users" count={tokens?.by_agent?.length ?? 0} padding="none">
+      <Panel title="By seat" icon="users" count={seats.length} padding="none">
         <DataGrid
-          rows={tokens?.by_agent ?? []}
+          rows={seats}
           rowKey={(a) => a.agent_id || a.role}
           defaultSort="-total"
-          onRowActivate={(a) => nav.to(["company", "people", a.handle || a.role], { tab: "cost" })}
+          // THE SEAT BESIDE THE TABLE, not instead of it. A plain click used to
+          // navigate to the seat's own cost tab, which threw away the ranking
+          // the reader was in the middle of reading — and that tab is a place
+          // the rail's `Open ↗` cannot name, so the row's link and the way out
+          // of the panel it opens would have pointed at two different screens.
+          // Both are built from one reference now, and ⌘-click still goes to
+          // the seat's page.
+          rowHref={(a) => peekHref({ kind: "seat", id: a.handle || a.role })}
+          onRowActivate={peekRow<AgentSpendRow>((a) =>
+            openPeek({ kind: "seat", id: a.handle || a.role }),
+          )}
           empty={{ title: "No seat has spent tokens in this window" }}
           columns={[
             {
               key: "seat",
               header: "Seat",
               sortValue: (a) => a.role,
-              cell: (a) => <SeatChip name={a.role} handle={a.handle} />,
+              // NOT `SeatCell`, and not the seat chip this column used to draw:
+              // both are anchors, and this row is one now whose target is that
+              // very seat — a second link over the name would swallow the plain
+              // click the peek opens on and send the reader to the page the
+              // rail was built to save them from.
+              cell: (a) => <TextCell icon="cpu">{a.role}</TextCell>,
             },
             {
               key: "total",
               header: "Tokens",
               align: "right",
               sortValue: (a) => a.total_tokens,
-              cell: (a) => fmtExact(a.total_tokens),
+              // THE CELL, so a token count is spelled here the way it is spelled
+              // everywhere else in the product. `fmtCount`'s threshold is 10,000
+              // — a four-digit count stays exact and only what nobody reads digit
+              // by digit is abbreviated — and the window's exact total is in the
+              // stat row at the top of this screen.
+              cell: (a) => <TokenCell value={a.total_tokens} />,
             },
             {
               key: "share",
               header: "Share",
               width: "180px",
+              // NOT `MeterCell`: this is a BREAKDOWN across every phase, not one
+              // fraction of one whole, and a single bar cannot say which phase
+              // the tokens went to.
               cell: (a) => (
                 <StackedBar
                   segments={phaseKeys.map((p) => ({
@@ -419,14 +496,23 @@ export function Spend() {
               header: "Calls",
               align: "right",
               sortValue: (a) => a.calls,
-              cell: (a) => fmtExact(a.calls),
+              cell: (a) => <NumberCell value={a.calls} />,
             },
             {
               key: "avg",
               header: "Per call",
               align: "right",
               sortValue: (a) => (a.calls ? a.total_tokens / a.calls : 0),
-              cell: (a) => (a.calls ? fmtCount(Math.round(a.total_tokens / a.calls)) : "—"),
+              // A DASH THAT SAYS WHICH ABSENCE THIS IS. A seat with no calls has
+              // no average rather than an average of nothing, and the cell's own
+              // "nothing recorded" would be the wrong sentence for a row whose
+              // tokens are right beside it.
+              cell: (a) =>
+                a.calls > 0 ? (
+                  <TokenCell value={Math.round(a.total_tokens / a.calls)} />
+                ) : (
+                  <Dash title="no calls to average over" />
+                ),
             },
           ]}
         />
@@ -437,13 +523,18 @@ export function Spend() {
         )}
       </Panel>
 
-      <Panel title="Recent turns" icon="layers" count={tokens?.by_turn?.length ?? 0} padding="none">
+      <Panel title="Recent turns" icon="layers" count={turns.length} padding="none">
         <DataGrid
           name="turns"
-          rows={tokens?.by_turn ?? []}
+          rows={turns}
           rowKey={(t) => t.turn_id}
           defaultSort="-started"
-          onRowActivate={(t) => nav.to(["activity", "turns", t.turn_id])}
+          // THE TURN BESIDE THE SPEND, which is the whole reason a reader scans
+          // this table: the expensive row is found by comparing it against the
+          // ones above and below it, and navigating away to read one turn loses
+          // the comparison that made it interesting.
+          rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
+          onRowActivate={peekRow<TurnSpendRow>((t) => openPeek({ kind: "turn", id: t.turn_id }))}
           empty={{ title: "No turns in this window" }}
           columns={[
             {
@@ -451,33 +542,45 @@ export function Spend() {
               header: "Started",
               shrink: true,
               sortValue: (t) => tsKey(t.started_at),
-              cell: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
+              // RELATIVE IN THE CELL, absolute in its title — the same trade the
+              // turn log makes for the same column. A spend table is scanned for
+              // what ran recently, and a wall-clock stamp is what somebody wants
+              // only once they have found the row.
+              cell: (t) => <DateCell at={t.started_at} now={now} />,
             },
             {
               key: "seat",
               header: "Seat",
               sortValue: (t) => t.role,
-              cell: (t) => <SeatChip name={t.role} handle={t.handle} />,
+              // NOT `SeatCell` or the chip this drew: both are anchors and every
+              // row here is one. The seat is a link again in the turn's own peek.
+              cell: (t) => <TextCell icon="cpu">{t.role}</TextCell>,
             },
             {
               key: "total",
               header: "Tokens",
               align: "right",
               sortValue: (t) => t.total_tokens,
-              cell: (t) => fmtExact(t.total_tokens),
+              cell: (t) => <TokenCell value={t.total_tokens} />,
             },
             {
               key: "calls",
               header: "Calls",
               align: "right",
               sortValue: (t) => t.calls,
-              cell: (t) => t.calls,
+              // A BARE `{t.calls}` RENDERED AN ABSENT COUNT AS NOTHING AT ALL —
+              // an empty cell reads as a column that does not apply to this row,
+              // where the cell says "nothing recorded" and still spells a real
+              // zero as `0`.
+              cell: (t) => <NumberCell value={t.calls} />,
             },
             {
               key: "turn",
               header: "Turn",
               shrink: true,
-              cell: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
+              // UNLINKED: the row is already a link to this turn, and `KeyCell`
+              // is the one spelling of an identifier every grid here uses.
+              cell: (t) => <KeyCell value={t.turn_id.slice(0, 8)} />,
             },
           ]}
         />

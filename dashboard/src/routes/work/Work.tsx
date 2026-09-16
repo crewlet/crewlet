@@ -37,8 +37,14 @@
 
 import { useEffect, useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+// THE HEADER'S FACT IS NOT THE TRACKER'S. `components/work.tsx` exports a
+// `Fact` that DRAWS one in the overview strip; this one is the VALUE an
+// [ObjectHeader] renders. Both are right and neither may be renamed for the
+// other's benefit, so the type is aliased where it is imported.
+import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.tsx";
+import { NumberCell } from "~/app/frame/cells.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
   BoardCard,
@@ -55,6 +61,7 @@ import {
   Banner,
   Button,
   Chip,
+  cx,
   Empty,
   Meter,
   Panel,
@@ -65,7 +72,6 @@ import {
   Tabs,
 } from "~/ui/primitives.tsx";
 import { BarList, StackedBar, Legend } from "~/ui/charts.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -94,6 +100,7 @@ import {
   shownRows,
   SORTS,
   STATUSES,
+  STATUS_TONE,
   statusLabel,
   totalHint,
   typeName,
@@ -106,11 +113,13 @@ import {
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
+  WorkActiveSprint,
   WorkActivityRecord,
   WorkGroup,
   WorkProjectDetail,
   WorkProjectRow,
   WorkSummary,
+  WorkTaskCounts,
   WorkView,
 } from "~/protocol/index.ts";
 
@@ -263,10 +272,28 @@ export function Work({ project = "" }: { project?: string }) {
 
   const groups = useMemo(() => data?.groups ?? [], [data]);
   const rows = useMemo(() => data?.items ?? [], [data]);
+  // THE WORKSPACE HEAD'S OWN ORDER, read back here so the stepper walks the
+  // bars as they are drawn — see [projectsByOpen].
+  const projectRows = useMemo(() => projectsByOpen(projects.data?.projects ?? []), [projects.data]);
   // WHAT `[` AND `]` WALK: the rows this board actually loaded, sorted and
   // filtered as the reader left them. Published rather than handed to the
   // rail, because only the list knows that order — see `PeekHost`.
-  usePeekNeighbours(useMemo(() => rows.map((r) => ({ kind: "item", id: r.key })), [rows]));
+  //
+  // TWO LISTS ARE ON THIS SCREEN and only one of them was stepped into: the
+  // board's items, and the workspace head's projects. The RAIL'S OWN KIND is
+  // what tells them apart — a project peek can only have been opened from the
+  // project list, so `]` there means the next project. The alternatives are
+  // both worse: one array holding both would step off the last item into the
+  // first project, which is not a sequence anybody is looking at, and two
+  // `usePeekNeighbours` calls would be two hooks racing to own one stepper.
+  const neighbours = useMemo(
+    () =>
+      !project && peek?.kind === "project"
+        ? projectRows.map((p) => ({ kind: "project" as const, id: p.key }))
+        : rows.map((r) => ({ kind: "item" as const, id: r.key })),
+    [project, peek?.kind, projectRows, rows],
+  );
+  usePeekNeighbours(neighbours);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
 
   const chrome: RowChrome = {
@@ -329,7 +356,16 @@ export function Work({ project = "" }: { project?: string }) {
         {project ? (
           <ProjectHead detail={detail} chrome={chrome} />
         ) : (
-          <WorkspaceHead projects={projects.data?.projects ?? []} />
+          <WorkspaceHead
+            projects={projects.data?.projects ?? []}
+            // A PROJECT IS AN OBJECT WITH A PEEK, so a plain click on a bar
+            // opens it beside the board rather than leaving for its page —
+            // the same gesture every item row on this screen already makes.
+            // Passed in rather than taken from the frame inside the head,
+            // because these two components take an `href` and an `onOpen` and
+            // need no router: see `components/work.tsx`.
+            onOpen={(key) => openPeek({ kind: "project", id: key })}
+          />
         )}
 
         {views.length > 0 && (
@@ -600,9 +636,224 @@ export function Work({ project = "" }: { project?: string }) {
 // The rail
 // ---------------------------------------------------------------------------
 
+/**
+ * One project, beside the list it was opened from.
+ *
+ * # What it answers that the row could not
+ *
+ * The workspace head ranks projects by open work and says how much there is —
+ * a bar, three numbers and a name. That is enough to CHOOSE a project and
+ * nothing like enough to RECOGNISE one: who leads it, which unit owns it,
+ * whether a sprint is running and whether anything has happened this week are
+ * facts about the CONTAINER, and a bar carries none of them. So the header is
+ * the same facts the project's own page wears — from [projectFacts], so the
+ * two cannot drift — and under it the three questions a reader opens a
+ * project for: where the work stands, what the sprint is, and what changed.
+ *
+ * # Why the breakdown asks only about OPEN work
+ *
+ * `task_counts` is MAINTAINED by the applier on every status-group change, so
+ * the census costs the same to read at any project size. A breakdown per
+ * STATUS is maintained nowhere and has to be grouped at read time — and asked
+ * over the finished work too it would count every task the team has ever
+ * closed, on a poll, to draw two rows whose totals are already on the census.
+ * The open statuses are the ones that move.
+ */
+export function ProjectPeek({ projectKey }: { projectKey: string }) {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
+
+  // NAMED FOR WHAT IT IS, not for the slot it arrives in. The rail hands every
+  // peek an opaque `id` because the frame knows nothing about any kind
+  // (`app/frame/peeks.tsx`), and a project's is its KEY — the string a unit
+  // declares and a person types. Every other peek does the same, which is why
+  // `ItemPeek` takes an `itemKey` and `SeatPeek` a `handle`: inside the
+  // component the word has to be the one the engine's own parameter uses, or
+  // the reader of `{ key: id }` has to go and check which id that is.
+  const state = useQuery(
+    "work_project",
+    { key: projectKey },
+    { enabled: projectKey !== "", pollMs: 60_000 },
+  );
+  const detail = state.data;
+  // `group_limit: 1` because only the COUNTS are drawn here and the engine
+  // runs one paged statement per column — a column's rows are exactly what
+  // this panel does not show, and zero is not a bound the grammar accepts.
+  const census = useQuery(
+    "work_items",
+    { container: `project:${projectKey}`, group_by: "status", group_limit: 1 },
+    { enabled: projectKey !== "", pollMs: 60_000 },
+  );
+  // AND WHAT HAPPENED, which is a different question from what is there — the
+  // feed is ordered by the LOG, so a change that moved nothing still shows.
+  const feed = useQuery(
+    "work_activity",
+    { container: `project:${projectKey}`, limit: 8 },
+    { enabled: projectKey !== "", pollMs: 60_000 },
+  );
+
+  const chrome: RowChrome = {
+    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    types: detail?.types,
+    statuses: detail?.statuses,
+  };
+
+  // NOT THE GENERIC "there is no such record" that `QueryState` draws for a
+  // `not_found`. A project key reaches this from a pasted URL and from a
+  // bookmark as often as from a bar, and WHICH key resolved to nothing is
+  // precisely the half the generic banner drops.
+  if (state.error === "not_found") return <NoSuchProject projectKey={projectKey} />;
+
+  const records = feed.data?.records ?? [];
+
+  return (
+    <>
+      {state.loading && !state.data && <Skeleton rows={6} />}
+      <QueryState error={state.error} loading={state.loading}>
+        {detail && (
+          <>
+            <ObjectHeader
+              size="peek"
+              kind="Project"
+              icon="columns"
+              identifier={detail.key}
+              title={detail.name}
+              status={detail.archived ? <Badge outline>archived</Badge> : undefined}
+              facts={projectFacts(detail, chrome)}
+            />
+            <div className="col gap-3">
+              <Coverage answer={detail} />
+              <ProjectBanners detail={detail} />
+              {/* WHY THIS PROJECT EXISTS, drawn whenever somebody wrote it:
+                  "is this the one I meant" is the question the rail answers,
+                  and a purpose is the sentence that answers it. */}
+              {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
+
+              <Panel title="Where the work stands" icon="columns">
+                <div className="col gap-3">
+                  {/* A BAR OF NOTHING IS NOT A CENSUS — three zero segments
+                      draw an empty track that reads as a chart which failed
+                      to load rather than as a project nobody has filed
+                      anything in. */}
+                  {detail.task_counts.open + detail.task_counts.done + detail.task_counts.closed >
+                  0 ? (
+                    <ProjectCensus counts={detail.task_counts} />
+                  ) : (
+                    <span className="muted">No work has been filed in this project yet.</span>
+                  )}
+                  {/* A FAILED BREAKDOWN IS NOT AN EMPTY ONE. This is the only
+                      read that can say how the open work is distributed, so a
+                      refusal rendered as no rows would read as a project whose
+                      every task is in one status. */}
+                  <QueryState error={census.error} loading={census.loading}>
+                    {census.data && (
+                      <div className="col">
+                        {statusCounts(census.data.groups ?? []).map((line) => (
+                          <div className="work-col-head" key={line.status}>
+                            <i className={statusDot(line.status)} aria-hidden="true" />
+                            <span className="truncate">
+                              {statusLabel(line.status, detail.statuses)}
+                            </span>
+                            <span className="count-chip">{line.count}</span>
+                          </div>
+                        ))}
+                        <span className="t-caption faint">
+                          Open work only — the {detail.task_counts.done} done and{" "}
+                          {detail.task_counts.closed} closed are in the census above.
+                        </span>
+                      </div>
+                    )}
+                  </QueryState>
+                </div>
+              </Panel>
+
+              <Panel
+                title={sprintLabel(detail)}
+                icon="calendar"
+                subtitle="what the team committed to, and how much of it has landed"
+              >
+                <SprintFigure detail={detail} />
+              </Panel>
+
+              <Panel
+                title="Recent activity"
+                icon="activity"
+                count={feed.data ? records.length : null}
+              >
+                <QueryState error={feed.error} loading={feed.loading}>
+                  {feed.data &&
+                    (records.length > 0 ? (
+                      <div className="col gap-2">
+                        {records.map((record) => (
+                          <div className="col gap-1" key={record.id}>
+                            <div className="row gap-2">
+                              {record.subject_key ? (
+                                <a
+                                  className="mono t-link"
+                                  href={href(["work", record.subject_key])}
+                                >
+                                  {record.subject_key}
+                                </a>
+                              ) : (
+                                <span className="faint">—</span>
+                              )}
+                              <span className="spacer" />
+                              <span className="t-caption faint" title={fmtDateTime(record.at)}>
+                                {relTime(record.at, now)}
+                              </span>
+                            </div>
+                            <span className="t-caption truncate">
+                              {describeChange(record)} · {record.actor || "the engine"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="muted">Nothing has changed in this project yet.</span>
+                    ))}
+                </QueryState>
+              </Panel>
+            </div>
+          </>
+        )}
+      </QueryState>
+    </>
+  );
+}
+
+/**
+ * NOT AN EMPTY RAIL, and not a spinner that never resolves.
+ *
+ * A project key that resolves to nothing is almost always a key that MOVED or
+ * was never real — the engine's own refusal names the nearest ones — so the
+ * honest answer prints the key that failed and says what its absence means.
+ */
+function NoSuchProject({ projectKey }: { projectKey: string }) {
+  return (
+    <Empty
+      inline
+      icon="columns"
+      title={`No project called “${projectKey}”`}
+      hint="A project key is declared by a unit in the company configuration. Either it never existed, or the unit that declared it has since been renamed — the workspace list is what this company actually has."
+    />
+  );
+}
+
 // ---------------------------------------------------------------------------
 // The two heads
 // ---------------------------------------------------------------------------
+
+/**
+ * The projects in the order the workspace head draws them.
+ *
+ * ONE FUNCTION, because two things read this order: the bars, and the sequence
+ * `[` and `]` step through. A screen that published one order and rendered
+ * another would step off the row the reader clicked into somewhere else.
+ */
+function projectsByOpen(projects: WorkProjectRow[]): WorkProjectRow[] {
+  return [...projects].sort((a, b) => b.task_counts.open - a.task_counts.open);
+}
 
 /**
  * The company's work at a glance, ranked by where the open work is.
@@ -612,7 +863,14 @@ export function Work({ project = "" }: { project?: string }) {
  * meant anything — and the label already carries which project it is. The
  * chart is absent below two projects, because a one-bar chart is a number.
  */
-export function WorkspaceHead({ projects }: { projects: WorkProjectRow[] }) {
+export function WorkspaceHead({
+  projects,
+  onOpen,
+}: {
+  projects: WorkProjectRow[];
+  /** A plain click on a project. Absent leaves each bar an ordinary link. */
+  onOpen?: (key: string) => void;
+}) {
   if (projects.length === 0) return null;
   const counts = projects.reduce(
     (acc, p) => ({
@@ -633,23 +891,33 @@ export function WorkspaceHead({ projects }: { projects: WorkProjectRow[] }) {
       {projects.length > 1 && (
         <Panel title="Open work by project" icon="columns" padding="normal">
           <BarList
-            data={[...projects]
-              .sort((a, b) => b.task_counts.open - a.task_counts.open)
-              .map((p) => ({
-                label: (
-                  <span className="row gap-2">
-                    <span className="key-mark">{p.key}</span>
-                    <span className="truncate">{p.name}</span>
-                  </span>
-                ),
-                value: p.task_counts.open,
-                display: p.task_counts.open,
-                sub: `${p.task_counts.done} done · ${p.task_counts.closed} closed`,
-                color: "var(--viz-1)",
-                // A REAL LINK: a project is a page now, so the bar opens in a
-                // tab like anything else on this screen.
-                href: href(["work", p.key]),
-              }))}
+            data={projectsByOpen(projects).map((p) => ({
+              // THE LINK IS THE LABEL, not the bar.
+              //
+              // A row that carried both an `href` and an `onClick` would do
+              // BOTH on a plain click: `BarDatum` hands its `onClick` no
+              // event, so nothing there can call `preventDefault`, and the
+              // anchor's own navigation would land on the project's page a
+              // moment after the rail opened. Moving the anchor inside the
+              // label puts the whole rule back under `rowPeekHandler` — the
+              // frame's one copy of which clicks mean "open elsewhere" — so a
+              // plain click peeks and ⌘-click, the middle button and the
+              // status bar all keep meaning the page.
+              label: (
+                <a
+                  className="row gap-2"
+                  href={peekHref({ kind: "project", id: p.key })}
+                  onClick={rowPeekHandler(onOpen ? () => onOpen(p.key) : undefined)}
+                >
+                  <span className="key-mark">{p.key}</span>
+                  <span className="truncate">{p.name}</span>
+                </a>
+              ),
+              value: p.task_counts.open,
+              display: p.task_counts.open,
+              sub: `${p.task_counts.done} done · ${p.task_counts.closed} closed`,
+              color: "var(--viz-1)",
+            }))}
             emptyLabel="No project holds any open work."
           />
         </Panel>
@@ -673,13 +941,92 @@ export function ProjectHead({
   chrome?: RowChrome;
 }) {
   if (!detail) return null;
-  const sprint = detail.sprints?.active;
-  const pending = detail.sprints?.pending_spillovers ?? [];
   const counts = detail.task_counts;
   const total = counts.open + counts.done + counts.closed;
-  const measure = sprint?.figures.measure === "estimate_min" ? "minutes" : "points";
-  const committed = sprint ? sprint.figures.committed + sprint.figures.added : 0;
 
+  return (
+    <>
+      <ProjectBanners detail={detail} />
+
+      {/* A PROJECT IS AN OBJECT, so it wears the header every other object
+          wears rather than a title block of its own — the same facts in the
+          same order its peek shows, from [projectFacts]. What stays below is
+          what a fact line cannot hold: a bar inside `.fact-value` is a bar in
+          a `truncate`d inline box, which is no bar at all. */}
+      <ObjectHeader
+        kind="Project"
+        icon="columns"
+        identifier={detail.key}
+        title={detail.name}
+        status={detail.archived ? <Badge outline>archived</Badge> : undefined}
+        facts={projectFacts(detail, chrome)}
+      />
+      {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
+
+      <div className="work-facts">
+        {/* THE CENSUS AS A SHAPE. The three numbers say how much; the bar says
+            the proportion, which is the fact a reader actually wants — "mostly
+            finished" against "mostly ahead". */}
+        {total > 0 && (
+          <Fact label="Census">
+            <span className="col gap-1" style={{ width: "100%" }}>
+              <ProjectCensus counts={counts} />
+            </span>
+          </Fact>
+        )}
+        <Fact label={sprintLabel(detail)}>
+          <SprintFigure detail={detail} />
+        </Fact>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The six facts a project is read by, in one order, on its page and in the rail.
+ *
+ * ONE FUNCTION rather than two lists that happen to agree today: a reader
+ * scans the same facts in the same order wherever the object appears, and a
+ * header written twice is two orders as soon as somebody adds a seventh.
+ */
+function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact[] {
+  const sprint = detail.sprints?.active;
+  return [
+    {
+      label: "Lead",
+      // A HANDLE IS THE DATABASE'S WORD FOR A PERSON. Every other surface in
+      // the tree resolves it through the chart and shows the name somebody is
+      // actually called; this one printed the slug.
+      value: detail.lead.handle ? (
+        <SeatChip
+          name={chrome?.seatName?.(detail.lead.handle) ?? detail.lead.handle}
+          handle={detail.lead.handle}
+        />
+      ) : (
+        <span className="muted">nobody</span>
+      ),
+    },
+    {
+      label: "Unit",
+      value: detail.unit.name || detail.unit.key || <span className="muted">none</span>,
+    },
+    // THE THREE COUNTS ARE CELLS, not bare numbers: a project with nothing
+    // open is the one an operator is most often looking for here, and a zero
+    // rendered as a blank or as a dash is the one reading that hides it.
+    { label: "Open", value: <NumberCell value={detail.task_counts.open} /> },
+    { label: "Done", value: <NumberCell value={detail.task_counts.done} /> },
+    { label: "Closed", value: <NumberCell value={detail.task_counts.closed} /> },
+    // AND NO SPRINT IS NO VALUE. Which KIND of none it is — between sprints,
+    // or a team that does not use them — is a sentence rather than a fact,
+    // and [SprintFigure] below is where it is said; `FactLine` drops a fact
+    // with an empty value rather than printing a word for it.
+    { label: "Sprint", value: sprint ? sprintName(sprint) : "" },
+  ];
+}
+
+/** The two findings a project's own record can carry, on the page and in the rail. */
+function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
+  const pending = detail.sprints?.pending_spillovers ?? [];
   return (
     <>
       {/* A UNIT THE CHART NO LONGER HAS is a finding, not a blank: it is what
@@ -696,81 +1043,101 @@ export function ProjectHead({
           still undecided — the unfinished work is waiting on a lead.
         </Banner>
       )}
-
-      <div className="work-facts">
-        {/* A HANDLE IS THE DATABASE'S WORD FOR A PERSON. Every other
-            surface in the tree resolves it through the chart and shows the
-            name somebody is actually called; this one printed the slug. */}
-        <Fact label="Lead">
-          {detail.lead.handle ? (
-            <SeatChip
-              name={chrome?.seatName?.(detail.lead.handle) ?? detail.lead.handle}
-              handle={detail.lead.handle}
-            />
-          ) : (
-            <span className="muted">nobody</span>
-          )}
-        </Fact>
-        <Fact label="Unit">
-          <span className="truncate">
-            {detail.unit.name || detail.unit.key || <span className="muted">none</span>}
-          </span>
-        </Fact>
-        <Fact label="Open">{counts.open}</Fact>
-        <Fact label="Done">{counts.done}</Fact>
-        {/* THE CENSUS AS A SHAPE. The three numbers say how much; the bar says
-            the proportion, which is the fact a reader actually wants — "mostly
-            finished" against "mostly ahead" — and it is drawn in the STATUS
-            tones the badges use rather than the chart hues, so the same fact
-            is not two colours on one screen. */}
-        {total > 0 && (
-          <Fact label="Census">
-            <span className="col" style={{ gap: 4, width: "100%" }}>
-              <StackedBar
-                segments={[
-                  { label: "Open", value: counts.open, color: "var(--info)" },
-                  { label: "Done", value: counts.done, color: "var(--positive)" },
-                  { label: "Closed", value: counts.closed, color: "var(--viz-other)" },
-                ]}
-              />
-              <Legend
-                items={[
-                  { label: "Open", color: "var(--info)" },
-                  { label: "Done", color: "var(--positive)" },
-                  { label: "Closed", color: "var(--viz-other)" },
-                ]}
-              />
-            </span>
-          </Fact>
-        )}
-        {/* THE MEASURE IS ALWAYS NAMED, because a bare "8 / 25" is points to
-            one team and minutes to another. */}
-        <Fact label={sprint ? `Sprint ${sprint.number} · ${sprint.name}` : "Sprint"}>
-          {sprint ? (
-            <span className="col" style={{ gap: 4, width: "100%" }}>
-              <Meter
-                used={sprint.figures.done}
-                max={Math.max(1, committed)}
-                ariaLabel={`Sprint ${sprint.number} — delivered`}
-                right={`${sprint.figures.done} of ${committed} ${measure} · ${sprint.days_remaining}d left`}
-                fullMeans="achieved"
-              />
-            </span>
-          ) : (
-            // TWO DIFFERENT FACTS, and one sentence used to cover both:
-            // "this team does not work in sprints" and "this team is
-            // between sprints" send a reader to different places, and the
-            // answer tells them apart — a project that runs sprints has a
-            // POLICY whether or not one is open right now. It is also a
-            // value rather than a sentence, because the five facts beside
-            // it are words and numbers.
-            <span className="muted">{detail.sprint_policy ? "none running" : "not used"}</span>
-          )}
-        </Fact>
-      </div>
     </>
   );
 }
+
+/**
+ * A project's census, drawn once.
+ *
+ * IN THE STATUS TONES the badges use rather than the chart hues, so the same
+ * fact is not two colours on one screen — and NEVER WITHOUT ITS LEGEND, since
+ * an unlabelled stack of three colours is three colours.
+ */
+function ProjectCensus({ counts }: { counts: WorkTaskCounts }) {
+  const segments = [
+    { label: "Open", value: counts.open, color: "var(--info)" },
+    { label: "Done", value: counts.done, color: "var(--positive)" },
+    { label: "Closed", value: counts.closed, color: "var(--viz-other)" },
+  ];
+  return (
+    <>
+      <StackedBar segments={segments} />
+      <Legend items={segments.map(({ label, color }) => ({ label, color }))} />
+    </>
+  );
+}
+
+/** A running sprint names itself; the number and the name are one string. */
+function sprintName(sprint: WorkActiveSprint): string {
+  return `${sprint.number} · ${sprint.name}`;
+}
+
+/** What the sprint block is CALLED, on the page's fact and on the rail's panel. */
+function sprintLabel(detail: WorkProjectDetail): string {
+  const sprint = detail.sprints?.active;
+  return sprint ? `Sprint ${sprintName(sprint)}` : "Sprint";
+}
+
+/**
+ * How much of the sprint has landed, or which kind of no-sprint this is.
+ *
+ * THE MEASURE IS ALWAYS NAMED, because a bare "8 / 25" is points to one team
+ * and minutes to another.
+ *
+ * TWO DIFFERENT FACTS, and one sentence used to cover both: "this team does
+ * not work in sprints" and "this team is between sprints" send a reader to
+ * different places, and the answer tells them apart — a project that runs
+ * sprints carries a POLICY whether or not one is open right now.
+ */
+function SprintFigure({ detail }: { detail: WorkProjectDetail }) {
+  const sprint = detail.sprints?.active;
+  if (!sprint) {
+    return <span className="muted">{detail.sprint_policy ? "none running" : "not used"}</span>;
+  }
+  const measure = sprint.figures.measure === "estimate_min" ? "minutes" : "points";
+  const committed = sprint.figures.committed + sprint.figures.added;
+  return (
+    <span className="col gap-1" style={{ width: "100%" }}>
+      <Meter
+        used={sprint.figures.done}
+        max={Math.max(1, committed)}
+        ariaLabel={`Sprint ${sprint.number} — delivered`}
+        right={`${sprint.figures.done} of ${committed} ${measure} · ${sprint.days_remaining}d left`}
+        fullMeans="achieved"
+      />
+    </span>
+  );
+}
+
+/**
+ * How the open work is distributed, as lines in the board's own order.
+ *
+ * THE CANONICAL ORDER FIRST, so the panel does not reshuffle between polls as
+ * a status empties, and A STATUS WITH NO WORK IS A ZERO rather than an
+ * absence: the query asked over the whole project, so a status nothing matched
+ * is a count of none — not a fact nobody recorded.
+ *
+ * AND ANYTHING THIS BUILD HAS NOT HEARD OF is appended rather than dropped.
+ * The wire evolves additively and a newer node may name a status this build
+ * does not know; a column silently missing from a census is the one shape a
+ * reader cannot notice.
+ */
+function statusCounts(groups: WorkGroup[]): { status: string; count: number }[] {
+  const counted = new Map(groups.map((group) => [group.key, group.count]));
+  const lines = OPEN_STATUSES.map((status) => ({ status, count: counted.get(status) ?? 0 }));
+  for (const group of groups) {
+    if (!OPEN_STATUSES.includes(group.key)) {
+      lines.push({ status: group.key, count: group.count });
+    }
+  }
+  return lines;
+}
+
+/** The statuses a task can be in while it is still somebody's problem. */
+const OPEN_STATUSES: string[] = STATUSES.filter(
+  (status) => status.group === "not_started" || status.group === "active",
+).map((status) => status.value);
 
 // ---------------------------------------------------------------------------
 // The board
@@ -812,9 +1179,7 @@ export function Board({
         return (
           <section className="work-col" key={group.key || "—"}>
             <header className="work-col-head">
-              {axis === "status" && (
-                <i className={`dot ${statusTone(group.key)}`} aria-hidden="true" />
-              )}
+              {axis === "status" && <i className={statusDot(group.key)} aria-hidden="true" />}
               {axis === "type" && <TypeIcon type={group.key} types={chrome.types} />}
               <span className="truncate">{label}</span>
               <span className="count-chip">{group.count}</span>
@@ -858,17 +1223,19 @@ export function Board({
   );
 }
 
-function statusTone(status: string): string {
-  return (
-    {
-      todo: "",
-      in_progress: "info",
-      in_review: "caution",
-      done: "positive",
-      closed: "",
-      cancelled: "",
-    }[status] ?? ""
-  );
+/**
+ * The dot a status is drawn with.
+ *
+ * THE TONE TABLE IS `lib/work.ts`'S. This file carried a second copy — six
+ * statuses mapped to the same four tones — and a second spelling of one rule
+ * is two rules as soon as a company's vocabulary moves. NEUTRAL ADDS NO CLASS
+ * because `.dot` is already the neutral dot: a `.dot.neutral` rule does not
+ * exist, so emitting the word would be a class that styles nothing and reads
+ * to the next person like one that does.
+ */
+function statusDot(status: string): string {
+  const tone = STATUS_TONE[status];
+  return cx("dot", tone !== undefined && tone !== "neutral" && tone);
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,11 +1397,12 @@ export function CalendarView({
                     }
                     href={hrefOf(row)}
                     title={`${row.key} · ${row.title}`}
-                    onClick={(e) => {
-                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                      e.preventDefault();
-                      onOpen(row);
-                    }}
+                    // THE FRAME'S ONE COPY of which clicks mean "open
+                    // elsewhere". This chip carried its own — four modifiers
+                    // and no `button` test — which is exactly the drift
+                    // `rowPeekHandler` was written to end: the second spelling
+                    // is the one that forgets the middle button.
+                    onClick={rowPeekHandler(() => onOpen(row))}
                   >
                     <TypeIcon type={row.type} types={chrome.types} />
                     <span className="work-cal-key">{row.key}</span>

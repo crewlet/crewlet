@@ -29,18 +29,39 @@
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, TextCell } from "~/app/frame/cells.tsx";
+import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { Badge, Button, Empty } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { WorkView } from "~/protocol/index.ts";
+
+/**
+ * How a view's container is written, everywhere it is written.
+ *
+ * ONE SPELLING. It was three — the grid's sort value, the grid's cell and the
+ * facts block — and the first two already disagreed: the sort key always
+ * carried the colon and the cell carried it only where there was an id, so a
+ * workspace view sorted under `workspace:` and rendered as `workspace`.
+ */
+function containerRef(view: WorkView): string {
+  return view.container.id ? `${view.container.kind}:${view.container.id}` : view.container.kind;
+}
 
 export function SavedViews({ id }: { id?: string }) {
   const nav = useNavigator();
   const viewer = useViewer();
+  const org = useOrg();
+  // AN OWNER IS A PERSON, and the chart is what turns their handle into the
+  // name they are actually called. A handle that is not in it — an operator
+  // writing through the MCP surface owns views too — falls through to the
+  // handle itself rather than to nothing.
+  const index = useMemo(() => indexOrg(org), [org]);
   // THE VIEWER IS SENT, which is what makes pins and personal views appear at
   // all: `work_views` answers the SHARED strip without one, so this screen
   // showed every reader the same list and no pin could ever render.
@@ -63,6 +84,11 @@ export function SavedViews({ id }: { id?: string }) {
   // with `view=` set, and a copy here would be a second board to keep correct.
   if (id) {
     if (views.loading && !views.data) return <PageNote>Loading the saved view…</PageNote>;
+    // A FAILED READ IS NOT A MISSING VIEW. The inventory is the ONLY answer
+    // this screen has, so a refusal rendered as "no saved view with that id"
+    // tells a reader their view was deleted when the truth is that nothing
+    // was read at all — and they act on it, by saving a second copy.
+    if (views.error) return <QueryState error={views.error} loading={false} />;
     if (!one) {
       return (
         <Empty
@@ -82,6 +108,17 @@ export function SavedViews({ id }: { id?: string }) {
             : "A shared view — everybody in this company sees it."}{" "}
           Running it hands its saved parameters to the board, where any one of them can be changed.
         </PageNote>
+        {/* A SAVED VIEW IS AN OBJECT, and this screen never printed its name:
+            the only place it appeared was the breadcrumb `usePageLabels`
+            feeds, so the page for one view was a paragraph, some badges and a
+            button about something it never named. */}
+        <ObjectHeader
+          kind="Saved view"
+          icon="columns"
+          identifier={one.key}
+          title={one.name}
+          facts={viewFacts(one, index.byHandle.get(one.owner ?? "")?.name)}
+        />
         <ViewFacts view={one} />
         <Button
           variant="primary"
@@ -144,9 +181,16 @@ export function SavedViews({ id }: { id?: string }) {
               key: "owner",
               header: "Owner",
               sortValue: (v) => v.owner ?? "",
+              // A SEAT IS AN AVATAR AND A NAME, not a handle in a chip: this
+              // column named a person and rendered them differently from
+              // every other column in the product that does.
+              //
+              // AND AN ABSENT OWNER IS NOT AN ABSENT PERSON, which is why
+              // `SeatCell`'s own dash is not what draws here: empty means the
+              // view is SHARED, a setting somebody chose.
               cell: (v) =>
                 v.owner ? (
-                  <Badge outline>{v.owner}</Badge>
+                  <SeatCell handle={v.owner} name={index.byHandle.get(v.owner)?.name} />
                 ) : (
                   <span className="t-caption">shared</span>
                 ),
@@ -154,13 +198,8 @@ export function SavedViews({ id }: { id?: string }) {
             {
               key: "container",
               header: "Container",
-              sortValue: (v) => `${v.container.kind}:${v.container.id}`,
-              cell: (v) => (
-                <span className="mono t-caption">
-                  {v.container.kind}
-                  {v.container.id ? `:${v.container.id}` : ""}
-                </span>
-              ),
+              sortValue: containerRef,
+              cell: (v) => <KeyCell value={containerRef(v)} />,
             },
             {
               key: "marks",
@@ -193,21 +232,52 @@ export function SavedViews({ id }: { id?: string }) {
   );
 }
 
+/**
+ * The four facts a saved view is read by.
+ *
+ * THE BADGE ROW THIS REPLACES said the same things in the same order and said
+ * them nowhere else on the screen — so it is re-homed here rather than
+ * dropped, and [ViewFacts] below is now what it was always named for: the
+ * parameters the view actually carries.
+ */
+function viewFacts(view: WorkView, ownerName?: string): Fact[] {
+  return [
+    { label: "Shape", value: view.type },
+    {
+      // A SHARED VIEW IS NOT AN UNOWNED ONE. Empty means everybody in the
+      // company sees it, which is a setting somebody chose rather than a
+      // field nobody filled in — so it is a word and never a dash.
+      label: "Owner",
+      value: view.owner ? (
+        <SeatCell handle={view.owner} name={ownerName} />
+      ) : (
+        <span className="t-caption">shared</span>
+      ),
+    },
+    { label: "Container", value: <KeyCell value={containerRef(view)} /> },
+    {
+      label: "Marks",
+      value:
+        view.default || view.protected || view.pinned ? (
+          <span className="row gap-1">
+            {view.default && <Badge outline>default</Badge>}
+            {view.protected && <Badge outline>protected</Badge>}
+            {/* THE ACCENT SAYS "YOURS" — a pin is this reader's own, where
+                the other two are facts about the view itself. */}
+            {view.pinned && <Badge tone="accent">pinned</Badge>}
+          </span>
+        ) : (
+          ""
+        ),
+    },
+  ];
+}
+
 /** What one view actually asks for, as the parameters it carries. */
 function ViewFacts({ view }: { view: WorkView }) {
   const params = Object.entries(view.params ?? {});
   return (
     <div className="col gap-2">
-      <div className="row gap-1 wrap">
-        <Badge outline>{view.type}</Badge>
-        <Badge outline>
-          {view.container.kind}
-          {view.container.id ? `:${view.container.id}` : ""}
-        </Badge>
-        {view.protected && <Badge outline>protected</Badge>}
-        {view.default && <Badge outline>default</Badge>}
-        {view.pinned && <Badge tone="accent">pinned</Badge>}
-      </div>
       {params.length === 0 ? (
         <p className="t-caption">
           This view saves no filters — it is the container's whole list in this shape.
