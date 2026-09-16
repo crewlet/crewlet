@@ -12,14 +12,25 @@ import (
 	"time"
 )
 
-// startLeader starts cmd as its own group leader and kills the group when the
+// startLeader starts argv as its own group leader and kills the group when the
 // test ends, so a failure never leaks a sleeper.
-func startLeader(t *testing.T, script string) *exec.Cmd {
+//
+// ARGV RATHER THAN A SHELL SCRIPT, and deliberately no shell anywhere in the
+// group. `sh -c "sleep 300"` is not obliged to exec its command, and a shell
+// that forks instead puts a grandchild in the group that this file never
+// started and therefore never reaps: killpg kills it, the kernel reparents the
+// corpse to init, and init reaps it whenever it gets to it. Until then
+// Exists(pgid) still answers true, because a zombie is a member —
+// so TestAGroupWhoseOnlyMemberIsAZombieIsNotCurrent's closing assertion, that
+// the group is over once its last member is reaped, was a race against init
+// and lost about one run in three. Every process in the group is now one this
+// file started and waits for.
+func startLeader(t *testing.T, argv ...string) *exec.Cmd {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", script)
+	cmd := exec.CommandContext(t.Context(), argv[0], argv[1:]...)
 	Set(cmd)
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %q: %v", script, err)
+		t.Fatalf("starting %q: %v", argv, err)
 	}
 	pgid := cmd.Process.Pid
 	t.Cleanup(func() {
@@ -32,7 +43,7 @@ func startLeader(t *testing.T, script string) *exec.Cmd {
 // The identity of a live group is current, and stops being current once the
 // group is gone. The baseline the recycled-pid case below is measured against.
 func TestAnIdentifiedGroupIsCurrentUntilItIsGone(t *testing.T) {
-	cmd := startLeader(t, "sleep 300")
+	cmd := startLeader(t, "sleep", "300")
 	leader, err := Identify(cmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("Identify: %v", err)
@@ -97,12 +108,12 @@ func assertZombieOnlyGroupIsNotCurrent(t *testing.T, leader Leader, zombie int) 
 // unreaped on purpose, so the case is built on every platform rather than
 // depending on who the kernel reparents an orphan to.
 func TestAGroupWhoseOnlyMemberIsAZombieIsNotCurrent(t *testing.T) {
-	leaderCmd := startLeader(t, "sleep 300")
+	leaderCmd := startLeader(t, "sleep", "300")
 	leader, err := Identify(leaderCmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("Identify: %v", err)
 	}
-	member := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300")
+	member := exec.CommandContext(t.Context(), "sleep", "300")
 	member.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: leader.PID}
 	if err := member.Start(); err != nil {
 		t.Fatalf("starting a member of group %d: %v", leader.PID, err)
@@ -134,7 +145,7 @@ func TestAGroupWhoseOnlyMemberIsAZombieIsNotCurrent(t *testing.T) {
 // same case with the corpse in the leader's place: its record still carries the
 // recorded start time, so the identity matches, and there is still no job.
 func TestAGroupOfOnlyAnUnreapedLeaderIsNotCurrent(t *testing.T) {
-	cmd := startLeader(t, "exit 0")
+	cmd := startLeader(t, "sleep", "0")
 	leader, err := Identify(cmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("Identify: %v", err)
@@ -181,7 +192,7 @@ func TestAGroupWithAZombieLeaderAndALivingMemberIsCurrent(t *testing.T) {
 // with a start time that is not its own is exactly what a recycled pid looks
 // like from the outside.
 func TestALiveGroupWithAnotherStartTimeIsNotCurrent(t *testing.T) {
-	cmd := startLeader(t, "sleep 300")
+	cmd := startLeader(t, "sleep", "300")
 	own, err := Identify(cmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("Identify: %v", err)
