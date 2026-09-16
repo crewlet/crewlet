@@ -952,24 +952,25 @@ function FullscreenHint() {
  * A NODE WITH NOTHING UNDER IT DRAWS NONE, so a leaf of the chart is a card
  * with no disclosure rather than one with an empty slot.
  *
- * AND THE PRESS LANDS ON THE NODE, never in the control: `card.press` is what
- * the actions strip gets from `card.actions`, and this is the same kind of
- * region, so it takes the same behaviour explicitly. Focus in a subtree hidden
- * from assistive technology is focus nowhere, so a press that left it on the
- * expander would leave the chart with no announced position at all.
+ * AND THE PRESS LANDS ON THE NODE, never in the control, which is why
+ * `card.press` is spread on the region rather than on the button inside it:
+ * it is the same rule the actions strip gets from `card.actions`, and the
+ * design system asks a caller for it here because only the chart knows which
+ * node this belongs to. Focus in a subtree hidden from assistive technology is
+ * focus nowhere, so a press that left it on the expander would leave the chart
+ * with no announced position at all.
  */
 function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; name: string }) {
   if (!card.expandable(id)) return null;
   const expanded = card.expanded(id);
   return (
-    <OrgNodeDisclosure>
+    <OrgNodeDisclosure {...card.press(id)}>
       <IconButton
         label={expanded ? `Collapse ${name}` : `Expand ${name}`}
         icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
         size="sm"
         variant="ghost"
         tabIndex={-1}
-        {...card.press(id)}
         onClick={(e) => {
           e.stopPropagation();
           card.toggle(id);
