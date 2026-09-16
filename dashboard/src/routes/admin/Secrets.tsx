@@ -41,21 +41,48 @@ import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
-import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
+import type { ConfigReference, QueryErrorCode, SecretRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
- * How a read that did not answer is reported to the operator.
+ * A REST refusal as the CODE [QueryState] is keyed on.
  *
- * One sentence for a missing token and the engine's own words otherwise,
- * shared by both reads this screen makes so they cannot describe the same
- * refusal two ways.
+ * THE BANNER IS A TABLE OVER `QueryErrorCode`, not a place to put a sentence:
+ * this screen handed it prose, the lookup missed every time, and a 401 —
+ * the refusal an unguarded operator actually hits here, since `/secrets` is
+ * guarded reads included — rendered the red "a code this build does not know"
+ * banner instead of the auth-gated one. The sentence even promised a button
+ * that only exists inside the entry that was being skipped.
+ *
+ * The other two REST statuses this surface can answer with are mapped rather
+ * than folded into the generic failure, because each means something
+ * different to whoever is reading: status 0 is `offline()` — the request never
+ * reached the engine — and a 404 on the LIST route is the whole surface being
+ * unregistered, which `secretsapi.Routes` does on a process that cannot reach
+ * the fleet's coordination store. Everything else is a fault on the node.
+ */
+function refusalCode(err: unknown): QueryErrorCode {
+  if (!(err instanceof RestError)) return "query_failed";
+  if (err.unauthorized) return "unauthorized";
+  if (err.status === 0) return "closed";
+  if (err.status === 404) return "unknown_query";
+  return "query_failed";
+}
+
+/**
+ * How a read that did not answer is reported IN PROSE.
+ *
+ * Only the reference index needs this: its refusal is a caption under the
+ * caution banner in the removal confirmation, where there is no `QueryState`
+ * to key a code on and the engine's own words are what an operator acts on.
+ * The list's refusal goes through [refusalCode] instead — see there for why a
+ * sentence must never reach the banner.
  */
 function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    return "This surface needs an operator token. Set one with the button below, or from the command palette.";
+    return "This surface needs an operator token. Set one from the command palette.";
   }
   return err.detail || err.code || "the engine refused the read";
 }
@@ -64,7 +91,8 @@ interface Credentials {
   /** Null until the first answer — never an empty list standing in for one. */
   rows: SecretRow[] | null;
   loading: boolean;
-  error: string | null;
+  /** The refusal as a machine code, which is what [QueryState] renders from. */
+  error: QueryErrorCode | null;
   /** Why the reference index is unknown, when it is. */
   unknown: string | null;
   /** The config fields naming one credential, or null where the check did not answer. */
@@ -94,7 +122,7 @@ function useCredentials(enabled = true): Credentials {
   // still the data channel for everything it answers; this surface is simply
   // not one of them.
   const [rows, setRows] = useState<SecretRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<QueryErrorCode | null>(null);
   const [loading, setLoading] = useState(enabled);
 
   // THE REFERENCE INDEX IS THREE-VALUED, and collapsing it to two is the one
@@ -113,7 +141,7 @@ function useCredentials(enabled = true): Credentials {
     } catch (err) {
       // The last good list stays on screen. A refusal to refresh is not a
       // reason to tell an operator the company holds no credentials.
-      setError(refusal(err));
+      setError(refusalCode(err));
     } finally {
       setLoading(false);
     }

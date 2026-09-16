@@ -70,7 +70,13 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount(hash: string, answer: unknown = diff) {
+// The engine's answer for a collection when nothing is active: nothing at all.
+// `queries/config.go` returns nil for ErrNoActiveRevision and the envelope
+// omits an absent `data`, so the client settles on `undefined` — which is why
+// it is the default here rather than a case's own argument: a default of
+// `undefined` cannot be passed back in, and a helper that quietly substituted
+// the empty collection for it would test the opposite of what it said.
+function mount(hash: string, answer: unknown = diff, entities?: unknown) {
   location.hash = hash;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -78,7 +84,15 @@ function mount(hash: string, answer: unknown = diff) {
   // server, because what is under test is the rendering of an answer whose
   // shape is already pinned by the Go side.
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(what === "config_audit" ? revisions : what === "config_diff" ? answer : {});
+    Promise.resolve(
+      what === "config_audit"
+        ? revisions
+        : what === "config_diff"
+          ? answer
+          : what === "config_entities"
+            ? entities
+            : {},
+    );
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -138,4 +152,39 @@ test("a cut diff says how many changes there are", async () => {
   // And where the whole thing is: the CLI writes to a terminal, which has no
   // response budget, so it prints every change.
   expect(screen.getByText("crewlet config diff")).toBeDefined();
+});
+
+// NO ACTIVE REVISION IS NOT AN EMPTY COLLECTION, and the engine says so by
+// answering nothing at all: `queries/config.go` returns nil for
+// ErrNoActiveRevision and the envelope omits the field, so this arrives as
+// `undefined` with no error. Read as an empty list it produced the one
+// sentence that cannot be true on a deployment before its first import —
+// "the active revision declares none of these" — while the Active lens on the
+// same screen answered the same state correctly.
+test("a collection with no active revision says so, not that the revision declares none", async () => {
+  mount("#/config?lens=entities", diff, undefined);
+
+  expect(await screen.findByText("No company configuration is active")).toBeDefined();
+  expect(screen.queryByText(/declares none of these/)).toBeNull();
+});
+
+// THE CONTROL. An active revision that genuinely declares no seats is a
+// different fact and keeps its own wording — without this, collapsing both
+// into the no-revision sentence would pass the case above.
+test("an empty collection under an active revision still reads as empty", async () => {
+  mount("#/config?lens=entities", diff, { kind: "roles", ids: [] });
+
+  expect(await screen.findByText("Nothing in this collection")).toBeDefined();
+  expect(screen.queryByText("No company configuration is active")).toBeNull();
+});
+
+// `entity` is a URL key, so a shared or bookmarked link lands on the panel in
+// that same state — where `JSON.stringify(undefined ?? null)` printed the
+// literal word `null` as though it were the entity's own slice of the
+// document.
+test("a deep link to an entity with no active revision renders no literal null", async () => {
+  mount("#/config?lens=entities&entity=founder", diff, undefined);
+
+  expect(await screen.findAllByText("No company configuration is active")).toBeDefined();
+  expect(screen.queryByText("null")).toBeNull();
 });

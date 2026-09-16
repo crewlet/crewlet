@@ -201,25 +201,6 @@ function sharedFlag(entity: unknown): boolean {
 }
 
 /**
- * One tool, beside the catalogue it was found in.
- *
- * # It reads the PUSHED catalogue rather than asking for the tool
- *
- * No question answers one tool: the registry arrives whole with the connect
- * snapshot and is re-pushed when a server is re-discovered. So opening this
- * costs no request and a tool whose server has just come up appears in the
- * rail while the reader is looking at it — where a query would answer once
- * and then be stale for exactly as long as the peek is interesting. [SeatPeek]
- * says the same about the roster, for the same reason.
- *
- * # The one thing it does ask
- *
- * Whether the tool's server is SHARED. That is the half the catalogue cannot
- * carry — a registration records what a tool IS, not who was given it — and it
- * is what decides whether this tool belongs to every agent seat or to the
- * handful that hold credentials for its server.
- */
-/**
  * One tool, resolved from its name, wherever it is being shown.
  *
  * THE PAGE AND THE RAIL RESOLVE IT THE SAME WAY, which is the only reason the
@@ -227,15 +208,18 @@ function sharedFlag(entity: unknown): boolean {
  * but not across two servers, and deciding what to do about that in two places
  * is how one surface comes to pick a row silently while the other says the
  * name is shared.
+ *
+ * IT ASKS THE ENGINE NOTHING. Everything here comes off the pushed catalogue,
+ * so every surface that only needs to know WHICH tool this is — a header, a
+ * peek deciding whether it has one at all — costs no request. The one question
+ * a tool raises that the catalogue cannot answer is [useServerSharing]'s, and
+ * it is asked where it is read.
  */
 function useTool(name: string): {
   /** Every registration under this name — see [ToolBody]. */
   matches: ToolRow[];
   tool: ToolRow | null;
   server: string;
-  /** Null until the configuration answers, which is not the same as false. */
-  shared: boolean | null;
-  entity: { loading: boolean; error: string | null };
   /** The catalogue itself has not arrived — not a tool that does not exist. */
   cold: boolean;
 } {
@@ -246,19 +230,42 @@ function useTool(name: string): {
   // honest move is to say the name is shared rather than to pick one silently.
   const matches = useMemo(() => tools.filter((t) => t.name === name), [tools, name]);
   const tool = matches[0] ?? null;
-  const server = tool ? mcpServerOf(tool.source) : "";
+  return {
+    matches,
+    tool,
+    server: tool ? mcpServerOf(tool.source) : "",
+    cold: tools.length === 0,
+  };
+}
+
+/**
+ * Whether one MCP server's template is SHARED, from the active configuration.
+ *
+ * THE HALF THE CATALOGUE CANNOT CARRY — a registration records what a tool IS,
+ * not who was given it — and it is what decides whether a tool belongs to
+ * every agent seat or to the handful that hold credentials for its server.
+ *
+ * SEPARATE FROM [useTool] BECAUSE ONLY [ToolBody] READS IT. `useQuery` has no
+ * cache and no in-flight dedupe — each instance mints its own frame — so while
+ * this sat inside the resolution hook, every addressed tool asked the engine
+ * for the same entity twice: once for the header, which throws the answer
+ * away, and once for the body, on the page and in the rail alike, again on
+ * every `[`/`]` step through the peek's neighbours. A builtin or an A2A tool
+ * asks nothing at all: it has no server to ask about.
+ */
+function useServerSharing(server: string): {
+  /** Null until the configuration answers, which is not the same as false. */
+  shared: boolean | null;
+  entity: { loading: boolean; error: string | null };
+} {
   const entity = useQuery(
     "config_entities",
     { kind: "mcp-servers", id: server },
     { enabled: server !== "" },
   );
   return {
-    matches,
-    tool,
-    server,
     shared: entity.data?.entity ? sharedFlag(entity.data.entity) : null,
     entity: { loading: entity.loading, error: entity.error },
-    cold: tools.length === 0,
   };
 }
 
@@ -276,7 +283,8 @@ function useTool(name: string): {
 function ToolBody({ name }: { name: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const { matches, tool, server, shared, entity, cold } = useTool(name);
+  const { matches, tool, server, cold } = useTool(name);
+  const { shared, entity } = useServerSharing(server);
 
   // THE CATALOGUE HAS NOT ARRIVED YET, which is not the same screen as a tool
   // that does not exist. An engine registers its builtins at boot, so an empty
@@ -429,6 +437,23 @@ function ToolHeader({ name }: { name: string }) {
   );
 }
 
+/**
+ * One tool, beside the catalogue it was found in.
+ *
+ * # It reads the PUSHED catalogue rather than asking for the tool
+ *
+ * No question answers one tool: the registry arrives whole with the connect
+ * snapshot and is re-pushed when a server is re-discovered. So opening this
+ * costs no request and a tool whose server has just come up appears in the
+ * rail while the reader is looking at it — where a query would answer once
+ * and then be stale for exactly as long as the peek is interesting. [SeatPeek]
+ * says the same about the roster, for the same reason.
+ *
+ * # The one thing it does ask
+ *
+ * Whether the tool's server is SHARED, asked ONCE, by [ToolBody] — see
+ * [useServerSharing] for why the header half of this rail must not ask it too.
+ */
 export function ToolPeek({ name }: { name: string }) {
   const { tool, cold } = useTool(name);
   if (cold) return <Skeleton rows={6} />;

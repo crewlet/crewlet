@@ -759,6 +759,23 @@ export interface FleetNode {
    */
   config_revision_id?: string;
   config_reported_at?: string;
+  /**
+   * How far this node's own derived copies have come up — `ready` of `total`.
+   *
+   * A DIFFERENT QUESTION FROM THE EPOCH: a node can hold the current revision
+   * and still be replaying the log the state is derived from, and only one of
+   * those makes its seats servable. `internal/coord/nodestatus.go` says where
+   * the fact belongs — "where an operator asking why is the new node holding
+   * nothing can see it, which is the fleet view" — and it writes TWO integers
+   * rather than a bool because "3 of 5" and "0 of 2" are the readings that
+   * have to be told apart.
+   *
+   * ABSENT RATHER THAN ZERO. The node publishes them only once the total is
+   * non-zero, so absent is "this node is not saying", never "nothing is
+   * ready" — the same rule `in_flight` follows.
+   */
+  projections_ready?: number;
+  projections_total?: number;
   in_flight?: number;
   draining?: boolean;
   started_at?: string;
@@ -2346,6 +2363,19 @@ export interface TurnAnswer {
    * measurement.
    */
   truncated: boolean;
+  /**
+   * EVERY TRACE THIS TURN TOUCHED, as the store itself indexed them.
+   *
+   * The screen can derive a list from the rows it holds, and does — but only
+   * from the rows it HOLDS. A turn read to the per-turn cap is missing its
+   * middle, and a turn whose events fell out of the retention window is
+   * missing most of itself, so a derived list silently loses whichever traces
+   * lived in the gap. `internal/api/queries/insight.go` seeks these
+   * separately for that reason and DEGRADES to an empty list rather than
+   * failing the read, so an absent or empty value means "the seek did not
+   * answer", never "this turn touched no trace".
+   */
+  trace_ids?: string[];
 }
 
 /** A seat's phase history, newest first, with a cursor. */

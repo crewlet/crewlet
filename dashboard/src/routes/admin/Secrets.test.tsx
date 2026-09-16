@@ -143,11 +143,34 @@ test("the screen never asks for a value", async () => {
 // A refused read keeps the last good list rather than claiming the company
 // holds nothing. On the first load there is no last good list, so what it
 // must not do is render an empty table as if that were an answer.
-test("a refused read says so instead of showing an empty company", async () => {
+//
+// AND IT REPORTS THE CODE, NOT A SENTENCE. `QueryState` is a table over
+// `QueryErrorCode`; handing it prose missed the table on every refusal and
+// rendered the "code this build does not know" banner — with no way to set
+// the token the same banner exists to offer. This screen is guarded reads
+// included, so a 401 is the refusal an operator actually arrives at.
+test("a 401 renders the auth-gated banner, with the button that fixes it", async () => {
   stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
   render(<Secrets />);
 
-  expect(await screen.findByText(/needs an operator token/)).toBeDefined();
+  expect(await screen.findByText(/auth-gated/)).toBeDefined();
+  expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+  expect(screen.queryByText(/code this build does not know/)).toBeNull();
+});
+
+// AND EVERY OTHER REFUSAL TOO, which is the half a single 401 case would let
+// rot: an engine fault is the node's, not the reader's, and it is a different
+// sentence from a missing token.
+test("a failed read is reported as a fault on the node, not as an unknown code", async () => {
+  stubFetch((path) =>
+    path === "/secrets"
+      ? new Response(JSON.stringify({ error: "internal_error" }), { status: 500 })
+      : ok({}),
+  );
+  render(<Secrets />);
+
+  expect(await screen.findByText(/tried to answer and failed/)).toBeDefined();
+  expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
 // THE VALUE IS THE BODY, not a field of a document. `PUT /secrets/{name}`

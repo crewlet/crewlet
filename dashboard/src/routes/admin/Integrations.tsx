@@ -139,14 +139,6 @@ export const CATALOG: Entry[] = [
 ];
 
 /**
- * COLOUR CARRIES STATE, NEVER IDENTITY (see reference/dashboard-design.md), so
- * the tone follows the phase rather than the vendor.
- *
- * `ready` is the only positive one, and `degraded` is caution rather than
- * critical on purpose: agents are still working, which is exactly what
- * separates it from a surface that cannot authenticate at all.
- */
-/**
  * The phases that mean the engine is still working.
  *
  * The screen polls faster while any surface is in one, because each is a
@@ -155,6 +147,14 @@ export const CATALOG: Entry[] = [
  */
 export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating", "disconnecting"]);
 
+/**
+ * COLOUR CARRIES STATE, NEVER IDENTITY (see reference/dashboard-design.md), so
+ * the tone follows the phase rather than the vendor.
+ *
+ * `ready` is the only positive one, and `degraded` is caution rather than
+ * critical on purpose: agents are still working, which is exactly what
+ * separates it from a surface that cannot authenticate at all.
+ */
 export function phaseTone(phase: string): Tone {
   switch (phase) {
     case "ready":
@@ -573,15 +573,6 @@ export function integrationFacts(
 }
 
 /**
- * What the reconcile loop last found for one surface.
- *
- * Renders NOTHING when the status is null, and the silence is the point: a
- * standalone API has no loop to ask and the loop may not have reached this
- * surface yet, and neither of those is a claim that the surface is healthy.
- * A green tick here would be exactly the invented health this screen has
- * always refused to show.
- */
-/**
  * The findings the report did NOT summarise.
  *
  * The engine promotes the reported finding to index 0 (integration.Promote),
@@ -618,6 +609,15 @@ export function withoutHeadline<T extends { kind: string; subject?: string; deta
   });
 }
 
+/**
+ * What the reconcile loop last found for one surface.
+ *
+ * Renders NOTHING when the status is null, and the silence is the point: a
+ * standalone API has no loop to ask and the loop may not have reached this
+ * surface yet, and neither of those is a claim that the surface is healthy.
+ * A green tick here would be exactly the invented health this screen has
+ * always refused to show.
+ */
 export function Reconcile({
   status,
   detail,
@@ -1864,12 +1864,12 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
             // address at all.
             //
             // AND A PLAIN CLICK STILL NAVIGATES, which is the opposite of the
-            // rule every list of a PEEKABLE kind follows. An event has no peek
-            // in this build (`app/frame/peeks.tsx` registers six kinds and
-            // `event` is not one), and `PeekHost` closes the rail for a kind
-            // with no body — so opening one here would be a click that does
-            // nothing at all. The raw delivery is also the whole reason to
-            // open a webhook row, and that is a page rather than a panel.
+            // rule every list of a PEEKABLE kind follows. `event` does have a
+            // peek (`app/frame/peeks.tsx` registers one), so this is a choice
+            // rather than a fallback: the RAW DELIVERY is the whole reason to
+            // open a webhook row — what the provider actually sent, which is
+            // what an operator is here to read against what the engine did
+            // with it — and that is a page rather than a panel.
             rowHref={(e) => href(["activity", "events", e.id])}
             onRowActivate={(e, event) => {
               // THE ANCHOR DOES THE MOUSE. What it never sees is the grid's

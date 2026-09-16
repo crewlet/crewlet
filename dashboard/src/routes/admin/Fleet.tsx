@@ -45,7 +45,7 @@ import {
   TextCell,
 } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -73,26 +73,6 @@ const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "neutral
 /** Seconds on the wire, milliseconds in a [DurationCell] — converted once. */
 function leaseMs(seconds?: number | null): number | null {
   return seconds == null ? null : seconds * 1000;
-}
-
-/**
- * A grid row's activation, for a grid whose `rowHref` is the object's page.
- *
- * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy of
- * which clicks mean "open elsewhere" and it reads a mouse event; the `enter`
- * chord carries no button at all and is never one of them. Written once here
- * because this file has three grids that all want it.
- */
-function peekRow<T>(
-  open: (row: T) => void,
-): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
-  return (row, e) => {
-    if (!("button" in e)) {
-      open(row);
-      return;
-    }
-    rowPeekHandler(() => open(row))?.(e);
-  };
 }
 
 export function Fleet({ node }: { node?: string }) {
@@ -661,7 +641,7 @@ function useNodeVersion(id: string, thisNode?: string): string | undefined {
  * scans the same facts in the same order wherever the object appears, and a
  * header written twice is two orders as soon as somebody adds a sixth fact.
  */
-function nodeFacts({
+export function nodeFacts({
   node,
   target,
   version,
@@ -696,6 +676,25 @@ function nodeFacts({
         ) : (
           <Dash title="this node has reported no config apply" />
         ),
+    },
+    {
+      // WHETHER ITS COPIES ARE UP, which the epoch above does not say: a node
+      // can hold the current revision and still be replaying the log its SQL
+      // state is derived from, and a seat placed on it then reads an empty
+      // answer as "there is no such item". `internal/coord/nodestatus.go` puts
+      // the fact here on purpose — it is the answer to "why is the new node
+      // holding nothing" — and deliberately does NOT take the node out of
+      // rotation for it.
+      //
+      // DROPPED, NOT DASHED, when the node published none: `FactLine` omits an
+      // empty value, and a dash beside "Posture" and "Epoch" would claim the
+      // engine keeps a reading it does not. The node only publishes the pair
+      // once the total is non-zero.
+      label: "Copies",
+      value:
+        node.projections_total != null && node.projections_total > 0
+          ? `${node.projections_ready ?? 0} of ${node.projections_total} ready`
+          : "",
     },
     {
       label: "Lag",

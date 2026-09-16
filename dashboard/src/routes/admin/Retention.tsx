@@ -357,22 +357,6 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   );
 }
 
-/** firstDomain is any one of a node's domains, for a sort key. */
-/**
- * MaintenanceBanner is the one thing on this screen that describes an outage
- * in progress rather than a property of the fleet.
- *
- * A capacity operation stops every publisher on every node — no seats, no
- * duties, no scheduler, no write routes — and it was visible on NO screen: an
- * operator watching a company go completely quiet had nothing to look at that
- * said why, and the alarm that names it only fires after an hour of it.
- *
- * So it is a banner rather than a panel, above everything, and it carries the
- * three things somebody finding it at an inconvenient hour needs first: how
- * long it has been open, who opened it, and WHO IS STILL OUTSTANDING — because
- * an operation with nobody outstanding is one waiting on its operator, and
- * that is the state that otherwise looks identical to one waiting on a node.
- */
 /**
  * WHAT THIS DOCUMENT MAY CLAIM ABOUT ITS OWN AGE.
  *
@@ -403,6 +387,21 @@ export function ServedLevelBanner({ level }: { level?: string }) {
   );
 }
 
+/**
+ * MaintenanceBanner is the one thing on this screen that describes an outage
+ * in progress rather than a property of the fleet.
+ *
+ * A capacity operation stops every publisher on every node — no seats, no
+ * duties, no scheduler, no write routes — and it was visible on NO screen: an
+ * operator watching a company go completely quiet had nothing to look at that
+ * said why, and the alarm that names it only fires after an hour of it.
+ *
+ * So it is a banner rather than a panel, above everything, and it carries the
+ * three things somebody finding it at an inconvenient hour needs first: how
+ * long it has been open, who opened it, and WHO IS STILL OUTSTANDING — because
+ * an operation with nobody outstanding is one waiting on its operator, and
+ * that is the state that otherwise looks identical to one waiting on a node.
+ */
 export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
   const missing = op.participants_missing ?? [];
   return (
@@ -435,6 +434,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
   );
 }
 
+/** firstDomain is any one of a node's domains, for a sort key. */
 function firstDomain(n: RetentionNode) {
   const domains = Object.values(n.domains ?? {});
   return domains.length ? domains[0] : undefined;

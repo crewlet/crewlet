@@ -77,6 +77,23 @@ const ENTITY_KINDS = [
 ] as const;
 
 /**
+ * What "no active revision" means, written ONCE.
+ *
+ * Three places on this screen answer that one engine state — the whole
+ * document, a collection, and one entity out of it — and the engine says it
+ * the same way in all three: `queries/config.go` answers nil for
+ * ErrNoActiveRevision and the envelope omits an absent `data`, so it arrives
+ * as `undefined` rather than as an error. Spelled separately, the Entities
+ * lens told an operator on a fresh install that "the active revision declares
+ * none of these" — a claim about a revision that does not exist, one lens away
+ * from the truth.
+ */
+const NO_REVISION = {
+  title: "No company configuration is active",
+  hint: "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import one with crewlet config import, or PUT /config.",
+} as const;
+
+/**
  * The facts a revision is recognised by, in the history table's own order.
  *
  * ONE FUNCTION for the page and the rail, so a reader who peeks a revision and
@@ -411,6 +428,14 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
     pollMs: FLEET_POLL_MS,
   });
 
+  // A NIL ANSWER IS "NO ACTIVE REVISION", NOT AN EMPTY COLLECTION, and the two
+  // are one lens apart on this screen: the Active lens already says so, and
+  // the Entities lens was reading the same silence as "the active revision
+  // declares none of these". It arrives as `undefined` rather than `null` —
+  // the envelope omits an absent `data` — so this tests falsiness, and it
+  // tests `loading` and `error` first because neither of those is an answer.
+  const noRevision = !ids.loading && !ids.error && !ids.data;
+
   const rows = useMemo(() => audit.data ?? [], [audit.data]);
 
   // THE ORDER `[` AND `]` WALK — the history as the engine answered it, which
@@ -550,11 +575,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 </div>
               </Panel>
             ) : (
-              <Empty
-                icon="sliders"
-                title="No company configuration is active"
-                hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import one with crewlet config import, or PUT /config."
-              />
+              <Empty icon="sliders" title={NO_REVISION.title} hint={NO_REVISION.hint} />
             )}
           </QueryState>
         </>
@@ -579,12 +600,14 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             error={ids.error}
             loading={ids.loading}
             empty={
-              (ids.data?.ids ?? []).length
-                ? undefined
-                : {
-                    title: "Nothing in this collection",
-                    hint: "The active revision declares none of these.",
-                  }
+              noRevision
+                ? NO_REVISION
+                : (ids.data?.ids ?? []).length
+                  ? undefined
+                  : {
+                      title: "Nothing in this collection",
+                      hint: "The active revision declares none of these.",
+                    }
             }
           >
             <div className="row gap-3 wrap" style={{ alignItems: "flex-start" }}>
@@ -631,9 +654,23 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   <Skeleton rows={6} />
                 ) : (
                   <QueryState error={one.error} loading={one.loading}>
-                    <Code plain selectable label={`${entity}, as JSON`}>
-                      {JSON.stringify(one.data?.entity ?? null, null, 2)}
-                    </Code>
+                    {one.data ? (
+                      <Code plain selectable label={`${entity}, as JSON`}>
+                        {JSON.stringify(one.data.entity, null, 2)}
+                      </Code>
+                    ) : (
+                      // THE SAME SILENCE, IN THE PANEL. `entity` is a URL key,
+                      // so a shared `?lens=entities&entity=…` lands here on a
+                      // deployment with nothing active — and this rendered the
+                      // literal word `null` as if it were the seat's own slice
+                      // of the document.
+                      <Empty
+                        inline
+                        icon="sliders"
+                        title={NO_REVISION.title}
+                        hint="There is no active revision for this entity to be declared in."
+                      />
+                    )}
                   </QueryState>
                 )}
               </Panel>
