@@ -256,15 +256,29 @@ const PEEK_RUNS = 3;
  * THE ENGINE IS THE AUTHORITY on the next fire and the facts above say so.
  * What it does NOT say is the one after — and the fires after the next are
  * what tell a reader whether an expression means what its author thought.
+ *
+ * Exported for its own suite, in this tree's idiom (`Runs.BridgeLog`,
+ * `Seat.CounterpartyRow`): the claim worth pinning is which ZONE the
+ * expression is worked out in, and the screen around it needs an org, a
+ * roster and three queries before this panel draws at all.
  */
-function NextFires({ row, now, count }: { row: ScheduleRow; now: number; count: number }) {
+export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; count: number }) {
   // ANCHORED TO THE MINUTE, not to the ticking clock: the list changes when a
   // fire passes, and recomputing it every second would rebuild the panel
   // sixty times for an answer that moves once.
   const minute = Math.floor(now / 60_000);
+  // IN THE ROW'S OWN ZONE, which `nextFires` requires and refuses to default —
+  // the engine resolves the row's timezone and evaluates the expression there,
+  // so a list worked out in UTC was wrong by the zone's STANDING offset on
+  // every row of every company that does not run in UTC, not merely across a
+  // daylight-saving change. An empty `timezone` is the engine's own default
+  // rather than an unreadable one; a zone this runtime cannot read yields no
+  // fires at all, which is the same refusal an unparseable expression gets and
+  // is what `problem` on the row names.
   const upcoming = useMemo(
-    () => (row.cron ? nextFires(row.cron, new Date(minute * 60_000), count) : []),
-    [row.cron, minute, count],
+    () =>
+      row.cron ? nextFires(row.cron, new Date(minute * 60_000), row.timezone || "UTC", count) : [],
+    [row.cron, row.timezone, minute, count],
   );
   // ONE FIRE IS NOT A SERIES. The next fire is already a fact in the header,
   // so a panel repeating it alone would be the same value twice.
@@ -273,7 +287,7 @@ function NextFires({ row, now, count }: { row: ScheduleRow; now: number; count: 
     <Panel
       title="And after that"
       icon="calendar"
-      subtitle={`the next ${upcoming.length} fires this expression works out to, in ${row.timezone || "UTC"}`}
+      subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone || "UTC"}`}
     >
       <ol className="fires">
         {upcoming.map((at) => (
@@ -285,14 +299,15 @@ function NextFires({ row, now, count }: { row: ScheduleRow; now: number; count: 
         ))}
       </ol>
       {row.timezone && row.timezone.toUpperCase() !== "UTC" && (
-        // A SCHEDULE IN ITS OWN ZONE IS NOT WORKED OUT HERE. The engine
-        // evaluates the expression in the row's timezone and this reads it in
-        // UTC, so the two agree only where the zones do — saying so beats a
-        // list that is quietly an hour out twice a year.
+        // TWO ZONES ARE IN PLAY AND THEY ARE NOT THE SAME ONE. The expression
+        // is worked out in the SCHEDULE's zone — the engine's own, so the list
+        // no longer drifts from it — and each instant is then rendered in the
+        // READER's, like every other timestamp on this screen. Saying which is
+        // which beats a reader working out why `0 9 * * *` in Asia/Tokyo is
+        // listed at midnight.
         <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-          This schedule runs in <code className="inline">{row.timezone}</code>; the instants above
-          are worked out in UTC, so they drift from the engine&rsquo;s own across a daylight-saving
-          change. The <strong>Next</strong> figure in the header is the engine&rsquo;s.
+          This schedule is evaluated in <code className="inline">{row.timezone}</code>; the instants
+          above are the same fires shown in your own timezone.
         </p>
       )}
     </Panel>

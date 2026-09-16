@@ -29,7 +29,14 @@ import { newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
+import {
+  spanWords,
+  stepOf,
+  useTimeRange,
+  windowEdges,
+  windowLabel,
+  windowParam,
+} from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
@@ -103,10 +110,27 @@ export function Activity() {
   // NOT ALIGNED to the bucket. A chart rounds its edges up so the column in
   // progress is drawn and the query changes once per column; a LIST's newest
   // row is the newest row, and rounding up would ask the store for rows that
-  // do not exist yet. The axis below is drawn from the engine's own snapped
-  // window, which is where that rounding belongs.
+  // do not exist yet.
   const range = useTimeRange(now, LOG_OFFER, false);
   const { since, until, bucket } = range;
+  // WHICH WINDOW THIS IS, as an identity rather than as two instants.
+  //
+  // The price of the unaligned range above is that `since` and `until` ARE the
+  // clock: a fresh pair of millisecond instants on every tick of `useNow`. They
+  // are the right values to FILTER and to ASK with, and the wrong thing for
+  // anything to be keyed on — keyed on them, the reset below ran once a second,
+  // so every page a reader had loaded was thrown away and page one re-fetched,
+  // for as long as the tab stayed open.
+  const windowKey = windowParam(range.window);
+  // THE AXIS'S OWN EDGES, snapped OUT to the bucket it draws in — the rounding
+  // the comment above says a chart wants, and the reason `windowEdges` takes a
+  // step at all. It buys two things: the query's identity stands still between
+  // ticks (a query is keyed on its parameters, so instants carrying the
+  // millisecond re-asked the engine for the same bars once a second, on every
+  // open tab), and the bars cover exactly the window the badge names — whole
+  // buckets ending at the end of the one in progress, rather than the extra
+  // part-bucket the engine's own outward snap adds under a raw `now`.
+  const axis = windowEdges(range.window, now, stepOf(bucket));
 
   const [older, setOlder] = useState<FeedRow[]>([]);
   // Whether this window's FIRST page has been asked for. A window is a query
@@ -131,13 +155,17 @@ export function Activity() {
   //
   // The server-side keys only. `q` and `failed` are applied in the browser to
   // whatever arrived, so changing them cannot invalidate a page.
+  //
+  // THE WINDOW'S IDENTITY, not its two instants — see [windowKey]. A reader
+  // choosing another range is a new query and its pages go; a second passing
+  // is not.
   useEffect(() => {
     setOlder([]);
     setCursor(null);
     setExhausted(false);
     setPageError(null);
     setFetched(false);
-  }, [category, actor, since, until]);
+  }, [category, actor, windowKey]);
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
@@ -188,8 +216,8 @@ export function Activity() {
   // to whatever arrived, so an axis carrying them would be counting a set the
   // engine was never asked about.
   const series = useQuery("event_series", {
-    since,
-    until,
+    since: axis.since,
+    until: axis.until,
     bucket,
     ...(category ? { category } : {}),
     ...(actor ? { actor } : {}),
@@ -371,16 +399,29 @@ export function Activity() {
             ))}
           </div>
         ) : (
-          <QueryState
-            error={null}
-            loading={false}
-            empty={{
-              title: filtered ? "Nothing matches these filters" : "Nothing has been published yet",
-              hint: filtered
-                ? "Older rows may still match — load more history below."
-                : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to.",
-            }}
-          />
+          // AN EMPTY LIST IS A CLAIM, and only one of the three ways to hold no
+          // rows supports it. A page still in flight has not been shown to hold
+          // nothing — the mount asks for this window's own first page, so this
+          // used to say "Nothing has been published yet" over every load, on a
+          // company with thirty days of history. A page the engine REFUSED is
+          // the footer's banner to report, and an empty state drawn over it
+          // tells a reader their log is gone when nobody managed to read it.
+          // Both are absences of an answer; only the third is an answer.
+          !paging &&
+          !pageError && (
+            <QueryState
+              error={null}
+              loading={false}
+              empty={{
+                title: filtered
+                  ? "Nothing matches these filters"
+                  : "Nothing has been published yet",
+                hint: filtered
+                  ? "Older rows may still match — load more history below."
+                  : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to.",
+              }}
+            />
+          )
         )}
         <footer className="panel-foot">
           {pageError ? (

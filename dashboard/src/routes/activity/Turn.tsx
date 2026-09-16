@@ -277,11 +277,12 @@ export interface TurnView {
   span: { from: number; to: number };
   /** The turn's own token bill, without the workers — see [turnFacts]. */
   tokens: number;
-  toolCalls: number;
   workerTokens: number;
   workerCount: number;
   /** The highest self-iterate round its own phases reached. */
   rounds: number;
+  /** Every trace this turn touched, store's list first — see [useTurnView]. */
+  traceIds: string[];
 }
 
 export function useTurnView(turnId: string): TurnView {
@@ -298,6 +299,43 @@ export function useTurnView(turnId: string): TurnView {
   const phaseEvents = usePhaseEvents();
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
+
+  // EVERY TRACE THIS TURN TOUCHED, not the first one to arrive.
+  //
+  // `events[0].trace_id` is the trace of whichever event happened to sort
+  // first, and the store's own doc says a turn resumed on another node after a
+  // restart spans more than one — which is exactly the turn somebody opens
+  // this page to understand. One button labelled "trace" then led to half the
+  // story with nothing saying a second half existed.
+  //
+  // THE STORE'S OWN LIST COMES FIRST, because a derived one can only ever name
+  // the traces of rows this frame HOLDS: a cut view is missing its middle and
+  // a turn past the retention window is missing most of itself, so a trace
+  // that lived only in the gap is one no derivation can reach.
+  // `internal/api/queries/insight.go` seeks them separately and DEGRADES to an
+  // empty list rather than failing the read — which is why an empty answer
+  // falls through to the derivation instead of being taken for "this turn
+  // touched none".
+  //
+  // AND THE STREAMED HALF IS THIS TURN'S ONLY. `usePhaseEvents` is the tab's
+  // GLOBAL phase slice — every seat's, every turn's, 200 deep — so folded
+  // whole it offered "Trace 3 of 4" buttons leading to other turns' traces.
+  // It is derived HERE rather than on the screen so the rail gets the same
+  // list: a peek holds no phase slice of its own and could not compute one.
+  const traceIds = useMemo(() => {
+    const seen: string[] = [];
+    const add = (id: string) => {
+      if (id && !seen.includes(id)) seen.push(id);
+    };
+    for (const id of data?.trace_ids ?? []) add(id);
+    for (const ev of events) add(ev.trace_id);
+    // `fromPhaseEvent` is the one reader of a phase payload's shape, so the
+    // turn is matched through it rather than by reaching into `payload` here.
+    for (const ev of phaseEvents) {
+      if (fromPhaseEvent(ev)?.turnId === turnId) add(ev.trace_id);
+    }
+    return seen;
+  }, [data, events, phaseEvents, turnId]);
   // THE STORE STOPPED AT ITS CAP, not at the end of the turn. The answer
   // recovers the turn's ENDING beside its opening — that is where the two
   // records the header reads its outcome, its clock and its plan summary off
@@ -378,9 +416,9 @@ export function useTurnView(turnId: string): TurnView {
     durationMs: typeof measured === "number" ? measured : null,
     span: turnSpan(events, phases),
     tokens: own.reduce((n, p) => n + p.totalTokens, 0),
-    toolCalls: own.reduce((n, p) => n + p.tools.length, 0),
     workerTokens,
     workerCount,
+    traceIds,
     // THE HIGHEST ITERATION ITS OWN PHASES REACHED, which is what a reader
     // means by "how many rounds did this take" and what the turns list counts
     // (`MAX(iteration)`, in `store.Turns`) — a self-iterate round, not a tool
@@ -837,21 +875,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
   const { from, to } = view.span;
-  // EVERY TRACE THIS TURN TOUCHED, not the first one to arrive.
-  //
-  // `events[0].trace_id` is the trace of whichever event happened to sort
-  // first, and the store's own doc says a turn resumed on another node after a
-  // restart spans more than one — which is exactly the turn somebody opens
-  // this page to understand. One button labelled "trace" then led to half the
-  // story with nothing saying a second half existed.
-  const traceIds = useMemo(() => {
-    const seen: string[] = [];
-    for (const ev of [...events, ...phaseEvents]) {
-      const id = ev.trace_id;
-      if (id && !seen.includes(id)) seen.push(id);
-    }
-    return seen;
-  }, [events, phaseEvents]);
+  const traceIds = view.traceIds;
   const traceId = traceIds[0] ?? "";
 
   const conversation = str(rec.summary, "conversation_key") || phases[0]?.conversationKey || "";

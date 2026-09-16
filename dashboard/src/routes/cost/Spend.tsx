@@ -28,7 +28,7 @@ import { QueryState } from "~/components/common.tsx";
 import { Badge, Meter, Panel, Segmented, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
 import {
@@ -200,26 +200,6 @@ function SpendOverTime({ range }: { range: TimeRange }) {
   );
 }
 
-/**
- * A grid row's activation, for a grid whose `rowHref` is the object's page.
- *
- * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy of
- * which clicks mean "open elsewhere" and it reads a mouse event; the `enter`
- * chord carries no button at all and is never one of them. Written once here
- * because this screen has two grids that both want it.
- */
-function peekRow<T>(
-  open: (row: T) => void,
-): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
-  return (row, e) => {
-    if (!("button" in e)) {
-      open(row);
-      return;
-    }
-    rowPeekHandler(() => open(row))?.(e);
-  };
-}
-
 export function Spend() {
   const pushed = useTokens();
   const { open: openPeek } = usePeekControls();
@@ -240,7 +220,19 @@ export function Spend() {
     { since: range.since, until: range.until, recent_turns: 100 },
     { enabled: !live },
   );
-  const tokens = live ? pushed : (asked.data ?? pushed);
+  // AND A FAILED READ IS NOT A WINDOW'S ANSWER. The fallback above covers the
+  // moment BEFORE the first answer arrives; past a refusal there is no answer
+  // coming, and the live rollup left standing under the chosen window's badge
+  // is the March-chart-with-this-afternoon's-figures this query was built to
+  // stop — reintroduced on the one path nobody looks at. A 90-day scan is
+  // exactly what times out, and `internal/api/queries` returns the store's own
+  // error unchanged. Nothing is invented in its place: every consumer below
+  // already draws an em dash or its own empty state for an absent rollup, and
+  // the refusal above the tiles says which of the two this is.
+  //
+  // The last GOOD answer still wins where there is one — it is an answer for
+  // THIS window, and a reconnect that failed is no reason to throw it away.
+  const tokens = live ? pushed : (asked.data ?? (asked.error ? null : pushed));
 
   // SORTED THE WAY EACH TABLE OPENS, which is what makes the stepper below
   // honest: the grid applies its own `defaultSort` to whatever it is handed, so
@@ -321,6 +313,13 @@ export function Spend() {
         How many tokens the company&rsquo;s model calls have spent, and how much headroom the budget
         gate has left. Every figure here is in tokens.
       </PageNote>
+
+      {/* THE REFUSAL, ABOVE THE FIGURES IT IS ABOUT. `SpendOverTime` routes its
+          own series error, and the breakdown's had no reader at all — so a
+          window that could not be read drew a chart's error banner over stat
+          tiles, bar lists and two tables that were all still rendering, with
+          nothing saying where their numbers came from. */}
+      {!live && asked.error && <QueryState error={asked.error} loading={false} />}
 
       <Panel padding="none">
         <StatRow cols={4}>

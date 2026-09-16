@@ -166,6 +166,38 @@ function Exchange({
 }
 
 /**
+ * A section of the channel body, framed for the page or run on for the rail.
+ *
+ * AT MODULE SCOPE, which is the whole point of it being a component at all: a
+ * component defined inside a render body is a NEW function on every render, so
+ * `<Wrap>` is a different element type each time and React unmounts the whole
+ * subtree and builds it again rather than reconciling it. Both callers of
+ * [ChannelBody] pass a `now` that ticks once a second, so the body's DOM was
+ * replaced sixty times a minute — and a reader dragging over the channel id to
+ * copy it lost the selection within the second, because the node it anchored
+ * to no longer existed.
+ */
+function Wrap({
+  flush,
+  title,
+  children,
+}: {
+  flush?: boolean;
+  title: string;
+  children: React.ReactNode;
+}) {
+  if (flush) {
+    return (
+      <section className="col gap-2">
+        <div className="t-label">{title}</div>
+        {children}
+      </section>
+    );
+  }
+  return <Panel title={title}>{children}</Panel>;
+}
+
+/**
  * One channel, in the rail and on its own page.
  *
  * `flush` is the peek: the rail is the panel already, so the two sections run
@@ -183,17 +215,6 @@ function ChannelBody({
   now: number;
   flush?: boolean;
 }) {
-  const Wrap = flush
-    ? ({ title, children }: { title: string; children: React.ReactNode }) => (
-        <section className="col gap-2">
-          <div className="t-label">{title}</div>
-          {children}
-        </section>
-      )
-    : ({ title, children }: { title: string; children: React.ReactNode }) => (
-        <Panel title={title}>{children}</Panel>
-      );
-
   // OPEN FOR HOW LONG, measured to the close where there is one and to the
   // last message where there is not: a channel that is still open has no end,
   // and measuring it to `now` would make the number move while nothing did.
@@ -201,10 +222,10 @@ function ChannelBody({
 
   return (
     <>
-      <Wrap title="The exchange">
+      <Wrap flush={flush} title="The exchange">
         <Exchange channel={channel} seatName={seatName} now={now} />
       </Wrap>
-      <Wrap title="The record">
+      <Wrap flush={flush} title="The record">
         <PropertiesRail
           groups={[
             {
@@ -473,7 +494,18 @@ export function Conversations({ channelId }: { channelId?: string }) {
           <ChannelBody channel={addressedChannel} seatName={seatName} now={now} />
         </>
       )}
-      {addressed !== "" && !addressedChannel && !channels.loading && (
+      {/* ONLY OVER A RECORD THAT WAS ACTUALLY READ. "This node cannot reach the
+          coordination store", "the read failed" and "the record holds no such
+          channel" are three different facts, and this Empty states the third
+          about somebody's company — so it is guarded on the answer rather than
+          on `loading` alone. Unguarded, a timed-out socket or a node with no
+          channel record drew the refusal banner above and, directly under it, a
+          confident claim that the channel the reader followed a link to had
+          been purged. `available` is the flag that tells the first two apart —
+          see `queries.a2aChannels` — and a present answer is what tells a read
+          that happened from one that did not; the sibling `ChannelPeek` gets
+          both for free by rendering inside `QueryState`. */}
+      {addressed !== "" && !addressedChannel && channels.data?.available === true && (
         <Empty
           icon="link"
           title="No such channel in the record"

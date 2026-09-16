@@ -249,6 +249,50 @@ test("a running turn's streamed phases keep the empty state away", async () => {
   expect(screen.queryByText("No events for this turn")).toBeNull();
 });
 
+// THE TRACE BUTTONS NAME THIS TURN'S TRACES, AND NOBODY ELSE'S.
+//
+// `usePhaseEvents` is the store's GLOBAL phase slice — every seat's completed
+// phase, every turn's, two hundred deep — and the header folded it whole, so a
+// tab left open on a busy company offered "Trace 2 of 4" buttons leading into
+// other turns. This case is the worst shape of it: the deep-link-while-running
+// turn, where the query answers with nothing at all and the ONE trace button
+// therefore came entirely from whichever foreign phase landed most recently.
+test("the trace buttons name this turn's traces, not the tab's", async () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false })
+      : Promise.resolve({});
+  // Another seat's turn, landing in the same tab a moment before this one's.
+  store.applyEvent({
+    ...phase("2026-09-13T10:00:00Z", 1_000, { turn_id: "t-elsewhere", role: "CFO" }),
+    failed: false,
+    trace_id: "trace-elsewhere",
+  });
+  store.applyEvent({
+    ...phase("2026-09-13T10:01:30Z", 90_000),
+    failed: false,
+    trace_id: "trace-mine",
+  });
+
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <TurnScreen turnId={TURN} />
+      </Router>
+    </ClientContext.Provider>,
+  );
+
+  // ONE trace, not two: the plural form is what a reader is offered when a
+  // turn was genuinely resumed elsewhere, and this turn was not.
+  const button = await screen.findByRole("button", { name: "Trace" });
+  expect(screen.queryByText(/Trace 1 of/)).toBeNull();
+  button.click();
+  expect(location.hash).toContain("trace-mine");
+  expect(location.hash).not.toContain("trace-elsewhere");
+});
+
 // THE DOWNLOADED FILE SAYS WHAT THE SCREEN SAYS.
 //
 // The page marks a capped turn with a badge and a banner because its opening
@@ -272,4 +316,43 @@ test("the exported turn carries the truncation flag", async () => {
 
   await waitFor(() => expect(written).not.toBe(""));
   expect(JSON.parse(written)).toHaveProperty("truncated", true);
+});
+
+// THE STORE'S OWN TRACE LIST IS NOT A DERIVATION, and the page prefers it.
+//
+// A list folded from the rows this page holds can only name the traces of rows
+// it HOLDS: a cut view is missing its middle and a turn past the retention
+// window is missing most of itself, so a trace that lived only in the gap is
+// one the fold can never reach. `internal/api/queries/insight.go` seeks them
+// separately for exactly that reason.
+test("a trace the rows never carried still reaches the header", async () => {
+  mount({
+    trace_ids: ["only-in-the-gap", "also-on-a-row"],
+    events: [
+      phase("2026-09-13T10:01:30Z", 90_000, {}),
+      event({
+        type: "turn_completed",
+        timestamp: "2026-09-13T10:40:00Z",
+        trace_id: "also-on-a-row",
+      }),
+    ],
+  });
+  // Two traces, so the header draws the numbered list rather than one button.
+  expect(await screen.findByText("Trace 1 of 2")).toBeTruthy();
+  expect(screen.getByText("Trace 2 of 2")).toBeTruthy();
+});
+
+// AND AN EMPTY ANSWER IS NOT "THIS TURN TOUCHED NONE". The seek degrades to an
+// empty list rather than failing the read, so an absent value has to fall
+// through to the rows rather than blanking a trace the page can see.
+test("an empty trace list falls through to the rows", async () => {
+  mount({
+    trace_ids: [],
+    events: [
+      event({ type: "turn_completed", timestamp: "2026-09-13T10:40:00Z", trace_id: "from-a-row" }),
+    ],
+  });
+  // One trace, so the header draws its single unnumbered button — which it
+  // could only have got from the row.
+  expect(await screen.findByRole("button", { name: "Trace" })).toBeTruthy();
 });

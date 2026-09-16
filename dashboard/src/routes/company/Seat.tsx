@@ -40,6 +40,7 @@ import {
 } from "~/lib/seats.ts";
 import { fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { spanWords } from "~/lib/range.ts";
 import {
   fromLiveCall,
   fromPhaseEvent,
@@ -493,7 +494,16 @@ export function SeatScreen({ handle }: { handle: string }) {
                 />
                 <Stat
                   icon="coin"
-                  label="Tokens · 7d"
+                  // THE WINDOW THE ROLLUP ITSELF REPORTS, never a second
+                  // hardcoded one. This tile is fed by the PUSHED rollup —
+                  // which is why Overview fires no query for it — and that
+                  // covers `livestate.LiveSpendWindow`, currently a day. Under
+                  // a literal "7d" it was a day's spend beneath a week's
+                  // heading, disagreeing by a factor of several with the Cost
+                  // tab's tile of the same name one click away. The engine
+                  // states the window on the answer for exactly this reason,
+                  // and refuses to relabel a rollup it did not take.
+                  label={tokens ? `Tokens · ${spanWords(tokens.since, tokens.until)}` : "Tokens"}
                   value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
                   sub={
                     seatSpend

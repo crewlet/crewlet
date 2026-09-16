@@ -199,12 +199,16 @@ describe("outcomeOf", () => {
 
 /**
  * The fact line is what the page and the rail BOTH wear, so what it says about
- * a number is said once. Two of its facts carry a note, and a note is a claim
- * about where a number came from — which is exactly the kind of claim that
- * goes stale silently, because nothing on screen contradicts it.
+ * a number is said once. THREE of its facts carry a note — an outcome, a
+ * duration and a token figure — and a note is a claim about where a value came
+ * from, which is exactly the kind of claim that goes stale silently, because
+ * nothing on screen contradicts it. This block said two, and the third was the
+ * one nothing here pinned: a count stated in prose and checked by nobody is how
+ * a branch stops being covered without any test going red.
  *
- * These pin the branches rather than the prose: a duration is captioned only
- * when it was NOT measured, a token figure only when workers are outside it.
+ * These pin the branches rather than the prose: an outcome is captioned with
+ * WHOSE word it is, a duration only when it was NOT measured, a token figure
+ * only when workers are outside it.
  */
 describe("turnFacts", () => {
   function view(over: Partial<TurnView>): TurnView {
@@ -225,10 +229,10 @@ describe("turnFacts", () => {
       durationMs: null,
       span: { from: 0, to: 0 },
       tokens: 0,
-      toolCalls: 0,
       workerTokens: 0,
       workerCount: 0,
       rounds: 0,
+      traceIds: [],
       ...over,
     };
   }
@@ -236,6 +240,30 @@ describe("turnFacts", () => {
   function fact(v: TurnView, label: string) {
     return turnFacts(v).find((f) => f.label === label);
   }
+
+  test("the outcome carries whose word it is, and a running turn carries neither", () => {
+    // `done` is the REVIEWER's verdict and `delivered` is the executor's own,
+    // and the fact renders one word for both — so without the note a reader
+    // cannot tell a turn the reviewer passed from one that merely reported
+    // itself finished. It is the third note, and the one this block used to
+    // claim did not exist.
+    const done = view({
+      outcome: outcomeOf({
+        summary: record({ failed: false, decision: "done" }),
+        learning: record({ review_outcome: "done", outcome: "delivered" }),
+      }),
+    });
+    expect(fact(done, "Outcome")?.value).toBe("done");
+    expect(fact(done, "Outcome")?.note).toBe("delivered the work");
+
+    // A RUNNING TURN HAS NO OUTCOME. `outcomeOf` answers an em dash for a
+    // caller with a tile to fill; a fact line has no tile, so the value is
+    // dropped — and the note has to go with it, or the line carries a caption
+    // about nothing, directly under the badge that says "running".
+    const running = view({ outcome: outcomeOf({ summary: undefined, learning: undefined }) });
+    expect(fact(running, "Outcome")?.value).toBe("");
+    expect(fact(running, "Outcome")?.note).toBe(undefined);
+  });
 
   test("the engine's own milliseconds carry no note", () => {
     // A caption under every duration is a caption nobody reads, and then the
