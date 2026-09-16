@@ -344,15 +344,25 @@ test("the segments that include finished work say so on the wire", () => {
   expect(build({ filters: { ...NO_FILTERS, scope: "open" } }).show_closed).toBeUndefined();
 });
 
-// THE SEGMENT OWNS BOTH KEYS, not one of them. A saved view carrying
-// `show_closed` is a default like any other, and a segment that overrode the
-// group while leaving the flag would ask a question neither the view nor the
-// reader posed.
-test("a view's own show_closed loses to the segment on screen", () => {
+// AND IT IS A FLOOR, NOT AN OVERRIDE. A saved view carrying `show_closed`
+// states a NARROWER window inside the same segment — `recent:168h` is
+// "finished in the last week" — and the segment is derived from that same
+// view's `status_group`, so writing `true` over it would turn the view its
+// author saved into "everything ever closed" without anybody touching the
+// control. Measured on a running engine: under `done,closed`, `true` answers
+// 1 row and `recent:1h` answers 0, so the difference is real rather than
+// theoretical.
+test("a view's own show_closed survives the segment on screen", () => {
   const view = { show_closed: "recent:168h" };
-  expect(build({ view, filters: { ...NO_FILTERS, scope: "open" } }).show_closed).toBeUndefined();
-  expect(build({ view, filters: { ...NO_FILTERS, scope: "closed" } }).show_closed).toBe("true");
-  expect(build({ view, filters: { ...NO_FILTERS, scope: "" } }).show_closed).toBe("true");
+  expect(build({ view, filters: { ...NO_FILTERS, scope: "closed" } }).show_closed).toBe(
+    "recent:168h",
+  );
+  expect(build({ view, filters: { ...NO_FILTERS, scope: "" } }).show_closed).toBe("recent:168h");
+  // Untouched under `open` too, where every value of the key is inert because
+  // the group already excludes everything it could admit.
+  expect(build({ view, filters: { ...NO_FILTERS, scope: "open" } }).show_closed).toBe(
+    "recent:168h",
+  );
 });
 
 // A VIEW IS A SET OF DEFAULTS AND EVERY EXPLICIT KEY OVERRIDES IT, which is

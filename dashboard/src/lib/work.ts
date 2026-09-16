@@ -443,26 +443,35 @@ export function buildItemsParams(args: {
   // two of them rather than one negation. The third segment deletes the key,
   // including one a view brought with it.
   //
-  // AND `show_closed` TRAVELS WITH IT, because the group alone cannot widen
-  // the answer. `internal/tracker/read.go` ANDs an unconditional
-  // `t.status_group IN ('not_started','active')` unless this key is set, so
-  // sending `done,closed` without it asks for the intersection of the two
-  // disjoint halves — the Closed segment returned nothing at all, on every
-  // company, and All returned exactly what Open did. Measured against a
-  // seeded company: 0 rows and 14 rows where the answers are 1 and 15.
+  // AND THE TWO SEGMENTS THAT INCLUDE FINISHED WORK NEED `show_closed`, because
+  // the group alone cannot widen the answer. `internal/tracker/read.go` ANDs an
+  // unconditional `t.status_group IN ('not_started','active')` unless this key
+  // is set, so sending `done,closed` without it asks for the intersection of
+  // two disjoint halves — the Closed segment returned nothing at all, on every
+  // company, and All returned exactly what Open did. Measured against a seeded
+  // company through a running engine: 0 rows and 14 where the answers are 1
+  // and 15.
   //
-  // The segment owns BOTH keys together rather than one of them. A saved view
-  // may carry its own `show_closed`, and leaving it under a segment that
-  // contradicts it is how a screen comes to show a scope nobody picked.
+  // IT IS A FLOOR, NOT AN OVERRIDE. A saved view may carry its own
+  // `show_closed` — `recent:168h` is "finished in the last week" — and that is
+  // a NARROWER window its author chose, inside the same segment. Writing
+  // `true` over it turns their view into "everything ever closed" the moment
+  // the segment is derived from their own `status_group`, which is a scope
+  // nobody picked. So the segment supplies the key only where nothing else
+  // did, and never deletes one.
+  //
+  // Which is also why `open` touches it at all: under `not_started,active`
+  // every value of `show_closed` is inert, since each of the three arms in
+  // that switch either adds nothing or adds a predicate the group already
+  // implies. Measured, all three answer identically.
   if (filters.scope === "open") {
     params.status_group = "not_started,active";
-    delete params.show_closed;
   } else if (filters.scope === "closed") {
     params.status_group = "done,closed";
-    params.show_closed = "true";
+    if (!params.show_closed) params.show_closed = "true";
   } else {
     delete params.status_group;
-    params.show_closed = "true";
+    if (!params.show_closed) params.show_closed = "true";
   }
 
   if (filters.blocked) params.blocked = true;
