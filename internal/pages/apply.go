@@ -215,11 +215,12 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return 0, fmt.Errorf("pages: decode the record at %s: %w", rec.Position, err)
 	}
 	at := applyContext{
-		record:   record,
-		position: rec.Position,
-		packed:   rec.Position.Packed(),
-		brokerAt: opts.StoredAt,
-		epoch:    opts.Epoch,
+		record:       record,
+		position:     rec.Position,
+		packed:       rec.Position.Packed(),
+		brokerAt:     opts.StoredAt,
+		epoch:        opts.Epoch,
+		maxVariables: opts.MaxVariables,
 	}
 
 	switch ObjectKind(rec.Subject.Kind) {
@@ -270,6 +271,20 @@ type applyContext struct {
 	brokerAt time.Time
 
 	epoch map[string]any
+
+	// maxVariables is the engine's probed bind-parameter limit, carried
+	// here because it is what sizes a multi-row INSERT and an applier holds
+	// a transaction and nothing else.
+	//
+	// IT IS NOT AN INPUT TO WHAT THE ROWS SAY, which is why it sits beside
+	// the four purity rules above without breaking them: it decides how
+	// many statements a collection is written in, never which rows land or
+	// in what order. Two nodes probing different limits still write
+	// byte-identical tables. A ZERO is an unset field rather than a limit —
+	// [store.RowsPerInsert] falls to one row per statement — so an applier
+	// reached by a caller that never set it behaves exactly as this domain
+	// did before the chunker.
+	maxVariables int
 }
 
 // subject is the record's own subject.
