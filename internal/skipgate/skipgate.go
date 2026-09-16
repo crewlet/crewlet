@@ -102,6 +102,10 @@ type report struct {
 	// check needs; this answers "did anything actually run".
 	tests int
 
+	// measuredSeen is which declared measurements actually reported, so a
+	// renamed one is caught rather than silently stopping.
+	measuredSeen map[string]bool
+
 	// ran is every package the stream carried a record for.
 	//
 	// Load-bearing for the staleness half: BOTH test targets run a SUBSET of
@@ -127,7 +131,7 @@ type report struct {
 // writes build errors and toolchain chatter around the stream, and a gate that
 // swallowed those would hide the one failure nobody can debug without them.
 func read(in *bufio.Scanner, out *os.File) report {
-	r := report{ran: map[string]bool{}}
+	r := report{ran: map[string]bool{}, measuredSeen: map[string]bool{}}
 	buffered := map[string][]string{}
 
 	for in.Scan() {
@@ -166,12 +170,23 @@ func read(in *bufio.Scanner, out *os.File) report {
 			buffered[key] = append(buffered[key], e.Output)
 		case "pass", "fail", "skip":
 			r.tests++
+			if m := measurement(short(e.Package), e.Test); m != nil {
+				r.measuredSeen[m.Package+"\x00"+m.Test] = true
+			}
 		}
 		switch e.Action {
 		case "skip":
 			r.skipped = append(r.skipped, Skip{Package: short(e.Package), Test: e.Test})
 			delete(buffered, key)
 		case "pass":
+			// A DECLARED MEASUREMENT PRINTS ON A GREEN RUN. Every other
+			// passing test's output is dropped, which is what keeps this
+			// gate's log the length `go test` would have produced.
+			if measurement(short(e.Package), e.Test) != nil {
+				for _, o := range buffered[key] {
+					fmt.Fprint(out, o)
+				}
+			}
 			delete(buffered, key)
 		case "fail":
 			r.failed = append(r.failed, short(e.Package)+" "+e.Test)
@@ -232,6 +247,7 @@ func main() {
 	}
 
 	unlisted, stale := Judge(r.skipped, r.ran)
+	staleMeasured := JudgeMeasured(r.measuredSeen, r.ran)
 
 	for _, s := range unlisted {
 		fmt.Fprintf(os.Stderr, "\nskipgate: %s %s SKIPPED and nothing says it may.\n"+
@@ -249,7 +265,16 @@ func main() {
 			s.Package, s.Test)
 	}
 
-	code, note := Verdict(r, producer, len(unlisted) > 0 || len(stale) > 0)
+	for _, m := range staleMeasured {
+		fmt.Fprintf(os.Stderr, "\nskipgate: %s %s is declared in the measured table "+
+			"and never reported.\nA measurement that stopped running prints nothing "+
+			"on every green run, which is the\nexact failure that table was added to "+
+			"fix. Rename or drop the entry in\ninternal/skipgate/allowed.go.\n",
+			m.Package, m.Test)
+	}
+
+	code, note := Verdict(r, producer,
+		len(unlisted) > 0 || len(stale) > 0 || len(staleMeasured) > 0)
 	fmt.Fprintln(os.Stderr, note)
 	os.Exit(code)
 }
