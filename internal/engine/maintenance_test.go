@@ -2,10 +2,12 @@ package engine_test
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -176,11 +178,30 @@ func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 // deploy that restarted the holder left the duty dark for its whole TTL. A
 // setup hold under the same prefix is different: it belongs to a pass that may
 // still be running, and giving it back would let a second writer in mid-pass.
+// BACKENDS THE TEST OWNS, which is what makes the assertions after the stop
+// observable at all. The coordination KV rides the broker's own connection,
+// and an engine that OPENED its backends closes them as the last act of
+// teardown — taking the embedded NATS server with them. Read through those,
+// every lease read after the stop is racing a teardown that is removing the
+// store it reads: it answers "definitively not held" whichever the truth was,
+// so the duty assertion passes for the wrong reason and the hold assertion
+// fails whenever the close wins. Supplied, their lifetime is this test's, and
+// both reads are observations rather than a race — see [engine.Options] on
+// Backends and the ownership rule in [engine.New].
 func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	t.Parallel()
-	e := newEngine(t, engine.Options{})
 	ctx := context.Background()
-	leases := e.Backends().Coord
+	boot := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	company := parsedCompany(t, companyDoc)
+	backends, err := engine.OpenBackends(t.Context(), boot, company)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { backends.Close(ctx) })
+	e := newEngine(t, engine.Options{Bootstrap: boot, Company: company, Backends: backends})
+	leases := backends.Coord
 	owner := e.Node().Owner()
 
 	if _, err := e.Maintenance().Tick(ctx); err != nil {
@@ -190,11 +211,16 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	if held, err := leases.Get(ctx, duty); err != nil || held == nil || held.Owner != owner {
 		t.Fatalf("precondition: the sweep's tick did not leave %s held by this node: (%v, %v)", duty, held, err)
 	}
+	// THE LEASE IS CHECKED, not just the error. A refused claim is the
+	// ordinary (nil, nil) here — a peer holding it, or the duty layout gate
+	// — so a precondition reading only err calls a refusal success and
+	// leaves the assertion below failing for a reason that is not the rule
+	// it is about.
 	hold := coord.WorkerResource("setup-provision-github")
-	if _, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
+	if got, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
-	}); err != nil {
-		t.Fatalf("precondition: take a setup hold: %v", err)
+	}); err != nil || got == nil {
+		t.Fatalf("precondition: take a setup hold: (%v, %v)", got, err)
 	}
 
 	e.Stop(ctx)
