@@ -20,6 +20,19 @@
   scroll-behavior: auto;
 }
 
+/* THE TOOLBAR OWNS THE TOP OF THE SCROLLER, so everything else that sticks
+   starts below it. Asked with `:has` on the whole screen rather than on a
+   direct child, because a toolbar rendered inside a tab panel or a panel is
+   still sticky against this same scroller and still covers the same band.
+   The offset is ONE band of controls: a toolbar narrow enough to wrap is
+   taller than that and a column head then parks under its second row — the
+   only alternative is measuring the band in JS and writing the property from
+   a ResizeObserver, which puts a layout read in the scroll path to buy a
+   pixel at the one width where the grid is already dropping columns. */
+.screen:has(.toolbar) {
+  --sticky-top: var(--toolbar-h);
+}
+
 .screen-inner {
   /* NO MAX WIDTH. The page column is already bounded by the rail and the
      workspace sidebar, and a cap inside it throws away exactly the width the
@@ -45,6 +58,11 @@
   padding: var(--space-2) 0;
   background: var(--bg);
   min-width: 0;
+  /* A FLOOR, NOT A HEIGHT. The band is what `--sticky-top` offsets the grid's
+     column heads by, so it has to be a real number even on a screen whose
+     toolbar holds one short chip — and a fixed height would clip the wrapped
+     row instead, which is the case the floor deliberately lets grow. */
+  min-height: var(--toolbar-h);
 }
 
 .degraded {

@@ -1,7 +1,8 @@
 /**
  * The global rail: the workspaces, and nothing else.
  *
- * 68 px, an icon over an 11 px label, always legible without hover. A rail of
+ * 80 px (`--rail-w`, which is where the width is actually set), an icon over
+ * an 11 px label, always legible without hover. A rail of
  * bare icons is a rail whose rows have to be learnt, and the thing being
  * learnt is the product's own vocabulary — so the label is not an affordance
  * that can be traded for width.

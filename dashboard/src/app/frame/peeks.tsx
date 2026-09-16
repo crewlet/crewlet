@@ -77,7 +77,7 @@ export interface PeekProps {
  * some future build addresses and this one cannot render must do.
  */
 export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.ReactNode>> = {
-  item: ({ id }) => <ItemPeek itemKey={id} chrome={{}} />,
+  item: ({ id }) => <ItemPeek itemKey={id} />,
   project: ({ id }) => <ProjectPeek projectKey={id} />,
   sprint: ({ id }) => <SprintPeek id={id} />,
   goal: ({ id }) => <GoalPeek id={id} />,

@@ -50,7 +50,16 @@
    a long subtitle in the peek rail rendered its heading as "S…" beside a
    readable sentence explaining a panel nobody could name. A subtitle is the
    expendable one by construction: it restates in prose what the title says in
-   a word. */
+   a word.
+
+   IT STILL HAS TO FIT THE PANEL, which is what `max-width` is for. "Never
+   gives way" is about the competition with the subtitle, not about the head's
+   own width: a panel title is free text — a checklist's name, a unit's, a
+   sprint's — and a long one alone on its line is wider than a 420px peek
+   rail. Flexbox clamps an item to its max main size even at `flex: 0 0 auto`,
+   so the cap changes nothing about who shrinks first and everything about
+   what happens when there is nobody to shrink against: the inner `truncate`
+   span ellipses instead of being cut mid-word by `.panel-flush`'s clip. */
 .panel-head > .panel-title {
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
@@ -60,6 +69,7 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  max-width: 100%;
   flex: 0 0 auto;
 }
 /* The basis is what makes the head WRAP rather than crush: at `auto` a long

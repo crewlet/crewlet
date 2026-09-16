@@ -24,7 +24,7 @@
      the content jump. */
   --page-bar-h: var(--topbar-h);
   /* Below this the detail rail becomes a drawer. Measured with the sidebar
-     OPEN: 68 rail + 236 sidebar + 420 peek leaves 456px of list, which is
+     OPEN: 80 rail + 236 sidebar + 420 peek leaves 444px of list, which is
      under the width a work row needs for a key, a title and an assignee.
      With the sidebar collapsed the same layout works at 980, which is why the
      drawer threshold is not simply "small screen" — it is this sum. */
@@ -67,26 +67,41 @@
    The shell mounts it, so the track has to exist here — and it exists ONLY
    while the rail is open, because an empty fourth column would take its
    width from every screen that never opens one. `--peek-w` is the reader's
-   own dragged width, set on the rail itself and read here, so the column and
-   the panel cannot disagree about how wide it is. */
-.app[data-peek="true"] {
-  grid-template-columns:
-    var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
-    var(--peek-w, 420px);
-}
+   own dragged width, published on the ROOT by `DetailRail` — not on the rail
+   itself, which is this grid's own child, and a custom property inherits
+   downward only, so a value set there could never reach the track that sizes
+   it. On the root the column and the panel read one value and cannot
+   disagree about how wide it is.
 
-.app[data-peek="true"][data-rail-collapsed="true"] {
-  grid-template-columns:
-    var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr)
-    var(--peek-w, 420px);
-}
+   AND THE TRACK ONLY EXISTS WHERE THE PEEK IS A COLUMN. Below
+   `--peek-drawer-max` the rail is `position: fixed` (see the drawer block
+   further down), which takes it out of grid flow but does NOT shrink an
+   explicitly sized track — so an unconditional fourth track reserved 420px
+   of empty page at exactly the widths the drawer exists to rescue, and at
+   ≤960 it also out-specified the two-column reset and kept the empty sidebar
+   track as well. 1181 rather than a `calc()` off the token because a custom
+   property cannot be read in a media query; `frame.test.ts` holds the two
+   numbers against each other so they move together. */
+@media (min-width: 1181px) {
+  .app[data-peek="true"] {
+    grid-template-columns:
+      var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
+      var(--peek-w, 420px);
+  }
 
-.app[data-peek="true"][data-no-sidebar="true"] {
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--peek-w, 420px);
-}
+  .app[data-peek="true"][data-rail-collapsed="true"] {
+    grid-template-columns:
+      var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr)
+      var(--peek-w, 420px);
+  }
 
-.app[data-peek="true"][data-no-sidebar="true"][data-rail-collapsed="true"] {
-  grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr) var(--peek-w, 420px);
+  .app[data-peek="true"][data-no-sidebar="true"] {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--peek-w, 420px);
+  }
+
+  .app[data-peek="true"][data-no-sidebar="true"][data-rail-collapsed="true"] {
+    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr) var(--peek-w, 420px);
+  }
 }
 
 /* ---- The global rail ---------------------------------------------------- */
@@ -146,11 +161,17 @@
 }
 
 /* The current row also carries a bar, so "where you are" survives a viewer
-   who cannot separate the accent from the muted text. */
+   who cannot separate the accent from the muted text. It hangs back into the
+   rail's own `--space-1` padding, and the offset is a `calc()` because CSS
+   has no unary minus in front of a function: `-var(--space-1)` parses as a
+   value nothing can compute, the whole declaration is dropped, and `left`
+   falls back to `auto` — which on an abspos child of a centred column flex
+   row is the STATIC position, so the bar painted straight down the middle of
+   the icon it was meant to sit beside. */
 .rail-row.active::before {
   content: "";
   position: absolute;
-  left: -var(--space-1);
+  left: calc(-1 * var(--space-1));
   inset-block: 6px;
   width: 2px;
   border-radius: 1px;
@@ -594,7 +615,16 @@
   }
 }
 
-/* ---- The grid ----------------------------------------------------------- */
+/* ---- The grid -----------------------------------------------------------
+   THE GRID MAKES NO SCROLLPORT OF ITS OWN. `overflow: clip` rounds the rows
+   off at the border radius exactly as `hidden` did, and it is the whole
+   difference between a sticky header that works and one that cannot: `hidden`
+   makes a SCROLL CONTAINER, a sticky box is confined to its nearest
+   scrollport, and this one has no height constraint — it grows to its rows —
+   so its scroll offset is permanently 0 and `top` was never applied. The
+   scroller is `.screen` (see the note at the top of this file: ONE), which is
+   what the header now sticks against, and it rides off with the bottom of the
+   grid because a sticky box still cannot leave this element's box. */
 
 .grid-wrap {
   display: flex;
@@ -602,18 +632,30 @@
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  overflow: hidden;
+  overflow: clip;
   background: var(--surface-1);
 }
 
 .grid-head {
   display: grid;
   align-items: center;
+  /* A REAL HEIGHT, so the band head below can be offset by it rather than by
+     a number somebody measured off a screenshot. --row-h is the product's own
+     row rhythm and clears an 11px label with its padding at every density. A
+     floor rather than a height because `--density: compact` shrinks the
+     padding but not the label, which at a fixed height would put the glyphs
+     0.7px outside a box that clips; the band head then sticks that same sliver
+     high, which is the cheaper of the two errors. */
+  min-height: var(--row-h);
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunken);
   position: sticky;
-  top: 0;
-  z-index: 1;
+  /* NOT 0: `.toolbar` is sticky at the top of the same scroller, opaque and
+     at --z-sticky, so a header that stopped at 0 would stop underneath it.
+     See `--sticky-top` in shell.css, which is 0 on a screen with no toolbar
+     rather than a band of empty page above every header. */
+  top: var(--sticky-top);
+  z-index: 2;
 }
 
 .grid-th {
@@ -651,9 +693,11 @@
   outline-offset: -2px;
 }
 
+/* NO OVERFLOW HERE EITHER, and for the same reason: an `auto` that never
+   scrolled was still a scrollport, and it was the one that confined
+   `.grid-band-head`. */
 .grid-body {
-  overflow-y: auto;
-  min-height: 0;
+  min-width: 0;
 }
 
 .grid-row {
@@ -747,7 +791,14 @@
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
   position: sticky;
-  top: 0;
+  /* Under the column heads, which are `--row-h` tall and already parked at
+     `--sticky-top`. A band head is confined to its own `.grid-band`, so it
+     leaves with the band rather than stacking up. */
+  top: calc(var(--sticky-top) + var(--row-h));
+  /* Above the rows — which are `position: relative` for the row link and so
+     would otherwise paint over it in document order — and below the column
+     heads at 2. */
+  z-index: 1;
 }
 
 .grid-band-count {
@@ -962,9 +1013,14 @@
    rules about an absent value, so the same kind of panel read differently
    depending on which screen it was on.
 
-   Every row of every group shares ONE grid — see PropertiesRail's
-   `display: contents` — which is what keeps the labels in a single column
-   down the whole rail rather than restarting it per section. */
+   EVERY ROW OF EVERY GROUP IS A DIRECT CHILD OF THIS GRID, which is what
+   keeps the labels in a single column down the whole rail rather than
+   restarting it per section — and it is why PropertiesRail groups with keyed
+   fragments and not with wrapper elements. A `display: contents` wrapper
+   looks equivalent and is not: it removes the BOX but not the node, so the
+   child combinators below stop matching (a `dd` kept the user agent's 40px
+   indent inside its own grid cell) and `:first-child` becomes true for every
+   group's heading rather than for the rail's first one. */
 
 .props {
   display: grid;
@@ -1000,6 +1056,10 @@
   color: var(--text-faint);
 }
 
+/* THE RAIL'S FIRST HEADING HAS NOTHING TO BE SEPARATED FROM, so it loses the
+   hairline — and only it. This reads as the rail's first child because the
+   groups are fragments; under a wrapper per group it was true of every
+   heading, and no group in any rail ever drew its separator. */
 .props-section:first-child {
   margin-top: 0;
   padding-top: 0;

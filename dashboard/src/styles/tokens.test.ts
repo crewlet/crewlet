@@ -42,36 +42,62 @@ function sheets(): { name: string; text: string }[] {
     .map((name) => ({ name, text: readFileSync(join(STYLES, name), "utf8") }));
 }
 
+/**
+ * Every no-fallback `var()` in `all` whose name no sheet declares.
+ *
+ * EXTRACTED SO BOTH TESTS BELOW RUN THE SAME CODE. They used to run two
+ * copies: the real check inlined its regexes over the stylesheets, and the
+ * "it can tell" case re-spelled them over a literal — so the mutation test
+ * never touched the thing it claimed to cover and stayed green for every
+ * possible break in it. One function is what makes the second test evidence
+ * about the first.
+ */
+export function undeclared(all: { name: string; text: string }[]): string[] {
+  const declared = new Set<string>();
+  for (const { text } of all) {
+    for (const m of text.matchAll(/^\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
+  }
+  const missing: string[] = [];
+  for (const { name, text } of all) {
+    for (const m of text.matchAll(/var\((--[a-zA-Z0-9_-]+)\s*([,)])/g)) {
+      // A two-argument var() carries its own default and cannot fail
+      // silently — see the note above.
+      if (m[2] === ",") continue;
+      if (declared.has(m[1]!)) continue;
+      const line = text.slice(0, m.index).split("\n").length;
+      missing.push(`${name}:${line} reads ${m[1]}, which nothing declares`);
+    }
+  }
+  return missing;
+}
+
 describe("the token namespace", () => {
   test("every var() with no fallback names a property something declares", () => {
-    const all = sheets();
-    const declared = new Set<string>();
-    for (const { text } of all) {
-      for (const m of text.matchAll(/^\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
-    }
-    const missing: string[] = [];
-    for (const { name, text } of all) {
-      for (const m of text.matchAll(/var\((--[a-zA-Z0-9_-]+)\s*([,)])/g)) {
-        // A two-argument var() carries its own default and cannot fail
-        // silently — see the note above.
-        if (m[2] === ",") continue;
-        if (declared.has(m[1]!)) continue;
-        const line = text.slice(0, m.index).split("\n").length;
-        missing.push(`${name}:${line} reads ${m[1]}, which nothing declares`);
-      }
-    }
-    expect(missing).toEqual([]);
+    expect(undeclared(sheets())).toEqual([]);
   });
 
-  test("it can tell — a property nobody declares is caught", () => {
-    // The mutation this file exists to catch, run against itself: without it
-    // the test above passes on any stylesheet, including one that reads
-    // nothing real.
-    const declared = new Set(["--text"]);
-    const text = ".a { color: var(--text); background: var(--nope); }";
-    const missing = [...text.matchAll(/var\((--[a-zA-Z0-9_-]+)\s*([,)])/g)]
-      .filter((m) => m[2] === ")" && !declared.has(m[1]!))
-      .map((m) => m[1]);
-    expect(missing).toEqual(["--nope"]);
+  test("is reading the stylesheets at all, so the scan cannot pass on nothing", () => {
+    // The check above is vacuous if `sheets()` comes back empty or short — a
+    // stylesheet moved into a subdirectory, a changed extension — and an
+    // empty list satisfies it perfectly. Same idiom as classes.test.ts's own
+    // floor.
+    const all = sheets();
+    expect(all.length).toBeGreaterThan(4);
+    expect(all.some((s) => /^\s*--text\s*:/m.test(s.text))).toBe(true);
+    expect(all.some((s) => /var\(--text\)/.test(s.text))).toBe(true);
+  });
+
+  test("it can tell — a property nobody declares is caught, a fallback is not", () => {
+    // The mutation this file exists to catch, run against THE FUNCTION THE
+    // TEST ABOVE CALLS. Both arms of the exemption are exercised: `--nope`
+    // has no fallback and must be reported, `--nope2` carries one and must
+    // not be.
+    const missing = undeclared([
+      {
+        name: "fake.css",
+        text: ":root {\n  --text: #fff;\n}\n.a {\n  color: var(--text);\n  border-color: var(--nope);\n  width: var(--nope2, 1px);\n}",
+      },
+    ]);
+    expect(missing).toEqual(["fake.css:6 reads --nope, which nothing declares"]);
   });
 });

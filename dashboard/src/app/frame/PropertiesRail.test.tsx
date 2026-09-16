@@ -77,8 +77,17 @@ describe("an absent property", () => {
 
 describe("the rail's shape", () => {
   test("puts every group's rows in ONE grid, so the labels share a column", () => {
-    // A wrapper that laid out would restart the column per group and the rail
-    // would read as several rails stacked.
+    // EVERY ROW IS A DIRECT CHILD OF THE `dl`, which is the only shape the
+    // rail's own rules are written against: `.props > dt` and `.props > dd`
+    // carry the label face and cancel the user agent's 40px indent on a
+    // definition, and `.props-section:first-child` drops the separator above
+    // the rail's FIRST heading and only that one.
+    //
+    // This was asserted as "every wrapper is `display: contents`", which is
+    // the shape that broke it: contents removes the BOX, never the node, so
+    // every one of those rules silently stopped matching while the assertion
+    // stayed green. A group that laid out and a group with no element at all
+    // are told apart by where the rows are, not by a style property.
     const { container } = render(
       <PropertiesRail
         groups={[
@@ -87,13 +96,50 @@ describe("the rail's shape", () => {
         ]}
       />,
     );
-    const rail = container.querySelector("dl.props");
+    const rail = container.querySelector<HTMLElement>("dl.props");
     expect(rail).not.toBeNull();
-    for (const wrapper of rail!.querySelectorAll<HTMLElement>(":scope > div:not(.props-section)")) {
-      expect(wrapper.style.display).toBe("contents");
-    }
-    expect(within(rail as HTMLElement).getByText("State")).toBeTruthy();
-    expect(within(rail as HTMLElement).getByText("Plan")).toBeTruthy();
+    const rows = [...rail!.querySelectorAll("dt, dd")];
+    expect(rows).toHaveLength(4);
+    for (const row of rows) expect(row.parentElement).toBe(rail);
+    expect(rail!.querySelectorAll(":scope > div:not(.props-section)")).toHaveLength(0);
+    expect(within(rail!).getByText("State")).toBeTruthy();
+    expect(within(rail!).getByText("Plan")).toBeTruthy();
+  });
+
+  test("only the rail's first heading is its first child", () => {
+    // Which is what decides whether a group draws its separator. Under a
+    // wrapper per group `:first-child` was true of every heading, so the
+    // hairline between "Dates", "People" and "Tracking" was suppressed
+    // everywhere and no group in any rail ever drew one.
+    const { container } = render(
+      <PropertiesRail
+        groups={[
+          { name: "State", properties: [{ label: "Status", value: "todo" }] },
+          { name: "Plan", properties: [{ label: "Due", value: "Friday" }] },
+        ]}
+      />,
+    );
+    const headings = [...container.querySelectorAll(".props-section")];
+    expect(headings).toHaveLength(2);
+    expect(headings[0]!.matches(":first-child")).toBe(true);
+    expect(headings[1]!.matches(":first-child")).toBe(false);
+  });
+
+  test("an unnamed first group leaves the next heading its separator", () => {
+    // The work item's own shape: a run of unlabelled rows, then "Fields",
+    // "Cost" and "Record". That first heading HAS rows above it, so it is not
+    // the rail's first child and must keep its hairline.
+    const { container } = render(
+      <PropertiesRail
+        groups={[
+          { properties: [{ label: "Status", value: "todo" }] },
+          { name: "Fields", properties: [{ label: "Due", value: "Friday" }] },
+        ]}
+      />,
+    );
+    const heading = container.querySelector(".props-section");
+    expect(heading).not.toBeNull();
+    expect(heading!.matches(":first-child")).toBe(false);
   });
 
   test("links a value the caller gave a path, and nothing else", () => {

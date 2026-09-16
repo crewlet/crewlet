@@ -133,6 +133,18 @@
   --nav-row-pad: var(--space-3);
   --sidebar-w: 236px;
   --topbar-h: 52px;
+  /* One band of controls: a control plus the toolbar's own padding. Derived
+     rather than measured, so a change to either input moves the band and the
+     offset below it together. */
+  --toolbar-h: calc(var(--control-h) + var(--space-2) * 2);
+  /* WHERE A STICKY BAND INSIDE THE PAGE COMES TO REST. `.screen` is the one
+     scroller, and more than one thing wants to stop at the top of it — the
+     toolbar, a grid's column heads, a band label. The toolbar is the one that
+     owns 0, so everything under it offsets by this; it is 0 here and raised
+     in shell.css only on a screen that actually has a toolbar, because an
+     unconditional offset leaves a strip of scrolling page above the header on
+     every screen that does not. */
+  --sticky-top: 0px;
   /* Prose and forms get a measure. Tables and charts deliberately do not:
      they are the one content that genuinely wants the whole viewport.
 

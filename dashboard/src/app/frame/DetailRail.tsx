@@ -29,7 +29,7 @@
  * because it is one keystroke away.
  */
 
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigator, useRoute, parseHash, buildHash } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
 import { href } from "../router.tsx";
@@ -114,6 +114,33 @@ export function rowPeekHandler(open?: () => void): ((e: React.MouseEvent) => voi
   };
 }
 
+/**
+ * A `DataGrid` row's `onRowActivate`, wired to open a peek.
+ *
+ * WHY NOT [rowPeekHandler] DIRECTLY: that one decides on `e.button`, and a
+ * KeyboardEvent has none. `DataGrid` activates its cursor row from an `enter`
+ * chord, so `undefined !== 0` read as "the reader meant elsewhere" and the
+ * keyboard path opened nothing at all. Three screens each hit that and wrote
+ * the same private adapter — `Fleet`, `Pages` and `Spend`, byte for byte —
+ * which is the shape this repository has already paid for three times
+ * (`textcut`, `whsec`, `httpjson`). It belongs beside the handler it wraps.
+ *
+ * THE KEYBOARD PATH HAS NO MODIFIERS TO READ, so it opens unconditionally:
+ * a grid's `enter` is the reader saying "this row" with nothing to say
+ * "elsewhere" with, and the browser will not navigate on its own behalf.
+ */
+export function peekRow<T>(
+  open: (row: T) => void,
+): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
+  return (row, e) => {
+    if (!("button" in e)) {
+      open(row);
+      return;
+    }
+    rowPeekHandler(() => open(row))?.(e);
+  };
+}
+
 export function DetailRail({
   ref: object,
   children,
@@ -136,6 +163,28 @@ export function DetailRail({
     { key: "[", run: () => onStep?.(-1), when: Boolean(onStep) },
     { key: "]", run: () => onStep?.(1), when: Boolean(onStep) },
   ]);
+
+  // THE DRAGGED WIDTH IS PUBLISHED ON THE ROOT, not on the rail.
+  //
+  // Two things read it and they are on opposite sides of this component: the
+  // grid track that sizes the peek column is declared on `.app`, which is
+  // this rail's ANCESTOR, and the fixed drawer's own `width` is on the rail
+  // itself. A custom property inherits downward only, so the value written on
+  // the aside — where it was — could never reach the track: the column stayed
+  // at its 420px fallback for ever, `.peek-rail` deliberately declares no
+  // width of its own, and a drag moved React state, localStorage and nothing
+  // on screen. From the root both readers inherit one value, which is the
+  // thing frame.css claims: the column and the panel cannot disagree.
+  //
+  // Removed on unmount rather than left behind, so a closed rail does not
+  // leave a width pinned on the document for the next one to inherit.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--peek-w", `${width}px`);
+    return () => {
+      root.style.removeProperty("--peek-w");
+    };
+  }, [width]);
 
   const startDrag = useCallback(() => {
     dragging.current = true;
@@ -164,11 +213,7 @@ export function DetailRail({
   return (
     <>
       <div className="peek-veil" onClick={close} role="presentation" />
-      <aside
-        className="peek-rail"
-        style={{ "--peek-w": `${width}px` } as never}
-        aria-label={`${KINDS[object.kind].label} detail`}
-      >
+      <aside className="peek-rail" aria-label={`${KINDS[object.kind].label} detail`}>
         <div
           className="peek-grip"
           onMouseDown={startDrag}

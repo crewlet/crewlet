@@ -30,7 +30,7 @@
  * that should vanish is not in the list.
  */
 
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { href } from "../router.tsx";
 import type { SetBy } from "./ObjectHeader.tsx";
 
@@ -65,14 +65,22 @@ export function PropertiesRail({ groups }: { groups: PropertyGroup[] }) {
   return (
     <dl className="props">
       {groups.map((group, i) => (
-        // `display: contents` so every row of every group shares ONE grid,
-        // which is what keeps the labels in a single column down the whole
-        // rail. A wrapper that laid out would restart the column per group
-        // and the rail would read as several rails.
-        <div key={group.name ?? i} style={{ display: "contents" }}>
+        // A KEYED FRAGMENT, so every row of every group is a DIRECT CHILD of
+        // the one grid — which is what keeps the labels in a single column
+        // down the whole rail instead of restarting it per section.
+        //
+        // These were `display: contents` wrappers, which looks like the same
+        // thing and is not: it removes the BOX, never the node, so the rail's
+        // own rules stopped matching. `.props > dd` is what cancels the user
+        // agent's 40px indent on a definition, and it was not applying to a
+        // single value in the product; `.props-section:first-child` is what
+        // drops the separator above the rail's FIRST heading, and under a
+        // wrapper per group it was true of every heading, so no group ever
+        // drew its hairline. A fragment has no node to get in the way.
+        <Fragment key={group.name ?? i}>
           {group.name && <div className="props-section">{group.name}</div>}
           {group.properties.map((p) => (
-            <div key={p.label} style={{ display: "contents" }}>
+            <Fragment key={p.label}>
               <dt title={p.title} className={p.code ? "mono" : undefined}>
                 {p.label}
               </dt>
@@ -96,9 +104,9 @@ export function PropertiesRail({ groups }: { groups: PropertyGroup[] }) {
                   </span>
                 )}
               </dd>
-            </div>
+            </Fragment>
           ))}
-        </div>
+        </Fragment>
       ))}
     </dl>
   );

@@ -126,9 +126,11 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   integration: { label: "Integration", pathOf: (id) => ["admin", "integrations", id] },
   credential: { label: "Credential", pathOf: (id) => ["admin", "credentials", id], mono: true },
   revision: { label: "Revision", pathOf: (id) => ["admin", "config", "revisions", id], mono: true },
-  // A NOTICE HAS NO PAGE OF ITS OWN. It is a row in somebody's inbox naming a
-  // change to something else, so its "page" is the inbox that holds it — and
-  // the peek is where the notice itself is read.
+  // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
+  // somebody's inbox naming a change to something else, so its "page" is the
+  // inbox that holds it — and that is where it is read in place and marked,
+  // which is why `peeks.tsx` deliberately registers no body for it and
+  // `peekable` answers false.
   notice: { label: "Notice", pathOf: () => ["inbox"] },
 };
 

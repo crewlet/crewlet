@@ -24,7 +24,16 @@
  * how many that is, so an export never claims more than the page it has.
  */
 
-import { useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { useParam } from "../router.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { Button, Empty, cx } from "~/ui/primitives.tsx";
@@ -76,6 +85,60 @@ function compare(a: string | number, b: string | number): number {
 export function parseSort(raw: string): { key: string; desc: boolean } | null {
   if (!raw) return null;
   return raw.startsWith("-") ? { key: raw.slice(1), desc: true } : { key: raw, desc: false };
+}
+
+/**
+ * WHICH GRID THE KEYBOARD IS DRIVING.
+ *
+ * `j`, `k` and `enter` are bound on `window`, because there is nothing else to
+ * bind them to: a grid whose rows are anchors takes no focus of its own, and
+ * asking the reader to click a list before they can walk it is not a keyboard
+ * shortcut. But several screens carry two or three grids at once — the spend
+ * by seat and the recent turns, a node's leases and its duties, a page's grid
+ * and another inside the peek rail over it — and `window` is one target, so
+ * every mounted grid received every keystroke. One `j` moved two cursors and
+ * set two `scrollIntoView`s fighting over the viewport; one Enter opened a
+ * seat peek and then a turn peek over it, so the object the reader got was
+ * never the one their cursor was on.
+ *
+ * The reader's LAST POINTER GESTURE says which grid they are in — it is the
+ * only signal there is, since neither grid can be focused. With no gesture yet
+ * the first DRIVABLE grid mounted drives, which on every screen that has one
+ * is the primary grid: a reader who has clicked nothing keeps exactly the
+ * behaviour they had. A grid showing its empty state registers nothing, so an
+ * empty list at the top of a screen does not swallow the keystrokes meant for
+ * the populated one under it.
+ *
+ * Module state rather than a context: the two grids that need to agree are
+ * frequently in different subtrees (a screen and the peek rail over it), and a
+ * provider around both would have to be the shell, which knows nothing about
+ * grids.
+ */
+const drivable: string[] = [];
+let touched: string | null = null;
+let revision = 0;
+const watchers = new Set<() => void>();
+
+/** Wake every grid: whose keystroke this is has changed. */
+function announce(): void {
+  revision += 1;
+  for (const watcher of watchers) watcher();
+}
+
+function watchDriving(watcher: () => void): () => void {
+  watchers.add(watcher);
+  return () => {
+    watchers.delete(watcher);
+  };
+}
+
+function drivingRevision(): number {
+  return revision;
+}
+
+function isDriving(gridId: string): boolean {
+  if (touched !== null) return touched === gridId;
+  return drivable[0] === gridId;
 }
 
 export function DataGrid<T>({
@@ -193,12 +256,38 @@ export function DataGrid<T>({
       }),
     [flat.length],
   );
+  // `when` below is a value captured at render, so a pointer gesture that
+  // changes nothing on screen still has to re-render every grid for them to
+  // agree about whose keystroke the next one is.
+  useSyncExternalStore(watchDriving, drivingRevision);
+  const canDrive = flat.length > 0;
+  useEffect(() => {
+    if (!canDrive) return;
+    drivable.push(gridId);
+    announce();
+    return () => {
+      const at = drivable.indexOf(gridId);
+      if (at >= 0) drivable.splice(at, 1);
+      // A grid the reader touched and then left takes nothing with it: the
+      // fallback has to be free to name the next one.
+      if (touched === gridId) touched = null;
+      announce();
+    };
+  }, [gridId, canDrive]);
+  const driving = isDriving(gridId);
+
+  const claimKeyboard = useCallback(() => {
+    if (touched === gridId) return;
+    touched = gridId;
+    announce();
+  }, [gridId]);
+
   useKeyChords([
-    { key: "j", run: () => step(1) },
-    { key: "k", run: () => step(-1) },
+    { key: "j", run: () => step(1), when: driving },
+    { key: "k", run: () => step(-1), when: driving },
     {
       key: "enter",
-      when: cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
+      when: driving && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
       run: (e) => {
         const row = flat[cursor];
         if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
@@ -289,7 +378,10 @@ export function DataGrid<T>({
   }
 
   return (
-    <div className="grid-wrap">
+    // THE POINTER IS WHAT SAYS WHICH GRID THE READER IS IN — see the registry
+    // above. `pointerdown` rather than `click`, so a drag on a header or a
+    // press that never becomes a click still hands the keyboard over.
+    <div className="grid-wrap" onPointerDown={claimKeyboard}>
       <div className="grid-head" style={{ gridTemplateColumns: template }} role="row">
         {shownColumns.map((column) => {
           const sorted = sort?.key === column.key;

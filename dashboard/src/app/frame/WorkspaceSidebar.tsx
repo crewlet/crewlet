@@ -73,11 +73,33 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
   const current = samePath(row.path, route.path);
   const onPath = containsRoute(row, route.path);
   const hasChildren = (row.children ?? []).length > 0;
-  // OPEN BECAUSE THE READER IS INSIDE IT, or because they opened it. A tree
-  // that collapsed the branch you are standing on is a tree that loses you on
-  // every navigation.
+  // OPEN BECAUSE THE READER IS INSIDE IT, or because they searched into it, or
+  // because they opened it. A tree that collapsed the branch you are standing
+  // on is a tree that loses you on every navigation.
+  //
+  // WHY THE HAND STATE IS FORGOTTEN RATHER THAN CONSULTED FIRST. `openedByHand
+  // ?? forced` alone made one collapse permanent: `??` falls through on null
+  // and a twist writes a boolean, so neither force-open could ever apply
+  // again. Collapse a project, then type a filter its sprint matches — the
+  // project row stays (it matches THROUGH its children) and the sprint renders
+  // nowhere, which is indistinguishable from a search that found nothing.
+  // Navigate into the branch and it is worse: `onPath` is true, the branch is
+  // shut, and the row marked `current` is not drawn at all.
+  //
+  // So the hand state is cleared whenever the REASON to be open changes —
+  // which page the reader is on, when it is inside this branch, or what they
+  // have typed. The path rather than the whole hash, because opening a peek
+  // changes the query and must not reopen a branch somebody folded away.
+  // Adjusted during render rather than in an effect, so the row is never
+  // painted once in the state the reader already left.
+  const forcedBy = onPath ? route.path.join("/") : filter !== "" ? `?${filter}` : "";
   const [openedByHand, setOpenedByHand] = useState<boolean | null>(null);
-  const open = openedByHand ?? (onPath || filter !== "");
+  const [lastForcedBy, setLastForcedBy] = useState(forcedBy);
+  if (lastForcedBy !== forcedBy) {
+    setLastForcedBy(forcedBy);
+    if (forcedBy !== "") setOpenedByHand(null);
+  }
+  const open = openedByHand ?? forcedBy !== "";
 
   return (
     <>

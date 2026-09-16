@@ -17,12 +17,20 @@
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeAll, expect, test } from "vitest";
 
 import { DataGrid } from "./DataGrid.tsx";
 import { Router } from "~/app/router.tsx";
 
 afterEach(cleanup);
+
+beforeAll(() => {
+  // jsdom implements no layout and so no scrolling, and the cursor keys below
+  // scroll the row they land on into view. Stubbed here rather than in the
+  // shared setup: it is a fact about what these cases exercise, not a gap
+  // every suite has.
+  Element.prototype.scrollIntoView = () => {};
+});
 
 interface Row {
   id: string;
@@ -105,4 +113,62 @@ test("a grid with no row link renders no overlay at all", () => {
     </Router>,
   );
   expect(screen.queryAllByRole("link")).toHaveLength(0);
+});
+
+/**
+ * AND THE KEYBOARD BELONGS TO ONE GRID AT A TIME.
+ *
+ * `j`, `k` and `enter` are bound on `window` — a grid whose rows are anchors
+ * takes no focus of its own, so there is nothing else to bind them to. Several
+ * screens carry two: the spend by seat over the recent turns, a page's grid
+ * under one in the peek rail. Unscoped, both handlers ran on every keystroke —
+ * one `j` moved two cursors and one Enter opened a seat peek and then a turn
+ * peek over it, so the object the reader got was never the one their cursor
+ * was on.
+ */
+function twoGrids(seen: string[]) {
+  const columns = [{ key: "id", header: "Id", cell: (r: Row) => r.id }];
+  return render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        name="upper"
+        rowKey={(r) => r.id}
+        onRowActivate={(r) => seen.push(`upper:${r.id}`)}
+        columns={columns}
+      />
+      <DataGrid<Row>
+        rows={ROWS}
+        name="lower"
+        rowKey={(r) => r.id}
+        onRowActivate={(r) => seen.push(`lower:${r.id}`)}
+        columns={columns}
+      />
+    </Router>,
+  );
+}
+
+test("one keystroke activates one grid, not every grid on the screen", () => {
+  const seen: string[] = [];
+  twoGrids(seen);
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "Enter" });
+  // The first grid mounted drives, which on every screen that has one is the
+  // primary grid: a reader who has clicked nothing keeps what they had.
+  expect(seen).toEqual(["upper:one"]);
+});
+
+test("the grid the reader last touched is the one the keyboard drives", () => {
+  const seen: string[] = [];
+  const { container } = twoGrids(seen);
+  const wraps = container.querySelectorAll<HTMLElement>(".grid-wrap");
+  expect(wraps).toHaveLength(2);
+  fireEvent.pointerDown(wraps[1]!);
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "Enter" });
+  // Two `j`s in the lower grid alone — the upper one's cursor never moved, so
+  // an Enter that reached it would have activated nothing at all and this
+  // assertion would pass on a second row it never touched.
+  expect(seen).toEqual(["lower:two"]);
 });
