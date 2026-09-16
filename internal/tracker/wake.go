@@ -468,10 +468,25 @@ func without(all, muted []string) []string {
 //
 // AN ABSENT VALUE IS THE EMPTY STRING, which every renderer of a delta already
 // draws as an em-dash — so "no due date → 16 Apr" reads the way "— → jun"
-// already does for an assignee. A zero is NOT absent for an estimate or a
-// size: unestimated and estimated-at-nothing are different facts everywhere
-// else in this package, and a delta that folded them would report a size
-// being cleared as no change at all.
+// already does for an assignee.
+//
+// AND A ZERO IS ABSENT for a sprint, an estimate and a size, because in this
+// package it is the only absence those three have. [Task.StartAt] and
+// [Task.DueAt] are pointers and can be nil; [Task.EstimateMinutes] and
+// [Task.Points] are a plain int and a plain float64 over NOT NULL columns
+// defaulting to 0, and every reader of them already spends that zero as
+// "unsized" — a workload sums it, a burndown adds it, and a sprint's capacity
+// map skips the handle entirely. Rendering 0 as "0m" here would put a number
+// on the one surface that disagreed with all of them.
+//
+// The obvious alternative is to make "sized at nothing" its own fact by giving
+// the two fields the pointer this repo's zero-value rule calls for. It is not
+// wanted: nothing downstream can act on the distinction, and it would buy a
+// nullable column, a migration and a nil check in every sum to separate two
+// states that mean the same thing to a person reading a card. What a fold here
+// would cost — a size being CLEARED reported as no change at all — is not what
+// it costs: clearing 3 points renders "3" → "", which differs and is a delta
+// like any other. Only 0 → 0 folds, and that is not a change.
 
 // sprintText is the number, or empty for the backlog.
 func sprintText(n *int) string {

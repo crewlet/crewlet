@@ -210,6 +210,12 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	}
 	args = append(args, limit)
 
+	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
+	// and only a phase record carries one. Every turn's group also holds
+	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
+	// not empty strings — joined one model as ",claude-opus-5" and handed
+	// every consumer splitting on the comma a nameless band in its legend
+	// and a nameless row in its breakdown.
 	rows, err := l.db.sql.QueryContext(ctx, `
 		SELECT turn_id,
 		       MAX(agent_id), MAX(agent_role),
@@ -218,7 +224,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		       MAX(iteration),
 		       MAX(CASE WHEN json_extract(tags, '$.failed') = 'true' THEN 1 ELSE 0 END),
 		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
-		       GROUP_CONCAT(DISTINCT model),
+		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
 		       MAX(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
 		       MAX(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),

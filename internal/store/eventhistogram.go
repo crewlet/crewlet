@@ -123,7 +123,12 @@ type EventBar struct {
 type EventHistogram struct {
 	// Bucket, Since and Until describe what this covers, so a reader
 	// looking at a bar knows what it is a bar of. Until is EXCLUSIVE,
-	// matching every other half-open window in this engine.
+	// matching every other half-open window in this engine, and it is
+	// AHEAD OF NOW whenever the bucket in progress is one of the bars —
+	// which is every ask with no top edge. The last bar is a whole one
+	// like the rest and fills as the bucket does; an edge at `now` would
+	// be a bar whose height meant something different from its
+	// neighbours'.
 	Bucket EventBucket `json:"bucket"`
 	Since  string      `json:"since"`
 	Until  string      `json:"until"`
@@ -170,19 +175,27 @@ func (q HistogramQuery) Window(now time.Time) (since, until time.Time) {
 	if since.IsZero() || since.Before(floor) {
 		since = floor
 	}
-	until = q.Until
-	if until.IsZero() {
-		until = now
+	// THE EDGE THE SNAP IS MEASURED AGAINST, held separately from the
+	// query's own field because they are not the same value: an unbounded
+	// top edge means `now`, and a snap that compared its truncated result
+	// to the ZERO time never fired on exactly that caller. It rounded the
+	// top edge DOWN instead — so a series asked for "up to now" ended at
+	// the start of the bucket in progress, and every event of the current
+	// minute, hour or day was in no bar, out of Total, and absent from an
+	// axis whose own heading claimed to reach them.
+	top := q.Until
+	if top.IsZero() {
+		top = now
 	}
-	if until.Before(since) {
-		since = until
+	if top.Before(since) {
+		since = top
 	}
 	// DOWN for the bottom edge and UP for the top, so the window the bars
 	// cover contains the window that was asked for rather than clipping
 	// the rows at each end into bars nobody drew.
 	since = since.UTC().Truncate(step)
-	until = until.UTC().Truncate(step)
-	if until.Before(q.Until) || until.Equal(since) {
+	until = top.UTC().Truncate(step)
+	if until.Before(top) || until.Equal(since) {
 		until = until.Add(step)
 	}
 	return since, until

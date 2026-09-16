@@ -25,8 +25,9 @@
 // lists neither of which changed. Keyed on the declaration, a move and a
 // rename are both invisible, and the two failures it can report are the two
 // that matter: nothing declares it, which is a gate certifying nothing, and
-// TWO files declare it, which is two copies that can drift from each other as
-// well as from the engine.
+// TWO declarations exist, which is two copies that can drift from each other
+// as well as from the engine — wherever the second one is, including beside
+// the first in the same file.
 //
 // # One reader, for the same reason as everything else here
 //
@@ -53,8 +54,15 @@ import (
 // Callers one level deeper (`internal/api/...`) join another `..` themselves.
 const Tree = "../../dashboard/src"
 
-// Declaration returns the single capture of the one source file under `tree`
-// whose contents match `pattern`.
+// Declaration returns the single capture of the one declaration under `tree`
+// matching `pattern`.
+//
+// EVERY match in every file, not the first of each. Matching once per file
+// counts FILES rather than declarations, and the copy a gate exists to catch
+// is as easily a second one in the same module as one a directory over: a
+// `const CATEGORIES = [...] as const` at block scope inside a component is
+// legal TypeScript, and with the module-scope copy still above it the gate
+// validated the first and the screen rendered the second.
 //
 // The error says which of the two failures happened, because they have
 // different remedies: nothing matched means the constant was renamed or
@@ -83,7 +91,7 @@ func Declaration(tree, pattern string) (string, error) {
 		if err != nil {
 			return err
 		}
-		if m := re.FindStringSubmatch(string(source)); m != nil {
+		for _, m := range re.FindAllStringSubmatch(string(source), -1) {
 			found = append(found, m[1])
 		}
 		return nil
@@ -93,9 +101,10 @@ func Declaration(tree, pattern string) (string, error) {
 			"walked, so this gate certifies nothing: %w", tree, err)
 	}
 	if len(found) != 1 {
-		return "", fmt.Errorf("clientsource: %d files under %s match %s, want exactly "+
-			"one — none is a gate certifying nothing, and two are two copies that can "+
-			"drift from each other as well as from the engine", len(found), tree, pattern)
+		return "", fmt.Errorf("clientsource: %d declarations under %s match %s, want "+
+			"exactly one — none is a gate certifying nothing, and two are two copies "+
+			"that can drift from each other as well as from the engine",
+			len(found), tree, pattern)
 	}
 	return found[0], nil
 }

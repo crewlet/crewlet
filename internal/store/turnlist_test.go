@@ -171,13 +171,20 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 		t.Errorf("rounds = %d, want the highest iteration any phase reached",
 			one.Rounds)
 	}
-	// EVERY MODEL, because a turn routinely uses two — a cheap one for the
-	// extension judge and the seat's own for the work — and naming one
-	// makes a cost reader attribute the whole turn to it.
-	for _, model := range []string{"claude-opus-5", "claude-haiku-4-5"} {
-		if !slices.Contains(splitModels(one.Models), model) {
-			t.Errorf("models = %q and does not name %s", one.Models, model)
-		}
+	// EVERY MODEL AND NOTHING ELSE, because a turn routinely uses two — a
+	// cheap one for the extension judge and the seat's own for the work —
+	// and naming one makes a cost reader attribute the whole turn to it.
+	//
+	// THE WHOLE LIST, not `Contains` over it: `model` is NOT NULL with an
+	// empty default and only a phase record carries one, so the turn's own
+	// `turn_completed` row folded into the join as a nameless element and
+	// every `Contains` assertion passed straight over it.
+	want := []string{"claude-haiku-4-5", "claude-opus-5"}
+	named := splitModels(one.Models)
+	slices.Sort(named)
+	if !slices.Equal(named, want) {
+		t.Errorf("models = %q, which splits to %q, want exactly %q",
+			one.Models, named, want)
 	}
 }
 

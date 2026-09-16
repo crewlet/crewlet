@@ -781,10 +781,17 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 	}
 }
 
-// A ZERO IS NOT AN ABSENCE for a size or an estimate — unestimated and
-// estimated-at-nothing are different facts everywhere else in this package —
-// so CLEARING one is a change, and a delta that folded them would report a
-// size being taken off as no change at all.
+// CLEARING A SIZE IS A CHANGE, although a zero renders as the absence it is.
+//
+// [tracker.Task.Points] and [tracker.Task.EstimateMinutes] are a plain float64
+// and a plain int over NOT NULL columns, so nothing anywhere in this package
+// can tell "never sized" from "sized at nothing" — a workload sums the zero, a
+// burndown adds it, a sprint's capacity map skips the handle — and a card
+// printing "0" would be the one surface claiming a fact the rest of the engine
+// does not hold. What makes the clearing visible is not a distinction between
+// two zeroes: it is that the FROM side is a number and the TO side is not, so
+// "8" → "" differs and is recorded like any other delta. Only 0 → 0 folds away,
+// and that is not a change.
 func TestClearingASizeIsAChange(t *testing.T) {
 	t.Parallel()
 	sized := tracker.Task{ID: "t-1", Points: 8, EstimateMinutes: 45}

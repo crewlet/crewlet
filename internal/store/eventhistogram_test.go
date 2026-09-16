@@ -195,6 +195,66 @@ func TestAHistogramsEdgesAreWholeBuckets(t *testing.T) {
 	}
 }
 
+// AN UNBOUNDED TOP EDGE IS "UP TO NOW", AND NOW IS INSIDE A BUCKET.
+//
+// `/events/series` with no `until` is the commonest ask there is — "what just
+// happened" — and the outward snap has to widen that edge like any other. It
+// did not: the snap compared its truncated result to the query's own `Until`,
+// which is the ZERO time for exactly this caller, so the top edge rounded DOWN
+// to the start of the bucket in progress. Every event of the current minute,
+// hour or day fell in no bar at all, `Total` left them out, and the newest bar
+// an axis labelled "up to now" drew was the one before this one.
+func TestAHistogramWithNoTopEdgeDrawsTheBucketInProgress(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC()
+	seedEvent(t, log, "in-progress", at, "system", "node-0")
+
+	got, err := log.Histogram(t.Context(), store.HistogramQuery{
+		// NO Until. The bottom edge is named so the window is a couple
+		// of bars rather than the whole retention floor.
+		ListQuery: store.ListQuery{Since: at.Truncate(time.Hour).Add(-time.Hour)},
+		Bucket:    store.BucketHour,
+	})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	until, err := time.Parse(time.RFC3339, got.Until)
+	if err != nil {
+		t.Fatalf("until %q: %v", got.Until, err)
+	}
+	// PAST the instant that was published, because the bucket holding it
+	// is whole. Truncated down, this edge is the row's own bucket start.
+	if !until.After(at) {
+		t.Errorf("until = %s, want an edge past %s — the bucket in progress is "+
+			"a whole bar like every other", until, at)
+	}
+	if got.Total != 1 {
+		t.Errorf("total = %d, want the row published in the bucket in progress",
+			got.Total)
+	}
+	// AND IN THE RIGHT BAR. Found by the instant rather than by position,
+	// so an hour that rolls over between the append and the read moves
+	// which bar is last without moving which bar holds the row.
+	held := false
+	for _, bar := range got.Bars {
+		start, err := time.Parse(time.RFC3339, bar.At)
+		if err != nil {
+			t.Fatalf("bar at %q: %v", bar.At, err)
+		}
+		if !start.After(at) && at.Before(start.Add(time.Hour)) {
+			held = true
+			if bar.Count != 1 {
+				t.Errorf("the bar at %s counts %d, want the row in it",
+					bar.At, bar.Count)
+			}
+		}
+	}
+	if !held {
+		t.Errorf("bars = %+v cover no bucket holding %s", got.Bars, at)
+	}
+}
+
 // TOO MANY BUCKETS IS A REFUSAL, never a truncation or a coarser bucket.
 //
 // Dropping the oldest bars silently would put a month's heading over a day of

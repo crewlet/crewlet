@@ -271,7 +271,7 @@ func checkView(view *View) error {
 	return nil
 }
 
-// Valid reports whether this is one of the three shapes.
+// Valid reports whether this is one of the four shapes.
 //
 // A CLOSED SET, and the type's own comment says there are no others: a fifth
 // rendering is a screen that does not exist, so a view naming one is refused
