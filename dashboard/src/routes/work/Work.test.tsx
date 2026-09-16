@@ -12,19 +12,32 @@
  * also why the board can be drawn inside a peek panel and a sprint report.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { Board, CalendarView, ProjectHead, WorkspaceHead } from "./Work.tsx";
+import { Board, CalendarView, ProjectHead, Work, WorkspaceHead, patchedHref } from "./Work.tsx";
 import { BoardCard, WorkRow } from "~/components/work.tsx";
-import { calendarWeeks, dayKey } from "~/lib/work.ts";
+import { Router } from "~/app/router.tsx";
+import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { calendarWeeks, dayKey, filterPatchForGroup } from "~/lib/work.ts";
 import type {
+  QueryName,
   WorkGroup,
   WorkProjectDetail,
   WorkProjectRow,
   WorkSummary,
 } from "~/protocol/index.ts";
 
-afterEach(cleanup);
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  location.hash = "#/";
+});
 
 const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
   id,
@@ -140,6 +153,12 @@ const group = (key: string, over: Partial<WorkGroup> = {}): WorkGroup => ({
   ...over,
 });
 
+// THE SCREEN OWNS THE OVERFLOW ADDRESS, so the fixture supplies one that
+// names a project — which is what lets the case below assert that the column
+// footer renders what it was handed rather than a `#/work` of its own.
+const overflowHref = (axis: string, key: string) =>
+  `#/work/ENG?view=list&group_by=${axis}&group=${key}`;
+
 const board = (groups: WorkGroup[], axis = "status") =>
   render(
     <Board
@@ -150,6 +169,7 @@ const board = (groups: WorkGroup[], axis = "status") =>
       hrefOf={(r) => `#/work/${r.key}`}
       onOpen={() => {}}
       onOverflow={() => {}}
+      overflowHref={overflowHref}
     />,
   );
 
@@ -160,11 +180,33 @@ const board = (groups: WorkGroup[], axis = "status") =>
 test("a capped column offers its overflow and an uncapped one does not", () => {
   board([group("todo", { count: 53, rows: [row("a")] })]);
   const more = screen.getByText("52 more →");
-  expect(more.getAttribute("href")).toContain("group_by=status");
-  expect(more.getAttribute("href")).toContain("group=todo");
+  // THE SCREEN'S OWN ADDRESS, verbatim. The footer used to build
+  // `href(["work"], …)` itself, which dropped the project segment and every
+  // live filter — and a middle click follows the href rather than the
+  // `onClick`, so the column of 53 opened as every project's todo column.
+  expect(more.getAttribute("href")).toBe(overflowHref("status", "todo"));
   cleanup();
   board([group("todo", { count: 1, rows: [row("a")] })]);
   expect(screen.queryByText(/more →/)).toBeNull();
+});
+
+// THE LINK AND THE CLICK NAME THE SAME PLACE. Only the screen knows both
+// halves of that place — the project is a path segment and the filters are
+// keys beside it — so the address is a patch of where the reader already is,
+// never a URL rebuilt from the three keys the control moves.
+test("a patched address keeps the path it is on and the filters it is under", () => {
+  expect(
+    patchedHref(
+      ["work", "ENG"],
+      new URLSearchParams("assignee=ada&scope=open"),
+      filterPatchForGroup("status", "todo"),
+    ),
+  ).toBe("#/work/ENG?assignee=ada&scope=open&view=list&group_by=status&group=todo");
+  // AN EMPTY VALUE IS THE KEY'S ABSENCE, matching `useParam`: a control that
+  // clears the grouping must drop the key rather than write `group_by=`.
+  expect(patchedHref(["work"], new URLSearchParams("group_by=status"), { group_by: "" })).toBe(
+    "#/work",
+  );
 });
 
 test("an overflow link hands the axis and the column back to the screen", () => {
@@ -178,6 +220,7 @@ test("an overflow link hands the axis and the column back to the screen", () => 
       hrefOf={(r) => `#/work/${r.key}`}
       onOpen={() => {}}
       onOverflow={onOverflow}
+      overflowHref={overflowHref}
     />,
   );
   fireEvent.click(screen.getByText("8 more →"));
@@ -429,4 +472,110 @@ test("an ordinary priority draws no mark at all", () => {
   expect(marks(undefined)).toBe(0);
   expect(marks("low")).toBe(1);
   expect(marks("high")).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// The screen
+// ---------------------------------------------------------------------------
+
+/** One socket answering each question with a fixture, and refusing the named
+ *  ones — because a per-query refusal is exactly the state these cases are
+ *  about: `socket.ts` arms a timer per query id, so one question can fail
+ *  while every other on the screen answers. */
+function serving(
+  answers: Partial<Record<QueryName, unknown>>,
+  refusing: Partial<Record<QueryName, string>> = {},
+) {
+  const query = vi.fn(async (what: string) => {
+    const refusal = refusing[what as QueryName];
+    if (refusal) throw new Error(refusal);
+    return answers[what as QueryName] ?? {};
+  });
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useOrg).mockReturnValue({
+    name: "Acme",
+    roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
+  } as never);
+  return query;
+}
+
+const mountWork = () =>
+  render(
+    <Router>
+      <Work />
+    </Router>,
+  );
+
+// A FAILED PROJECT READ IS NOT A COMPANY THAT HAS FILED NOTHING. The empty
+// state was gated on the ITEMS query — a different question, which answers
+// fine while `work_projects` is refused, times out, or has simply not landed
+// — so the screen stated as a fact that the company had no work, over a read
+// that never happened. A reader acts on that by filing the duplicate.
+test("a refused project list is said to be a refusal, not an empty company", async () => {
+  serving(
+    { work_items: { items: [], groups: [], complete: true } },
+    { work_projects: "unavailable" },
+  );
+  mountWork();
+  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  expect(screen.queryByText("No work has been filed yet")).toBeNull();
+});
+
+// AND A READ THAT ANSWERED IS ALLOWED TO CONCLUDE IT.
+test("a project list that answered with nothing says the company has filed nothing", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+});
+
+// THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
+// carry `group_by` with nothing in the URL — `buildItemsParams` resolves the
+// axis as the URL's OR the view's — so a list handed the URL key alone had no
+// axis to label with and fell through to the raw group key: columns headed
+// `ada` where the board one line above headed them "Ada Okonkwo".
+test("a saved view's grouping heads the list's columns by name", async () => {
+  serving({
+    work_views: {
+      views: [
+        {
+          id: "v-1",
+          key: "by-owner",
+          name: "By owner",
+          type: "list",
+          container: { kind: "workspace", id: "" },
+          builtin: false,
+          default: true,
+          params: { group_by: "assignee" },
+        },
+      ],
+      complete: true,
+    },
+    work_items: {
+      items: [],
+      groups: [{ key: "ada", count: 3, rows: [] }],
+      complete: true,
+    },
+    work_projects: {
+      projects: [
+        {
+          key: "ENG",
+          name: "Engineering",
+          unit: { resolved: true },
+          lead: {},
+          task_counts: { open: 3, done: 0, closed: 0 },
+          version: 1,
+        },
+      ],
+      total: 1,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-group-head")).toBeTruthy());
+  expect(container.querySelector(".work-group-head")?.textContent).toContain("Ada Okonkwo");
+  expect(container.querySelector(".work-group-head")?.textContent).not.toContain("ada");
 });

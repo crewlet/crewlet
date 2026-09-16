@@ -35,8 +35,8 @@
  * Back means "off this list" rather than "untick one".
  */
 
-import { useEffect, useMemo } from "react";
-import { href, useParam } from "~/app/router.tsx";
+import { useCallback, useEffect, useMemo } from "react";
+import { buildHash, href, useParam, useRoute } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 // THE HEADER'S FACT IS NOT THE TRACKER'S. `components/work.tsx` exports a
@@ -94,7 +94,7 @@ import {
   monthLabel,
   PRIORITIES,
   projectKeys,
-  scopeOf,
+  seededScope,
   shapeOf,
   shiftMonth,
   shownRows,
@@ -170,6 +170,10 @@ export function Work({ project = "" }: { project?: string }) {
   // could peek a task and nothing else in the product could peek anything.
   const peek = usePeek();
   const { open: openPeek } = usePeekControls();
+  // THE WHOLE ADDRESS, for the controls that PATCH it rather than replace it —
+  // see [patchedHref]. `useParam` answers one key at a time and none of them
+  // is the project, which is a path segment.
+  const route = useRoute();
 
   // THE PROJECT LIST IS THE COMPANY'S, never the page's — a rail built from
   // the rows could only ever offer the projects already on screen, so a board
@@ -217,10 +221,12 @@ export function Work({ project = "" }: { project?: string }) {
   // view switch, exactly as every other filter on this screen does.
   //
   // A group the three segments cannot express — a saved view narrowed to
-  // `active` alone — reads as ALL, which is what [scopeOf] already answers for
-  // it. The segment and the query still agree, which is the property that
-  // matters; they simply agree on the wider set.
-  const viewScope = scopeOf(viewParams(chosenView, views).status_group) || "open";
+  // `active` alone — reads as OPEN, which is [seededScope]'s fallback and
+  // therefore the one the suite can reach. The segment and the query still
+  // agree, which is the property that matters; they agree on
+  // `not_started,active`, the wider set the segment stands for, rather than on
+  // the narrower one the view named.
+  const viewScope = seededScope(viewParams(chosenView, views).status_group);
   const [scope, setScope] = useParam("scope", viewScope);
 
   const filters: TrackerFilters = {
@@ -323,6 +329,27 @@ export function Work({ project = "" }: { project?: string }) {
   };
 
   const itemHref = (row: WorkSummary) => href(["work", row.key]);
+
+  // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
+  // click and shows in the status bar. Built here because this is the only
+  // frame that knows the whole address: `route.path` carries the project
+  // segment the board is narrowed to, and `route.query` carries the filters
+  // the reader has set. See [patchedHref].
+  //
+  // TWO PATCHES, NOT ONE, because the two controls do different things. A
+  // board column switches the screen to the list AND groups it; a list column
+  // is already a list and must keep whatever saved view is running, so
+  // rewriting `view=` there would throw that view away.
+  const boardOverflowHref = useCallback(
+    (axis: string, key: string) =>
+      patchedHref(route.path, route.query, filterPatchForGroup(axis, key)),
+    [route.path, route.query],
+  );
+  const listOverflowHref = useCallback(
+    (axis: string, key: string) =>
+      patchedHref(route.path, route.query, { group_by: axis, group: key }),
+    [route.path, route.query],
+  );
 
   return (
     <>
@@ -572,13 +599,23 @@ export function Work({ project = "" }: { project?: string }) {
                     setGroupBy(patch.group_by ?? "");
                     setGroup(patch.group ?? "");
                   }}
+                  overflowHref={boardOverflowHref}
                 />
               )}
               {shape === "list" && (
                 <List
                   rows={rows}
                   groups={groups}
-                  axis={groupBy}
+                  // THE AXIS THE QUERY WAS SENT ON, not the one in the URL —
+                  // exactly as [Board] above. A saved view may carry
+                  // `group_by`, which [buildItemsParams] resolves as
+                  // `filters.groupBy || view.group_by`, so a view that groups
+                  // with no key in the URL answered grouped while this read
+                  // `""` — and `groupLabel` with no axis falls through to the
+                  // raw key, heading the columns `ada-okonkwo` and
+                  // `in_progress` instead of the person's name and the team's
+                  // word for the status.
+                  axis={String(params.group_by ?? "")}
                   chrome={chrome}
                   detail={detail}
                   now={now}
@@ -589,6 +626,7 @@ export function Work({ project = "" }: { project?: string }) {
                     setGroupBy(axis);
                     setGroup(key);
                   }}
+                  overflowHref={listOverflowHref}
                 />
               )}
               {shape === "timeline" && (
@@ -620,13 +658,27 @@ export function Work({ project = "" }: { project?: string }) {
           </div>
         </div>
 
-        {!loading && !error && (projects.data?.projects ?? []).length === 0 && (
-          <Empty
-            icon="inbox"
-            title="No work has been filed yet"
-            hint="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key."
-          />
-        )}
+        {/* "THIS COMPANY HAS FILED NOTHING" IS THE PROJECT LIST'S ANSWER, so
+            it is gated on the project list's own state. It was gated on the
+            ITEMS query instead — a different question, usually answering
+            fine — so a `work_projects` that was refused, timed out, or had
+            simply not landed yet drew a positive statement that the company
+            had nothing, over a read that failed. A reader acts on that, by
+            filing the duplicate. [QueryState] is what puts the refusal ahead
+            of the empty state; it renders nothing at all once projects are
+            listed. */}
+        <QueryState
+          error={projects.error}
+          loading={projects.loading}
+          empty={
+            (projects.data?.projects ?? []).length === 0
+              ? {
+                  title: "No work has been filed yet",
+                  hint: "Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key.",
+                }
+              : undefined
+          }
+        />
       </div>
     </>
   );
@@ -1143,6 +1195,37 @@ const OPEN_STATUSES: string[] = STATUSES.filter(
 // The board
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a control that PATCHES THIS SCREEN points, written as an href.
+ *
+ * THE CLICK AND THE LINK HAVE TO NAME THE SAME PLACE. A column footer's
+ * `onClick` moves two or three query keys and leaves everything else alone —
+ * the project is a path segment and every live filter is a key beside them —
+ * but a middle click never reaches it (the browser dispatches `auxclick`,
+ * which React's `onClick` does not see), and the status bar and "copy link
+ * address" read the href verbatim. Spelled as a bare `href(["work"], patch)`
+ * the two disagreed: from `#/work/ENG?assignee=ada` the anchor named the
+ * company-wide board with the assignee dropped — every project's todo column
+ * merged, which is not the set the "52 more" was counting.
+ *
+ * PURE, over the route's two halves rather than over the hook, so the rule is
+ * testable beside the board it serves.
+ */
+export function patchedHref(
+  path: string[],
+  query: URLSearchParams,
+  patch: Record<string, string>,
+): string {
+  const next = new URLSearchParams(query);
+  for (const [key, value] of Object.entries(patch)) {
+    // An empty value is the key's ABSENCE on this screen — `useParam` drops it
+    // rather than writing `group_by=` — so clearing one here must drop it too.
+    if (value === "") next.delete(key);
+    else next.set(key, value);
+  }
+  return buildHash(path, next);
+}
+
 export function Board({
   groups,
   axis,
@@ -1154,6 +1237,7 @@ export function Board({
   hrefOf,
   onOpen,
   onOverflow,
+  overflowHref,
 }: {
   groups: WorkGroup[];
   axis: string;
@@ -1165,6 +1249,10 @@ export function Board({
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
   onOverflow: (axis: string, key: string) => void;
+  /** Where the column footer GOES — the same pairing as `hrefOf`/`onOpen`,
+   *  and for the same reason: the screen owns the address, because only it
+   *  knows which project and which filters the reader is looking at. */
+  overflowHref: (axis: string, key: string) => string;
 }) {
   if (groups.length === 0) return null;
   return (
@@ -1202,11 +1290,13 @@ export function Board({
             {/* A COLUMN'S COUNT IS OVER THE WHOLE SET and its rows are a
                 slice, so a column of four hundred says four hundred and hands
                 back fifty. The rest are reachable rather than merely counted:
-                the link is the same query as a list narrowed to this column. */}
+                the link is THIS screen — this project, these filters — as a
+                list narrowed to this column. See [patchedHref] for why the
+                href cannot be built here. */}
             {group.count > group.rows.length && (
               <div className="work-col-foot">
                 <a
-                  href={href(["work"], { view: "list", group_by: axis, group: group.key })}
+                  href={overflowHref(axis, group.key)}
                   onClick={(e) => {
                     e.preventDefault();
                     onOverflow(axis, group.key);
@@ -1253,6 +1343,7 @@ export function List({
   hrefOf,
   onOpen,
   onOverflow,
+  overflowHref,
 }: {
   rows: WorkSummary[];
   groups: WorkGroup[];
@@ -1264,6 +1355,8 @@ export function List({
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
   onOverflow: (axis: string, key: string) => void;
+  /** As [Board]'s — the screen owns the address. */
+  overflowHref: (axis: string, key: string) => string;
 }) {
   if (groups.length > 0) {
     return (
@@ -1292,7 +1385,7 @@ export function List({
             {group.count > group.rows.length && (
               <div className="work-group-foot">
                 <a
-                  href={href(["work"], { view: "list", group_by: axis, group: group.key })}
+                  href={overflowHref(axis, group.key)}
                   onClick={(e) => {
                     e.preventDefault();
                     onOverflow(axis, group.key);

@@ -39,7 +39,7 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, NumberCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -191,25 +191,6 @@ function pageFlags(page: Page): React.ReactNode {
       )}
     </span>
   );
-}
-
-/**
- * A grid row's activation, for a grid whose `rowHref` is the object's page.
- *
- * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy of
- * which clicks mean "open elsewhere" and it reads a mouse event; the `enter`
- * chord carries no button at all and is never one of them.
- */
-function peekRow<T>(
-  open: (row: T) => void,
-): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
-  return (row, e) => {
-    if (!("button" in e)) {
-      open(row);
-      return;
-    }
-    rowPeekHandler(() => open(row))?.(e);
-  };
 }
 
 /**

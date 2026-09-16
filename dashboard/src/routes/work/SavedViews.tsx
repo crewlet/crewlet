@@ -98,13 +98,22 @@ export function SavedViews({ id }: { id?: string }) {
         />
       );
     }
+    // ONE PERSON, ONE NAME ON THIS SCREEN. The note printed the raw handle
+    // while the Owner fact two lines below resolved the same value through the
+    // chart — so `ada-okonkwo` and "Ada Okonkwo" appeared on one page as if
+    // they were two people. Resolved once, here, and handed to both.
+    //
+    // FALLING BACK TO THE HANDLE rather than to nothing: an operator writing
+    // through the MCP surface owns views too and holds no seat, and their
+    // handle is still the thing to say.
+    const ownerName = one.owner ? (index.byHandle.get(one.owner)?.name ?? one.owner) : undefined;
     // A REDIRECT WOULD BE WRONG HERE, because the reader asked for the view
     // rather than for the board: the button says what running it means.
     return (
       <>
         <PageNote>
-          {one.owner
-            ? `A personal view owned by ${one.owner}.`
+          {ownerName
+            ? `A personal view owned by ${ownerName}.`
             : "A shared view — everybody in this company sees it."}{" "}
           Running it hands its saved parameters to the board, where any one of them can be changed.
         </PageNote>
@@ -117,7 +126,7 @@ export function SavedViews({ id }: { id?: string }) {
           icon="columns"
           identifier={one.key}
           title={one.name}
-          facts={viewFacts(one, index.byHandle.get(one.owner ?? "")?.name)}
+          facts={viewFacts(one, ownerName)}
         />
         <ViewFacts view={one} />
         <Button

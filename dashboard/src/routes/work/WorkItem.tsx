@@ -62,6 +62,7 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact, type SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import type {
   WorkChange,
@@ -283,7 +284,18 @@ export function WorkItem({ id }: { id: string }) {
           OUT, which the header has no room for and the bar is for. */}
       <PageActions>
         {item ? (
-          <a className="t-link" href={href(["work"], { project: item.project, item: item.key })}>
+          // THE PROJECT IS A PATH AND THE TASK IS THE FRAME'S `peek=` TOKEN.
+          // This carried `?project=&item=`, which are the two spellings the
+          // screen retired when a project became an object with a page and
+          // the rail moved into the frame — nothing reads either key any
+          // more, so the one control that promised "this task, on its own
+          // board" landed on the company-wide board with the rail shut.
+          <a
+            className="t-link"
+            href={href(["work", item.project], {
+              peek: refToken({ kind: "item", id: item.key }),
+            })}
+          >
             Open on the board →
           </a>
         ) : undefined}
@@ -344,8 +356,17 @@ export function WorkItem({ id }: { id: string }) {
  * AND THE HEADER IS THE PAGE'S, one size down — the same [ObjectHeader] over
  * the same [itemFacts], so the two frames of one task cannot come to name the
  * same six things in two orders.
+ *
+ * IT RESOLVES ITS OWN PEOPLE, like every other peek in the product. It used
+ * to take a [RowChrome] instead, and the frame is what mounts it — from a
+ * `peek=` token, knowing nothing about an org chart — so the only caller
+ * handed it `{}` and every person in the rail rendered as a raw handle while
+ * the page for the same task named them. The chart is a store read, not
+ * something a list has to thread through.
  */
-export function ItemPeek({ itemKey, chrome }: { itemKey: string; chrome: RowChrome }) {
+export function ItemPeek({ itemKey }: { itemKey: string }) {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
   const state = useQuery("work_item", { id: itemKey }, { enabled: itemKey !== "", pollMs: 15_000 });
   const item = state.data?.task;
@@ -357,10 +378,12 @@ export function ItemPeek({ itemKey, chrome }: { itemKey: string; chrome: RowChro
     pollMs: 300_000,
   });
 
+  // THE PAGE'S OWN CHROME, built from the same two reads: the chart for the
+  // names and the project for its vocabulary.
   const inner: RowChrome = {
-    ...chrome,
-    types: project.data?.types ?? chrome.types,
-    statuses: project.data?.statuses ?? chrome.statuses,
+    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    types: project.data?.types,
+    statuses: project.data?.statuses,
   };
 
   return (
@@ -473,6 +496,40 @@ export function Subtasks({
   );
 }
 
+/**
+ * A titled block of the body — a panel on the page, a labelled section in the
+ * peek.
+ *
+ * AT MODULE SCOPE, AND THAT IS THE WHOLE POINT. It was two arrow components
+ * built inside [ItemBody]'s render and chosen with `flush`, so its type
+ * identity was new on every render — and this screen re-renders once a second,
+ * because it holds a live clock for its relative times. React reconciles on
+ * type identity, so the description's rendered markdown was torn down and
+ * rebuilt every tick: a reader selecting a sentence to copy lost the selection
+ * within a second, along with focus and every other piece of per-node DOM
+ * state. `flush` is a prop here rather than a branch at definition time for
+ * exactly that reason.
+ */
+function BodySection({
+  title,
+  flush,
+  children,
+}: {
+  title: string;
+  flush?: boolean;
+  children: ReactNode;
+}) {
+  if (flush) {
+    return (
+      <section className="col gap-2">
+        <div className="t-label">{title}</div>
+        {children}
+      </section>
+    );
+  }
+  return <Panel title={title}>{children}</Panel>;
+}
+
 /** The description, the subtasks, the checklists and the thread. */
 export function ItemBody({
   detail,
@@ -518,26 +575,15 @@ export function ItemBody({
   const comments = detail.comments ?? [];
   const history = detail.history ?? [];
 
-  const Wrap = flush
-    ? ({ title, children: body }: { title: string; children: React.ReactNode }) => (
-        <section className="col gap-2">
-          <div className="t-label">{title}</div>
-          {body}
-        </section>
-      )
-    : ({ title, children: body }: { title: string; children: React.ReactNode }) => (
-        <Panel title={title}>{body}</Panel>
-      );
-
   return (
     <>
-      <Wrap title="Description">
+      <BodySection title="Description" flush={flush}>
         {item.body ? (
           <div className="prose md">{renderMarkdown(item.body)}</div>
         ) : (
           <span className="muted">No description was written.</span>
         )}
-      </Wrap>
+      </BodySection>
 
       {/* A CHILD PEEKS FROM THE PAGE AND NAVIGATES FROM THE RAIL, which is the
           same split `SubUnitLinks` makes and for the same reason: the rail
@@ -1222,9 +1268,23 @@ export function ItemLinks({
           <div className="t-label">{heading}</div>
           {rows.map((link) => (
             <div key={`${link.kind}:${link.other}`} className="row gap-2">
+              {/* A PAGE IS ADDRESSED BY THE FRAME'S OWN MAP, never by a head
+                  spelled here. This read `["pages", …]` — a screen the
+                  application does not have — so every task→page link landed on
+                  NotFound. `pathOf` is the one definition of where each kind
+                  lives, and for a page it is `#/knowledge/{CONTAINER}/{Title}`.
+                  `key` IS that address when the other end was resolved; a page
+                  edge that came back with only its id still lands in the
+                  knowledge base, which answers honestly that it holds no such
+                  container — where the old head answered with no screen at
+                  all. */}
               <a
                 className="mono t-link"
-                href={href([link.kind === "page" ? "pages" : "work", link.key || link.other])}
+                href={href(
+                  link.kind === "page"
+                    ? pathOf({ kind: "page", id: link.key || link.other })
+                    : ["work", link.key || link.other],
+                )}
               >
                 {link.key || link.other}
               </a>

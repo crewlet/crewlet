@@ -7,12 +7,33 @@
  * labelled from the wrong end, a zero where nobody has written anything.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
-import { ItemLinks, ItemProps, Subtasks, linkHeading } from "./WorkItem.tsx";
-import type { WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import {
+  ItemBody,
+  ItemLinks,
+  ItemPeek,
+  ItemProps,
+  Subtasks,
+  WorkItem as WorkItemPage,
+  linkHeading,
+} from "./WorkItem.tsx";
+import { Router, href } from "~/app/router.tsx";
+import { pathOf, refToken } from "~/app/frame/objects.ts";
+import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import type { QueryName, WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
 
-afterEach(cleanup);
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  location.hash = "#/";
+});
 
 const NOW = Date.parse("2031-04-16T12:00:00Z");
 
@@ -220,15 +241,41 @@ test("a pending mirror and a permanent one-sided edge read differently", () => {
 
 // A PAGE LINK LEAVES THE TRACKER, and it has to go to the knowledge base
 // rather than to a task key that does not exist.
+//
+// ASSERTED THROUGH `pathOf`, never against a hand-typed literal. This case
+// used to re-compute the component's own string — `#/pages/p-1` — and so
+// pinned a head the application has no route for: every task→page link landed
+// on NotFound while the suite reported a pass. The frame's map is the one
+// definition of where a page lives, and a link that does not agree with it is
+// a link to nothing.
 test("a linked page points at the page rather than at a task", () => {
   const { container } = render(
     <ItemLinks
-      detail={detail({ links: [{ kind: "page", other: "p-1", title: "The runbook" }] })}
+      detail={detail({
+        links: [{ kind: "page", other: "p-1", key: "ENG/The runbook", title: "The runbook" }],
+      })}
       chrome={{}}
     />,
   );
   expect(screen.getByText("Pages")).toBeTruthy();
-  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe("#/pages/p-1");
+  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe(
+    href(pathOf({ kind: "page", id: "ENG/The runbook" })),
+  );
+});
+
+// AND AN EDGE THAT CARRIES ONLY AN ID STILL LANDS IN THE KNOWLEDGE BASE. The
+// tracker's `readLinks` resolves the other end against the TASK rows, so a
+// page edge comes back with no `key` and no `title` and the row is a bare
+// uuid — a screen that answers that address honestly is the knowledge base
+// saying it holds no such container, never a screen that does not exist.
+test("a page edge with no address resolved still leaves the tracker", () => {
+  const { container } = render(
+    <ItemLinks detail={detail({ links: [{ kind: "page", other: "p-1" }] })} chrome={{}} />,
+  );
+  expect(container.querySelector("a.mono")?.getAttribute("href")).toBe(
+    href(pathOf({ kind: "page", id: "p-1" })),
+  );
+  expect(container.querySelector("a.mono")?.getAttribute("href")).toContain("#/knowledge/");
 });
 
 // NO LINKS IS NO PANEL. A panel headed "Links" over nothing reads as a task
@@ -341,4 +388,93 @@ test("a property no visible change names carries no attribution", () => {
   // One line, for the one property a change names — never a dash-shaped one
   // under every other row.
   expect(container.querySelectorAll(".props-setby").length).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// The two frames of one task
+// ---------------------------------------------------------------------------
+
+/** One socket answering each question with a fixture. */
+function serving(answers: Partial<Record<QueryName, unknown>>) {
+  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useOrg).mockReturnValue({
+    name: "Acme",
+    roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
+  } as never);
+  return query;
+}
+
+// THE WAY OUT HAS TO LAND WHERE IT SAYS. "Open on the board" carried
+// `?project=&item=`, the two keys this screen retired when a project became a
+// path and the rail moved into the frame — so the one control promising "this
+// task, on its own board" dropped the reader on the company-wide board with
+// the rail shut. The project is a PATH SEGMENT and the task is the frame's
+// own `peek=` token; asserted through `refToken` so the spelling has one
+// definition.
+test("the way out to the board names the project and opens the task", async () => {
+  serving({
+    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <WorkItemPage id="ENG-42" />
+    </Router>,
+  );
+  await waitFor(() => expect(screen.getByText("Open on the board →")).toBeTruthy());
+  const out = [...container.querySelectorAll("a")].find(
+    (a) => a.textContent === "Open on the board →",
+  );
+  expect(out?.getAttribute("href")).toBe(
+    href(["work", "ENG"], { peek: refToken({ kind: "item", id: "ENG-42" }) }),
+  );
+});
+
+// A PEEK RESOLVES ITS OWN PEOPLE. The frame mounts it from a `peek=` token and
+// knows nothing about an org chart, so a peek that waited to be handed a
+// resolver rendered every handle raw — assignee, reporter, watchers, comment
+// authors and history actors — while the page for the same task named them.
+// One person under two names, depending on which frame you opened.
+test("the rail names a person, exactly as the page does", async () => {
+  serving({
+    work_item: { task: task({ assignee: "ada" }), complete: true },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  render(
+    <Router>
+      <ItemPeek itemKey="ENG-42" />
+    </Router>,
+  );
+  // NAMED IN BOTH FRAMES OF THE RAIL — the header fact and the properties
+  // block — which is why this counts rather than asking for the one node.
+  await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
+  expect(screen.queryByText("ada")).toBeNull();
+});
+
+// THE BODY IS NOT REBUILT ON EVERY TICK OF THE SCREEN'S CLOCK. Both frames of
+// a task hold a live `now` for their relative times, so this component
+// re-renders once a second — and the wrapper around the description used to be
+// a component DEFINED INSIDE the render, so its type identity was new each
+// time and React tore the subtree down and built it again. A reader selecting
+// a sentence to copy lost the selection within a second. Asserted on DOM node
+// identity, which is the only thing that distinguishes a re-render from a
+// remount.
+test("the description keeps its own DOM across a clock tick", async () => {
+  serving({ work_items: { items: [], complete: true } });
+  const body = (now: number) => (
+    <Router>
+      <ItemBody
+        detail={detail({ task: task({ body: "the runbook is **here**" }) })}
+        chrome={{}}
+        now={now}
+      />
+    </Router>
+  );
+  const { container, rerender } = render(body(NOW));
+  await waitFor(() => expect(container.querySelector(".prose")).toBeTruthy());
+  const before = container.querySelector(".prose");
+  rerender(body(NOW + 1000));
+  expect(container.querySelector(".prose")).toBe(before);
 });
