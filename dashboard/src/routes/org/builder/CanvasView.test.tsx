@@ -1586,12 +1586,21 @@ describe("adding a node in the chart", () => {
     item("Engineering").focus();
     view.rerender({ adding: adding(unitKey("Engineering")).request });
     /*
-     * ON THE NAME, which is the field the reader came to type in. The form
-     * asks for it (`autoFocus` on the name field, as the dialog does), and the
-     * chart leaves a form that is already holding focus alone rather than
-     * pulling it back to the first control in the box.
+     * ON THE KIND, which is the question the add is asking. Everything else in
+     * the form follows from the answer: the name is pre-filled with one free
+     * FOR THAT KIND and changes when the kind does, the unit type exists only
+     * for a unit and the contact identity only for a human seat. A reader who
+     * wants what was offered presses the primary control without touching the
+     * name at all.
+     *
+     * AND THE DIALOG OPENS ON THE SAME CONTROL. One set of fields opening on
+     * two different ones, because a ghost is hidden on the tick its form
+     * mounts and a dialog is not, is worse than either answer: the note at the
+     * top of `AddNodeDialog.tsx` is where that is decided.
      */
-    expect(document.activeElement).toBe(within(ghost("Add to Engineering")).getByLabelText("Name"));
+    expect(document.activeElement).toBe(
+      within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
+    );
     view.rerender({ adding: null });
     expect(focused()).toBe(unitKey("Engineering"));
   });
