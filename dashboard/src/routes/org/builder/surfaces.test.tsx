@@ -18,6 +18,7 @@ import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
 import { company, Engine, mountBuilder } from "./testkit.tsx";
+import { LayoutObserver } from "./viewTestkit.tsx";
 import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testing.tsx";
 
 beforeEach(() => {
@@ -25,8 +26,12 @@ beforeEach(() => {
   sessionStorage.clear();
 });
 
+/** What one case installed and every case has to take back down. */
+const onTeardown: (() => void)[] = [];
+
 afterEach(() => {
   cleanup();
+  while (onTeardown.length > 0) onTeardown.pop()!();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   location.hash = "#/";
@@ -176,11 +181,18 @@ test("a node's card menu and its row menu are the same list", async () => {
   expect(onCard).toEqual(onRow);
 });
 
+/*
+ * ADDED FROM THE TABLE, which is the view that still asks in a DIALOG: the
+ * structure chart draws the same form in the chart instead (`Builder.tsx`
+ * decides which, and `CanvasView.test.tsx` holds the chart's half). Bound
+ * here, so the lens really does hand a table-view add to `surfaces.add`.
+ */
 test("the toolbar offers no screen for a seat that exists only in the draft", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
     keys: countingKeys("lens"),
+    hash: "#/org?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -188,12 +200,10 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Analyst" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Add agent seat" }));
-  // The new seat is selected by the focus the Builder moves to it; select it
-  // through the table, where pressing a row selects the node it holds.
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   // Minted from the lens's one key source, which a suite injects.
   await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"new:lens1"'));
-  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+  // Pressing a row selects the node it holds.
   fireEvent.click(await tableRow("Analyst"));
   fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
   const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
@@ -395,4 +405,69 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   expect(onChart.caption).toBe("Department");
   expect(onRow.caption).toBe(onChart.caption);
   expect(onRow.mark).toBe(onChart.mark);
+});
+
+/*
+ * AN ADD WHOSE PARENT LEAVES THE DRAFT FALLS BACK TO THE DIALOG.
+ *
+ * The structure chart draws an add in the ghost of the node about to exist,
+ * hanging off its parent's own branch. A unit can leave the draft under an
+ * open add, because an undo takes no dialog and so reaches the toolbar while
+ * the ghost is drawn, and a ghost on a branch that is not there is not
+ * drawable. It falls back to the dialog, which is where the refusal saying so
+ * has always been written: a chart that simply stopped drawing the form would
+ * take it away with no word about why.
+ *
+ * Mounted with the real surfaces, because the whole of this is the lens and
+ * the chart agreeing about where one add is asked.
+ */
+test("an add falls back to the dialog when its parent leaves the draft", async () => {
+  /*
+   * MEASURED, unlike every other case in this file. jsdom has no layout, so a
+   * chart nothing measures draws every card at `visibility: hidden` and the
+   * whole chart is then outside the accessibility tree: the cases above reach
+   * their treeitems with `querySelector` for exactly that reason. This one is
+   * about a control a reader points at, so the chart has to be laid out.
+   */
+  const restore = LayoutObserver.install();
+  onTeardown.push(restore);
+  mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=table",
+  });
+  await screen.findByText("No problems");
+  // A unit of the draft alone, so an undo can take it away again.
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Tooling" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add unit" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+  await screen.findByRole("tree", { name: "Structure chart" });
+  act(() => LayoutObserver.settle());
+  // The Add on the new unit's own branch, which is where a pointer asks. It
+  // is pointer-only, so it is hidden from assistive technology and the query
+  // has to say so.
+  fireEvent.click(screen.getByRole("button", { name: "Add to Tooling", hidden: true }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Add agent seat to Tooling", hidden: true }),
+  );
+  // The ghost is a card of the chart, so it is drawn once it is measured.
+  act(() => LayoutObserver.settle());
+  // Drawn IN the chart, with no dialog over it.
+  const form = screen.getByRole("group", { name: "Add to Tooling" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  // The form a reader types into, with the fields the dialog would have had.
+  expect(within(form).getByLabelText("Name")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  const fallback = await screen.findByRole("dialog");
+  expect(
+    within(fallback).getByText(
+      "That unit is no longer in the draft, so nothing can be added to it.",
+    ),
+  ).toBeDefined();
 });

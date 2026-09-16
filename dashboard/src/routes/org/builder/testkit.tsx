@@ -330,15 +330,21 @@ export function FakeCanvas({
   chart,
   chrome = {},
   about = null,
+  adding = null,
 }: {
   chart: ChartKind;
   chrome?: { controls?: ReactNode; switcher?: ReactNode };
   about?: string | null;
+  /** An add the lens handed the chart to draw itself, rather than opening a dialog. */
+  adding?: { parent: string | null; kind?: string; opening: number; onClose: () => void } | null;
 }) {
   return (
     <div>
       <p>{`Drawing the ${chart} chart`}</p>
       {about !== null && <p>{`About ${about}`}</p>}
+      {adding !== null && (
+        <p>{`Adding ${adding.kind ?? "something"} to ${adding.parent ?? "the company"}`}</p>
+      )}
       {chrome.controls}
       {chrome.switcher}
       <FakeView />

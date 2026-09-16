@@ -47,6 +47,19 @@
  * wiring marks as fixed-size glyphs on the caption. A name that would wrap
  * truncates instead.
  *
+ * AND A NODE IS ADDED IN THE CHART. Picking a kind from the Add on a branch
+ * does not open a dialog over the picture: the chart makes room in the rank
+ * the new node will land in, reaches a dashed branch into that place, eases
+ * onto it and draws the add form THERE, in the ghost of the node about to
+ * exist. It is the design system's `composing` (a card the layout knows about
+ * and the draft does not), so the tree's counts, keys and focus are untouched
+ * by it, and it is the console chart's own gesture. The form is the engine's,
+ * in `AddNodeDialog.tsx`, and so is the one case that cannot be drawn this
+ * way: an add asked while the TABLE or the REPORTING chart is on screen, where
+ * there is no place in the drawing for a unit's next child, still opens the
+ * dialog (`Builder.tsx` decides which, because only it knows which view is
+ * mounted).
+ *
  * The chart's reading of the draft is `chartModel.ts`, every action is
  * `nodeActions.tsx`, and which hue a seat takes is `nodeTone.ts`.
  */
@@ -61,7 +74,13 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
-import { useBuilder, useBuilderView, type BuilderApi, type ChartKind } from "./BuilderContext.tsx";
+import {
+  useBuilder,
+  useBuilderView,
+  type AddKind,
+  type BuilderApi,
+  type ChartKind,
+} from "./BuilderContext.tsx";
 import {
   CYCLE_GROUP,
   type NodeView,
@@ -70,12 +89,13 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
+import { AddNodeGhostForm } from "./AddNodeDialog.tsx";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
   cardMenu,
   isDeletable,
-  leadLabel,
+  leadChipLabel,
   leadMenu,
   leadSentence,
   moveKey,
@@ -113,6 +133,7 @@ import {
   Kbd,
   Menu,
   type MenuEntry,
+  OrgNodeDisclosure,
   OrgNodeLabel,
   OrgNodeLead,
   TreeCanvas,
@@ -120,6 +141,7 @@ import {
   type TreeCardContext,
   type TreeCardInput,
   type TreeCardTone,
+  type TreeComposing,
   type TreeInput,
   type TreeItemAction,
   type TreeModel,
@@ -137,6 +159,7 @@ export function CanvasView({
   chart,
   chrome = {},
   about = null,
+  adding = null,
 }: {
   chart: ChartKind;
   chrome?: Chrome;
@@ -154,6 +177,11 @@ export function CanvasView({
    * reader who asked for less motion is moved without an animation.
    */
   about?: string | null;
+  /**
+   * An add the Builder has handed to the chart to draw, rather than opening a
+   * dialog for it. Only the structure chart takes one: see [Adding].
+   */
+  adding?: Adding | null;
 }) {
   const api = useBuilder();
   const open = useOpenScreen();
@@ -164,9 +192,38 @@ export function CanvasView({
     );
   }
   return (
-    <StructureChart api={api} structure={structure} open={open} chrome={chrome} about={about} />
+    <StructureChart
+      api={api}
+      structure={structure}
+      open={open}
+      chrome={chrome}
+      about={about}
+      adding={adding}
+    />
   );
 }
+
+/**
+ * An add drawn in the chart: which parent it hangs from, which kind it opened
+ * on, which opening of it this is, and how it ends.
+ *
+ * ONE MOUNT PER OPENING, keyed on `opening`, for the reason the Builder's own
+ * dialog host keys on it: every opening builds its form afresh (another node,
+ * or the same node again), while the node it is about may be re-keyed under it
+ * by the first check without the form being torn down and its focus thrown
+ * away.
+ */
+export interface Adding {
+  /** A unit's key, or `null` for the company root. */
+  parent: NodeKey | null;
+  kind?: AddKind;
+  opening: number;
+  onClose: () => void;
+}
+
+/** The ghost's card id. No key of the draft can collide with it: `model/keys.ts`
+ *  mints `company`, `seat:`, `unit:`, `seat@`, `unit@` and `new:` and nothing else. */
+const ADD_GHOST = "adding:";
 
 /**
  * What the PAGE hangs in the canvas's own control group.
@@ -197,14 +254,46 @@ function StructureChart({
   open,
   chrome,
   about,
+  adding,
 }: {
   api: BuilderApi;
   structure: Structure;
   open: OpenScreen;
   chrome: Chrome;
   about: string | null;
+  adding: Adding | null;
 }) {
   const reorder = useReorder(api, structure);
+  /*
+   * THE GHOST OF THE NODE ABOUT TO EXIST. The parent is a card of this chart,
+   * so a ghost is only asked for where the parent is still in the draft: an
+   * add left open across a delete of its own parent has nothing to hang from,
+   * and the form then falls back to nothing rather than to a card floating at
+   * the origin. The refusal a reader needs in that case is in the form itself
+   * ("That unit is no longer in the draft"), which is why it stays in the
+   * fields rather than in the dialog shell.
+   */
+  const composing: TreeComposing | null = useMemo(() => {
+    if (adding === null) return null;
+    const parent = adding.parent ?? COMPANY_KEY;
+    const view = structure.nodes.get(parent);
+    if (!view) return null;
+    const where = view.name || "the company";
+    return {
+      id: ADD_GHOST,
+      parent,
+      label: `Add to ${where}`,
+      onCancel: adding.onClose,
+      render: () => (
+        <AddNodeGhostForm
+          key={adding.opening}
+          parent={adding.parent}
+          {...(adding.kind ? { kind: adding.kind } : {})}
+          onClose={adding.onClose}
+        />
+      ),
+    };
+  }, [adding, structure]);
   const cards = useCallback(
     (model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
       const card = (id: string): TreeCardInput => {
@@ -236,6 +325,7 @@ function StructureChart({
       label="Structure chart"
       chrome={chrome}
       about={about}
+      composing={composing}
       nodes={structure.tree}
       cards={cards}
       cardOf={(id) => id}
@@ -268,19 +358,18 @@ function StructureChart({
           reorder={reorder}
         />
       )}
-      // THE ADD IS ON THE BRANCH, under the node whose children it makes. It
-      // used to be a third button crowding the node's own name, where "add a
-      // unit under Engineering" was a menu on Engineering's top right corner
-      // rather than a control on the line its units hang from.
-      renderUnder={(id, card) => {
+      // THE ADD IS ON THE BRANCH, under the node whose children it makes, and
+      // it is ALONE there. It used to be a third button crowding the node's
+      // own name, where "add a unit under Engineering" was a menu on
+      // Engineering's top right corner rather than a control on the line its
+      // units hang from; then the expander shared the strip with it, and an
+      // add pill splitting open covered the expander. The expander is on the
+      // node's leading edge now (`leading` on every label below), which is
+      // where every hierarchy a reader has used puts a disclosure.
+      renderUnder={(id) => {
         const view = structure.nodes.get(id);
-        if (!view) return null;
-        return (
-          <>
-            <ToggleButton card={card} id={id} name={view.name || "the company"} />
-            {view.type !== "seat" && !api.readOnly && <AddButton api={api} view={view} />}
-          </>
-        );
+        if (!view || view.type === "seat" || api.readOnly) return null;
+        return <AddButton api={api} view={view} />;
       }}
     />
   );
@@ -367,7 +456,6 @@ function ReportingChart({
         const item = chart.items.get(id);
         return item ? seatTone(item.kind, item.key ?? undefined) : undefined;
       }}
-      renderUnder={(id, card) => <ToggleButton card={card} id={id} name={nameOfItem(chart, id)} />}
       renderCard={(id, card) =>
         id === CYCLE_GROUP ? (
           <CycleGroupCard card={card} count={chart.cycles.length} />
@@ -405,6 +493,7 @@ function Chart({
   label,
   chrome,
   about,
+  composing = null,
   nodes,
   cards,
   cardOf,
@@ -421,6 +510,8 @@ function Chart({
   label: string;
   chrome: Chrome;
   about: string | null;
+  /** A node being composed in the chart: the design system draws the ghost. */
+  composing?: TreeComposing | null;
   nodes: readonly TreeInput[];
   cards: (model: TreeModel, expanded: ReadonlySet<string>) => TreeCardInput[];
   cardOf: (id: string) => string;
@@ -484,8 +575,12 @@ function Chart({
         hasNodeMenu={hasNodeMenu}
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
         // being decided has the part of the chart it is about behind it rather
-        // than a veil over a picture nobody can see any more.
+        // than a veil over a picture nobody can see any more. An add is NOT
+        // such a surface any more: it is drawn IN the chart, so the chart
+        // stays sharp and pannable behind the form and the reader can read the
+        // organization they are adding to while they fill it in.
         dimmed={about !== null}
+        composing={composing}
         // THE CHART'S OWN CHROME, in the chart's own corner: the design system
         // puts the zoom bar at the top right in this appearance and stacks
         // what the page hands in under it, which is the arrangement the chart
@@ -555,6 +650,7 @@ function StructureCard({
           />
           <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
+        <ToggleButton card={card} id={id} name={view.name} />
         <NodeActions
           api={api}
           card={card}
@@ -580,6 +676,7 @@ function StructureCard({
           />
           <VisuallyHidden>{counts}</VisuallyHidden>
         </div>
+        <ToggleButton card={card} id={id} name={view.name || "the company"} />
         <NodeActions
           api={api}
           card={card}
@@ -606,6 +703,7 @@ function StructureCard({
         <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
+      <ToggleButton card={card} id={id} name={view.name} />
       <NodeActions
         api={api}
         card={card}
@@ -679,6 +777,7 @@ function ReportingCard({
         <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
       </div>
+      <ToggleButton card={card} id={item.id} name={item.name} />
       <div {...card.actions(item.id)}>
         {seat && (
           <KeyboardMenu
@@ -706,6 +805,7 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
         />
         <VisuallyHidden>{note}</VisuallyHidden>
       </div>
+      <ToggleButton card={card} id={CYCLE_GROUP} name="the reporting cycles" />
     </>
   );
 }
@@ -729,10 +829,13 @@ function nameOfItem(chart: { items: ReadonlyMap<string, ReportingItem> }, id: st
  * on the node, the toolbar, which mirrors the selected node, and the Add on
  * the branch below.
  *
- * THE EXPANDER IS NOT HERE, it is on the branch beside the Add. Both are about
- * a node's CHILDREN rather than about the node, and the branch below the node
- * is where its children hang from; in the column they were a third cell, which
- * on one rank is 16px a pointer cannot land on.
+ * THE EXPANDER IS NOT HERE EITHER, it is on the node's LEADING edge. In this
+ * column it was a third cell, which on one rank is 16px a pointer cannot land
+ * on; on the branch below, beside the Add, it was covered whenever the add
+ * pill split open into its three kinds, which is the one gesture a reader
+ * makes right next to it. The card's leading edge is where every hierarchy a
+ * reader has used puts a disclosure, and it leaves the branch to the Add
+ * alone, which is what the chart this is drawn from draws there.
  *
  * THE MENU IS STILL MOUNTED even though nothing visible opens it: a menu the
  * key can open has to have somewhere to be, and `KeyboardMenu` is that anchor,
@@ -835,21 +938,45 @@ function FullscreenHint() {
   );
 }
 
+/**
+ * The control that opens and closes what hangs under a node, on its leading
+ * edge.
+ *
+ * BESIDE THE TREEITEM, NEVER INSIDE IT, which is what `OrgNodeDisclosure` is
+ * for: a tree's items hold nothing focusable, so the design system draws this
+ * as a sibling of the node's own item, exactly where the actions strip goes,
+ * and places it on the card's boundary from there. It used to hang on the
+ * BRANCH beside the Add, where the add pill splitting open into its three
+ * kinds covered it, which is the one gesture a reader makes right next to it.
+ *
+ * A NODE WITH NOTHING UNDER IT DRAWS NONE, so a leaf of the chart is a card
+ * with no disclosure rather than one with an empty slot.
+ *
+ * AND THE PRESS LANDS ON THE NODE, never in the control, which is why
+ * `card.press` is spread on the region rather than on the button inside it:
+ * it is the same rule the actions strip gets from `card.actions`, and the
+ * design system asks a caller for it here because only the chart knows which
+ * node this belongs to. Focus in a subtree hidden from assistive technology is
+ * focus nowhere, so a press that left it on the expander would leave the chart
+ * with no announced position at all.
+ */
 function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; name: string }) {
   if (!card.expandable(id)) return null;
   const expanded = card.expanded(id);
   return (
-    <IconButton
-      label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-      icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
-      size="sm"
-      variant="ghost"
-      tabIndex={-1}
-      onClick={(e) => {
-        e.stopPropagation();
-        card.toggle(id);
-      }}
-    />
+    <OrgNodeDisclosure {...card.press(id)}>
+      <IconButton
+        label={expanded ? `Collapse ${name}` : `Expand ${name}`}
+        icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
+        size="sm"
+        variant="ghost"
+        tabIndex={-1}
+        onClick={(e) => {
+          e.stopPropagation();
+          card.toggle(id);
+        }}
+      />
+    </OrgNodeDisclosure>
   );
 }
 
@@ -946,6 +1073,11 @@ function LeadChip({
   unit: UnitView;
   card: TreeCardContext;
 }) {
+  // THE PILL SAYS THE WORD "LEAD" ITSELF (`leadChipLabel`), as the chart this
+  // is drawn from does: "Lead: VP Engineering" set, "Lead" not. The table's
+  // own column keeps `leadLabel`, which says the name alone, because there the
+  // word is already the column heading and the pill's wording would double it.
+  //
   // THE PILL IS DRAWN EMPTY where the unit has no lead, and it still SAYS
   // which of the two nothings it is. The chart this is drawn from writes
   // "Lead" in every pill with nothing in it; this builder has a third answer
@@ -987,14 +1119,14 @@ function LeadChip({
           : {})}
       >
         {api.readOnly ? (
-          <span className="truncate">{leadLabel(unit)}</span>
+          <span className="truncate">{leadChipLabel(unit)}</span>
         ) : (
           <Menu
             label={`Lead of ${unit.name}`}
             items={leadMenu(api, structure, unit)}
             triggerTabIndex={-1}
             onOpenChange={(opened) => opened && card.activate(unit.key)}
-            trigger={leadLabel(unit)}
+            trigger={leadChipLabel(unit)}
           />
         )}
       </OrgNodeLead>

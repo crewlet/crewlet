@@ -200,9 +200,26 @@ export interface BuilderSurfaces {
      * reader their view back.
      */
     about?: string | null;
+    /**
+     * An add the chart draws ITSELF, in the ghost of the node about to exist,
+     * rather than a dialog this host opens over it. Handed here only while a
+     * chart with a place for it is on screen: see `adding` below.
+     */
+    adding?: {
+      parent: NodeKey | null;
+      kind?: AddKind;
+      opening: number;
+      onClose: () => void;
+    } | null;
   }>;
   table: ComponentType;
   editor: ComponentType<EditorDialogProps>;
+  /**
+   * The add as a DIALOG, for the views that have no place to draw it in: the
+   * table, and the reporting chart, which draws who reports to whom rather
+   * than what is inside what. The structure chart draws the same form in the
+   * chart instead, through `canvas`'s `adding`.
+   */
   add: ComponentType<AddDialogProps>;
   move: ComponentType<NodeDialogProps>;
   remove: ComponentType<NodeDialogProps>;
@@ -1216,19 +1233,60 @@ function Lens({
   };
 
   /*
-   * WHICH NODE THE OPEN SURFACE IS ABOUT, for the chart behind it. An add is
-   * about the parent the child will hang from, every other dialog about its
-   * own node, and the discard question about the whole draft. The chart eases
-   * onto it and pushes the rest of itself back, which is what the console
-   * chart does while a node is being added, and gives the reader their view
-   * back when the surface closes.
+   * WHERE AN ADD IS ASKED FOR, which is the one request this host does not
+   * always answer with a dialog.
+   *
+   * THE STRUCTURE CHART DRAWS IT ITSELF, in the ghost of the node about to
+   * exist, on the branch it will hang from, in the rank it will land in: a
+   * form that asks for a child's name while saying nothing about where the
+   * child goes is a form missing the one thing a chart is for, and a modal
+   * over a blurred picture is that form with the answer hidden behind it. The
+   * canvas is handed the request; nothing is mounted here.
+   *
+   * THE TABLE AND THE REPORTING CHART STILL ASK IN A DIALOG, because neither
+   * draws a place for a unit's next child: the table is a grid of the rows
+   * that exist, and the reporting chart draws who reports to whom, which is
+   * derived and has no slot a new seat can be put into before it has a
+   * manager. It is the ONE case that falls back, and it falls back to the same
+   * form in a different shell rather than to a second, quieter add.
+   *
+   * WHICH VIEW IS ON SCREEN IS THIS HOST'S ANSWER and nobody else's, so the
+   * decision is here: a canvas that claimed the add itself would leave the
+   * host mounting a dialog for the same request whenever the reader was
+   * looking at the table.
+   *
+   * AND AN ADD WHOSE PARENT HAS GONE HAS NOWHERE TO HANG. A unit can leave the
+   * draft under an open add (an undo takes no dialog, so it reaches the toolbar
+   * while the ghost is drawn), and a ghost on a branch that is not there is not
+   * drawable. That add falls back to the dialog, which is where the refusal
+   * saying so has always been drawn ("That unit is no longer in the draft"):
+   * a chart that simply stopped drawing the ghost would take the form away
+   * with no word about why.
+   */
+  const inTheChart = view === "visualization" && chart === "structure";
+  const adding =
+    dialog !== null &&
+    dialog.type === "add" &&
+    inTheChart &&
+    structure.nodes.has(dialog.parent ?? COMPANY_KEY)
+      ? dialog
+      : null;
+  const surface = adding === null ? dialog : null;
+
+  /*
+   * WHICH NODE THE OPEN SURFACE IS ABOUT, for the chart behind it. Every
+   * dialog is about its own node and the discard question about the whole
+   * draft. An add drawn IN the chart is not here at all: it is not a surface
+   * over the picture, so the picture is neither pushed back nor moved off
+   * what the reader was looking at -- the ghost itself is what the chart
+   * eases onto, and the design system does that.
    */
   const about =
-    dialog === null || dialog.type === "discard"
+    surface === null || surface.type === "discard"
       ? null
-      : dialog.type === "add"
-        ? (dialog.parent ?? COMPANY_KEY)
-        : dialog.key;
+      : surface.type === "add"
+        ? (surface.parent ?? COMPANY_KEY)
+        : surface.key;
 
   const handlers = {
     undo: () => dispatch({ type: "undo" }),
@@ -1602,7 +1660,21 @@ function Lens({
           <TabPanel id={viewPanel} value={view}>
             {view === "visualization" ? (
               <TabPanel id={chartPanel} value={chart}>
-                <Canvas chart={chart} chrome={chartChrome} about={about} />
+                <Canvas
+                  chart={chart}
+                  chrome={chartChrome}
+                  about={about}
+                  adding={
+                    adding === null
+                      ? null
+                      : {
+                          parent: adding.parent,
+                          ...(adding.kind ? { kind: adding.kind } : {}),
+                          opening: adding.opening,
+                          onClose: closeDialog,
+                        }
+                  }
+                />
               </TabPanel>
             ) : (
               <Table />
@@ -1697,9 +1769,9 @@ function Lens({
           </Modal>
         )}
 
-        {dialog && (
+        {surface && (
           <DialogHost
-            dialog={dialog}
+            dialog={surface}
             follow={follow}
             surfaces={surfaces}
             onClose={closeDialog}

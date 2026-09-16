@@ -23,7 +23,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
-import { CanvasView } from "./CanvasView.tsx";
+import { CanvasView, type Adding } from "./CanvasView.tsx";
 import { OrgNodeLabel, Tag } from "@crewlethq/ui";
 import { isDrawnAs } from "~/testing.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
@@ -64,17 +64,23 @@ afterEach(() => {
 interface Mounted {
   spies: BuilderSpies;
   probe: HarnessProbe;
-  rerender: (props?: { agents?: AgentRow[]; readOnly?: boolean }) => void;
+  rerender: (props?: { agents?: AgentRow[]; readOnly?: boolean; adding?: Adding | null }) => void;
   container: HTMLElement;
 }
 
 function mount(
   initial: BuilderState = checkedEdit(fixtureCompany()),
-  { chart = "structure", readOnly = false }: { chart?: ChartKind; readOnly?: boolean } = {},
+  {
+    chart = "structure",
+    readOnly = false,
+    adding = null,
+  }: { chart?: ChartKind; readOnly?: boolean; adding?: Adding | null } = {},
 ): Mounted {
   const spies = builderSpies();
   const probe = harnessProbe();
-  const tree = (props: { agents?: AgentRow[]; readOnly?: boolean } = {}) => (
+  const tree = (
+    props: { agents?: AgentRow[]; readOnly?: boolean; adding?: Adding | null } = {},
+  ) => (
     <BuilderHarness
       initial={initial}
       spies={spies}
@@ -82,7 +88,7 @@ function mount(
       readOnly={props.readOnly ?? readOnly}
       agents={props.agents}
     >
-      <CanvasView chart={chart} />
+      <CanvasView chart={chart} adding={props.adding === undefined ? adding : props.adding} />
     </BuilderHarness>
   );
   const utils = render(tree());
@@ -224,8 +230,9 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Engineering"));
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
 
-    // The lead chip is drawn in the same hidden strip.
-    pointerPress("VP Engineering");
+    // The lead chip is drawn in the same hidden strip. It says the word
+    // itself, as the chart this is drawn from does: see `leadChipLabel`.
+    pointerPress("Lead: VP Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
@@ -654,15 +661,21 @@ describe("what a node offers a pointer", () => {
   test("the node's own edge carries Edit and Delete, and nothing else", () => {
     const { spies } = mount();
     expect(controls("Engineering")).toEqual([
+      // THE EXPANDER FIRST, on the node's leading edge, which is where every
+      // hierarchy a reader has used puts a disclosure. It shared the branch
+      // strip with the Add, where the add pill splitting open into its three
+      // kinds covered it, and that is the one gesture a reader makes next to
+      // it.
+      "Collapse Engineering",
       "Edit Engineering",
       "Delete Engineering",
       "Actions for Engineering",
       // The lead along the bottom edge, which stays drawn: it is a fact about
       // the organization rather than a tool for changing it. The X inside it
       // is the tool, and it is quiet with the rest of them.
-      "VP Engineering",
+      "Lead: VP Engineering",
       "Clear the lead of Engineering",
-      "Collapse Engineering",
+      // And the branch below is the Add, alone.
       "Add to Engineering",
     ]);
     pointerPress("Edit Engineering");
@@ -675,20 +688,20 @@ describe("what a node offers a pointer", () => {
   test("the company has no Delete, and a read-only draft has none at all", () => {
     mount();
     expect(controls("Acme")).toEqual([
+      "Collapse Acme",
       "Edit Acme",
       "Actions for Acme",
-      "Collapse Acme",
       "Add to Acme",
     ]);
     cleanup();
     mount(undefined, { readOnly: true });
     expect(controls("Engineering")).toEqual([
+      "Collapse Engineering",
       "Edit Engineering",
       "Actions for Engineering",
-      "Collapse Engineering",
     ]);
     // The lead is still READ on a read-only draft; it is simply not a control.
-    expect(within(chartCard(item("Engineering"))).getByText("VP Engineering")).toBeDefined();
+    expect(within(chartCard(item("Engineering"))).getByText("Lead: VP Engineering")).toBeDefined();
   });
 
   /*
@@ -853,7 +866,10 @@ describe("menus", () => {
         seats: { "roles[1]": { placed_by_ref: true, unit_path: "units[0].children[0]" } },
       }),
     );
-    const chip = screen.getByRole("button", { name: /VP Engineering \(inherited\)/, hidden: true });
+    const chip = screen.getByRole("button", {
+      name: /^Lead: VP Engineering \(inherited\)$/,
+      hidden: true,
+    });
     fireEvent.click(chip);
     const answers = screen.getAllByRole("menuitemradio");
     expect(answers.map((a) => [a.textContent, a.getAttribute("aria-checked")])).toEqual([
@@ -868,7 +884,7 @@ describe("menus", () => {
     // Engineering's own lead is unchanged, and so is what the check said of it.
     expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
     // Now declared, the choice says so, and No lead offers the parent's lead.
-    fireEvent.click(screen.getByRole("button", { name: "SRE", hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Lead: SRE", hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -941,7 +957,7 @@ describe("menus", () => {
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: "CEO", hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: "Lead: CEO", hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -959,11 +975,12 @@ describe("menus", () => {
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
     const { probe, spies } = mount();
     // Engineering declares VP Engineering; Sales declares no lead.
-    fireEvent.click(screen.getByRole("button", { name: "VP Engineering", hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Lead: VP Engineering", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: "No lead", hidden: true }));
+    // An empty pill still says the word: "Lead", as that chart writes it.
+    fireEvent.click(sales.getByRole("button", { name: "Lead", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
     expect(spies.dispatched).toEqual([]);
     expect(probe.state.refusal).toBeNull();
@@ -987,6 +1004,42 @@ describe("the reporting chart", () => {
       "roles[3]": { manager: "a" },
     },
   };
+
+  /*
+   * THE EXPANDER IS BESIDE THE NODE ON BOTH CHARTS, and nothing hangs on the
+   * branch here at all: the reporting chart adds nothing, so the strip under a
+   * card would be an empty band on every node of it. Both charts of one
+   * organization draw one shape, which is the rule this whole module exists
+   * for, and the cycle GROUP is a node a reader collapses like any other.
+   */
+  test("a node's expander is drawn beside it, and the branch carries nothing", () => {
+    const { container } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
+    for (const name of ["Chief", "Reporting cycle", "A"]) {
+      const collapse = within(chartCard(item(name))).getByRole("button", {
+        name: `Collapse ${name === "Reporting cycle" ? "the reporting cycles" : name}`,
+        hidden: true,
+      });
+      // Beside the treeitem, never inside it: a tree's items hold nothing
+      // focusable, and the whole chart is held to that a few cases above.
+      expect(collapse.closest("[role='treeitem']")).toBeNull();
+    }
+    // A LEAF HAS NONE. Ops is the bottom of its branch, so its card is drawn
+    // with no disclosure rather than with an empty one.
+    expect(
+      within(chartCard(item("Ops"))).queryByRole("button", {
+        name: /^(Collapse|Expand) /,
+        hidden: true,
+      }),
+    ).toBeNull();
+    // And it still collapses, from the control that is there.
+    pointerPress("Collapse Chief");
+    expect(item("Chief").getAttribute("aria-expanded")).toBe("false");
+    // Nothing hangs on a branch of this chart: it adds nothing, so a strip
+    // there would be an empty band under every node of it.
+    expect(
+      within(container).queryAllByRole("button", { name: /^Add /, hidden: true }),
+    ).toHaveLength(0);
+  });
 
   test("draws the forest with no-manager tops and the cycle group, and changes nothing itself", () => {
     const { spies, probe } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
@@ -1436,3 +1489,216 @@ describe("a surface opened about one node", () => {
     expect(view()).toBe(before);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Adding a node in the chart
+// ---------------------------------------------------------------------------
+
+/*
+ * WHAT THESE PROTECT. Picking a kind from the Add draws the engine's own add
+ * form in the ghost of the node about to exist, rather than a dialog over a
+ * blurred chart:
+ *
+ * - it hangs off the parent it will hang off, in the rank it will land in;
+ * - the tree it is drawn in is untouched by it: the counts a screen reader is
+ *   told, the keys and the selection are what they were;
+ * - focus goes into the form and comes back to the node it was added to;
+ * - Escape cancels, and the chart is given back;
+ * - every refusal, every help and the collision suggestion the dialog could
+ *   show are still shown, and the add it records is the same operation.
+ */
+
+/** An add of `kind` under `parent`, and what the chart was told about closing it. */
+function adding(parent: string | null, kind: "unit" | "agent" | "human" = "agent") {
+  const closed: number[] = [];
+  const request: Adding = {
+    parent,
+    kind,
+    opening: 1,
+    onClose: () => closed.push(1),
+  };
+  return { request, closed };
+}
+
+/** The ghost, found the way a reader meets it: a named region holding a form. */
+const ghost = (name: string) => screen.getByRole("group", { name });
+
+describe("adding a node in the chart", () => {
+  test("the form is drawn in the chart, under the node it is added to", () => {
+    const view = mount();
+    const branches = () => chartLinks(view.container).querySelectorAll("path").length;
+    const before = branches();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    const form = ghost("Add to Engineering");
+    // No dialog: the chart itself is where the question is asked, so the
+    // picture behind it is neither covered nor pushed back.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // A card of the chart, placed by the same layout as every other one, and
+    // below the parent it hangs from.
+    expect(translate(chartCard(form)).y).toBeGreaterThan(
+      translate(chartCard(item("Engineering"))).y,
+    );
+    // AND THE BRANCH INTO IT IS DRAWN, which is what makes this a chart saying
+    // where the node goes rather than a form that happens to be drawn nearby.
+    expect(branches()).toBe(before + 1);
+  });
+
+  test("the tree is what it was: the ghost is no node of the draft", () => {
+    const shape = () =>
+      screen
+        .getAllByRole("treeitem")
+        .map((el) =>
+          [
+            el.getAttribute("data-tree-id"),
+            el.getAttribute("aria-level"),
+            el.getAttribute("aria-posinset"),
+            el.getAttribute("aria-setsize"),
+          ].join("/"),
+        );
+    const view = mount();
+    const before = shape();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    expect(ghost("Add to Engineering")).toBeDefined();
+    expect(shape()).toEqual(before);
+  });
+
+  test("no key of the chart lands on the ghost", () => {
+    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+    item("Engineering").focus();
+    press("ArrowDown");
+    const reached: (string | null | undefined)[] = [];
+    for (let step = 0; step < 12; step += 1) {
+      reached.push(focused());
+      press("ArrowDown");
+    }
+    expect(reached.every((id) => id !== undefined && id !== null)).toBe(true);
+    // Every stop is a node of the draft. The ghost has no `data-tree-id` at
+    // all, so a stop on it would read as nothing here.
+    expect(
+      reached.every(
+        (id) => id!.startsWith("seat:") || id!.startsWith("unit:") || id === COMPANY_KEY,
+      ),
+    ).toBe(true);
+  });
+
+  test("focus goes into the form and back to the node it was added to", () => {
+    const view = mount();
+    item("Engineering").focus();
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    /*
+     * ON THE NAME, which is the field the reader came to type in. The form
+     * asks for it (`autoFocus` on the name field, as the dialog does), and the
+     * chart leaves a form that is already holding focus alone rather than
+     * pulling it back to the first control in the box.
+     */
+    expect(document.activeElement).toBe(within(ghost("Add to Engineering")).getByLabelText("Name"));
+    view.rerender({ adding: null });
+    expect(focused()).toBe(unitKey("Engineering"));
+  });
+
+  test("Escape in the form closes the add", () => {
+    const { request, closed } = adding(unitKey("Engineering"));
+    mount(undefined, { adding: request });
+    fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
+      key: "Escape",
+    });
+    expect(closed).toHaveLength(1);
+  });
+
+  test("the chart eases onto the ghost and gives the view back", () => {
+    const view = mount();
+    const world = () => canvasWorld(view.container).style.transform;
+    const before = world();
+    // eslint-disable-next-line no-console
+    console.log("PROBE before:", before, "cards:", chartCards(view.container).length);
+    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    // eslint-disable-next-line no-console
+    console.log("PROBE onto:", world(), "cards:", chartCards(view.container).length);
+    expect(world()).not.toBe(before);
+    view.rerender({ adding: null });
+    // eslint-disable-next-line no-console
+    console.log("PROBE back:", world(), "cards:", chartCards(view.container).length);
+    expect(world()).toBe(before);
+  });
+
+  /*
+   * THE SAME ADD, RECORDED THE SAME WAY. The ghost is a shell around the form
+   * the dialog also draws, so what it records is the reducer's own operation
+   * with the key the lens minted: a second, quieter add drawn in the chart is
+   * exactly what this arrangement must not become.
+   */
+  test("the form records the add and closes", () => {
+    const { request, closed } = adding(unitKey("Engineering"), "unit");
+    const view = mount(undefined, { adding: request });
+    const form = ghost("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Add unit" }));
+    expect(closed).toHaveLength(1);
+    const recorded = view.spies.dispatched.at(-1);
+    expect(recorded).toMatchObject({
+      type: "record",
+      intent: { type: "addUnit", placement: { parent: unitKey("Engineering") } },
+    });
+  });
+
+  /*
+   * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. The collision
+   * suggestion is the one a reader meets most, and it is a CONTROL rather than
+   * a sentence: it has to be in the ghost or the way out of a name clash is
+   * gone from the chart's add.
+   */
+  test("a name already taken offers the next free one, in the ghost", () => {
+    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+    const form = ghost("Add to Engineering");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
+    expect(within(form).getByText(/A seat named Dev already exists/)).toBeDefined();
+    fireEvent.click(within(form).getByRole("button", { name: "Use Dev 2" }));
+    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Dev 2");
+  });
+
+  test("a read-only draft says so in the ghost and records nothing", () => {
+    const { request } = adding(unitKey("Engineering"));
+    const view = mount(undefined, { adding: request, readOnly: true });
+    const form = ghost("Add to Engineering");
+    expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(view.spies.dispatched).toHaveLength(0);
+  });
+
+  /*
+   * A GHOST ON A BRANCH THAT IS NOT THERE IS NOT DRAWABLE, so the chart draws
+   * none. The Builder is what falls back to the dialog in that case, where the
+   * refusal saying so is drawn; here the guard is only that the chart does not
+   * hang a form off nothing.
+   */
+  test("no ghost where the parent has left the draft", () => {
+    const view = mount();
+    const cards = chartCards(view.container).length;
+    view.rerender({ adding: adding(unitKey("Gone")).request });
+    /*
+     * NOT ONE MORE CARD ON THE CHART, which is the only honest way to ask
+     * this. A ghost whose parent is no card of the chart hangs off nothing, so
+     * the layout never places it and it is drawn at `visibility: hidden`: every
+     * query by role then answers "absent" whether the chart drew it or not,
+     * and a guard written that way passed with the form drawn off the company
+     * instead of the missing unit. What the chart may not do is draw a card
+     * for it at all.
+     */
+    expect(chartCards(view.container)).toHaveLength(cards);
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
+  });
+
+  test("the company's own add is named after the company", () => {
+    mount(undefined, { adding: adding(null).request });
+    expect(ghost("Add to Acme")).toBeDefined();
+  });
+});
+
+/** Where the layout put a card, read off the transform the chart writes. */
+function translate(card: HTMLElement): { x: number; y: number } {
+  const match = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(card.style.transform);
+  if (!match) throw new Error(`this card is not placed: ${card.style.transform}`);
+  return { x: Number(match[1]), y: Number(match[2]) };
+}

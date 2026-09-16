@@ -237,6 +237,68 @@ describe("the views the lens hosts", () => {
   });
 
   /*
+   * AN ADD IS THE ONE REQUEST THIS LENS DOES NOT ALWAYS ANSWER WITH A DIALOG.
+   * The structure chart draws the form in the ghost of the node about to
+   * exist, on the branch it will hang from; nothing is mounted over the
+   * picture, and the picture is not pushed back either, so `about` stays
+   * empty for it.
+   */
+  test("an add is handed to the structure chart rather than opened over it", async () => {
+    mountBuilder({ engine: new Engine(company()) });
+    await screen.findByText("Drawing the structure chart");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
+    expect(await screen.findByText("Adding agent to the company")).toBeDefined();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Not a surface ABOUT a node: the chart is neither dimmed nor moved off
+    // what the reader was looking at, because the ghost is what it eases onto.
+    expect(screen.queryByText(/^About /)).toBeNull();
+  });
+
+  /*
+   * AND THE TWO VIEWS WITH NO PLACE TO DRAW IT IN STILL ASK IN ONE. The table
+   * is a grid of the rows that exist; the reporting chart draws who reports to
+   * whom, which is derived, and has no slot a seat can take before it has a
+   * manager. Both fall back to the same form in a dialog rather than to a
+   * second, quieter add.
+   */
+  test("an add asked from the table or the reporting chart is a dialog", async () => {
+    mountBuilder({ engine: new Engine(company()), hash: "#/org?lens=builder&view=table" });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
+    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+    await screen.findByText("Drawing the structure chart");
+    fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
+    await screen.findByText("Drawing the reporting chart");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
+    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+  });
+
+  /*
+   * AND AN ADD FOLLOWS THE VIEW. The request is the lens's, not the chart's,
+   * so moving to the table while a ghost is open asks the same question in the
+   * dialog rather than leaving the reader with a form they can no longer see.
+   */
+  test("an add open in the chart becomes a dialog when the reader leaves the chart", async () => {
+    mountBuilder({ engine: new Engine(company()) });
+    await screen.findByText("Drawing the structure chart");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
+    await screen.findByText("Adding unit to the company");
+    fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Adding unit to the company")).toBeDefined();
+  });
+
+  /*
    * AND SO IS THE FULLSCREEN TOGGLE, at the end of the chart's own zoom bar.
    * The table has no canvas to hang it in, so it stays in the toolbar there:
    * one control, in the one place each view puts it, never both.
