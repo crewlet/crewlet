@@ -417,8 +417,29 @@ test("a unit says the same word and wears the same mark on the chart and in the 
  * ghost IS hidden until the layout places it, so the same request was refused
  * and the chart's own answer landed instead. One set of fields opening on two
  * different controls is worse than either answer.
+ *
+ * WHAT EACH HALF ACTUALLY HOLDS, because they are not the same claim and the
+ * difference decides what this case can catch.
+ *
+ * The dialog half asserts WHO HOLDS THE FOCUS, so it fails if anything in the
+ * shared fields asks for focus again: restoring `autoFocus` reddens it, which
+ * is measured rather than assumed.
+ *
+ * The chart half asserts DOM ORDER, and cannot assert focus. Two things
+ * compete for it on the tick a ghost opens, the chart and the control that
+ * opened the composition, and jsdom commits them in an order a browser does
+ * not: measured here, the pill that opened it wins and the form does not hold
+ * focus at all, however the chart is settled first. `CanvasView.test.tsx`
+ * holds the chart's own focus answer, where that ordering is driven
+ * deliberately.
+ *
+ * So restoring `autoFocus` reddens the dialog half ALONE, and that is not a
+ * hole: `autoFocus` is inert in the chart for the same reason the defect
+ * existed, since a hidden card refuses the request in a browser too. What this
+ * case guards across both shells is the thing that can silently disagree,
+ * which is WHICH control the shared fields put first.
  */
-test("an add opens on the kind, in the dialog and in the chart alike", async () => {
+test("an add puts the kind first in both shells, and opens on it in the dialog", async () => {
   const restore = LayoutObserver.install();
   onTeardown.push(restore);
   mountBuilder({
