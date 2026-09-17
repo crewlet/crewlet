@@ -22,7 +22,6 @@ jobs:
   build:
     name: build + vet
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -75,7 +74,6 @@ jobs:
   # is written at its top.
   signoff:
     name: sign-off
-    timeout-minutes: 10
     # The PULL REQUEST half. It is the gate that matters — it is the only one
     # that can stop an unsigned commit rather than report it — but it is not
     # the whole job, because the commit a pull request lands is not always a
@@ -134,7 +132,6 @@ jobs:
   # symptom.
   signoff-main:
     name: sign-off (main)
-    timeout-minutes: 10
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -197,7 +194,6 @@ jobs:
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       # `latest` is the newest Node release, resolved by setup-node at run
@@ -242,11 +238,6 @@ jobs:
   test:
     name: test (race)
     runs-on: ubuntu-latest
-    # ABOVE the Makefile's own -timeout, deliberately. `go test` hitting its
-    # deadline prints a full goroutine dump naming what is stuck; a cancelled
-    # job prints nothing at all, so the dump has to win the race. This is the
-    # outer bound for a runner that wedges somewhere go test cannot see.
-    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -280,91 +271,27 @@ jobs:
       - name: the suite, minus the packages that run alone
         run: make test
 
-  # WHICH PACKAGES RUN ALONE, computed from the same declaration the Makefile
-  # reads and emitted as a matrix.
-  #
-  # The list is NEVER written here. A package declares "I need a runner to
-  # myself" by importing internal/solo from its TestMain, internal/solo's
-  # roster guard fails the build in both directions, and
-  # internal/solo/partition is the one reader that turns that into a package
-  # list — see `go doc ./internal/solo`. A matrix hand-listed in this file
-  # would be the fourth copy of a fact the tree already computes, and the one
-  # copy nothing checks.
-  solo-packages:
-    name: which packages run alone
+  gates:
+    name: end-to-end gates
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      packages: ${{ steps.partition.outputs.packages }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - id: partition
-        name: the solo half, as a matrix
-        run: |
-          set -euo pipefail
-          packages="$(go run ./internal/solo/partition solo |
-            jq -R -s -c '[splits("\n") | select(length > 0) |
-              {path: ., name: (split("/") | last)}]')"
-          # AN EMPTY MATRIX IS A PASS THAT RAN NOTHING, which is the one
-          # failure this whole job could introduce: `make test-solo` guards
-          # the same way and for the same reason.
-          if [ "$packages" = "[]" ]; then
-            echo "::error::no package imports internal/solo, so the solo half is empty"
-            exit 1
-          fi
-          echo "packages=$packages" >> "$GITHUB_OUTPUT"
-          echo "$packages"
-
-  # ONE JOB PER SOLO PACKAGE, because they must not share a runner and a
-  # SERIAL job made every one of them hostage to the slowest.
-  #
-  # `make test-solo` runs them at -p 1 locally, which is the same guarantee by
-  # a different means: no two solo packages run at once. On a hosted runner
-  # each job gets its own VM, so the matrix gives that isolation AND removes
-  # the coupling -p 1 leaves behind — one package overrunning the job's
-  # wall-clock ceiling used to kill the three that had not started, so three
-  # packages reported nothing and the loss looked like a suite that had been
-  # cancelled rather than a package that had hung.
-  #
-  # fail-fast is off for the same reason: one package's failure is not
-  # evidence about another's, and cancelling the rest throws away the run's
-  # other three answers.
-  solo:
-    name: solo (${{ matrix.package.name }})
-    needs: solo-packages
-    runs-on: ubuntu-latest
-    # ABOVE the Makefile's own -timeout, deliberately. `go test` hitting its
-    # deadline prints a full goroutine dump naming what is stuck; a cancelled
-    # job prints nothing at all, so the dump has to win the race. One package
-    # per job is what makes this number mean something: it is now the ceiling
-    # on ONE binary rather than on four sharing a job, and the slowest of them
-    # (internal/e2e) measures 300-400s green.
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJSON(needs.solo-packages.outputs.packages) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      # THE PACKAGES THAT RUN ALONE — `make test-solo`, which is every package
+      # importing internal/solo, run at -p 1 so their brokers do not contend
+      # with each other either. Today that is internal/e2e, internal/node,
+      # internal/statelog and the cluster harness's own suite; the list is
+      # computed, never written here. See `go doc ./internal/solo`.
+      #
       # internal/e2e is why this job installs node: it runs a real engine, a
       # real broker and the real API, then replays the frames its socket
       # produced through the dashboard's OWN protocol module — the built
       # static/dashboard/protocol.js, which is committed, so nothing has to be
       # built here. Both halves of the wire protocol are checked against each
       # other here and nowhere else, so a missing node fails rather than skips.
-      #
-      # INSTALLED FOR EVERY LEG rather than only e2e's, because which package
-      # needs it is not something this file may know: the matrix is computed,
-      # and a condition naming a package here would be the hand-maintained
-      # list the computation exists to remove. It costs a few seconds.
       #
       # `latest` for the reason the `dashboard` job above states at length: no
       # node version is pinned anywhere in the tree, because Dependabot moves
@@ -375,52 +302,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      # THROUGH THE ENVIRONMENT, not interpolated into the script — the
-      # convention the `sign-off` job above states at length: a `run:` that
-      # pastes `${{ }}` into its shell is the shape that becomes an injection
-      # the day the field is not what you assumed. This one is our own
-      # `go list` output today, which is exactly the assumption worth not
-      # encoding.
-      - name: the package this leg owns
-        env:
-          PKG: ${{ matrix.package.path }}
-        run: make test-solo-one PKG="$PKG"
-
-  # THE NAME BRANCH PROTECTION KNOWS, kept stable across the split above.
-  #
-  # A required check is matched by NAME, and the matrix legs are named per
-  # package — a set that changes whenever a package declares or stops
-  # declaring. Requiring those directly would make the protection rule a
-  # fourth copy of the computed list, and a rule naming a check that no longer
-  # runs blocks every pull request for ever. So this one job keeps the old
-  # name, depends on the matrix, and is the only thing that has to be
-  # required.
-  #
-  # `if: always()` because a skipped or cancelled dependency would otherwise
-  # skip this too, and a skipped required check never reports — which reads to
-  # the merge queue as a check that is still coming.
-  gates:
-    name: end-to-end gates
-    needs: [solo-packages, solo]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: every solo package passed
-        env:
-          PACKAGES_RESULT: ${{ needs.solo-packages.result }}
-          SOLO_RESULT: ${{ needs.solo.result }}
-        run: |
-          set -euo pipefail
-          echo "which packages run alone: $PACKAGES_RESULT"
-          echo "solo:                     $SOLO_RESULT"
-          # EXPLICITLY success, not "not failure": a cancelled or skipped
-          # dependency is not a pass, and reporting one as a pass is how a
-          # required check certifies a run that never happened. A matrix
-          # job's result is the aggregate of its legs, so one failed leg
-          # fails this.
-          [ "$PACKAGES_RESULT" = "success" ] || exit 1
-          [ "$SOLO_RESULT" = "success" ] || exit 1
+      - run: make test-solo
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because
@@ -439,7 +321,6 @@ jobs:
   cross:
     name: cross-compile the release targets
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     # The release matrix is not exercised by any other job: `go build ./...`
     # above compiles for the runner and nothing else, so a change that only
     # breaks darwin — a build tag, a syscall, a platform-gated file — reaches
@@ -507,7 +388,6 @@ jobs:
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

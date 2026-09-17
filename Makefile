@@ -81,14 +81,13 @@ BIN := crewlet
 # package that hangs dies in thirty minutes rather than go's default ten,
 # which is the cost of having a gate that can pass at all.
 #
-# It is NOT the outer bound. ci.yml carries a `timeout-minutes` per job, set
-# ABOVE this one deliberately: `go test` hitting its own deadline prints a full
-# goroutine dump naming what is stuck, a cancelled job prints nothing, so the
-# dump has to win the race. That ceiling only means anything because the solo
-# half runs ONE PACKAGE PER JOB there (see test-solo-one) — over a job running
-# four of them it bounded the slowest and killed the three that had not
-# started, so what it reported was a cancelled run rather than a hung
-# package.
+# AND IT IS THE ONLY DEADLINE A HUNG TEST MEETS. ci.yml sets no
+# `timeout-minutes`, so the outer bound is GitHub's own per-job default of six
+# hours — this fires twelve times sooner, and it is the one that fires
+# usefully: `go test` hitting its own deadline prints a full goroutine dump
+# naming what is stuck, where a job killed by the runner prints nothing at all.
+# A ceiling in the workflow would have to sit ABOVE this one to keep that true,
+# which is most of the reason there is not one.
 #
 # TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
 # the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and
@@ -406,28 +405,6 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
 	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
-
-# ONE solo package, which is what each of ci.yml's matrix legs runs.
-#
-# THE SAME GUARANTEE AS -p 1 BY A DIFFERENT MEANS, which is the only reason
-# this is not a second spelling of the target above. Both say "no two solo
-# packages run at once": -p 1 serialises them inside one invocation, and the
-# matrix gives each its own runner. What the split adds is that one package
-# overrunning no longer takes the others with it — serially they shared a job's
-# wall clock, so a package that hung killed the ones that had not started and
-# three of the four reported nothing.
-#
-# It is a target rather than a bare `go test` in the workflow because of the
-# rule at the top of this file: what CI runs is what this file runs, or this
-# file is a lie. The flags have to come from $(GOTEST) and the gate from
-# $(SKIPGATE), or the matrix leg would be the one command in the pipeline
-# nothing here describes.
-#
-# No -p 1: one package is one binary, and the flag bounds package binaries
-# rather than the tests inside one.
-test-solo-one: require-node ## one solo package, by import path (ci: end-to-end gates)
-	@test -n "$(PKG)" || { echo "test-solo-one needs PKG=<import path>" >&2; exit 1; }
-	$(SKIPGATE) -- $(GOTEST) -json $(PKG)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
