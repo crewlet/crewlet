@@ -721,7 +721,7 @@ type Store struct {
 
 	// BusyTimeoutSeconds is how long a statement waits for the file lock
 	// before giving up; 0 takes the store's own default.
-	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a statement fails; 0 takes the store default."`
+	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a write gives up, and the anchor for the one retry it then gets; 0 takes the store default."`
 }
 
 func (s *Store) validate(path Path) error {

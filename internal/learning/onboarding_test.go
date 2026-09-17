@@ -680,20 +680,31 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	t.Parallel()
 	// The measurement behind Claim's single conditional upsert.
 	//
-	// The driver's BeginTx always issues a plain BEGIN, so two claimants
-	// doing read-then-write both take their snapshot before either writes,
-	// and the loser's write is REFUSED with "database snapshot is stale".
-	// [store.DB.Tx] retries that on a fresh snapshot, which is what turns
-	// the refusal into a correct answer rather than an error the caller
-	// cannot tell from an outage: the loser RE-READS, sees the lease the
-	// winner took, and declines. So the claim never goes to two seats.
+	// This used to measure a RACE. store.Tx began DEFERRED, so two
+	// claimants doing read-then-write both took their snapshot before
+	// either wrote and the loser's write was refused with "database
+	// snapshot is stale"; the retry turned that refusal into a correct
+	// answer by re-reading. internal/store/begin.go removed the premise:
+	// a write transaction now takes the lock at BEGIN, so two claimants
+	// SERIALISE and there is no interleaving to recover from.
 	//
-	// That recovery is why the upsert form is still the right shape rather
-	// than a redundant one. It survives the race in ONE statement with no
-	// re-decision, so it does not depend on fn being safe to run twice —
-	// and a body doing read-then-write must re-read inside fn, never cache
-	// the first read, or the retry rewrites the winner's lease with a
-	// decision taken against a snapshot that no longer exists.
+	// The conclusion is unchanged, and the reason it survives is worth
+	// stating because it is not the reason it had before. A read-then-write
+	// claim is now correct — the loser's read happens after the winner
+	// committed, so it sees the lease and declines — but it holds the
+	// database's single write lock across its read, its decision and its
+	// write, for every claimant in the queue. The conditional upsert
+	// evaluates the same predicate in ONE statement under that lock, so it
+	// holds it for a statement rather than for a round trip, and it does
+	// not depend on fn being safe to run twice.
+	//
+	// What this asserts is therefore the SERIALISATION, and the old test's
+	// barrier is gone rather than relaxed: it forced both claimants to read
+	// before either wrote, which is exactly the interleaving the begin mode
+	// makes impossible, so under it the barrier deadlocks — claimant two
+	// blocks in BEGIN and never reaches the barrier claimant one is waiting
+	// on. A test that cannot run is not a weaker test than one that can; it
+	// is asserting about a world that no longer exists.
 	_, db := onboarding(t)
 	if _, err := db.SQL().ExecContext(t.Context(),
 		`INSERT INTO agent_onboarding_markers (agent_id, chain_hash, created_at, updated_at)
@@ -705,18 +716,11 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 		mu      sync.Mutex
 		outcome []error
 		reads   atomic.Int64
-		read    sync.WaitGroup
+		took    atomic.Int64
 		done    sync.WaitGroup
 	)
-	read.Add(2)
 	for i := range 2 {
 		done.Go(func() {
-			// ONCE, because Tx may run fn again on a stale snapshot and a
-			// second Done takes the counter negative. The barrier belongs
-			// to the goroutine, not to the attempt — it exists to make both
-			// claimants read before either writes, which is a fact about
-			// the FIRST pass through.
-			var barrier sync.Once
 			err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 				var lease sql.NullInt64
 				if err := tx.QueryRowContext(t.Context(),
@@ -725,13 +729,12 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 					return err
 				}
 				reads.Add(1)
-				// Both readers are through before either writes — which is
-				// the whole race, made deterministic.
-				barrier.Do(read.Done)
-				read.Wait()
 				if lease.Valid {
+					// Somebody else already holds it, which is the
+					// answer the loser must reach WITHOUT an error.
 					return nil
 				}
+				took.Add(1)
 				_, err := tx.ExecContext(t.Context(),
 					`UPDATE agent_onboarding_markers SET in_progress_until = ? WHERE agent_id='seat-1'`,
 					100+i)
@@ -747,20 +750,29 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	for _, err := range outcome {
 		if err != nil {
 			t.Errorf("a claimant got an error it cannot tell from an outage: %v — "+
-				"the retry is what stops a lost race being reported as one", err)
+				"serialised claimants both succeed, one taking the lease and one "+
+				"finding it taken", err)
 		}
 	}
-	if got := reads.Load(); got != 3 {
-		// Two first reads plus the loser's re-read. Exactly three, because
-		// this is the property: the loser ran fn again, and it ran it after
-		// the winner had committed.
-		t.Errorf("fn read %d times, want 3 (two claimants, one retry) — "+
-			"with no retry the loser would surface the conflict as an error, "+
-			"and with more the race is not what this test set up", got)
+	// EXACTLY ONE took it, which is the property. Under the deferred begin
+	// this held only because the loser's write was refused and retried;
+	// now it holds because the loser's READ happened after the winner's
+	// commit, and nothing had to be re-run to make it true.
+	if got := took.Load(); got != 1 {
+		t.Errorf("%d claimants took the lease, want exactly 1 — two writers "+
+			"cannot be inside a write transaction at once, so the second must "+
+			"read the first's lease", got)
+	}
+	// AND NEITHER BODY RAN TWICE. That is the visible difference from the
+	// old behaviour: a conflict the retry absorbed is a conflict that no
+	// longer happens, so fn runs once per claimant.
+	if got := reads.Load(); got != 2 {
+		t.Errorf("fn read %d times, want 2 (one per claimant, no retry) — a third "+
+			"read means a transaction was aborted and replayed, which the begin "+
+			"mode is supposed to prevent", got)
 	}
 
-	// ONE LEASE, the winner's. The loser saw it on its re-read and declined,
-	// which is the answer a caller can act on.
+	// ONE LEASE, the winner's.
 	var lease sql.NullInt64
 	if err := db.SQL().QueryRowContext(t.Context(),
 		`SELECT in_progress_until FROM agent_onboarding_markers WHERE agent_id='seat-1'`).

@@ -28,7 +28,7 @@ import (
 // # It is not a second transaction implementation
 //
 // Tx below carries the SAME retry loop and the SAME stale-snapshot classifier
-// [DB.Tx] does, through retryStale, because a second copy is how one of them
+// [DB.Tx] does, through retryTransient, because a second copy is how one of them
 // comes to retry an error the other returns. The only difference is which
 // connection the transaction begins on.
 //
@@ -75,7 +75,7 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // ONCE, so anything with an effect outside the transaction belongs after Tx
 // returns rather than inside it.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryStale(ctx, func() error { return w.tx(ctx, fn) })
+	return retryTransient(ctx, pinned(w.db.busy), func() error { return w.tx(ctx, fn) })
 }
 
 // tx is one attempt: begin, run, commit or roll back.
@@ -151,19 +151,20 @@ func (w *Writer) Close() error {
 // applier is committing to, otherwise reports a total that does not match the
 // page under it. A transaction is what makes the two statements one answer.
 //
-// database/sql has sql.TxOptions{ReadOnly: true} for exactly this and it is
-// deliberately not passed: the driver's BeginTx IGNORES its options and always
-// issues a plain BEGIN (see the note on DB.Tx). Passing one would read as a
-// guarantee the driver does not make — a caller could believe a write inside
-// fn is refused, and it is not. The read-only-ness here is the caller's
-// discipline and this doc, which is the honest description of what the layer
-// underneath actually provides.
+// IT PASSES sql.TxOptions{ReadOnly: true}, and that option now MEANS
+// something here — but not what its name suggests. [beginModeDriver] reads it
+// as "take the DEFERRED begin": a snapshot with no write lock, which is what
+// a multi-statement read wants and what keeps a dashboard query from
+// excluding the engine's writes for its duration. It does NOT make the driver
+// refuse a write inside fn. The read-only-ness is still the caller's
+// discipline and this doc; what the option buys is the right begin, not an
+// enforcement.
 //
 // It carries the same retry as [DB.Tx]: a read transaction can lose a snapshot
 // race too, and a reader that surfaced "database snapshot is stale" to a
 // dashboard would be reporting the store's internals as the answer.
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryStale(ctx, func() error {
-		return d.tx(ctx, func(tx *sql.Tx) error { return fn(tx) })
+	return retryTransient(ctx, pooled(d.busy), func() error {
+		return d.txOpts(ctx, readTx, func(tx *sql.Tx) error { return fn(tx) })
 	})
 }
