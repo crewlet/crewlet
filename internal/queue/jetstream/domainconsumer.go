@@ -170,7 +170,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// gives: this consumer is placed by the same metadata group as
 		// the stream it reads, so "no suitable peers" is transient here
 		// too and the budget above is worth nothing without the retry.
-		err = jsprovision.Place(createCtx, func(ctx context.Context) error {
+		err = jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.CreateConsumer(ctx, stream, config)
 			return e
@@ -295,7 +295,27 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// THE DELETE HAS LANDED, so from here the broker has no consumer and
 	// the handle must not go on naming one.
 	c.cons = nil
-	cons, err := c.q.js.CreateConsumer(ctx, c.stream, config)
+	// THROUGH [jsprovision.Place] like every other replicated create,
+	// which this one was not. A domain consumer is placed by the same
+	// metadata group as the durable consumers beside it, so it meets the
+	// same two transient conditions — a placement refusal while the group
+	// is short of members, and a request the group never answers — and it
+	// met them with no budget at all, which is nats.go's undeclared
+	// five-second default on whatever context the applier happened to hold.
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	defer cancelCreate()
+	var cons jetstream.Consumer
+	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = c.q.js.CreateConsumer(ctx, c.stream, config)
+			return e
+		}, func() {
+			c.q.log.Info("jetstream_domain_consumer_awaiting_peers",
+				"stream", c.stream, "consumer", c.name,
+				"detail", "the cluster has not yet seen enough members to place "+
+					"this consumer; retrying until the provisioning deadline")
+		})
 	if err != nil {
 		// `want` IS LEFT AS IT WAS, deliberately: the rebuild then
 		// restores the consumer at its PREVIOUS position rather than at
@@ -323,7 +343,18 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	if c.cons != nil {
 		return c.cons, nil
 	}
-	cons, err := c.q.js.CreateConsumer(ctx, c.stream, c.want)
+	// THE SAME BUDGET AND THE SAME RE-ASK as Reset's own create: this is
+	// the identical call, reached when that one failed, so it faces the
+	// identical transient conditions.
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	defer cancelCreate()
+	var cons jetstream.Consumer
+	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = c.q.js.CreateConsumer(ctx, c.stream, c.want)
+			return e
+		}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: rebuild the domain consumer %s on "+
 			"%s after a reset that deleted it and could not create it again: %w",

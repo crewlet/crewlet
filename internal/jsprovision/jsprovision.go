@@ -42,7 +42,7 @@
 // # And why the sequence is bounded separately
 //
 // Each budget below bounds ONE create, and a boot makes many of them in a row
-// — thirteen coordination buckets from [internal/coord/kv]'s OpenFleet, two
+// — fourteen coordination buckets from [internal/coord/kv]'s OpenFleet, three
 // more from its Open, and the engine's own streams beside them.
 // Nothing bounded the sequence, so the real worst case was already the product
 // rather than the term, and raising the term alone would have multiplied it.
@@ -57,6 +57,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -124,6 +125,56 @@ func SequenceBudget(clustered bool) time.Duration {
 	}
 	return soloSequenceBudget
 }
+
+// LookupBudget is the CEILING over one existence probe — the "does this object
+// already exist" read that decides create-versus-observe, including however
+// many times [Ask] has to re-issue it.
+//
+// # Why a read is not sized like a create
+//
+// [Budget] sizes a raft round trip against a metadata group that may still be
+// forming, and the provisioning paths handed that same number to the LOOKUP
+// that precedes the create, because both went through one context. They are
+// not the same operation. A create has to be agreed by a quorum; a lookup is a
+// metadata READ, and the only reason it is ever slow is that the group cannot
+// answer it yet.
+//
+// # THIRTY SECONDS, WHICH IS TWO ATTEMPTS AND THE GAP BETWEEN THEM
+//
+// A ceiling rather than one request's deadline, because an unanswered lookup
+// is re-issued like any other metadata request: the reply is usually destroyed
+// rather than late, and [Ask] carries the server's own three drop paths. Two
+// attempts at [AskTerm]'s clustered fifteen seconds plus the [ReAsk] second
+// between them is thirty-one, so thirty buys a full second attempt against a
+// group that has had a complete election (maxElectionTimeout is 9s) to produce
+// the leader the first attempt was missing.
+//
+// A third attempt would add no evidence. What changes between attempts is
+// which member holds the metadata group, and that is settled within one
+// election; past it, a group still not answering is one the create's own
+// budget goes on asking — with far more of that budget left than a longer
+// lookup would have spent.
+//
+// The ceiling does not branch on topology, which is why this is one constant
+// where [Budget] and [SequenceBudget] are two. A solo member's lookup is a
+// local file-store read answered in microseconds, with no raft, no election
+// and nothing to re-ask — [AskTerm] states that as one attempt — so for it
+// thirty seconds is pure hang detection.
+//
+// # What it buys
+//
+// A lookup that used to spend the whole two-minute clustered [Budget] on ONE
+// unanswered request and then fail the boot now spends thirty seconds asking
+// twice, and if it is still told nothing it falls through to the create, which
+// covers every outcome the lookup could have reported (see [Unanswered]).
+//
+// Both of the numbers this replaced were measured failing. The client's
+// undeclared five-second default on this call failed a three-member cluster
+// under load about one boot in six, reported as a bare "context deadline
+// exceeded" with nothing to say which deadline; the two-minute budget that
+// replaced it then failed an end-to-end cluster case on three attempts
+// running, at ~120s each, on a different object every time.
+const LookupBudget = 30 * time.Second
 
 // Settle re-runs ask while it answers [NotYetVisible], for up to [ReadBack].
 //
@@ -223,9 +274,18 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 // THE ERROR IT RETURNS IS THE CREATE'S OWN, never the context's: "no suitable
 // peers" says what is wrong and names the condition to go and look at, and
 // "deadline exceeded" says neither.
-func Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
+func Place(ctx context.Context, term time.Duration,
+	create func(context.Context) error, awaiting func()) error {
+
 	for attempt := 0; ; attempt++ {
-		err := create(ctx)
+		// THROUGH [Ask], because a create is a metadata request like
+		// any other and the server drops those. Without it a create
+		// whose request was destroyed sat on this loop's single call
+		// until the whole clustered budget expired, and the refusal
+		// this loop waits for never arrived to be waited for — so the
+		// budget bought the create the same nothing the missing
+		// placement retry once bought the consumer.
+		err := Ask(ctx, term, create, nil)
 		if err == nil || !Unplaceable(err) {
 			return err
 		}
@@ -239,6 +299,128 @@ func Place(ctx context.Context, create func(context.Context) error, awaiting fun
 		}
 	}
 }
+
+// Ask runs one idempotent metadata request, RE-ISSUING it while the broker
+// does not answer, for as long as ctx allows.
+//
+// # Why re-asking is the remedy and waiting is not
+//
+// Because the reply does not exist rather than being late. nats-server drops
+// a routed metadata request outright in more than one place, and both are
+// ordinary during a bring-up. A member that is not the metadata leader and has
+// no assignment for the object RETURNS WITHOUT REPLYING unless the group is
+// already leaderless (server/jetstream_api.go, the `sa == nil` arm of
+// jsStreamInfoRequest — the leaderless branch sends a delayed error, the other
+// branch sends nothing at all). And apiDispatch DRAINS its whole routed queue
+// when it reaches JSDefaultRequestQueueLimit, discarding every request pending
+// on it with an advisory and no replies.
+//
+// So the caller is waiting on a reply nobody is going to send, and a longer
+// deadline buys strictly nothing: it was measured buying exactly nothing, at
+// two minutes a time, on a different object every attempt. What gets an answer
+// is ASKING AGAIN — at a leader that now exists, or past a queue that has
+// drained.
+//
+// # Why every attempt gets its own context
+//
+// The premise is that the outstanding request is dead. An attempt handed the
+// previous one's spent deadline would be dead on arrival, which is the same
+// defect [Settle]'s doc records for read-backs handed the create's expired
+// context: the retry would be dead code on precisely the path it was written
+// for.
+//
+// # Any answer ends it, including a bad one
+//
+// [Unanswered] is the only condition re-asked. An answer — the object, a
+// not-found, a placement refusal, an auth failure — is returned at once, so
+// this never turns a configuration mistake into a loop, and [Place] can still
+// see the refusal it exists to wait out.
+//
+// again, when non-nil, is called before each re-ask with the number of
+// requests already sent, so a caller can say which object is not being
+// answered. The error returned is the last attempt's own, never this
+// function's patience.
+func Ask(ctx context.Context, term time.Duration,
+	one func(context.Context) error, again func(asks int)) error {
+
+	for asks := 1; ; asks++ {
+		attempt, cancel := context.WithTimeout(ctx, term)
+		err := one(attempt)
+		cancel()
+		if !Unanswered(ctx, err) {
+			return err
+		}
+		if again != nil {
+			again(asks)
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(ReAsk):
+		}
+	}
+}
+
+// AskTerm is how long ONE metadata request waits before it is presumed
+// destroyed and re-issued by [Ask].
+//
+// # THE CLUSTERED TERM IS FIFTEEN SECONDS, AND THE SERVER CHOSE IT
+//
+// An attempt has to be long enough that a group which is GOING to answer has
+// answered, and no longer — because past that point the request is gone and
+// the time is spent waiting for nothing. Three of the vendored server's own
+// constants bound that (server/raft.go, server/jetstream_api.go in the pinned
+// nats-server):
+//
+//   - maxElectionTimeout is 9s, so an attempt that spans it covers a complete
+//     election: a request that arrived mid-election is re-asked at a leader
+//     that now exists rather than at one that never did.
+//   - lostQuorumInterval is 10s, which is when a leaderless group stops being
+//     silent and starts ANSWERING JSClusterNotAvailError. An attempt shorter
+//     than this abandons the request just before the server would have replied
+//     to it, and the reply is the thing that ends the loop.
+//   - errRespDelay is 500ms, the delay on that answer once it is decided, so
+//     the term has to clear 10s by more than a rounding margin.
+//
+// Fifteen covers all three with room, and it is an eighth of the clustered
+// [Budget] that used to be one attempt — so a create now asks eight times
+// inside the budget that once bought a single unanswered request.
+//
+// # AND THE SOLO TERM IS THE SOLO BUDGET, BECAUSE THERE IS NOTHING TO RE-ASK
+//
+// A solo broker has no metadata group, no election and no leader that can
+// change, so none of the drop paths above exists: a request that has not been
+// answered is one the local file store is still working on, and asking a
+// second time adds load rather than a leader. Stating it as one attempt at the
+// full budget keeps that a decision rather than an accident of sharing the
+// clustered number.
+func AskTerm(clustered bool) time.Duration {
+	if clustered {
+		return clusterAskTerm
+	}
+	return soloBudget
+}
+
+// AskTerm is how long one metadata request gets before it is re-issued.
+func (c Clustered) AskTerm() time.Duration { return AskTerm(bool(c)) }
+
+const clusterAskTerm = 15 * time.Second
+
+// ReAsk is how long [Ask] waits before re-issuing a request nobody answered.
+//
+// ONE SECOND, which is the vendored server's hbInterval (server/raft.go) — the
+// shortest interval over which the metadata group's leadership can have
+// changed. Re-asking sooner puts the same question to a group in the same
+// state and answers it the same way, so it spends requests on a queue that may
+// itself be draining.
+//
+// Deliberately NOT [PlacementRetry], although both are "try again in a
+// moment". That one re-asks a refusal the server ANSWERED, which clears the
+// instant a peer joins and is worth polling for four times a second; this one
+// re-sends a request that was destroyed, where the thing that has to change is
+// which member holds the group. Two conditions, two cadences, and merging them
+// would tie each to the other's evidence.
+const ReAsk = time.Second
 
 // Clustered is whether this node's broker has peers, which is what decides
 // every budget above.
@@ -278,7 +460,7 @@ const SlowAfter = 10 * time.Second
 // # Why a provisioning call needs this at all
 //
 // Because a stalled one is COMPLETELY SILENT, and that is what made a failed
-// boot undiagnosable. A node opens fifteen buckets across its two coordination
+// boot undiagnosable. A node opens seventeen buckets across its two coordination
 // stores, and several streams, in a row; if one of them hangs, nothing is
 // logged between the line before it and the failure a budget later — so the
 // log cannot say which object it was on,
@@ -384,4 +566,70 @@ func NotYetVisible(err error) bool {
 	return errors.Is(err, jetstream.ErrStreamNotFound) ||
 		errors.Is(err, jetstream.ErrBucketNotFound) ||
 		errors.Is(err, jetstream.ErrConsumerNotFound)
+}
+
+// Unanswered reports a request the broker never replied to — the THIRD value
+// an existence probe can return, beside "it is there" and "it is not".
+//
+// # Why this is a value and not a failure
+//
+// [internal/coord]'s lesson, in the provisioning path: "held", "definitively
+// not held" and "the store could not be reached" are three different facts,
+// and collapsing the last two is the most expensive mistake this engine has
+// made. An existence probe has exactly the same three answers. A lookup that
+// returned [jetstream.ErrStreamNotFound] has been TOLD the object is absent; a
+// lookup whose deadline expired has been told NOTHING, and the difference is
+// the whole of this function.
+//
+// Every provisioning path here read the second and third as one. The switch
+// was `case err == nil: observe` / `case errors.Is(err, ErrNotFound): create`
+// / `default: fail the boot` — so a metadata group that was merely slow to
+// answer produced `ensure stream CREWLET_CONFIG: context deadline exceeded`
+// and a node that refused to start, on a cluster where nothing was wrong with
+// the stream, the config or the peer. That is a node declining to boot because
+// it could not hear, reported as though it had heard "no".
+//
+// # Why falling through to the create is the answer
+//
+// Because the create already covers both of the things the lookup failed to
+// say. If the object is absent the create makes it; if it exists the create
+// returns "already in use", which these paths have ALWAYS treated as a peer
+// having won the race, read back through [Settle] and compared exactly as a
+// lookup's own hit would be. So the lookup is an optimisation — it saves one
+// round trip when it answers — and a failed optimisation is not a failed boot.
+// Nothing downstream needs a distinction the probe could not supply.
+//
+// # What counts
+//
+// [context.DeadlineExceeded] is the budget above expiring while the request
+// was in flight; nats.go's [nats.ErrTimeout] is the same event on its own
+// non-context path; [nats.ErrNoResponders] is the request reaching a server
+// whose JetStream is not serving yet, which on a boot means "ask again in a
+// moment" rather than "there is no such object".
+//
+// [context.Canceled] is deliberately NOT here. A cancelled context is the
+// caller giving up — a shutdown, an operator's Ctrl-C — and falling through to
+// a create on it would spend a second doomed round trip arguing with a
+// decision that has already been made.
+//
+// # Why it takes the PARENT and not the error alone
+//
+// Because [context.DeadlineExceeded] arrives from two deadlines that mean
+// opposite things, and the value is identical. From a term THIS package set,
+// it means the request is gone and the NEXT one will be answered — the
+// condition this predicate exists to name. From the CALLER's own deadline —
+// the boot's sequence ceiling, an operator's Ctrl-C deadline — it means time
+// is up and nobody is waiting for the answer any more. Reading the second as
+// the first sends a doomed second request on a context that is already done,
+// and reports whatever that produces instead of the ceiling that actually
+// expired.
+//
+// nats.go's own two are unconditional: neither [nats.ErrTimeout] nor
+// [nats.ErrNoResponders] can be produced by a caller's deadline, so for them
+// the parent has nothing to say.
+func Unanswered(parent context.Context, err error) bool {
+	if errors.Is(err, nats.ErrTimeout) || errors.Is(err, nats.ErrNoResponders) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil
 }

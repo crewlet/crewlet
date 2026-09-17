@@ -3,10 +3,12 @@ package jsprovision
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -122,7 +124,7 @@ func TestASequenceIsBoundedAboveOneCreateAndBelowTheirSum(t *testing.T) {
 	// fleetBuckets is how many buckets OpenFleet opens in a row. Spelled
 	// here for the same reason clusterReadyTimeout is above: it is the
 	// count this ceiling was sized against.
-	const fleetBuckets = 13
+	const fleetBuckets = 14
 
 	for _, clustered := range []bool{false, true} {
 		seq, one := SequenceBudget(clustered), Budget(clustered)
@@ -500,7 +502,7 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 
 	// IT CLEARS: the members arrive and the create succeeds.
 	calls, announced := 0, 0
-	err := Place(t.Context(), func(context.Context) error {
+	err := Place(t.Context(), time.Minute, func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return placement
@@ -524,7 +526,7 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 	// end.
 	calls = 0
 	bad := errors.New("invalid consumer config")
-	if err := Place(t.Context(), func(context.Context) error {
+	if err := Place(t.Context(), time.Minute, func(context.Context) error {
 		calls++
 		return bad
 	}, nil); !errors.Is(err, bad) {
@@ -539,12 +541,323 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 	// at, and "deadline exceeded" names nothing.
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	err = Place(ctx, func(context.Context) error { return placement }, nil)
+	err = Place(ctx, time.Minute, func(context.Context) error { return placement }, nil)
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("an exhausted budget reported its own deadline (%v) rather "+
 			"than the refusal that explains it", err)
 	}
 	if !errors.Is(err, placement) {
 		t.Errorf("reported %v, want the placement refusal", err)
+	}
+}
+
+// SILENCE IS NOT AN ANSWER, and telling it from one is what stops a slow
+// metadata group failing a boot.
+//
+// This is [internal/coord]'s three-valued rule at the broker: "it is there",
+// "it is not there" and "nobody said" are three facts. Every provisioning path
+// here used to read the last two as one, so a member whose existence probe
+// went unanswered reported `ensure stream CREWLET_CONFIG: context deadline
+// exceeded` and refused to start — on a cluster where nothing was wrong.
+func TestSilenceIsNotAnAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{
+		context.DeadlineExceeded,
+		nats.ErrTimeout,
+		nats.ErrNoResponders,
+		// WRAPPED, because that is how it arrives: every caller adds
+		// the object's name before anything sees it.
+		fmt.Errorf("ensure stream CREWLET_CONFIG: %w", context.DeadlineExceeded),
+		errors.Join(errors.New("open crewlet_channels"), nats.ErrNoResponders),
+	} {
+		if !Unanswered(context.Background(), err) {
+			t.Errorf("%v was read as an answer: a broker that did not reply "+
+				"has not said the object is absent", err)
+		}
+	}
+
+	for _, err := range []error{
+		nil,
+		// A CANCELLED CONTEXT IS THE CALLER GIVING UP, not the broker
+		// staying quiet. Falling through to a create on it would spend
+		// a doomed round trip arguing with a decision already made.
+		context.Canceled,
+		fmt.Errorf("shutting down: %w", context.Canceled),
+		// THESE ARE ANSWERS. "Not found" is the broker saying so, and a
+		// placement refusal is it saying why it will not act.
+		jetstream.ErrStreamNotFound,
+		jetstream.ErrBucketNotFound,
+		jetstream.ErrConsumerNotFound,
+		&jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400,
+			Description: "no suitable peers for placement"},
+		errors.New("nats: authorization violation"),
+	} {
+		if Unanswered(context.Background(), err) {
+			t.Errorf("%v was read as silence: it is an answer, and carrying on "+
+				"to a create would turn it into a second round trip ending in "+
+				"a worse message", err)
+		}
+	}
+}
+
+// THE THREE PREDICATES NAME THREE DIFFERENT FACTS, and no error is two of
+// them.
+//
+// Each has its own remedy: [Unplaceable] is waited out by [Place] because more
+// members may arrive, [NotYetVisible] is re-asked by [Settle] because the
+// object exists and this member has not seen it yet, and [Unanswered] falls
+// through to the create because nothing was learned at all. An error matching
+// two would take whichever branch was written first, which is how a rule with
+// three cases decays into one with two.
+func TestTheProvisioningPredicatesAreDisjoint(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want [3]bool // Unplaceable, NotYetVisible, Unanswered
+	}{
+		{"placement refusal", &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400},
+			[3]bool{true, false, false}},
+		{"stream not found", jetstream.ErrStreamNotFound, [3]bool{false, true, false}},
+		{"bucket not found", jetstream.ErrBucketNotFound, [3]bool{false, true, false}},
+		{"consumer not found", jetstream.ErrConsumerNotFound, [3]bool{false, true, false}},
+		{"deadline", context.DeadlineExceeded, [3]bool{false, false, true}},
+		{"nats timeout", nats.ErrTimeout, [3]bool{false, false, true}},
+		{"no responders", nats.ErrNoResponders, [3]bool{false, false, true}},
+		{"a real refusal", errors.New("nats: authorization violation"),
+			[3]bool{false, false, false}},
+	} {
+		got := [3]bool{Unplaceable(tc.err), NotYetVisible(tc.err), Unanswered(context.Background(), tc.err)}
+		if got != tc.want {
+			t.Errorf("%s: Unplaceable/NotYetVisible/Unanswered = %v, want %v",
+				tc.name, got, tc.want)
+		}
+	}
+}
+
+// A LOOKUP IS SIZED BY THE SERVER'S OWN HOLD WINDOW, not by the create it
+// precedes.
+//
+// The two shared one deadline, so a lookup nobody answered spent the whole
+// clustered [Budget] and left none of it for the create that would have
+// settled the question. The anchor is nats-server's own raft timing: an
+// election runs to maxElectionTimeout, a group notices lost quorum after
+// lostQuorumInterval and re-checks on lostQuorumCheckInterval. Past their sum
+// the server has itself decided, so a request still unanswered is one that
+// waiting will not answer.
+//
+// The three constants are spelled here for the reason clusterReadyTimeout is
+// spelled above: a Go test cannot reach a vendored package's unexported
+// constants, and a change to them must be reflected here.
+func TestALookupIsSizedByTheServersHoldWindow(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maxElectionTimeout      = 9 * time.Second
+		lostQuorumInterval      = 10 * time.Second
+		lostQuorumCheckInterval = 10 * time.Second
+	)
+	hold := maxElectionTimeout + lostQuorumInterval + lostQuorumCheckInterval
+
+	if LookupBudget < hold {
+		t.Errorf("a lookup gets %v, which is less than the %v the server may "+
+			"hold a metadata request for — so a probe can be abandoned while "+
+			"the thing that would have answered it is still running",
+			LookupBudget, hold)
+	}
+
+	// AND IT IS SHORTER THAN A CREATE'S, which is the whole point: a read
+	// that waits as long as a raft round trip is a read nobody sized.
+	if LookupBudget >= Budget(true) {
+		t.Errorf("a lookup gets %v and a clustered create %v — the lookup is "+
+			"not cheaper, so splitting them bought nothing", LookupBudget, Budget(true))
+	}
+
+	// AND A WHOLE BRING-UP STILL OUTLASTS ONE OF EACH. A boot that could
+	// not afford a slow lookup followed by its create would fail on the
+	// first object that needed both.
+	for _, clustered := range []bool{false, true} {
+		if got := SequenceBudget(clustered); got <= LookupBudget+Budget(clustered) {
+			t.Errorf("clustered=%v: the sequence gets %v, which is not more "+
+				"than one lookup (%v) plus one create (%v)",
+				clustered, got, LookupBudget, Budget(clustered))
+		}
+	}
+}
+
+// A REQUEST NOBODY ANSWERED IS SENT AGAIN, which is the only remedy that
+// works when the reply does not exist.
+//
+// nats-server drops a routed metadata request outright in more than one place
+// — a non-leader with no assignment returns without replying, and apiDispatch
+// drains its whole queue at the request limit — so the caller is waiting on a
+// reply nobody will send. Waiting longer was measured buying exactly nothing,
+// at two minutes a time.
+func TestAnUnansweredRequestIsAskedAgain(t *testing.T) {
+	t.Parallel()
+
+	var asks atomic.Int64
+	// SILENT TWICE, then answered: the shape of a group that elects a
+	// leader while the caller is asking.
+	err := Ask(t.Context(), 20*time.Millisecond, func(ctx context.Context) error {
+		if asks.Add(1) <= 2 {
+			<-ctx.Done() // the reply never comes; the term expires
+			return ctx.Err()
+		}
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("Ask returned %v, want the answer the third request got", err)
+	}
+	if got := asks.Load(); got != 3 {
+		t.Errorf("the request was sent %d times, want 3 — a request that was "+
+			"destroyed has to be re-issued, not waited on", got)
+	}
+}
+
+// AND ANY ANSWER ENDS IT, including one the caller will not like.
+//
+// [Unanswered] is the only condition re-asked. An auth failure, a bad subject
+// or a placement refusal is the broker having spoken, and re-sending it would
+// turn a configuration mistake into a loop — and would hide the refusal
+// [Place] exists to wait out.
+func TestAnAnsweredRequestIsNotAskedAgain(t *testing.T) {
+	t.Parallel()
+
+	for _, answer := range []error{
+		nil,
+		jetstream.ErrStreamNotFound,
+		errors.New("nats: authorization violation"),
+		&jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400},
+	} {
+		var asks atomic.Int64
+		got := Ask(t.Context(), time.Minute, func(context.Context) error {
+			asks.Add(1)
+			return answer
+		}, nil)
+		if !errors.Is(got, answer) {
+			t.Errorf("Ask returned %v, want the answer %v", got, answer)
+		}
+		if n := asks.Load(); n != 1 {
+			t.Errorf("answer %v was asked %d times, want 1", answer, n)
+		}
+	}
+}
+
+// A CALLER'S OWN DEADLINE ENDS IT TOO, rather than being read as silence.
+//
+// The two deadlines produce the identical error value and mean opposite
+// things: a term this package set means the request is gone and the next will
+// be answered; the caller's means nobody is waiting for the answer any more.
+// Re-asking on the second spends requests on a context that is already done.
+func TestAskStopsWhenTheCallersOwnDeadlineExpires(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Millisecond)
+	defer cancel()
+
+	var asks atomic.Int64
+	start := time.Now()
+	err := Ask(ctx, time.Hour, func(ctx context.Context) error {
+		asks.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Ask returned %v, want the deadline that actually expired", err)
+	}
+	// ONE REQUEST. The term is an hour, so the only thing that can have
+	// ended the attempt is the caller's own ceiling — and that must not
+	// look like a destroyed request.
+	if got := asks.Load(); got != 1 {
+		t.Errorf("the request was sent %d times after the caller's deadline "+
+			"expired, want 1", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Ask took %v to notice the caller's deadline", elapsed)
+	}
+}
+
+// AND A CREATE THE BROKER NEVER ANSWERED IS RE-ISSUED THROUGH [Place].
+//
+// This is the path the end-to-end failure actually died on: the create sat on
+// one call for the whole clustered budget, so the placement refusal this loop
+// waits for never arrived to be waited for. Routing it through [Ask] is what
+// makes the budget buy attempts instead of one long silence.
+func TestAPlacementLoopReissuesADestroyedCreate(t *testing.T) {
+	t.Parallel()
+
+	// THE OUTER CONTEXT IS BOUNDED TOO, so a Place that stopped giving each
+	// attempt its own term fails here in seconds rather than hanging until
+	// the package timeout — a mutation that hangs is one nobody diagnoses.
+	//
+	// Five seconds because the run below really costs about 1.3: one
+	// destroyed attempt, a [ReAsk] second, a refusal, a [PlacementRetry]
+	// quarter-second, then the answer.
+	outer, cancelOuter := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOuter()
+
+	var creates atomic.Int64
+	err := Place(outer, 20*time.Millisecond, func(ctx context.Context) error {
+		switch creates.Add(1) {
+		case 1: // destroyed: no reply at all
+			<-ctx.Done()
+			return ctx.Err()
+		case 2: // answered, and refusing: the condition Place waits out
+			return &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
+		default:
+			return nil
+		}
+	}, nil)
+	if err != nil {
+		t.Fatalf("Place returned %v, want the create that finally landed", err)
+	}
+	if got := creates.Load(); got != 3 {
+		t.Errorf("the create was attempted %d times, want 3 — one destroyed, "+
+			"one refused, one answered", got)
+	}
+}
+
+// THE SAME ERROR VALUE FROM TWO DEADLINES MEANS OPPOSITE THINGS, and only the
+// parent can tell them apart.
+//
+// [context.DeadlineExceeded] from a term this package set means the request
+// was destroyed and the next one will be answered. The identical value from
+// the CALLER's own deadline — the boot's sequence ceiling, an operator's
+// Ctrl-C — means time is up and nobody is waiting for the answer any more.
+// Reading the second as the first sends a doomed request on a context that is
+// already done, and reports whatever that produces instead of the ceiling that
+// actually expired.
+//
+// This is the guard [Ask]'s own cases cannot provide: its select on ctx.Done()
+// ends the loop either way, so the predicate has to be exercised directly.
+func TestUnansweredTellsThisPackagesDeadlineFromTheCallers(t *testing.T) {
+	t.Parallel()
+
+	// A LIVE PARENT: our own term expired, so the request is gone and the
+	// next one is worth sending.
+	if !Unanswered(t.Context(), context.DeadlineExceeded) {
+		t.Error("a deadline under a live caller was not read as a destroyed " +
+			"request — this is the whole condition the re-ask exists for")
+	}
+
+	// AN EXPIRED PARENT: the caller's ceiling is what ran out. There is
+	// nobody to answer to any more.
+	spent, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	if Unanswered(spent, context.DeadlineExceeded) {
+		t.Error("a deadline under a caller whose own deadline had passed was " +
+			"read as a destroyed request: falling through on that spends a " +
+			"second doomed round trip on a context that is already done")
+	}
+
+	// AND nats.go's OWN TWO ARE UNCONDITIONAL, because neither can be
+	// produced by a caller's deadline — the parent has nothing to say.
+	for _, err := range []error{nats.ErrTimeout, nats.ErrNoResponders} {
+		if !Unanswered(spent, err) {
+			t.Errorf("%v under an expired caller was not read as silence: it "+
+				"is the broker's own report of no reply, not a deadline", err)
+		}
 	}
 }
