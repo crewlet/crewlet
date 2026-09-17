@@ -155,7 +155,11 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// read-back and the alignment after it. Either way the line names a
 	// step this member is not on, which is the one thing it exists to get
 	// right.
-	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
+	//
+	// ON ctx rather than on either term, because the two halves it spans
+	// carry separate deadlines now and a watcher armed on one would stop
+	// reporting the moment that half gave up.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", name, "waited", after,
 			"detail", "this state-log consumer is still being provisioned — "+
@@ -163,7 +167,34 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 				"a metadata group that has not settled")
 	})
 
-	cons, err := q.js.Consumer(createCtx, stream, name)
+	// THE LOOKUP IS SIZED AS A READ AND RE-ASKED, like its three siblings —
+	// see [jsprovision.LookupBudget] and [jsprovision.Ask]. It shared the
+	// create's term, so a probe the metadata group never answered spent the
+	// whole clustered budget and left none of it for the create that would
+	// have settled the question.
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	var cons jetstream.Consumer
+	err := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = q.js.Consumer(ctx, stream, name)
+			return e
+		}, nil)
+	cancelLookup()
+	if jsprovision.Unanswered(ctx, err) {
+		// TOLD NOTHING, which is not "it is not there" — see
+		// [jsprovision.Unanswered]. The create below answers it either
+		// way, so a boot no longer fails on a question nobody got
+		// round to. Reported as not-found so the one create path
+		// handles both, which is exactly what it already does with a
+		// held create's timeout a few lines down.
+		q.log.WarnContext(ctx, "jetstream_consumer_lookup_unanswered",
+			"stream", stream, "consumer", name, "error", err.Error(),
+			"detail", "the broker did not say whether this state-log consumer "+
+				"exists, so the create below decides it: absent and it is "+
+				"made, present and it is read back and taken as it is")
+		err = jetstream.ErrConsumerNotFound
+	}
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
