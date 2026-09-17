@@ -28,6 +28,7 @@ import (
 // hour is the whole of the answer's window.
 type EventBucket string
 
+// The buckets, finest first.
 const (
 	BucketMinute EventBucket = "minute"
 	BucketHour   EventBucket = "hour"
@@ -248,13 +249,13 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	for rows.Next() {
 		var at int64
 		var count int
-		if err := rows.Scan(&at, &count); err != nil {
+		if err = rows.Scan(&at, &count); err != nil {
 			return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 		}
 		counts[at] = count
 		total += count
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 	}
 

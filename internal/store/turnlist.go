@@ -134,14 +134,15 @@ const (
 	// horizon: asking for more cannot return more.
 	MaxTurnDays = MaxPhaseTokenDays
 
-	// DefaultTurnPage and MaxTurnPage bound one page.
+	// DefaultTurnPage is one page for a caller that names no size.
 	//
-	// FIFTY and TWO HUNDRED. A turn row is narrow — no payload, no prompts
-	// — so the page is sized to what a person scans rather than to what
-	// the wire can carry, and the ceiling is where a list stops being one
-	// and becomes a report.
+	// FIFTY. A turn row is narrow — no payload, no prompts — so the page is
+	// sized to what a person scans rather than to what the wire can carry.
 	DefaultTurnPage = 50
-	MaxTurnPage     = 200
+
+	// MaxTurnPage is the ceiling, at TWO HUNDRED: past it a list stops
+	// being one and becomes a report.
+	MaxTurnPage = 200
 )
 
 // Turns lists one row per turn, newest first.
