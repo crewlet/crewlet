@@ -358,6 +358,13 @@ create still running after 10 seconds now writes one `WARN` naming it
 One line per object, deliberately: whether more lines follow is what tells a
 slow bring-up from a wedged one.
 
+**Every broker line names the member that emitted it.** More than one
+embedded broker can run in one process — a fleet test does exactly that — and
+without the name every `queue.nats.server` line from either of them was
+indistinguishable, which is the one question a reader has about a fleet that
+did not form. Lines carry `server=` from `stream.cluster.name`'s member
+identity; a solo broker has no name to carry and the attribute is empty.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
