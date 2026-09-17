@@ -25,7 +25,17 @@
 import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
+import {
+  Button,
+  EmptyState,
+  FilterChip,
+  FilterChipGroup,
+  Select,
+  Skeleton,
+  Tag,
+  type TagVariant,
+} from "@crewlethq/ui";
+import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
@@ -47,6 +57,11 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { Dash, DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+// THE ONE PHASE MARK. This file carried a private copy of the variant table
+// until `PhaseTag` was rebuilt on uilet's `Tag`; two tables spelling one
+// vocabulary is how a phase renders the neutral pill on one screen and its
+// own hue on the next, with nothing in the build to say so.
+import { PhaseTag } from "~/ui/primitives.tsx";
 
 const PAGE = 60;
 
@@ -245,7 +260,7 @@ export function ModelActivity() {
         header: "Outcome",
         cell: (r) =>
           r.failed ? (
-            <Badge tone="critical">{r.errorKind || "failed"}</Badge>
+            <Tag variant="danger">{r.errorKind || "failed"}</Tag>
           ) : r.live ? (
             <span className="t-caption">running</span>
           ) : r.decision ? (
@@ -318,25 +333,25 @@ export function ModelActivity() {
         {
           <>
             {liveCount > 0 && (
-              <Badge tone="info" dot>
+              <Tag variant="info" dot>
                 {liveCount} running
-              </Badge>
+              </Tag>
             )}
             {/* The count IS the control. It used to be a stat tile that said
                 "4 failed" and did nothing, next to a separate chip that did
                 the filtering — so a reader who saw the number had to go find
                 the unrelated pill that acted on it. */}
             {failedCount > 0 && (
-              <Badge
-                tone="critical"
+              <Tag
+                variant="danger"
                 onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}
                 pressed={!!onlyFailed}
                 title={onlyFailed ? "show every phase" : "show only failed phases"}
               >
                 {failedCount} failed
-              </Badge>
+              </Tag>
             )}
-            <Badge outline>{plural(filtered.length, "phase")} loaded</Badge>
+            <Tag appearance="outline">{plural(filtered.length, "phase")} loaded</Tag>
           </>
         }
       </PageActions>
@@ -353,23 +368,58 @@ export function ModelActivity() {
           the match is exact on both sides of the wire, so a typed prefix
           silently returned nothing while looking like a search that missed. */}
       <div className="toolbar">
+        {/* THE EMPTY OPTION IS A REAL ROW rather than their `placeholder`:
+            "any seat" is a value this filter has, and a placeholder is only the
+            label over an unset one, with nothing to select back to. */}
         <Select
+          // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+          // `width: 100%` unless told otherwise, and its own doc says why that
+          // is wrong here: "a filter row of full-width selects is one question
+          // per line, which is not what a filter bar is".
+          width="auto"
           value={role}
-          onChange={setRole}
-          options={roles}
+          onChange={(value) => setRole(String(value))}
+          options={[
+            { value: "", label: "Any seat" },
+            ...roles.map((r) => ({ value: r, label: r })),
+          ]}
           ariaLabel="Filter by seat"
-          anyLabel="Any seat"
+          placeholder="Any seat"
+          active={role !== ""}
         />
         <span className="spacer" />
-        {PHASES.map((p) => (
-          <Chip key={p} on={phase === p} onClick={() => setPhase(phase === p ? "" : p)}>
-            {p}
-          </Chip>
-        ))}
+        {/* THEIRS, AND IT IS BETTER THAN THE ROW OF TOGGLES IT REPLACES. These
+            chips were always mutually exclusive — clicking one replaced the
+            other — and they announced themselves as six independent pressed
+            buttons across six tab stops. `semantics="radio"` says what they
+            are, `allowNone` keeps the second click that clears the filter, and
+            the group is ONE stop with arrows inside it.
+
+            Arrow keys COMMIT here, unlike the segmented controls elsewhere in
+            this port, and that is the right trade for this control rather than
+            an inconsistency: the phase filter is applied in memory over rows
+            already loaded and `useParam`'s `filter` kind REPLACES the history
+            entry, so arrowing across all six costs no query and leaves nothing
+            to press Back through. */}
+        <FilterChipGroup
+          label="Phase"
+          hideLabel
+          semantics="radio"
+          allowNone
+          value={phase}
+          onValueChange={(next) => setPhase(next ?? "")}
+        >
+          {PHASES.map((p) => (
+            <FilterChip key={p} value={p}>
+              {p}
+            </FilterChip>
+          ))}
+        </FilterChipGroup>
         {filtering && (
           <Button
-            size="sm"
-            icon="x"
+            size="small"
+            variant="secondary"
+            leadingIcon={<CloseGlyph size="xs" />}
             onClick={() => {
               setRole("");
               setPhase("");
@@ -381,14 +431,16 @@ export function ModelActivity() {
         )}
       </div>
 
-      {loading && !merged.length && <Skeleton rows={5} height={44} />}
+      {loading && !merged.length && (
+        <Skeleton variant="text" rows={5} rowHeight={44} label="Loading model activity" />
+      )}
       {error && <QueryState error={error} loading={loading} />}
 
       {!loading && !filtered.length && !error && (
-        <Empty
-          icon="brain"
+        <EmptyState
+          icon={<NeurologyGlyph size={32} />}
           title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
-          hint={
+          description={
             filtering
               ? "Clear them to see every phase the engine has kept."
               : "A phase is recorded when it completes. If seats are idle and no schedule has fired, there is nothing here yet."
@@ -457,7 +509,13 @@ export function ModelActivity() {
           <span className="t-caption">That is the beginning of the retained record.</span>
         ) : (
           <>
-            <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => void loadOlder()}
+              disabled={paging}
+              loading={paging}
+            >
               {paging ? "Loading…" : `Load ${PAGE} older phases`}
             </Button>
             <span className="t-caption">the event store keeps 30 days</span>

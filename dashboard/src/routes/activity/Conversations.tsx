@@ -28,7 +28,7 @@
 
 import { useCallback, useMemo } from "react";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -36,7 +36,7 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -68,13 +68,13 @@ function useSeatName(): (handle: string) => string {
 /** Open or closed — the only predicate a channel has. */
 function ChannelState({ channel }: { channel: A2AChannel }) {
   return channel.closed_at ? (
-    <Badge tone="neutral" dot>
+    <Tag variant="neutral" dot>
       closed
-    </Badge>
+    </Tag>
   ) : (
-    <Badge tone="info" dot>
+    <Tag variant="info" dot>
       open
-    </Badge>
+    </Tag>
   );
 }
 
@@ -137,7 +137,7 @@ function Exchange({
   return (
     <div className="col gap-2">
       <div className="row gap-2">
-        <Badge outline>ask</Badge>
+        <Tag appearance="outline">ask</Tag>
         <span className="truncate t-cell">
           {seatName(channel.requester)} asked {seatName(channel.target)}
         </span>
@@ -145,7 +145,7 @@ function Exchange({
         <span className="t-caption nowrap">{relTime(channel.opened_at, now)}</span>
       </div>
       <div className="row gap-2">
-        <Badge outline>answer</Badge>
+        <Tag appearance="outline">answer</Tag>
         <span className="truncate t-cell">
           {answered
             ? `${seatName(channel.target)} answered`
@@ -194,7 +194,14 @@ function Wrap({
       </section>
     );
   }
-  return <Panel title={title}>{children}</Panel>;
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
+      {children}
+    </Card>
+  );
 }
 
 /**
@@ -282,23 +289,20 @@ export function ChannelPeek({ id }: { id: string }) {
 
   return (
     <>
-      {loading && !data && <Skeleton rows={5} />}
+      {loading && !data && <Skeleton variant="text" rows={5} label="Loading the channel" />}
       <QueryState error={error} loading={loading}>
         {data?.available === false && (
-          <div className="banner neutral">
-            <Icon name="link" size="sm" />
-            <span>
-              No channel record is reachable from this node, so this channel cannot be read here.
-              Channels live in the fleet's coordination store.
-            </span>
-          </div>
+          <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+            No channel record is reachable from this node, so this channel cannot be read here.
+            Channels live in the fleet's coordination store.
+          </Callout>
         )}
         {data?.available !== false && !channel && (
-          <Empty
-            inline
-            icon="link"
+          <EmptyState
+            size="compact"
+            icon={<LinkGlyph size={32} />}
             title="No such channel in the record"
-            hint="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
+            description="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
           />
         )}
         {channel && (
@@ -366,39 +370,37 @@ export function Conversations({ channelId }: { channelId?: string }) {
         channel is the authorization record, not the transport.
       </PageNote>
 
-      <Panel padding="none">
-        <StatRow cols={3}>
-          <Stat
-            icon="link"
-            label="Open channels"
-            value={rows.filter((c) => !c.closed_at).length}
-            sub="one ask, one answer, then closed"
-          />
-          <Stat
-            icon="message"
-            label="Messages"
-            value={rows.reduce((n, c) => n + c.messages, 0)}
-            sub="across every channel in the record"
-          />
-          <Stat
-            icon="users"
-            label="Pairs"
-            value={new Set(rows.map((c) => `${c.requester}->${c.target}`)).size}
-            sub="distinct requester/target pairs"
-          />
-        </StatRow>
-      </Panel>
+      {/* The flush Panel this row sat in is gone: StatGroup draws that surface
+          itself — the same hairline, radius and clip our `panel-flush` did —
+          and the tiles inside it are flush, so wrapping it would be two
+          surfaces around one row. */}
+      <StatGroup columns={3}>
+        <StatCard
+          icon={<LinkGlyph size="xs" />}
+          label="Open channels"
+          value={rows.filter((c) => !c.closed_at).length}
+          sub="one ask, one answer, then closed"
+        />
+        <StatCard
+          icon={<ChatGlyph size="xs" />}
+          label="Messages"
+          value={rows.reduce((n, c) => n + c.messages, 0)}
+          sub="across every channel in the record"
+        />
+        <StatCard
+          icon={<GroupGlyph size="xs" />}
+          label="Pairs"
+          value={new Set(rows.map((c) => `${c.requester}->${c.target}`)).size}
+          sub="distinct requester/target pairs"
+        />
+      </StatGroup>
 
-      {channels.loading && <Skeleton rows={4} />}
+      {channels.loading && <Skeleton variant="text" rows={4} label="Loading channels" />}
       {channels.data?.available === false ? (
-        <div className="banner neutral">
-          <Icon name="link" size="sm" />
-          <span>
-            No agent-to-agent channel record is reachable from this node. Channels live in the
-            fleet's coordination store; a node that cannot read it says so rather than drawing an
-            empty list.
-          </span>
-        </div>
+        <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+          No agent-to-agent channel record is reachable from this node. Channels live in the fleet's
+          coordination store; a node that cannot read it says so rather than drawing an empty list.
+        </Callout>
       ) : (
         <QueryState
           error={channels.error}
@@ -412,7 +414,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
                 }
           }
         >
-          <Panel padding="none">
+          <Card padding="none">
             <DataGrid<A2AChannel>
               rows={rows}
               rowKey={(c) => c.id}
@@ -436,13 +438,13 @@ export function Conversations({ channelId }: { channelId?: string }) {
                   // draw: both are anchors and every row here is one now, and
                   // an anchor inside an anchor is markup no browser agrees
                   // about. The seat is a link again in the peek's own facts.
-                  cell: (c) => <TextCell icon="cpu">{seatName(c.requester)}</TextCell>,
+                  cell: (c) => <TextCell icon="memory">{seatName(c.requester)}</TextCell>,
                 },
                 {
                   key: "to",
                   header: "Asked",
                   sortValue: (c) => seatName(c.target),
-                  cell: (c) => <TextCell icon="cpu">{seatName(c.target)}</TextCell>,
+                  cell: (c) => <TextCell icon="memory">{seatName(c.target)}</TextCell>,
                 },
                 {
                   key: "messages",
@@ -472,7 +474,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
                 },
               ]}
             />
-          </Panel>
+          </Card>
         </QueryState>
       )}
 
@@ -506,16 +508,15 @@ export function Conversations({ channelId }: { channelId?: string }) {
           that happened from one that did not; the sibling `ChannelPeek` gets
           both for free by rendering inside `QueryState`. */}
       {addressed !== "" && !addressedChannel && channels.data?.available === true && (
-        <Empty
-          icon="link"
+        <EmptyState
+          icon={<LinkGlyph size={32} />}
           title="No such channel in the record"
-          hint="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
+          description="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
         />
       )}
 
       <Section title="What this surface is, and is not">
-        <div className="banner neutral">
-          <Icon name="info" size="sm" />
+        <Callout variant="neutral" icon={<InfoGlyph size="md" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>
               A2A is deliberately narrow: one ask, one answer, then the channel closes. Both halves
@@ -528,7 +529,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
               which is why nothing here tries to be an inbox.
             </span>
           </span>
-        </div>
+        </Callout>
       </Section>
     </>
   );

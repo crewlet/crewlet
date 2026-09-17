@@ -9,13 +9,19 @@
  * A fact is `{label, value}` and may carry `setBy` — who last changed it, when
  * and in which turn. That line exists because this product's objects are
  * mostly written by agents: "in progress" is a different fact from "moved to
- * in progress by ada, eleven minutes ago, in turn ↗".
+ * in progress by ada, eleven minutes ago, in turn ↗" — where the arrow is
+ * the design system's own `arrow_outward`, the one drawing every "this leaves
+ * the page" in the product is made of.
  */
 
 import type { ReactNode } from "react";
+import { ArrowOutwardGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
-import { cx } from "~/ui/primitives.tsx";
+import { cx } from "@crewlethq/ui";
+// AN OBJECT'S EYEBROW MARK IS NAME-KEYED — `icon: IconName` is the prop every
+// screen and every peek fills in — so the name→drawing lookup stays in
+// `~/ui/Icon.tsx` and moves all of them onto uilet's glyphs in one place.
+import { Mark, type MarkName } from "~/ui/glyph.tsx";
 
 export interface SetBy {
   actor: string;
@@ -81,7 +87,7 @@ export function FactLine({ facts }: { facts: Fact[] }) {
                 <>
                   {" · "}
                   <a className="t-link" href={href(["activity", "turns", fact.setBy.turnId])}>
-                    turn ↗
+                    turn <ArrowOutwardGlyph size="xs" />
                   </a>
                 </>
               )}
@@ -105,7 +111,7 @@ export function ObjectHeader({
 }: {
   /** The eyebrow: what kind of thing this is. */
   kind: string;
-  icon?: IconName;
+  icon?: MarkName;
   /** The key, handle or id, in the mono face. */
   identifier?: string;
   title: ReactNode;
@@ -118,8 +124,13 @@ export function ObjectHeader({
   return (
     <header className={cx("object-head", size === "peek" && "peek")}>
       <div className="object-eyebrow">
-        {icon && <Icon name={icon} size="xs" />}
+        {icon && <Mark name={icon} size="xs" />}
         <span>{kind}</span>
+        {/* NOT `InlineCode`: this is a key sitting inside an eyebrow, on the
+            eyebrow's own type step and ink, and their inline code is a chip —
+            a tinted box with a boundary — which puts a second surface inside a
+            line that is already the quietest thing on the screen. The mono
+            face is the whole of what this needs, and `.object-id` is it. */}
         {identifier && <span className="mono object-id">{identifier}</span>}
       </div>
       <div className="row">

@@ -1,19 +1,27 @@
 /**
- * The three affordances a JSON panel is: copy it, save it, and select it.
+ * The three affordances a JSON panel is — copy it, save it, select it — and
+ * the one mark this file still draws.
  *
- * All three are asserted here rather than on a screen because each was WRONG
+ * The three are asserted here rather than on a screen because each was WRONG
  * in the same way before, or would be — silently. A copy that reached no
  * clipboard clicked exactly like one that did, select-all took the whole
  * document while looking like it had done something, and a download whose
  * anchor carries no `download` attribute opens the JSON in a tab rather than
  * saving it, which reads as success to everyone including the reader. A test
  * that only rendered the buttons would have passed through all of them.
+ *
+ * `PhaseTag` joins them for exactly that reason. It is four lines over
+ * `@crewlethq/ui`'s `Tag`, and its whole content is a spelling: a variant the
+ * package does not know renders the NEUTRAL pill rather than failing, so
+ * `execute` where `phase-execute` was meant is a phase that silently stops
+ * being a colour a reader can follow across four screens, and nothing in the
+ * build says so.
  */
 
 import { StrictMode, type ReactElement } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { Code, CopyButton, DownloadButton } from "./primitives.tsx";
+import { Code, CopyButton, DownloadButton, PhaseTag } from "./primitives.tsx";
 
 afterEach(() => {
   cleanup();
@@ -87,6 +95,35 @@ describe("CopyButton", () => {
     expect(screen.getByRole("button").textContent).toContain("Copied");
     // The scratch field is not left behind for the next reader to tab into.
     expect(document.querySelector("textarea")).toBeNull();
+  });
+
+  test("the fallback hands focus back to the control it was taken from", async () => {
+    // `select()` takes focus and `remove()` then drops it on the document
+    // body, so a fallback copy left the reader's next Tab starting from the
+    // top of the page rather than from the button they had just pressed — on
+    // exactly the plain-http origin this branch exists for.
+    vi.stubGlobal("navigator", { ...globalThis.navigator, clipboard: undefined });
+    Object.defineProperty(document, "execCommand", {
+      writable: true,
+      configurable: true,
+      value: () => {
+        // THE THEFT IS STAGED, because jsdom's own `select()` does not move
+        // focus and a browser's does. Without it this case cannot fail, which
+        // is worse than not having it: what is asserted below is the recovery
+        // from the state a real engine leaves, not jsdom's manners.
+        document.querySelector("textarea")?.focus();
+        return true;
+      },
+    });
+
+    render(<CopyButton text="x" />);
+    const button = screen.getByRole("button");
+    button.focus();
+
+    await click("copy");
+
+    expect(screen.getByRole("button").textContent).toContain("Copied");
+    expect(document.activeElement).toBe(button);
   });
 
   test("says so when the browser refuses, rather than looking like it worked", async () => {
@@ -624,6 +661,55 @@ describe("Code", () => {
     });
     tall.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("PhaseTag", () => {
+  // THE PREFIX IS THE WHOLE COMPONENT. uilet's `TagVariant` carries the phase
+  // vocabulary under its own names, separated from the status hues so the two
+  // families can never be confused inside one union — and a bare `execute`
+  // there is not a phase at all.
+  test("draws the three phases uilet has hues for", () => {
+    for (const [phase, variant] of [
+      ["onboarding", "phase-onboarding"],
+      ["execute", "phase-execute"],
+      ["review", "phase-review"],
+    ] as const) {
+      const { container } = render(<PhaseTag phase={phase} />);
+      expect(container.querySelector(`.crewlet-tag--${variant}`)).not.toBeNull();
+      // COLOUR IS NEVER THE ONLY CARRIER: the word is beside it, always.
+      expect(container.textContent).toBe(phase);
+    }
+  });
+
+  // THE ENGINE EMITS MORE PHASES THAN THE DESIGN SYSTEM DRAWS — `subagent`,
+  // `auxiliary` and `judge` — and a phase this build has never heard of is the
+  // same case, because a rolling upgrade puts one on the wire. Neutral is the
+  // honest pill: the word still reads, and nothing claims a hue that would
+  // collide with one of the three.
+  test("a phase with no hue takes the neutral pill rather than none", () => {
+    for (const phase of ["subagent", "auxiliary", "judge", "a_phase_from_a_later_build"]) {
+      const { container } = render(<PhaseTag phase={phase} />);
+      expect(container.querySelector(".crewlet-tag--neutral")).not.toBeNull();
+      expect(container.textContent).toBe(phase);
+    }
+  });
+
+  // A RECORD WITH NO PHASE IS NOT A PHASE CALLED "". An empty pill is a
+  // coloured gap a reader has to hover to interrogate.
+  test("names an absent phase rather than drawing an empty pill", () => {
+    const { container } = render(<PhaseTag phase="" />);
+    expect(container.textContent).toBe("—");
+    expect(container.querySelector(".crewlet-tag--neutral")).not.toBeNull();
+  });
+
+  // The value is a column in the event store, and nothing normalises its case
+  // on the way out — so the lookup does, or a capitalised phase falls through
+  // to neutral and loses its hue on one screen and not the next.
+  test("a phase reaches the table whatever its case", () => {
+    const { container } = render(<PhaseTag phase="Execute" />);
+    expect(container.querySelector(".crewlet-tag--phase-execute")).not.toBeNull();
+    expect(container.textContent).toBe("execute");
   });
 });
 

@@ -20,7 +20,7 @@ import type {
   SandboxEntry,
   SandboxRun,
 } from "~/protocol/index.ts";
-import type { IconName } from "~/ui/Icon.tsx";
+import type { MarkName } from "~/ui/glyph.tsx";
 import { runState, staleness, type Seat } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -28,7 +28,7 @@ export type Severity = "critical" | "caution" | "info";
 export interface Attention {
   id: string;
   severity: Severity;
-  icon: IconName;
+  icon: MarkName;
   /** What happened, in the fewest words that are still true. */
   title: string;
   /** What it costs to leave it, or what to do about it. */
@@ -91,7 +91,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "offline",
       severity: "critical",
-      icon: "power",
+      icon: "power_settings_new",
       title: "No connection to the engine",
       detail:
         "The page is showing the last state it received and polling a REST snapshot until the socket returns.",
@@ -105,7 +105,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "unconfigured",
       severity: "critical",
-      icon: "sliders",
+      icon: "tune",
       title: "No company configuration is active",
       detail:
         "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import a company revision.",
@@ -116,7 +116,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: `posture-${engine.posture}`,
       severity: "critical",
-      icon: "server",
+      icon: "dns",
       title: `This node's control-plane posture is "${engine.posture}"`,
       detail:
         engine.posture === "shed"
@@ -129,7 +129,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "draining",
       severity: "caution",
-      icon: "power",
+      icon: "power_settings_new",
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
       path: ["admin", "fleet"],
@@ -157,7 +157,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "org-budget",
       severity: "critical",
-      icon: "coin",
+      icon: "token",
       title: "The company token budget is spent",
       detail: `${org.used.toLocaleString()} of ${org.max.toLocaleString()} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
       path: ["cost"],
@@ -166,7 +166,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "org-budget-near",
       severity: "caution",
-      icon: "coin",
+      icon: "token",
       title: "The company token budget is nearly spent",
       detail: `${Math.round((org.used / org.max) * 100)}% of the process-lifetime meter is used.`,
       path: ["cost"],
@@ -205,7 +205,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `error-${agent.role}`,
         severity: "critical",
-        icon: "alert",
+        icon: "warning",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
         path: ["company", "people", String(agent.handle ?? agent.id)],
@@ -236,7 +236,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         out.push({
           id: `stale-${agent.role}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
-          icon: "clock",
+          icon: "schedule",
           title:
             how === "stalled"
               ? `${agent.role} has been on one round for over 10 minutes`
@@ -254,7 +254,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",
-        icon: "coin",
+        icon: "token",
         title: `${agent.role}'s token budget is spent`,
         detail: `${meter.used.toLocaleString()} of ${meter.max.toLocaleString()} tokens. This seat's turns are being declined at the gate.`,
         path: ["company", "people", String(agent.handle ?? agent.id)],

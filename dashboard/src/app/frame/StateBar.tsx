@@ -20,13 +20,23 @@
  */
 
 import type { ReactNode } from "react";
-import { Icon } from "~/ui/Icon.tsx";
-import { Badge, Button, cx } from "~/ui/primitives.tsx";
+import { Button, Callout, Tag } from "@crewlethq/ui";
+import { KeyGlyph, RefreshGlyph, TuneGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 import type { CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
-  tone: "caution" | "critical";
-  icon: "key" | "refresh" | "sliders";
+  /** The strip's own variant, in uilet's spelling: two states, both of them bad. */
+  variant: "warning" | "danger";
+  /**
+   * The mark, as a GLYPH rather than a name.
+   *
+   * It was a name out of our own icon set, chosen from a three-value union, and
+   * the union was the whole type system this had: a fourth degradation would
+   * have added a name here and a path in `~/ui/Icon.tsx`. A component is the
+   * value uilet's `Callout` takes, and `degradationOf` below is the only thing
+   * that ever builds one.
+   */
+  icon: ReactNode;
   message: string;
   action?: { label: string; onClick: () => void };
 }
@@ -54,23 +64,23 @@ export function degradationOf({
 }): Degradation | null {
   if (authRejected) {
     return {
-      tone: "critical",
-      icon: "key",
+      variant: "danger",
+      icon: <KeyGlyph size="md" />,
       message: "The engine refused this browser's API token.",
       action: { label: "Set token", onClick: onSetToken },
     };
   }
   if (!connected) {
     return {
-      tone: "caution",
-      icon: "refresh",
+      variant: "warning",
+      icon: <RefreshGlyph size="md" />,
       message: "Reconnecting to the engine — showing the last state received, polling meanwhile.",
     };
   }
   if (configured === false) {
     return {
-      tone: "caution",
-      icon: "sliders",
+      variant: "warning",
+      icon: <TuneGlyph size="md" />,
       message:
         "No company configuration is active: no seats are running and inbound webhooks are being dropped.",
       action: { label: "Configuration", onClick: onConfig },
@@ -100,28 +110,37 @@ export function StateBar({
 
   return (
     <div className="state-bar">
+      {/* `Callout layout="banner"` IS `.degraded`: the same soft fill under
+          the same measured ink, the same 8/16 padding, the same bottom rule
+          and no radius. What it adds is the spacer we were spelling by hand —
+          `action` is its own slot at the trailing edge. */}
       {degraded && (
-        <div className={cx("degraded", degraded.tone)}>
-          <Icon name={degraded.icon} size="sm" />
-          <span>{degraded.message}</span>
-          {degraded.action && (
-            <>
-              <span className="spacer" />
-              <Button size="sm" onClick={degraded.action.onClick}>
+        <Callout
+          variant={degraded.variant}
+          icon={degraded.icon}
+          layout="banner"
+          action={
+            degraded.action && (
+              <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
                 {degraded.action.label}
               </Button>
-            </>
-          )}
-        </div>
+            )
+          }
+        >
+          {degraded.message}
+        </Callout>
       )}
 
       {/* THE ENGINE'S OWN FLAG, so it is a banner rather than a badge: rows
           may be missing, rows that should have gone may still be here, and
           every total on this screen was computed over the incomplete set. */}
       {incomplete && (
-        <div className="degraded caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning" icon={<WarningGlyph size="md" />} layout="banner">
           <span>
+            {/* THE BOLD STAYS IN THE SENTENCE rather than becoming Callout's
+                `title`. Its title is a lead-in label with its own trailing
+                space; this is one running sentence whose opening clause is
+                emphasised and whose next word is an em dash or a full stop. */}
             <strong>This answer is incomplete</strong>
             {coverage?.incomplete
               ? ` — ${coverage.incomplete.records} record(s) this build cannot read.`
@@ -135,20 +154,31 @@ export function StateBar({
               ? ` Record version ${coverage.incomplete.version}, from sequence ${coverage.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
               : ""}
           </span>
-        </div>
+        </Callout>
       )}
 
       {(coverage?.read_level || behind || extra) && (
         <div className="state-facts">
+          {/* NEUTRAL, both of them. A read level and an apply position are
+              facts about the answer, not states of it — and lag alone is never
+              an alarm here, which is what the module doc above says. */}
           {coverage?.read_level && (
-            <Badge outline title="How fresh this answer is, as the engine actually served it">
+            <Tag
+              appearance="outline"
+              size="xs"
+              title="How fresh this answer is, as the engine actually served it"
+            >
               {coverage.read_level}
-            </Badge>
+            </Tag>
           )}
           {behind && (
-            <Badge outline title="This node holds records it has not applied yet">
+            <Tag
+              appearance="outline"
+              size="xs"
+              title="This node holds records it has not applied yet"
+            >
               applied through {coverage?.applied_through} of {coverage?.log_seq}
-            </Badge>
+            </Tag>
           )}
           {extra}
         </div>

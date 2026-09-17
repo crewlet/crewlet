@@ -36,10 +36,26 @@
  */
 
 import { useState } from "react";
-import { Badge, Banner, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import {
+  Button,
+  Callout,
+  Card,
+  InlineCode,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+import {
+  ContentCopyGlyph,
+  DatabaseGlyph,
+  DnsGlyph,
+  Package2Glyph,
+  ScheduleGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -83,43 +99,46 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   return (
     <>
       {error && (
-        <Banner tone="critical" icon="alert">
+        <Callout variant="danger" role="alert">
           This retention poll failed ({error}). What is below is the last reading that succeeded —
           on this screen, which is read while nodes are dying, that difference matters.
-        </Banner>
+        </Callout>
       )}
-      {loading && !data && <Skeleton rows={3} />}
+      {loading && !data && <Skeleton variant="text" rows={3} label="Loading" />}
 
       {/* THE BANNER NAMES THE TERM IN THE OPERATOR'S OWN WORDS, and never the
           term name alone: `backup_max_age` is a field, and "the newest
           complete backup is 3 days old" is the fact somebody acts on. The
           server composes that sentence, because the CLI renders the same one. */}
       {blocked.map((d) => (
-        <Banner key={d.domain} tone="caution" icon="alert">
+        <Callout key={d.domain} variant="warning">
           <span>
-            Nothing is being trimmed on <code className="inline">{d.domain}</code>:{" "}
+            Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>:{" "}
             {d.prose || `the ${d.blocked_by} term is holding it`}
             {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
             <a href="https://docs.crewlet.ai/guides/retention" target="_blank" rel="noreferrer">
               What the six terms mean
             </a>
           </span>
-        </Banner>
+        </Callout>
       ))}
 
       {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
 
       {data?.register_readable === false && (
-        <Banner tone="caution" icon="alert">
+        <Callout variant="warning">
           The node register could not be listed, so the rows below are what could be READ of the
           fleet rather than the fleet. An empty list here is not an empty company.
-        </Banner>
+        </Callout>
       )}
 
       <ServedLevelBanner level={data?.read_level} />
 
       {(data?.alarms?.length ?? 0) > 0 && (
-        <Panel title="Alarms" icon="alert" count={data?.alarms.length}>
+        <Card>
+          <Card.Header icon={<WarningGlyph size="sm" />} count={data?.alarms.length}>
+            Alarms
+          </Card.Header>
           <div className="col gap-2">
             {data?.alarms.map((a) => (
               // THE KIND IS NOT THE IDENTITY. `trim_blocked` is raised PER
@@ -129,19 +148,21 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               // React kept ONE of them. Caught by running a node with no
               // backup: three blocked trims, one banner. The pair is what
               // identifies the alarm, and the detail is where the domain is.
-              <div key={`${a.kind}:${a.detail}`} className="banner caution">
-                <Icon name="alert" size="sm" />
+              <Callout key={`${a.kind}:${a.detail}`} variant="warning">
                 <span>
-                  <code className="inline">{a.kind}</code> — {a.detail}{" "}
+                  <InlineCode>{a.kind}</InlineCode> — {a.detail}{" "}
                   <span className="faint">{a.remedy}</span>
                 </span>
-              </div>
+              </Callout>
             ))}
           </div>
-        </Panel>
+        </Card>
       )}
 
-      <Panel title="Replication" icon="server" count={nodes.length} padding="none">
+      <Card padding="none">
+        <Card.Header icon={<DnsGlyph size="sm" />} count={nodes.length}>
+          Replication
+        </Card.Header>
         <DataGrid<RetentionNode>
           rows={nodes}
           rowKey={(n) => n.node_id}
@@ -161,26 +182,26 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                       gesture, and a button inside a link is markup no browser
                       agrees about. */}
                   <KeyCell value={n.node_id} path={["admin", "fleet", n.node_id]} />
-                  {n.node_id === thisNode && <Badge tone="accent">this one</Badge>}
-                  {n.counted && !n.live && <Badge tone="caution">counted · not live</Badge>}
+                  {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
+                  {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
                   {/* THE FENCE WINDOW IS THE POINT. An eviction is not
                       immediate — the node stays counted until effective_at so
                       a live one is certain to have noticed — and an operator
                       who cannot see that runs the gesture twice. */}
                   {n.evicted && !n.evicted.effective && (
-                    <Badge
-                      tone="caution"
+                    <Tag
+                      variant="warning"
                       title={`evicted by ${n.evicted.by}; takes effect ${fmtDateTime(
                         n.evicted.effective_at,
                       )}`}
                     >
                       evicted in {fmtDuration(Date.parse(n.evicted.effective_at) - now)}
-                    </Badge>
+                    </Tag>
                   )}
                   {n.evicted?.effective && (
-                    <Badge tone="critical" title={`evicted by ${n.evicted.by}`}>
+                    <Tag variant="danger" title={`evicted by ${n.evicted.by}`}>
                       evicted
-                    </Badge>
+                    </Tag>
                   )}
                 </span>
               ),
@@ -233,20 +254,23 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               header: "",
               shrink: true,
               cell: (n) => (
-                <button
-                  type="button"
-                  className="btn ghost sm"
+                <Button
+                  variant="tertiary"
+                  size="small"
                   onClick={() => setGate({ node: n.node_id, evict: !n.evicted })}
                 >
                   {n.evicted ? "Readmit…" : "Evict…"}
-                </button>
+                </Button>
               ),
             },
           ]}
         />
-      </Panel>
+      </Card>
 
-      <Panel title="Log retention" icon="database" count={domains.length}>
+      <Card>
+        <Card.Header icon={<DatabaseGlyph size="sm" />} count={domains.length}>
+          Log retention
+        </Card.Header>
         {/* ONE BLOCK PER REGISTERED DOMAIN, from the document itself rather
             than as hand-written sections — so a domain added to the register
             appears here with no dashboard change at all. */}
@@ -255,15 +279,16 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
             <DomainBlock key={d.domain} domain={d} />
           ))}
         </div>
-      </Panel>
+      </Card>
 
-      <Panel
-        title="Snapshots"
-        icon="box"
-        count={data?.snapshots?.length}
-        subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
-        padding="none"
-      >
+      <Card padding="none">
+        <Card.Header
+          icon={<Package2Glyph size="sm" />}
+          count={data?.snapshots?.length}
+          subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
+        >
+          Snapshots
+        </Card.Header>
         <DataGrid<RetentionSnapshot>
           name="snapshots"
           rows={data?.snapshots ?? []}
@@ -288,7 +313,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                   // none" is not an answer, and `lagging`, `unhydrated`,
                   // `sole_node`, `insufficient_space`, `deferred` and
                   // `recent` are six different things to do about it.
-                  <Badge tone="caution">{s.skip || "no snapshot"}</Badge>
+                  <Tag variant="warning">{s.skip || "no snapshot"}</Tag>
                 ),
             },
             {
@@ -314,9 +339,9 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               cell: (s) => (
                 <span className="row wrap gap-1">
                   {Object.entries(s.domains ?? {}).map(([domain, seq]) => (
-                    <Badge key={domain} outline>
+                    <Tag key={domain} appearance="outline">
                       {domain} @{seq}
-                    </Badge>
+                    </Tag>
                   ))}
                   {!s.domains && <Dash title="this node holds no snapshot" />}
                 </span>
@@ -324,19 +349,20 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
             },
           ]}
         />
-      </Panel>
+      </Card>
 
       {data?.replica && (
-        <Panel title="This node as a replica" icon="copy">
-          <StatRow>
-            <Stat
-              icon="database"
+        <Card>
+          <Card.Header icon={<ContentCopyGlyph size="sm" />}>This node as a replica</Card.Header>
+          <StatGroup>
+            <StatCard
+              icon={<DatabaseGlyph size="xs" />}
               label="Replicated store"
               value={fmtBytes(data.replica.store_bytes)}
               sub="what a joining peer has to receive"
             />
-            <Stat
-              icon="clock"
+            <StatCard
+              icon={<ScheduleGlyph size="xs" />}
               label="Projected join"
               value={fmtDuration(data.replica.projected_join_seconds * 1000)}
               sub={
@@ -348,8 +374,8 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                   : `inside the ${fmtDuration(data.replica.rejoin_window_seconds * 1000)} window`
               }
             />
-          </StatRow>
-        </Panel>
+          </StatGroup>
+        </Card>
       )}
 
       {gate && <GateDialog node={gate.node} evict={gate.evict} onClose={() => setGate(null)} />}
@@ -379,11 +405,10 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
 export function ServedLevelBanner({ level }: { level?: string }) {
   if (!level || level === "stale") return null;
   return (
-    <Banner tone="caution" icon="alert">
+    <Callout variant="warning">
       This node could not measure its own distance from the log, so the figures below are a coherent
-      point in its order with no statement about age (read level{" "}
-      <code className="inline">{level}</code>).
-    </Banner>
+      point in its order with no statement about age (read level <InlineCode>{level}</InlineCode>).
+    </Callout>
   );
 }
 
@@ -405,11 +430,11 @@ export function ServedLevelBanner({ level }: { level?: string }) {
 export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
   const missing = op.participants_missing ?? [];
   return (
-    <Banner tone="critical" icon="alert">
+    <Callout variant="danger" role="alert">
       <span className="col" style={{ gap: 6 }}>
         <span>
           <strong>Maintenance is open on {op.stream}</strong> — no publisher is running anywhere in
-          this fleet. Phase <code className="inline">{op.phase}</code>, attempt {op.attempt}, since{" "}
+          this fleet. Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
           {relTime(op.since, now)}
           {op.by && <> ({op.by})</>}. Resizing from {fmtBytes(op.original_max_bytes)} to{" "}
           {fmtBytes(op.target_max_bytes)}.
@@ -430,7 +455,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
           )}
         </span>
       </span>
-    </Banner>
+    </Callout>
   );
 }
 
@@ -465,7 +490,7 @@ export function NodePositions({ node }: { node: RetentionNode }) {
     <span className="col gap-1">
       {domains.map(([name, d]) => (
         <span key={name} className="row gap-1 t-caption">
-          <code className="inline">{name}</code>
+          <InlineCode>{name}</InlineCode>
           <span className="t-num">
             {d.seq}
             {d.applied_through !== d.seq && (
@@ -480,12 +505,12 @@ export function NodePositions({ node }: { node: RetentionNode }) {
             </span>
           )}
           {(d.deferred ?? 0) > 0 && (
-            <Badge
-              tone="critical"
+            <Tag
+              variant="danger"
               title="this node holds records it cannot decode; its rows are missing their effects"
             >
               {d.deferred} deferred
-            </Badge>
+            </Tag>
           )}
         </span>
       ))}
@@ -498,8 +523,8 @@ function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
   return (
     <div className="col gap-2">
       <div className="row wrap gap-2 baseline">
-        <code className="inline">{d.domain}</code>
-        <Badge outline>{d.replay}</Badge>
+        <InlineCode>{d.domain}</InlineCode>
+        <Tag appearance="outline">{d.replay}</Tag>
         <span className="t-caption faint">generation {d.generation}</span>
         <span className="t-caption t-num">
           {d.first_seq}…{d.last_seq}
@@ -518,9 +543,9 @@ function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
           )}
         </span>
         {d.blocked_by ? (
-          <Badge tone="caution">{d.blocked_by}</Badge>
+          <Tag variant="warning">{d.blocked_by}</Tag>
         ) : (
-          <Badge tone="positive">advancing</Badge>
+          <Tag variant="success">advancing</Tag>
         )}
       </div>
       <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} />
@@ -539,21 +564,20 @@ export function Terms({
   return (
     <div className="col gap-2">
       {snapshotBlocked && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning">
           <span>
-            This node is taking no snapshots: <code className="inline">{snapshotBlocked}</code>. A
-            stalled snapshot tier and a stalled trim are different problems — this one is silent
-            until a node tries to join.
+            This node is taking no snapshots: <InlineCode>{snapshotBlocked}</InlineCode>. A stalled
+            snapshot tier and a stalled trim are different problems — this one is silent until a
+            node tries to join.
           </span>
-        </div>
+        </Callout>
       )}
       <table className="table">
         <tbody>
           {terms.map((t) => (
             <tr key={t.name}>
               <td>
-                <code className="inline">{t.name}</code>
+                <InlineCode>{t.name}</InlineCode>
               </td>
               <td>
                 {/* `n/a` RATHER THAN `0` for a term this domain does not
@@ -563,7 +587,7 @@ export function Terms({
                 {t.state === "ok" ? (
                   <span className="t-num t-caption">{t.seq ?? 0}</span>
                 ) : (
-                  <Badge tone={t.state === "unknown" ? "caution" : "neutral"}>{t.state}</Badge>
+                  <Tag variant={t.state === "unknown" ? "warning" : "neutral"}>{t.state}</Tag>
                 )}
               </td>
               <td className="t-caption faint">{t.detail}</td>

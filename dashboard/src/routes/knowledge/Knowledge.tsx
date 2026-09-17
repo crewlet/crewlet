@@ -16,8 +16,21 @@
 import { useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section, SeatChip } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Callout, Card, EmptyState, Input, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  Book2Glyph,
+  CloseGlyph,
+  DatabaseGlyph,
+  DescriptionGlyph,
+  FolderGlyph,
+  GroupGlyph,
+  NeurologyGlyph,
+  OpenInNewGlyph,
+  ScheduleGlyph,
+  SearchGlyph,
+  TargetGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
@@ -71,7 +84,9 @@ export function Knowledge() {
 
   return (
     <>
-      <PageActions>{data?.backend ? <Badge outline>{data.backend}</Badge> : undefined}</PageActions>
+      <PageActions>
+        {data?.backend ? <Tag appearance="outline">{data.backend}</Tag> : undefined}
+      </PageActions>
       <PageNote>
         The company knowledge base, searched live the way an agent searches it — there is no local
         copy, so what you see here is what the backend holds right now.
@@ -85,19 +100,26 @@ export function Knowledge() {
         }}
       >
         <div style={{ flex: 1, maxWidth: 520 }}>
-          <SearchInput
+          {/* THEIR FIELD, WITH THE GLYPH IN ITS LEADING SLOT — which is what
+              our own `SearchInput` was, plus the name carried as an
+              `aria-label` rather than a prop of its own. */}
+          <Input
+            type="search"
+            width="full"
             value={draft}
-            onChange={setDraft}
-            ariaLabel="Search the knowledge base"
+            onChange={(e) => setDraft(e.target.value)}
+            aria-label="Search the knowledge base"
+            leading={<SearchGlyph size="sm" />}
             placeholder="Search the knowledge base — plain text, not a query language"
           />
         </div>
-        <Button variant="primary" type="submit" icon="search">
+        <Button variant="primary" type="submit" leadingIcon={<SearchGlyph size="sm" />}>
           Search
         </Button>
         {q && (
           <Button
-            icon="x"
+            variant="secondary"
+            leadingIcon={<CloseGlyph size="sm" />}
             onClick={() => {
               setDraft("");
               setQ("");
@@ -109,14 +131,14 @@ export function Knowledge() {
       </form>
 
       {!q && (
-        <Empty
-          icon="book"
+        <EmptyState
+          icon={<Book2Glyph size="xl" />}
           title="Search the company's shared knowledge"
-          hint="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
+          description="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
       )}
 
-      {loading && <Skeleton rows={4} />}
+      {loading && <Skeleton variant="text" rows={4} label="Searching" />}
 
       {/* The search DID NOT RUN. `available: false` covers four states — no
           company, no backend, a backend with no org-wide read scope, and an
@@ -126,8 +148,10 @@ export function Knowledge() {
           company" alike, and telling somebody with no company configured to
           go and wire a wiki is the wrong fix. */}
       {q && data?.available === false && (
-        <div className={data.reason === "building" ? "banner caution" : "banner neutral"}>
-          <Icon name={data.reason === "building" ? "clock" : "book"} size="sm" />
+        <Callout
+          variant={data.reason === "building" ? "warning" : "neutral"}
+          icon={data.reason === "building" ? <ScheduleGlyph size="md" /> : <Book2Glyph size="md" />}
+        >
           <span>
             This search could not run: {data.note || "the engine gave no reason"}.
             {data.reason === "no_backend" && (
@@ -158,21 +182,20 @@ export function Knowledge() {
               </>
             )}
           </span>
-        </div>
+        </Callout>
       )}
 
       {/* The search DID run and came back degraded — a different banner,
           because an empty result that ran is not the same fact as one that
           never started. */}
       {q && data?.available !== false && data?.note && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
-          <span>
-            The search did not complete: {data.note}. Knowledge search is best effort by design — a
-            turn never dies because a wiki was slow — so an empty result here is not proof that
-            nothing matches.
-          </span>
-        </div>
+        // NO EXPLICIT ICON: `Callout` draws the variant's own mark, and for
+        // `warning` that is the same glyph our banner reached for by name.
+        <Callout variant="warning">
+          The search did not complete: {data.note}. Knowledge search is best effort by design — a
+          turn never dies because a wiki was slow — so an empty result here is not proof that
+          nothing matches.
+        </Callout>
       )}
 
       {q && (
@@ -190,7 +213,10 @@ export function Knowledge() {
                   }
           }
         >
-          <Panel title="Results" icon="search" count={data?.hits?.length ?? 0} padding="none">
+          <Card padding="none">
+            <Card.Header icon={<SearchGlyph size="sm" />} count={data?.hits?.length ?? 0}>
+              <Card.Title>Results</Card.Title>
+            </Card.Header>
             <div className="list">
               {(data?.hits ?? []).map((hit) => (
                 <div key={hit.id} className="hit">
@@ -208,7 +234,7 @@ export function Knowledge() {
                       vendor's link for a vendor one. */}
                   {hit.url ? (
                     <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
-                      {hit.title} <Icon name="external" size="xs" style={{ display: "inline" }} />
+                      {hit.title} <OpenInNewGlyph size="xs" style={{ display: "inline" }} />
                     </a>
                   ) : hit.container ? (
                     // THE CONTAINER AND THE TITLE, which is how a page is
@@ -238,7 +264,7 @@ export function Knowledge() {
                     <span className="hit-title">{hit.title}</span>
                   )}
                   <div className="row gap-1">
-                    {hit.container && <Badge outline>{hit.container}</Badge>}
+                    {hit.container && <Tag appearance="outline">{hit.container}</Tag>}
                     {hit.updated_at && (
                       <span className="t-caption">updated {fmtDateTime(hit.updated_at)}</span>
                     )}
@@ -247,11 +273,13 @@ export function Knowledge() {
                 </div>
               ))}
             </div>
-            <footer className="panel-foot">
+            {/* THEIR FOOTER SLOT, `meta` rather than `actions`: this is a
+                sentence about the list above it, not a row of buttons. */}
+            <Card.Footer variant="meta">
               A snippet is capped by contract — it exists to say WHICH page to read, not to be the
               page.
-            </footer>
-          </Panel>
+            </Card.Footer>
+          </Card>
         </QueryState>
       )}
 
@@ -264,11 +292,11 @@ export function Knowledge() {
             hint above an empty grid, so the screen appeared to be broken
             rather than to be describing a company that has none. */}
         {index.seats.filter((s) => s.kind === "agent").length === 0 ? (
-          <Empty
-            inline
-            icon="brain"
+          <EmptyState
+            size="compact"
+            icon={<NeurologyGlyph size="xl" />}
             title="No agent seats to have learned anything"
-            hint="Memory is per agent seat: a diary, past episodes, and the skills it drafted for itself. This company's seats are all human, so there is nothing private to show."
+            description="Memory is per agent seat: a diary, past episodes, and the skills it drafted for itself. This company's seats are all human, so there is nothing private to show."
           />
         ) : (
           <div className="grid grid-auto">
@@ -283,13 +311,13 @@ export function Knowledge() {
                 >
                   <div className="row">
                     <span className="attention-icon" data-severity="info">
-                      <Icon name="database" size="sm" />
+                      <DatabaseGlyph size="sm" />
                     </span>
                     <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                       <strong className="truncate t-cell">{seat.name}</strong>
                       <span className="truncate t-caption mono">@{seat.handle}</span>
                     </span>
-                    <Icon name="arrowRight" size="sm" />
+                    <ArrowForwardGlyph size="sm" />
                   </div>
                   <span className="t-caption truncate">
                     {seat.goal || "memory, episodes and skills"}
@@ -471,7 +499,9 @@ export function ContainerPeek({ id }: { id: string }) {
 
   return (
     <>
-      {containers.loading && !containers.data && <Skeleton rows={6} />}
+      {containers.loading && !containers.data && (
+        <Skeleton variant="text" rows={6} label="Loading the container" />
+      )}
       <QueryState error={containers.error} loading={containers.loading}>
         {containers.data &&
           (found ? (
@@ -501,13 +531,16 @@ export function ContainerPeek({ id }: { id: string }) {
                     one. "Is this the one I meant" is the question the rail
                     answers, and a purpose missing from the panel reads as one
                     the reader failed to scroll to. */}
-                <Panel title="Purpose" icon="target">
+                <Card>
+                  <Card.Header icon={<TargetGlyph size="sm" />}>
+                    <Card.Title>Purpose</Card.Title>
+                  </Card.Header>
                   {found.purpose ? (
                     <p className="t-body measure">{found.purpose}</p>
                   ) : (
                     <span className="muted">No purpose is written for this container.</span>
                   )}
-                </Panel>
+                </Card>
 
                 <ContainerPages container={found} recent={recent} list={list} now={now} />
                 <ContainerWriters recent={recent} index={index} />
@@ -519,11 +552,11 @@ export function ContainerPeek({ id }: { id: string }) {
             // from a pasted URL, or from a sidebar row read before the key was
             // renamed — and "no such record" would leave them unable to tell a
             // stale link from a container this node has not caught up with.
-            <Empty
-              inline
-              icon="folder"
+            <EmptyState
+              size="compact"
+              icon={<FolderGlyph size="xl" />}
               title={`No container called “${id}”`}
-              hint="A container is created the first time somebody writes into it — give a unit a `space` and its seats will have somewhere to file what they learn. This node may also simply not have caught up with one that exists."
+              description="A container is created the first time somebody writes into it — give a unit a `space` and its seats will have somewhere to file what they learn. This node may also simply not have caught up with one that exists."
             />
           ))}
       </QueryState>
@@ -551,7 +584,10 @@ function ContainerPages({
   now: number;
 }) {
   return (
-    <Panel title="Recent pages" icon="file" count={recent.length}>
+    <Card>
+      <Card.Header icon={<DescriptionGlyph size="sm" />} count={recent.length}>
+        <Card.Title>Recent pages</Card.Title>
+      </Card.Header>
       <QueryState
         error={list.error}
         loading={list.loading}
@@ -579,7 +615,7 @@ function ContainerPages({
           )}
         </div>
       </QueryState>
-    </Panel>
+    </Card>
   );
 }
 
@@ -602,12 +638,14 @@ function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: Org
   }, [recent]);
 
   return (
-    <Panel
-      title="Who writes here"
-      icon="users"
-      count={writers.length}
-      subtitle="the seats that started these pages"
-    >
+    <Card>
+      <Card.Header
+        icon={<GroupGlyph size="sm" />}
+        count={writers.length}
+        subtitle="the seats that started these pages"
+      >
+        <Card.Title>Who writes here</Card.Title>
+      </Card.Header>
       {writers.length > 0 ? (
         <div className="row wrap gap-2">
           {writers.slice(0, PEEK_WRITERS).map((handle) => (
@@ -632,6 +670,6 @@ function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: Org
             : "Nothing has been written here yet."}
         </span>
       )}
-    </Panel>
+    </Card>
   );
 }

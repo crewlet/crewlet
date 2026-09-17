@@ -22,9 +22,8 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
+import { CheckGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { rest, RestError } from "~/protocol/index.ts";
 
 export function RemoveSecretDialog({
@@ -66,15 +65,21 @@ export function RemoveSecretDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
       title={`Remove ${name}`}
-      icon="key"
+      icon={<KeyGlyph size="md" />}
       onClose={onClose}
+      // A REMOVAL IN FLIGHT CANNOT BE ABANDONED, and the close control says
+      // so rather than going quiet: the row may or may not be gone, and a
+      // dialog dismissed mid-request is how nobody finds out which.
       dismissable={!busy}
-      width={560}
+      closeDisabledReason="Waiting for the store to answer."
+      size="md"
+      stackBody
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button
@@ -93,8 +98,7 @@ export function RemoveSecretDialog({
       </p>
 
       {referenced && (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert">
           <span className="col" style={{ gap: 6 }}>
             <span>
               {paths.length === 1
@@ -105,21 +109,18 @@ export function RemoveSecretDialog({
             </span>
             <span className="col" style={{ gap: 2 }}>
               {paths.map((path) => (
-                <code className="inline" key={path}>
-                  {path}
-                </code>
+                <InlineCode key={path}>{path}</InlineCode>
               ))}
             </span>
             <span className="t-caption faint">
               Point those fields somewhere else, or remove them, before removing this.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
 
       {unchecked && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning">
           <span className="col" style={{ gap: 4 }}>
             <span>
               The active configuration could not be read, so it is not known whether anything points
@@ -127,17 +128,20 @@ export function RemoveSecretDialog({
             </span>
             {unknown && <span className="t-caption faint">{unknown}</span>}
           </span>
-        </div>
+        </Callout>
       )}
 
+      {/* NEUTRAL, not success: "nothing points at this" is a fact about the
+          configuration rather than a good outcome, and the tone rule is that
+          colour carries state. The tick is the mark our own banner drew, so it
+          is passed rather than taking Callout's neutral info glyph. */}
       {!referenced && !unchecked && (
-        <div className="banner neutral">
-          <Icon name="check" size="sm" />
+        <Callout variant="neutral" icon={<CheckGlyph size="md" />}>
           <span>
             No field in the active configuration names this. Removing it changes nothing the company
             is running.
           </span>
-        </div>
+        </Callout>
       )}
 
       {needsAcknowledgement && (
@@ -157,11 +161,10 @@ export function RemoveSecretDialog({
       )}
 
       {error && (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert">
           <span>{error}</span>
-        </div>
+        </Callout>
       )}
-    </Dialog>
+    </Modal>
   );
 }

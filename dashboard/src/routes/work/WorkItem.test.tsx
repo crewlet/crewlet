@@ -294,7 +294,7 @@ test("a task with no links draws no panel at all", () => {
 test("a refused subtree read says so rather than looking like a leaf", () => {
   render(<Subtasks rows={[]} error="bad_params" now={NOW} chrome={{}} />);
   expect(screen.getByText("Subtasks")).toBeTruthy();
-  expect(document.querySelector(".banner")).toBeTruthy();
+  expect(screen.getByText(/The engine refused this request/)).toBeTruthy();
 });
 
 // AND A READ THAT ANSWERED IS ALLOWED TO CONCLUDE IT. An empty answer is a
@@ -327,7 +327,7 @@ test("a refused poll says so even when children were listed before", () => {
       chrome={{}}
     />,
   );
-  expect(document.querySelector(".banner")).toBeTruthy();
+  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
   expect(screen.queryByText("A child")).toBeNull();
 });
 

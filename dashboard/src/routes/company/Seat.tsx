@@ -5,27 +5,58 @@
  * them — and the tab is in the URL so a colleague can be sent the exact view.
  */
 
-import { useMemo, useRef } from "react";
+import { useId, useMemo, useRef } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
   Avatar,
-  Badge,
+  BarList,
   Button,
-  Empty,
+  Callout,
+  Card,
+  EmptyState,
   Meter,
-  Panel,
-  PhaseTag,
   Skeleton,
-  Stat,
-  StatRow,
+  StatCard,
+  StatGroup,
   Tabs,
-} from "~/ui/primitives.tsx";
-import { BarList, phaseColor } from "~/ui/charts.tsx";
+  Tag,
+  tabId,
+} from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  Book2Glyph,
+  BoltGlyph,
+  CalendarTodayGlyph,
+  ChatGlyph,
+  CheckGlyph,
+  DatabaseGlyph,
+  ErrorGlyph,
+  FlagGlyph,
+  GroupGlyph,
+  HelpGlyph,
+  InboxGlyph,
+  KeyGlyph,
+  LayersGlyph,
+  LinkGlyph,
+  MemoryGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  ScheduleGlyph,
+  TargetGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
+// OURS, AND THERE IS NO PEER. `phaseColor` picks one of `--color-phase-*`,
+// which uilet publishes as tokens without a function that chooses between
+// them; `Charts` exports only `dataColor` over the neutral data ramp. See the
+// report.
+import { phaseColor } from "~/ui/charts.tsx";
+// ONE PHASE PILL for this screen and the Model screen alike — it is uilet's
+import { PhaseTag } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -210,6 +241,11 @@ export function SeatScreen({ handle }: { handle: string }) {
   // kind. The list changes between renders and the hook does not, so the
   // resolution follows the seat rather than a cast made before it was known.
   const [tab, setTab] = useTab<Tab>("tab", human ? HUMAN_TABS : AGENT_TABS);
+  // The pair of ids the strip and its panel are wired together by — minted
+  // here rather than taken from a caller, for the reason ours minted them: a
+  // caller asked to supply both is a caller who wires one end and forgets the
+  // other, which reads exactly like a complete widget and is not one.
+  const panelId = useId();
 
   const agent = liveRow(agents, handle, seat);
   const sandbox = sandboxes.find((s) => s.role === seat?.name) ?? null;
@@ -302,10 +338,10 @@ export function SeatScreen({ handle }: { handle: string }) {
   if (!seat) {
     return (
       <>
-        <Empty
-          icon="user"
+        <EmptyState
+          icon={<PersonGlyph size={32} />}
           title={`No seat called “${handle}”`}
-          hint="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
+          description="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
           action={
             <Button variant="primary" onClick={() => nav.to(["company", "people"])}>
               All seats
@@ -326,8 +362,9 @@ export function SeatScreen({ handle }: { handle: string }) {
       <PageActions>
         {
           <Button
-            icon="activity"
-            size="sm"
+            leadingIcon={<TimelineGlyph size="xs" />}
+            size="small"
+            variant="secondary"
             onClick={() => nav.to(["activity"], { actor: seat.name })}
           >
             Its events
@@ -343,12 +380,12 @@ export function SeatScreen({ handle }: { handle: string }) {
           is the status, and the unit is the fact it always was. */}
       <ObjectHeader
         kind="Seat"
-        icon={human ? "user" : "cpu"}
+        icon={human ? "person" : "memory"}
         identifier={`@${seat.handle}`}
         title={seat.name}
         status={
           human ? (
-            <Badge outline>human seat</Badge>
+            <Tag appearance="outline">human seat</Tag>
           ) : (
             <StateBadge agent={agent} sandboxes={sandboxes} />
           )
@@ -358,42 +395,61 @@ export function SeatScreen({ handle }: { handle: string }) {
       <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
 
       {agent?.last_error && (
-        <div className="banner critical">
-          <Icon name="alert" size="sm" />
-          <span>
-            <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
-            {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
-            {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
-          </span>
-          {agent.last_error.event_id && (
-            <a className="t-link" href={href(["activity", "events", agent.last_error.event_id])}>
-              event →
-            </a>
-          )}
-        </div>
+        <Callout
+          variant="danger"
+          action={
+            agent.last_error.event_id ? (
+              <a className="t-link" href={href(["activity", "events", agent.last_error.event_id])}>
+                event →
+              </a>
+            ) : undefined
+          }
+        >
+          <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+          {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
+          {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
+        </Callout>
       )}
       {state === "afk" && (
-        <div className="banner caution">
-          <Icon name="pause" size="sm" />
-          <span>This seat is AFK: {afkReason(agent?.afk_reason)}.</span>
-        </div>
+        <Callout variant="warning">This seat is AFK: {afkReason(agent?.afk_reason)}.</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
-        <div className="banner caution">
-          <Icon name="help" size="sm" />
-          <span>
-            A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
-          </span>
-          <Button size="sm" onClick={() => nav.to(["activity", "runs", sandbox.turn_id])}>
-            The run
-          </Button>
-        </div>
+        <Callout
+          variant="warning"
+          icon={<HelpGlyph size="md" />}
+          action={
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => nav.to(["activity", "runs", sandbox.turn_id])}
+            >
+              The run
+            </Button>
+          }
+        >
+          A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
+        </Callout>
       )}
 
-      <Tabs<Tab>
+      {/* THEIR STRIP, OUR PANEL. `Tabs` is a real port: its roving focus is
+          MANUAL — `useRoving(items.length, null)` passes no selector, so the
+          arrows move focus and commit nothing, which is the contract ours was
+          written for and the one this screen needs, since every tab pushes a
+          history entry and three of them fire a query.
+
+          What it does not have is the PANEL. `TabPanel` takes `id`, `value`,
+          `children` and `className` and spreads nothing else, so it cannot be
+          given the `tabIndex={0}` that puts the content in the tab order — and
+          without that a reader who selects a tab and presses Tab leaves the
+          widget entirely, landing past everything they just chose. So the
+          panel stays ours, wired to their strip through their own `tabId`.
+          See the report. */}
+      <Tabs
         ariaLabel="Seat sections"
+        variant="underline"
         value={tab}
-        onChange={setTab}
+        onValueChange={(next) => setTab(next as Tab)}
+        panelId={panelId}
         // THE KIND DECIDES THE SET. Model activity, Memory and Cost are
         // properties of a RUNTIME, and a human seat has none: it is
         // addressable and never spawned. All five were rendered
@@ -404,43 +460,55 @@ export function SeatScreen({ handle }: { handle: string }) {
         //
         // Not disabled — absent. A tab that cannot have content is not an
         // empty state, it is a claim that the reader is missing something.
-        options={
+        items={
           human
             ? [
-                { value: "overview" as const, label: "Overview", icon: "user" as const },
-                { value: "access" as const, label: "Access", icon: "key" as const },
+                { value: "overview", label: "Overview", icon: <PersonGlyph size="sm" /> },
+                { value: "access", label: "Access", icon: <KeyGlyph size="sm" /> },
               ]
             : [
-                { value: "overview" as const, label: "Overview", icon: "user" as const },
-                { value: "model" as const, label: "Model activity", icon: "brain" as const },
-                { value: "threads" as const, label: "Conversations", icon: "message" as const },
-                { value: "memory" as const, label: "Memory", icon: "database" as const },
-                { value: "cost" as const, label: "Cost", icon: "coin" as const },
-                { value: "access" as const, label: "Access", icon: "key" as const },
+                { value: "overview", label: "Overview", icon: <PersonGlyph size="sm" /> },
+                { value: "model", label: "Model activity", icon: <NeurologyGlyph size="sm" /> },
+                { value: "threads", label: "Conversations", icon: <ChatGlyph size="sm" /> },
+                { value: "memory", label: "Memory", icon: <DatabaseGlyph size="sm" /> },
+                { value: "cost", label: "Cost", icon: <TokenGlyph size="sm" /> },
+                { value: "access", label: "Access", icon: <KeyGlyph size="sm" /> },
               ]
         }
+      />
+      <div
+        className="tabpanel"
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={tabId(panelId, tab)}
+        tabIndex={0}
       >
         {/* WITHHELD, and said so. A panel that simply is not there reads as
             a person with nothing on their plate, which is the one thing it
             must not read as. */}
         {tab === "overview" && human && !mayReadPerson && (
-          <Panel title="Their day" icon="check">
+          <Card>
+            <Card.Header icon={<CheckGlyph size="sm" />}>
+              <Card.Title>Their day</Card.Title>
+            </Card.Header>
             <p className="t-body">
               Their inbox, their queue and their pinned views are theirs. Reading another person's
               record needs an operator credential.
             </p>
-          </Panel>
+          </Card>
         )}
 
         {tab === "overview" && human && person.data?.held && (
-          <Panel
-            title="Their day"
-            icon="check"
-            subtitle="Read-only here: an inbox is moved on by the person whose it is, through their own assistant."
-          >
-            <StatRow cols={3}>
-              <Stat
-                icon="inbox"
+          <Card>
+            <Card.Header
+              icon={<CheckGlyph size="sm" />}
+              subtitle="Read-only here: an inbox is moved on by the person whose it is, through their own assistant."
+            >
+              <Card.Title>Their day</Card.Title>
+            </Card.Header>
+            <StatGroup columns={3}>
+              <StatCard
+                icon={<InboxGlyph size="xs" />}
                 label="Unread"
                 value={person.data.unread?.length ?? 0}
                 sub={
@@ -449,8 +517,8 @@ export function SeatScreen({ handle }: { handle: string }) {
                     : "nothing snoozed is due"
                 }
               />
-              <Stat
-                icon="layers"
+              <StatCard
+                icon={<LayersGlyph size="xs" />}
                 label="Queue"
                 value={person.data.priorities?.length ?? 0}
                 // WHO CHOSE IT is the one thing a queue cannot say for
@@ -472,64 +540,64 @@ export function SeatScreen({ handle }: { handle: string }) {
                     : "their own order"
                 }
               />
-              <Stat
-                icon="flag"
+              <StatCard
+                icon={<FlagGlyph size="xs" />}
                 label="Pinned views"
                 value={person.data.pinned_views?.length ?? 0}
                 sub={`${person.data.favorites?.length ?? 0} starred`}
               />
-            </StatRow>
-          </Panel>
+            </StatGroup>
+          </Card>
         )}
 
         {tab === "overview" && (
           <>
-            <Panel padding="none">
-              <StatRow cols={4}>
-                <Stat
-                  icon="zap"
-                  label="State"
-                  value={human ? "human" : state}
-                  sub={statusLine(agent, { sandbox, seat })}
-                />
-                <Stat
-                  icon="coin"
-                  // THE WINDOW THE ROLLUP ITSELF REPORTS, never a second
-                  // hardcoded one. This tile is fed by the PUSHED rollup —
-                  // which is why Overview fires no query for it — and that
-                  // covers `livestate.LiveSpendWindow`, currently a day. Under
-                  // a literal "7d" it was a day's spend beneath a week's
-                  // heading, disagreeing by a factor of several with the Cost
-                  // tab's tile of the same name one click away. The engine
-                  // states the window on the answer for exactly this reason,
-                  // and refuses to relabel a rollup it did not take.
-                  label={tokens ? `Tokens · ${spanWords(tokens.since, tokens.until)}` : "Tokens"}
-                  value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
-                  sub={
-                    seatSpend
-                      ? `${seatSpend.calls.toLocaleString()} model calls`
-                      : "nothing recorded"
-                  }
-                />
-                <Stat
-                  icon="layers"
-                  label="Turns in the record"
-                  // Zero is a MEASUREMENT — this seat has taken no turns — and
-                  // an em dash would claim nobody looked.
-                  value={turns.length}
-                  sub="the phase history loaded below"
-                />
-                <Stat
-                  icon="users"
-                  label="Direct reports"
-                  value={reports.length}
-                  sub={manager ? `reports to ${manager.name}` : "no manager in the chart"}
-                />
-              </StatRow>
-            </Panel>
+            {/* The flush Panel is gone: StatGroup draws that surface itself. */}
+            <StatGroup columns={4}>
+              <StatCard
+                icon={<BoltGlyph size="xs" />}
+                label="State"
+                value={human ? "human" : state}
+                sub={statusLine(agent, { sandbox, seat })}
+              />
+              <StatCard
+                icon={<TokenGlyph size="xs" />}
+                // THE WINDOW THE ROLLUP ITSELF REPORTS, never a second
+                // hardcoded one. This tile is fed by the PUSHED rollup —
+                // which is why Overview fires no query for it — and that
+                // covers `livestate.LiveSpendWindow`, currently a day. Under
+                // a literal "7d" it was a day's spend beneath a week's
+                // heading, disagreeing by a factor of several with the Cost
+                // tab's tile of the same name one click away. The engine
+                // states the window on the answer for exactly this reason,
+                // and refuses to relabel a rollup it did not take.
+                label={tokens ? `Tokens · ${spanWords(tokens.since, tokens.until)}` : "Tokens"}
+                value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
+                sub={
+                  seatSpend ? `${seatSpend.calls.toLocaleString()} model calls` : "nothing recorded"
+                }
+              />
+              <StatCard
+                icon={<LayersGlyph size="xs" />}
+                label="Turns in the record"
+                // Zero is a MEASUREMENT — this seat has taken no turns — and
+                // an em dash would claim nobody looked.
+                value={turns.length}
+                sub="the phase history loaded below"
+              />
+              <StatCard
+                icon={<GroupGlyph size="xs" />}
+                label="Direct reports"
+                value={reports.length}
+                sub={manager ? `reports to ${manager.name}` : "no manager in the chart"}
+              />
+            </StatGroup>
 
             <div className="grid grid-auto-lg">
-              <Panel title="Who this is" icon="user">
+              <Card>
+                <Card.Header icon={<PersonGlyph size="sm" />}>
+                  <Card.Title>Who this is</Card.Title>
+                </Card.Header>
                 <PropertiesRail
                   groups={[
                     {
@@ -602,9 +670,12 @@ export function SeatScreen({ handle }: { handle: string }) {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
 
-              <Panel title="Profile" icon="book">
+              <Card>
+                <Card.Header icon={<Book2Glyph size="sm" />}>
+                  <Card.Title>Profile</Card.Title>
+                </Card.Header>
                 <div className="col gap-3">
                   {seat.backstory && (
                     <div className="col gap-1">
@@ -649,7 +720,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     </span>
                   )}
                 </div>
-              </Panel>
+              </Card>
             </div>
 
             {reports.length > 0 && (
@@ -662,13 +733,23 @@ export function SeatScreen({ handle }: { handle: string }) {
                       href={href(["company", "people", r.handle])}
                     >
                       <div className="row">
-                        <Avatar name={r.name} human={r.kind === "human"} />
+                        {/* Their `variant="dashed"` is our `human`: a human
+                            seat is drawn rather than tinted, because the
+                            engine does not run it. Their `md` is 32px where
+                            ours was 26, so the step moves down one. */}
+                        <Avatar
+                          name={r.name}
+                          size="sm"
+                          variant={r.kind === "human" ? "dashed" : "solid"}
+                          decorative
+                          title={r.name}
+                        />
                         <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                           <span className="truncate t-cell">{r.name}</span>
                           <span className="truncate t-caption">{r.goal || r.unit?.name}</span>
                         </span>
                         {r.kind === "human" ? (
-                          <Badge outline>human</Badge>
+                          <Tag appearance="outline">human</Tag>
                         ) : (
                           <StateBadge
                             agent={agents.find((a) => a.role === r.name)}
@@ -683,12 +764,10 @@ export function SeatScreen({ handle }: { handle: string }) {
             )}
 
             {seat.schedules.length > 0 && (
-              <Panel
-                title="Recurring work"
-                icon="calendar"
-                count={seat.schedules.length}
-                padding="none"
-              >
+              <Card padding="none">
+                <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={seat.schedules.length}>
+                  <Card.Title>Recurring work</Card.Title>
+                </Card.Header>
                 <DataGrid
                   rows={seat.schedules}
                   rowKey={(s) => s.name}
@@ -696,7 +775,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {
                       key: "name",
                       header: "Name",
-                      cell: (s) => <TextCell icon="calendar">{s.name}</TextCell>,
+                      cell: (s) => <TextCell icon="calendar_today">{s.name}</TextCell>,
                       sortValue: (s) => s.name,
                     },
                     {
@@ -716,14 +795,16 @@ export function SeatScreen({ handle }: { handle: string }) {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
             )}
           </>
         )}
 
         {tab === "model" && (
           <>
-            {history.loading && !turns.length && <Skeleton rows={4} height={44} />}
+            {history.loading && !turns.length && (
+              <Skeleton variant="text" rows={4} rowHeight={44} label="Loading this seat's turns" />
+            )}
             {/* The QUERY'S OWN STATE, BESIDE THE TURNS RATHER THAN IN PLACE OF
               THEM. It used to wrap them, and `QueryState` renders NOTHING while
               a query is in flight and a banner INSTEAD of its children when one
@@ -733,11 +814,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               query; the running half is pushed. */}
             {history.error && <QueryState error={history.error} loading={history.loading} />}
             {!history.loading && !history.error && !turns.length && (
-              <Empty
-                inline
-                icon="brain"
+              <EmptyState
+                size="compact"
+                icon={<NeurologyGlyph size={32} />}
                 title="No phases in the record for this seat"
-                hint="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
+                description="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
               />
             )}
             {/* The same split the Model screen makes, for the same reason:
@@ -774,14 +855,15 @@ export function SeatScreen({ handle }: { handle: string }) {
               ))}
             </div>
             {turns.length > 0 && (
-              <Panel padding="tight">
+              <Card padding="tight">
                 <div className="row">
                   <span className="t-caption">
                     Showing the most recent phases the engine holds for this seat.
                   </span>
                   <span className="spacer" />
                   <Button
-                    size="sm"
+                    size="small"
+                    variant="secondary"
                     onClick={() =>
                       nav.to(["activity", "turns"], { view: "phases", role: seat.name })
                     }
@@ -789,7 +871,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     All model activity for {seat.name}
                   </Button>
                 </div>
-              </Panel>
+              </Card>
             )}
           </>
         )}
@@ -803,12 +885,13 @@ export function SeatScreen({ handle }: { handle: string }) {
             </PageNote>
             <QueryState error={threads.error} loading={threads.loading}>
               <div className="split">
-                <Panel
-                  title="Threads"
-                  icon="message"
-                  count={threads.data?.conversations?.length ?? 0}
-                  padding="none"
-                >
+                <Card padding="none">
+                  <Card.Header
+                    icon={<ChatGlyph size="sm" />}
+                    count={threads.data?.conversations?.length ?? 0}
+                  >
+                    <Card.Title>Threads</Card.Title>
+                  </Card.Header>
                   {threads.data?.conversations?.length ? (
                     <div className="list">
                       {threads.data.conversations.map((row) => (
@@ -822,36 +905,37 @@ export function SeatScreen({ handle }: { handle: string }) {
                             <span className="mono truncate t-cell" style={{ flex: 1 }}>
                               {row.key}
                             </span>
-                            <Badge outline>
+                            <Tag appearance="outline">
                               {row.turns} {row.turns === 1 ? "turn" : "turns"}
-                            </Badge>
+                            </Tag>
                             <span className="t-caption faint">{fmtDateTime(row.last_at)}</span>
                           </span>
                         </button>
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon="message"
+                    <EmptyState
+                      size="compact"
+                      icon={<ChatGlyph size={32} />}
                       title="No conversations recorded"
-                      hint="A seat writes one entry per turn that took part in a thread — a chat message, an issue comment, a page discussion."
+                      description="A seat writes one entry per turn that took part in a thread — a chat message, an issue comment, a page discussion."
                     />
                   )}
-                </Panel>
+                </Card>
 
-                <Panel
-                  title={thread ? "In this thread" : "Pick a thread"}
-                  icon="clock"
-                  count={threads.data?.entries?.length ?? 0}
-                  padding="none"
-                >
+                <Card padding="none">
+                  <Card.Header
+                    icon={<ScheduleGlyph size="sm" />}
+                    count={threads.data?.entries?.length ?? 0}
+                  >
+                    <Card.Title>{thread ? "In this thread" : "Pick a thread"}</Card.Title>
+                  </Card.Header>
                   {!thread ? (
-                    <Empty
-                      inline
-                      icon="clock"
+                    <EmptyState
+                      size="compact"
+                      icon={<ScheduleGlyph size={32} />}
                       title="Nothing selected"
-                      hint="Choose a thread to see the turns this seat recorded in it."
+                      description="Choose a thread to see the turns this seat recorded in it."
                     />
                   ) : threads.data?.entries?.length ? (
                     <div className="list">
@@ -860,14 +944,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon="clock"
+                    <EmptyState
+                      size="compact"
+                      icon={<ScheduleGlyph size={32} />}
                       title="No turns in this thread"
-                      hint="The ledger is trimmed per conversation, so an old thread can list a count it no longer carries the turns for."
+                      description="The ledger is trimmed per conversation, so an old thread can list a count it no longer carries the turns for."
                     />
                   )}
-                </Panel>
+                </Card>
               </div>
             </QueryState>
           </>
@@ -875,22 +959,25 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "memory" && (
           <>
-            {memory.loading && <Skeleton rows={5} />}
+            {memory.loading && (
+              <Skeleton variant="text" rows={5} label="Loading this seat's memory" />
+            )}
             <QueryState error={memory.error} loading={memory.loading}>
               <div className="col gap-4">
-                <Panel
-                  title="Private diary"
-                  icon="book"
-                  count={memory.data?.diary?.length ?? 0}
-                  subtitle="what this seat chose to remember"
-                  padding="none"
-                >
+                <Card padding="none">
+                  <Card.Header
+                    icon={<Book2Glyph size="sm" />}
+                    count={memory.data?.diary?.length ?? 0}
+                    subtitle="what this seat chose to remember"
+                  >
+                    <Card.Title>Private diary</Card.Title>
+                  </Card.Header>
                   {memory.data?.diary?.length ? (
                     <div className="list">
                       {memory.data.diary.map((d, i) => (
                         <div key={d.id ?? i} className="thread-entry">
                           <div className="row gap-1">
-                            <Badge outline>{d.retention || d.scope || "note"}</Badge>
+                            <Tag appearance="outline">{d.retention || d.scope || "note"}</Tag>
                             <span className="spacer" />
                             <span className="t-caption">{fmtDateTime(d.created_at)}</span>
                           </div>
@@ -899,22 +986,23 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon="book"
+                    <EmptyState
+                      size="compact"
+                      icon={<Book2Glyph size={32} />}
                       title="Nothing written yet"
-                      hint="A seat writes here by calling reflect_and_persist during a turn."
+                      description="A seat writes here by calling reflect_and_persist during a turn."
                     />
                   )}
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Past turns"
-                  icon="layers"
-                  count={memory.data?.episodes?.length ?? 0}
-                  subtitle="one row per completed turn, searched by similarity at turn start"
-                  padding="none"
-                >
+                <Card padding="none">
+                  <Card.Header
+                    icon={<LayersGlyph size="sm" />}
+                    count={memory.data?.episodes?.length ?? 0}
+                    subtitle="one row per completed turn, searched by similarity at turn start"
+                  >
+                    <Card.Title>Past turns</Card.Title>
+                  </Card.Header>
                   <DataGrid
                     name="episodes"
                     rows={memory.data?.episodes ?? []}
@@ -961,13 +1049,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                         sortValue: (e) => e.review_outcome ?? e.outcome ?? null,
                         cell: (e) =>
                           e.review_outcome || e.outcome ? (
-                            <Badge
-                              tone={
-                                (e.review_outcome ?? e.outcome) === "done" ? "positive" : "caution"
+                            <Tag
+                              variant={
+                                (e.review_outcome ?? e.outcome) === "done" ? "success" : "warning"
                               }
                             >
                               {e.review_outcome ?? e.outcome}
-                            </Badge>
+                            </Tag>
                           ) : (
                             <Dash title="the turn ended without a review outcome" />
                           ),
@@ -992,25 +1080,27 @@ export function SeatScreen({ handle }: { handle: string }) {
                       },
                     ]}
                   />
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Skills it taught itself"
-                  icon="zap"
-                  // `?? 0` for the ANSWER, never for the field: `skills_total`
-                  // is always sent, so falling back to `skills.length` would
-                  // only ever substitute the page size for the total.
-                  count={memory.data?.skills_total ?? 0}
-                  subtitle="drafted from its own past work, loadable mid-turn"
-                  padding="none"
-                >
+                <Card padding="none">
+                  <Card.Header
+                    icon={<BoltGlyph size="sm" />}
+                    // `?? 0` for the ANSWER, never for the field:
+                    // `skills_total` is always sent, so falling back to
+                    // `skills.length` would only ever substitute the page size
+                    // for the total.
+                    count={memory.data?.skills_total ?? 0}
+                    subtitle="drafted from its own past work, loadable mid-turn"
+                  >
+                    <Card.Title>Skills it taught itself</Card.Title>
+                  </Card.Header>
                   {memory.data?.skills?.length ? (
                     <div className="list">
                       {memory.data.skills.map((s, i) => (
                         <div key={s.id ?? s.key ?? i} className="thread-entry">
                           <div className="row gap-1">
                             <strong className="t-body">{s.title}</strong>
-                            {s.version != null && <Badge outline>v{s.version}</Badge>}
+                            {s.version != null && <Tag appearance="outline">v{s.version}</Tag>}
                             <span className="spacer" />
                             {s.updated_at && (
                               <span className="t-caption">{fmtDateTime(s.updated_at)}</span>
@@ -1029,21 +1119,22 @@ export function SeatScreen({ handle }: { handle: string }) {
                       )}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon="zap"
+                    <EmptyState
+                      size="compact"
+                      icon={<BoltGlyph size={32} />}
                       title="No synthesised skills"
-                      hint="The learning loop drafts these from repeated work. A young company has none."
+                      description="The learning loop drafts these from repeated work. A young company has none."
                     />
                   )}
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Who it has worked with"
-                  icon="users"
-                  count={memory.data?.counterparties?.length ?? 0}
-                  padding="none"
-                >
+                <Card padding="none">
+                  <Card.Header
+                    icon={<GroupGlyph size="sm" />}
+                    count={memory.data?.counterparties?.length ?? 0}
+                  >
+                    <Card.Title>Who it has worked with</Card.Title>
+                  </Card.Header>
                   {memory.data?.counterparties?.length ? (
                     <div className="list">
                       {memory.data.counterparties.map((c, i) => (
@@ -1051,14 +1142,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon="users"
+                    <EmptyState
+                      size="compact"
+                      icon={<GroupGlyph size={32} />}
                       title="No counterparty profiles"
-                      hint="Built up from observed interactions. Nothing read these until now — the key was on the answer and the store behind it was never asked."
+                      description="Built up from observed interactions. Nothing read these until now — the key was on the answer and the store behind it was never asked."
                     />
                   )}
-                </Panel>
+                </Card>
               </div>
             </QueryState>
           </>
@@ -1066,55 +1157,61 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "cost" && (
           <>
-            <Panel padding="none">
-              <StatRow cols={3}>
-                <Stat
-                  icon="coin"
-                  label="Tokens · 7d"
-                  value={spend.data ? fmtCount(spend.data.totals.total_tokens) : "—"}
-                  sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
-                />
-                <Stat
-                  icon="arrowRight"
-                  label="Input / output"
-                  value={
-                    spend.data
-                      ? `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
-                      : "—"
-                  }
-                  sub="input includes any cached prefix, as the provider reports it"
-                />
-                <Stat
-                  icon="target"
-                  label="Configured budget"
-                  value={seat.tokenBudget ? fmtCount(seat.tokenBudget) : "unlimited"}
-                  sub={
-                    seat.tokenBudget
-                      ? "token_budget on this role in the company config"
-                      : "token_budget is 0 or unset on this role"
-                  }
-                />
-              </StatRow>
-            </Panel>
+            {/* The flush Panel is gone: StatGroup draws that surface itself. */}
+            <StatGroup columns={3}>
+              <StatCard
+                icon={<TokenGlyph size="xs" />}
+                label="Tokens · 7d"
+                value={spend.data ? fmtCount(spend.data.totals.total_tokens) : "—"}
+                sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
+              />
+              <StatCard
+                icon={<ArrowForwardGlyph size="xs" />}
+                label="Input / output"
+                value={
+                  spend.data
+                    ? `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
+                    : "—"
+                }
+                sub="input includes any cached prefix, as the provider reports it"
+              />
+              <StatCard
+                icon={<TargetGlyph size="xs" />}
+                label="Configured budget"
+                value={seat.tokenBudget ? fmtCount(seat.tokenBudget) : "unlimited"}
+                sub={
+                  seat.tokenBudget
+                    ? "token_budget on this role in the company config"
+                    : "token_budget is 0 or unset on this role"
+                }
+              />
+            </StatGroup>
 
             {/* The live meter and the configured budget are DIFFERENT facts and
               the screen says so. The previous seat page printed "no budget is
               set" in one tab while another printed the budget from the same
               config, because one read a field the server never sent. */}
             {agent?.budget ? (
-              <Panel
-                title="Live budget meter"
-                icon="target"
-                subtitle="process-lifetime, not the 7-day window"
-              >
+              <Card>
+                <Card.Header
+                  icon={<TargetGlyph size="sm" />}
+                  subtitle="process-lifetime, not the 7-day window"
+                >
+                  <Card.Title>Live budget meter</Card.Title>
+                </Card.Header>
+                {/* THEIR `label` IS THE ACCESSIBLE NAME, tied to the bar, so
+                    the separate `ariaLabel` ours needed is gone — and with it
+                    the reason the visible word could not be the name. "Used"
+                    was never a name for anything; the seat's budget is.
+                    `fullMeans="spent"` is gone because that is the only
+                    reading theirs has, and it is the right one here. */}
                 <Meter
-                  fullMeans="spent"
-                  used={agent.budget.used}
+                  value={agent.budget.used}
                   max={agent.budget.max}
-                  ariaLabel={`${agent.role}'s token budget`}
-                  label="Used"
-                  right={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
-                  tone={agent.budget.used >= agent.budget.max ? "critical" : undefined}
+                  label={`${agent.role}'s token budget`}
+                  valueText={`${fmtCount(agent.budget.used)} of ${fmtCount(agent.budget.max)} tokens`}
+                  hint={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
+                  tone={agent.budget.used >= agent.budget.max ? "danger" : undefined}
                 />
                 {agent.budget.used >= agent.budget.max && (
                   <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
@@ -1122,24 +1219,27 @@ export function SeatScreen({ handle }: { handle: string }) {
                     gate.
                   </p>
                 )}
-              </Panel>
+              </Card>
             ) : (
-              <div className="banner neutral">
-                <Icon name="info" size="sm" />
-                <span>
-                  {seat.tokenBudget
-                    ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it — so there is nothing measured to draw."
-                    : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
-                </span>
-              </div>
+              <Callout variant="neutral">
+                {seat.tokenBudget
+                  ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it — so there is nothing measured to draw."
+                  : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
+              </Callout>
             )}
 
-            {spend.loading && <Skeleton rows={4} />}
+            {spend.loading && (
+              <Skeleton variant="text" rows={4} label="Loading this seat's spend" />
+            )}
             <QueryState error={spend.error} loading={spend.loading}>
               <div className="grid grid-auto-lg">
-                <Panel title="By phase" icon="layers">
+                <Card>
+                  <Card.Header icon={<LayersGlyph size="sm" />}>
+                    <Card.Title>By phase</Card.Title>
+                  </Card.Header>
                   <BarList
                     data={(spend.data?.by_phase ?? []).map((p) => ({
+                      id: p.phase,
                       label: p.phase,
                       value: p.total_tokens,
                       display: fmtCount(p.total_tokens),
@@ -1148,10 +1248,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                     }))}
                     emptyLabel="No calls in the window."
                   />
-                </Panel>
-                <Panel title="By model" icon="cpu">
+                </Card>
+                <Card>
+                  <Card.Header icon={<MemoryGlyph size="sm" />}>
+                    <Card.Title>By model</Card.Title>
+                  </Card.Header>
                   <BarList
                     data={(spend.data?.by_model ?? []).map((m) => ({
+                      id: m.model,
                       label: m.model,
                       value: m.total_tokens,
                       display: fmtCount(m.total_tokens),
@@ -1159,10 +1263,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                     }))}
                     emptyLabel="No calls in the window."
                   />
-                </Panel>
+                </Card>
               </div>
 
-              <Panel title="Recent turns" icon="layers" padding="none">
+              <Card padding="none">
+                <Card.Header icon={<LayersGlyph size="sm" />}>
+                  <Card.Title>Recent turns</Card.Title>
+                </Card.Header>
                 <DataGrid
                   name="turns"
                   rows={spend.data?.by_turn ?? []}
@@ -1202,14 +1309,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
             </QueryState>
           </>
         )}
 
         {tab === "access" && (
           <div className="col gap-4">
-            <Panel title="Identity on other surfaces" icon="link">
+            <Card>
+              <Card.Header icon={<LinkGlyph size="sm" />}>
+                <Card.Title>Identity on other surfaces</Card.Title>
+              </Card.Header>
               {Object.keys(seat.contact).length ? (
                 <PropertiesRail
                   groups={[
@@ -1222,21 +1332,23 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ]}
                 />
               ) : (
-                <Empty
-                  inline
-                  icon="link"
+                <EmptyState
+                  size="compact"
+                  icon={<LinkGlyph size={32} />}
                   title="No contact identities"
-                  hint="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
+                  description="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
                 />
               )}
-            </Panel>
+            </Card>
 
-            <Panel
-              title="Tool credentials"
-              icon="key"
-              subtitle="merged down the unit chain, this seat's own entries winning"
-              count={Object.keys(seat.mcpEnv).length}
-            >
+            <Card>
+              <Card.Header
+                icon={<KeyGlyph size="sm" />}
+                subtitle="merged down the unit chain, this seat's own entries winning"
+                count={Object.keys(seat.mcpEnv).length}
+              >
+                <Card.Title>Tool credentials</Card.Title>
+              </Card.Header>
               {Object.keys(seat.mcpEnv).length ? (
                 <div className="col gap-3">
                   {Object.entries(seat.mcpEnv).map(([server, vars]) => (
@@ -1266,17 +1378,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                   </p>
                 </div>
               ) : (
-                <Empty
-                  inline
-                  icon="key"
+                <EmptyState
+                  size="compact"
+                  icon={<KeyGlyph size={32} />}
                   title="No per-seat tool credentials"
-                  hint="This seat uses whatever the shared MCP servers were configured with."
+                  description="This seat uses whatever the shared MCP servers were configured with."
                 />
               )}
-            </Panel>
+            </Card>
           </div>
         )}
-      </Tabs>
+      </div>
     </>
   );
 }
@@ -1336,11 +1448,11 @@ export function SeatPeek({ handle }: { handle: string }) {
   // resolved to nothing rather than drawing a header over no seat.
   if (!seat) {
     return (
-      <Empty
-        inline
-        icon="user"
+      <EmptyState
+        size="compact"
+        icon={<PersonGlyph size={32} />}
         title={`No seat called “${handle}”`}
-        hint="Seats are addressed by handle. A company revision may have renamed or removed this one."
+        description="Seats are addressed by handle. A company revision may have renamed or removed this one."
       />
     );
   }
@@ -1355,12 +1467,12 @@ export function SeatPeek({ handle }: { handle: string }) {
       <ObjectHeader
         size="peek"
         kind="Seat"
-        icon={human ? "user" : "cpu"}
+        icon={human ? "person" : "memory"}
         identifier={`@${seat.handle}`}
         title={seat.name}
         status={
           human ? (
-            <Badge outline>human seat</Badge>
+            <Tag appearance="outline">human seat</Tag>
           ) : (
             <StateBadge agent={agent} sandboxes={sandboxes} />
           )
@@ -1386,25 +1498,19 @@ export function SeatPeek({ handle }: { handle: string }) {
             </p>
           )}
           {agent?.last_error && (
-            <div className="banner critical">
-              <Icon name="alert" size="sm" />
-              <span>
-                <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
-                {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
-              </span>
-            </div>
+            <Callout variant="danger">
+              <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+              {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
+            </Callout>
           )}
           {sandbox && awaitingPerson(sandbox.status) && (
             // THE ONE THING A READER CAN ACT ON from a list. A run parked on a
             // question stops this seat until somebody answers it, and a peek
             // that showed "writing code in a sandbox" and nothing else would
             // hide the half that needs them.
-            <div className="banner caution">
-              <Icon name="help" size="sm" />
-              <span>
-                A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
-              </span>
-            </div>
+            <Callout variant="warning" icon={<HelpGlyph size="md" />}>
+              A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
+            </Callout>
           )}
         </section>
 
@@ -1415,13 +1521,13 @@ export function SeatPeek({ handle }: { handle: string }) {
               <div className="thread-entry">
                 <div className="row gap-1">
                   {lastTurn.live ? (
-                    <Badge tone="info" dot>
+                    <Tag variant="info" dot>
                       running
-                    </Badge>
+                    </Tag>
                   ) : lastTurn.failed ? (
-                    <Badge tone="critical">failed</Badge>
+                    <Tag variant="danger">failed</Tag>
                   ) : (
-                    <Badge outline>finished</Badge>
+                    <Tag appearance="outline">finished</Tag>
                   )}
                   <span className="truncate t-cell">
                     {lastTurn.trigger?.summary || lastTurn.trigger?.type || "turn"}
@@ -1461,13 +1567,19 @@ export function SeatPeek({ handle }: { handle: string }) {
                   href={href(["company", "people", r.handle])}
                 >
                   <div className="row gap-2">
-                    <Avatar name={r.name} size="sm" human={r.kind === "human"} />
+                    <Avatar
+                      name={r.name}
+                      size="xs"
+                      variant={r.kind === "human" ? "dashed" : "solid"}
+                      decorative
+                      title={r.name}
+                    />
                     <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                       <span className="truncate t-cell">{r.name}</span>
                       <span className="truncate t-caption">{r.goal || r.unit?.name || ""}</span>
                     </span>
                     {r.kind === "human" ? (
-                      <Badge outline>human</Badge>
+                      <Tag appearance="outline">human</Tag>
                     ) : (
                       <StateBadge
                         agent={agents.find((a) => a.role === r.name)}
@@ -1537,9 +1649,9 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
           <strong className="t-cell">{profile.subject.name || counterpartyKey(profile)}</strong>
         )}
         {!profile.resolved && (
-          <Badge outline title="not mapped to a seat in this company">
+          <Tag appearance="outline" title="not mapped to a seat in this company">
             {profile.subject.platform || "external"}
-          </Badge>
+          </Tag>
         )}
         <span className="spacer" />
         <span className="t-caption">
@@ -1550,9 +1662,9 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
       {traits.length > 0 ? (
         <div className="row gap-1 wrap">
           {traits.map(([key, value]) => (
-            <Badge key={key} outline title={key}>
+            <Tag key={key} appearance="outline" title={key}>
               {key}: {typeof value === "string" ? value : JSON.stringify(value)}
-            </Badge>
+            </Tag>
           ))}
         </div>
       ) : (
@@ -1594,8 +1706,8 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
   return (
     <div className="thread-entry">
       <div className="row gap-1">
-        {entry.trigger && <Badge outline>{entry.trigger}</Badge>}
-        {entry.decision && <Badge outline>{entry.decision}</Badge>}
+        {entry.trigger && <Tag appearance="outline">{entry.trigger}</Tag>}
+        {entry.decision && <Tag appearance="outline">{entry.decision}</Tag>}
         <span className="spacer" />
         {entry.turn_id && (
           <a className="t-link mono t-caption" href={href(["activity", "turns", entry.turn_id])}>
@@ -1608,12 +1720,9 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
       {entry.reply && <p className="t-caption">{entry.reply}</p>}
       {entry.unsent && (
         // THE ONE THAT REACHED NOBODY, marked. See the doc above.
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
-          <span>
-            <strong>Nothing was delivered.</strong> {entry.unsent}
-          </span>
-        </div>
+        <Callout variant="warning" icon={<ErrorGlyph size="md" />}>
+          <strong>Nothing was delivered.</strong> {entry.unsent}
+        </Callout>
       )}
       {entry.completed_work && <p className="t-caption faint">{entry.completed_work}</p>}
       {entry.tool_calls && <pre className="code">{entry.tool_calls}</pre>}

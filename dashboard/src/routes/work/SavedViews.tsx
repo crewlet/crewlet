@@ -34,7 +34,8 @@ import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
-import { Badge, Button, Empty } from "~/ui/primitives.tsx";
+import { Button, EmptyState, Tag } from "@crewlethq/ui";
+import { ArrowForwardGlyph, DashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -91,10 +92,13 @@ export function SavedViews({ id }: { id?: string }) {
     if (views.error) return <QueryState error={views.error} loading={false} />;
     if (!one) {
       return (
-        <Empty
-          icon="columns"
+        // DASHBOARD IS THE NEAREST GLYPH THERE IS. Our `columns` mark is
+        // three columns of falling height — a BOARD, as distinct from a list
+        // — and the glyph set has no board. See the report.
+        <EmptyState
+          icon={<DashboardGlyph size="xl" />}
           title="No saved view with that id"
-          hint="A view that was deleted, or one saved against a different container. The inventory lists what this company has."
+          description="A view that was deleted, or one saved against a different container. The inventory lists what this company has."
         />
       );
     }
@@ -123,7 +127,7 @@ export function SavedViews({ id }: { id?: string }) {
             button about something it never named. */}
         <ObjectHeader
           kind="Saved view"
-          icon="columns"
+          icon="view_column"
           identifier={one.key}
           title={one.name}
           facts={viewFacts(one, ownerName)}
@@ -131,7 +135,7 @@ export function SavedViews({ id }: { id?: string }) {
         <ViewFacts view={one} />
         <Button
           variant="primary"
-          icon="arrowRight"
+          leadingIcon={<ArrowForwardGlyph size="sm" />}
           onClick={() => nav.to(["work"], { view: one.key })}
         >
           Run this view on the board
@@ -170,7 +174,7 @@ export function SavedViews({ id }: { id?: string }) {
               key: "name",
               header: "View",
               sortValue: (v) => v.name,
-              cell: (v) => <TextCell icon="columns">{v.name}</TextCell>,
+              cell: (v) => <TextCell icon="view_column">{v.name}</TextCell>,
             },
             {
               key: "key",
@@ -184,7 +188,7 @@ export function SavedViews({ id }: { id?: string }) {
               header: "Shape",
               shrink: true,
               sortValue: (v) => v.type,
-              cell: (v) => <Badge outline>{v.type}</Badge>,
+              cell: (v) => <Tag appearance="outline">{v.type}</Tag>,
             },
             {
               key: "owner",
@@ -216,19 +220,19 @@ export function SavedViews({ id }: { id?: string }) {
               cell: (v) => (
                 <span className="row gap-1">
                   {v.default && (
-                    <Badge outline title="the container's landing tab">
+                    <Tag appearance="outline" title="the container's landing tab">
                       default
-                    </Badge>
+                    </Tag>
                   )}
                   {v.protected && (
-                    <Badge outline title="only its owner may change it">
+                    <Tag appearance="outline" title="only its owner may change it">
                       protected
-                    </Badge>
+                    </Tag>
                   )}
                   {v.pinned && (
-                    <Badge tone="accent" title="pinned by you — pins are per reader">
+                    <Tag variant="brand" title="pinned by you — pins are per reader">
                       pinned
-                    </Badge>
+                    </Tag>
                   )}
                 </span>
               ),
@@ -269,11 +273,11 @@ function viewFacts(view: WorkView, ownerName?: string): Fact[] {
       value:
         view.default || view.protected || view.pinned ? (
           <span className="row gap-1">
-            {view.default && <Badge outline>default</Badge>}
-            {view.protected && <Badge outline>protected</Badge>}
-            {/* THE ACCENT SAYS "YOURS" — a pin is this reader's own, where
+            {view.default && <Tag appearance="outline">default</Tag>}
+            {view.protected && <Tag appearance="outline">protected</Tag>}
+            {/* THE BRAND TONE SAYS "YOURS" — a pin is this reader's own, where
                 the other two are facts about the view itself. */}
-            {view.pinned && <Badge tone="accent">pinned</Badge>}
+            {view.pinned && <Tag variant="brand">pinned</Tag>}
           </span>
         ) : (
           ""

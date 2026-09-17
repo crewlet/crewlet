@@ -48,8 +48,33 @@ import { useMemo, type ReactNode } from "react";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Badge, Banner, Empty, Meter, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { BarList, Legend, TimeSeries } from "~/ui/charts.tsx";
+import {
+  BarList,
+  Callout,
+  Card,
+  DATA_COLOR_OTHER,
+  dataColor,
+  EmptyState,
+  Legend,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+import { CalendarTodayGlyph, InboxGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
+// OURS, AND THE BURNDOWN IS WHY. Their `TimeSeries` fills EVERY series and has
+// no dashed stroke, so the ideal — a REFERENCE a reader must never mistake for
+// a measurement — would arrive as a third solid line under a third translucent
+// wash. Ours takes `dashed` per series and `fill` per series, which is exactly
+// the pair that chart is made of.
+//
+// `Meter` is ours for three reasons of its own: their `meterTone` welds in the
+// polarity "full is bad" (>= 100% draws `danger`), so a delivered sprint would
+// read as a failure; their legend is all-or-nothing, so the capacity bar below
+// — which has a value and deliberately NO visible label — cannot be drawn at
+// all; and their track keeps `role="meter"` with no scale. See the report.
+import { Meter } from "~/ui/primitives.tsx";
+import { TimeSeries } from "~/ui/charts.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -72,10 +97,10 @@ function measureLabel(measure: string): string {
   return measure === "estimate_min" ? "minutes" : "points";
 }
 
-const STATE_TONE: Record<string, "positive" | "caution" | "info" | "neutral"> = {
+const STATE_TONE: Record<string, "success" | "warning" | "info" | "neutral"> = {
   future: "neutral",
   active: "info",
-  closed: "positive",
+  closed: "success",
 };
 
 /**
@@ -108,8 +133,8 @@ function sprintFlags(sprint: WorkSprintRow): ReactNode {
   if (!sprint.rollover_pending && !sprint.archived) return undefined;
   return (
     <span className="row gap-1">
-      {sprint.rollover_pending && <Badge tone="caution">spillover pending</Badge>}
-      {sprint.archived && <Badge tone="neutral">archived</Badge>}
+      {sprint.rollover_pending && <Tag variant="warning">spillover pending</Tag>}
+      {sprint.archived && <Tag variant="neutral">archived</Tag>}
     </span>
   );
 }
@@ -156,7 +181,7 @@ function sprintFacts(sprint: WorkSprintRow): Fact[] {
       // THE TONE IS ON THE STATE and nowhere else on this line: `future`,
       // `active` and `closed` are the one thing here that is a state rather
       // than a quantity, and colour in this product carries exactly that.
-      value: <Badge tone={STATE_TONE[sprint.state] ?? "neutral"}>{sprint.state}</Badge>,
+      value: <Tag variant={STATE_TONE[sprint.state] ?? "neutral"}>{sprint.state}</Tag>,
     },
     {
       label: "Scope",
@@ -301,17 +326,18 @@ function SprintReport({ project }: { project: string }) {
       {chosen && (
         <QueryState error={report.error} loading={report.loading}>
           {sprints.length === 0 ? (
-            <Empty
+            <EmptyState
+              icon={<CalendarTodayGlyph size="xl" />}
               title="No sprints"
-              hint={`${chosen} does not run sprints — a lead turns them on with the project's sprint policy.`}
+              description={`${chosen} does not run sprints — a lead turns them on with the project's sprint policy.`}
             />
           ) : (
             <>
               {/* VELOCITY IS ABSENT UNTIL A SPRINT HAS CLOSED, and the screen
                   says so rather than drawing a zero — which would read as a
                   team that delivers nothing. */}
-              <StatRow cols={3}>
-                <Stat
+              <StatGroup columns={3}>
+                <StatCard
                   label="Velocity"
                   value={report.data?.velocity_avg ?? "—"}
                   sub={
@@ -320,19 +346,19 @@ function SprintReport({ project }: { project: string }) {
                       : `mean ${measure} per closed sprint`
                   }
                 />
-                <Stat label="Sprints shown" value={sprints.length} />
-                <Stat
+                <StatCard label="Sprints shown" value={sprints.length} />
+                <StatCard
                   label="Earlier"
                   value={report.data?.earlier_sprints_dropped ?? 0}
                   sub="closed sprints below this window"
                 />
-              </StatRow>
+              </StatGroup>
 
               {sprints.some((s) => s.rollover_pending) && (
-                <Banner tone="caution">
+                <Callout variant="warning">
                   A closed sprint's spillover is still undecided — its unfinished work is neither
                   carried forward nor dropped until a lead says which.
-                </Banner>
+                </Callout>
               )}
 
               <Velocity sprints={sprints} measure={measure} />
@@ -434,14 +460,16 @@ export function SprintScreen({ project, number }: { project: string; number: num
         <Coverage answer={report.data} />
       </div>
 
-      {report.loading && !report.data && <Skeleton rows={6} />}
+      {report.loading && !report.data && (
+        <Skeleton variant="text" rows={6} label="Loading the sprint" />
+      )}
       <QueryState error={report.error} loading={report.loading}>
         {report.data &&
           (sprint ? (
             <>
               <ObjectHeader
                 kind="Sprint"
-                icon="calendar"
+                icon="calendar_today"
                 identifier={`${project}/${number}`}
                 title={sprint.name}
                 status={sprintFlags(sprint)}
@@ -509,18 +537,20 @@ export function SprintPeek({ id }: { id: string }) {
   // this product is written to avoid.
   if (!addressed) {
     return (
-      <Empty
-        inline
-        icon="calendar"
+      <EmptyState
+        size="compact"
+        icon={<CalendarTodayGlyph size="xl" />}
         title={`“${id}” is not a sprint`}
-        hint="A sprint is addressed as the project's key and its number joined by a slash — ENG/3. This one carries one or the other, so there is nothing to look up."
+        description="A sprint is addressed as the project's key and its number joined by a slash — ENG/3. This one carries one or the other, so there is nothing to look up."
       />
     );
   }
 
   return (
     <>
-      {report.loading && !report.data && <Skeleton rows={6} />}
+      {report.loading && !report.data && (
+        <Skeleton variant="text" rows={6} label="Loading the sprint" />
+      )}
       <QueryState error={report.error} loading={report.loading}>
         {report.data &&
           (sprint ? (
@@ -528,7 +558,7 @@ export function SprintPeek({ id }: { id: string }) {
               <ObjectHeader
                 size="peek"
                 kind="Sprint"
-                icon="calendar"
+                icon="calendar_today"
                 identifier={`${project}/${number}`}
                 title={sprint.name}
                 status={sprintFlags(sprint)}
@@ -625,19 +655,20 @@ function OpenInSprint({
   const truncated = data != null && data.total_hint > rows.length;
 
   return (
-    <Panel
-      title="Still open"
-      icon="inbox"
-      count={rows.length}
-      subtitle={
-        state === "closed"
-          ? "the spillover — neither carried forward nor dropped until a lead says which"
-          : "what has to land before this sprint ends"
-      }
-      padding="none"
-    >
+    <Card padding="none">
+      <Card.Header
+        icon={<InboxGlyph size="sm" />}
+        count={rows.length}
+        subtitle={
+          state === "closed"
+            ? "the spillover — neither carried forward nor dropped until a lead says which"
+            : "what has to land before this sprint ends"
+        }
+      >
+        <Card.Title>Still open</Card.Title>
+      </Card.Header>
       {loading && !data ? (
-        <Skeleton rows={3} />
+        <Skeleton variant="text" rows={3} label="Loading what is still open" />
       ) : (
         <QueryState
           error={error}
@@ -669,7 +700,7 @@ function OpenInSprint({
           )}
         </QueryState>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -693,11 +724,11 @@ function NoSuchSprint({
   inline?: boolean;
 }) {
   return (
-    <Empty
-      inline={inline}
-      icon="calendar"
+    <EmptyState
+      size={inline ? "compact" : "default"}
+      icon={<CalendarTodayGlyph size="xl" />}
       title={`${project} has no sprint ${number}`}
-      hint="Sprints are numbered per project and minted by the cadence duty, so a number above the last one it has reached names a sprint that does not exist yet."
+      description="Sprints are numbered per project and minted by the cadence duty, so a number above the last one it has reached names a sprint that does not exist yet."
     />
   );
 }
@@ -734,18 +765,24 @@ export function Velocity({ sprints, measure }: { sprints: WorkSprintRow[]; measu
   // look like a failure.
   const max = Math.max(1, ...sprints.map((s) => s.figures.committed + s.figures.added));
   return (
-    <Panel
-      title="Delivery by sprint"
-      icon="activity"
-      subtitle="the running sprint in colour; its total is still partial"
-    >
+    <Card>
+      <Card.Header
+        icon={<TimelineGlyph size="sm" />}
+        subtitle="the running sprint in colour; its total is still partial"
+      >
+        <Card.Title>Delivery by sprint</Card.Title>
+      </Card.Header>
       <BarList
         max={max}
         data={sprints.map((s) => ({
+          // THEIR BAR IS KEYED ON AN `id` RATHER THAN ON ITS INDEX, which is
+          // the one thing ours could not say: a sprint number is stable and
+          // its position in the window is not.
+          id: String(s.number),
           label: `${s.number} · ${s.name}`,
           value: s.figures.done,
           display: `${s.figures.done} of ${s.figures.committed + s.figures.added} ${measure}`,
-          color: s.state === "active" ? "var(--viz-1)" : "var(--viz-other)",
+          color: s.state === "active" ? dataColor(0) : DATA_COLOR_OTHER,
           sub:
             s.state === "closed"
               ? `${fmtDate(s.start_at)} — ${fmtDate(s.closed_at ?? s.end_at)}${
@@ -755,7 +792,7 @@ export function Velocity({ sprints, measure }: { sprints: WorkSprintRow[]; measu
         }))}
         emptyLabel="No sprint in this window has delivered anything yet."
       />
-    </Panel>
+    </Card>
   );
 }
 
@@ -791,9 +828,12 @@ export function Burndown({
   // where every code is turned into a sentence, so the refusal says which.
   if (error) {
     return (
-      <Panel title={`Sprint ${sprint.number} burndown`} icon="activity" subtitle={sprint.name}>
+      <Card>
+        <Card.Header icon={<TimelineGlyph size="sm" />} subtitle={sprint.name}>
+          <Card.Title>{`Sprint ${sprint.number} burndown`}</Card.Title>
+        </Card.Header>
         <QueryState error={error} loading={false} />
-      </Panel>
+      </Card>
     );
   }
   if (loading && !data) return null;
@@ -808,12 +848,16 @@ export function Burndown({
   // this product is written to avoid.
   if (data.points.length < 2) {
     return (
-      <Panel title={`Sprint ${data.sprint} burndown`} icon="activity" subtitle={sprint.name}>
-        <Empty
+      <Card>
+        <Card.Header icon={<TimelineGlyph size="sm" />} subtitle={sprint.name}>
+          <Card.Title>{`Sprint ${data.sprint} burndown`}</Card.Title>
+        </Card.Header>
+        <EmptyState
+          icon={<TimelineGlyph size="xl" />}
           title="Nothing to draw yet"
-          hint={`This sprint's window opens on ${fmtDate(data.start_at)}. A burndown needs a day that has been lived through, so the first point arrives with it.`}
+          description={`This sprint's window opens on ${fmtDate(data.start_at)}. A burndown needs a day that has been lived through, so the first point arrives with it.`}
         />
-      </Panel>
+      </Card>
     );
   }
   const from = tsKey(data.start_at);
@@ -821,22 +865,26 @@ export function Burndown({
   const last = data.points[data.points.length - 1];
 
   return (
-    <Panel
-      title={`Sprint ${data.sprint} burndown`}
-      icon="activity"
-      subtitle={`${sprint.name} · in ${measure}`}
-      actions={
-        sprint.days_remaining !== undefined && <Badge outline>{sprint.days_remaining}d left</Badge>
-      }
-    >
+    <Card>
+      <Card.Header
+        icon={<TimelineGlyph size="sm" />}
+        subtitle={`${sprint.name} · in ${measure}`}
+        actions={
+          sprint.days_remaining !== undefined ? (
+            <Tag appearance="outline">{sprint.days_remaining}d left</Tag>
+          ) : undefined
+        }
+      >
+        <Card.Title>{`Sprint ${data.sprint} burndown`}</Card.Title>
+      </Card.Header>
       {/* UNESTIMATED WORK IS NAMED ABOVE THE CHART, never folded in: a series
           over a sprint half of whose tasks carry no value is a series about
           half a sprint, and a reader who cannot see that quotes the number. */}
       {data.unestimated > 0 && (
-        <Banner tone="info">
+        <Callout variant="info">
           {data.unestimated} of {data.tasks} tasks carry no {measure}, so this chart describes only
           the rest.
-        </Banner>
+        </Callout>
       )}
       <TimeSeries
         from={from}
@@ -847,7 +895,7 @@ export function Burndown({
         series={[
           {
             name: "Scope",
-            color: "var(--viz-other)",
+            color: DATA_COLOR_OTHER,
             points: data.points.map((p) => ({ t: tsKey(p.at), v: p.scope })),
           },
           {
@@ -861,7 +909,7 @@ export function Burndown({
           },
           {
             name: "Remaining",
-            color: "var(--viz-1)",
+            color: dataColor(0),
             // THE ONE FILLED SERIES, because it is the one the chart is
             // about: an area under every line would blend three translucent
             // washes into a fourth colour nobody chose.
@@ -870,11 +918,14 @@ export function Burndown({
           },
         ]}
       />
+      {/* THEIRS, over our own chart: `Legend` is a real `role="list"` with a
+          count a screen reader announces, where ours was three spans. The
+          colours are handed in so the key and the curves cannot drift. */}
       <Legend
         items={[
-          { label: "Remaining", color: "var(--viz-1)" },
-          { label: "Scope", color: "var(--viz-other)" },
-          { label: "Ideal", color: "var(--border-strong)" },
+          { id: "remaining", label: "Remaining", color: dataColor(0) },
+          { id: "scope", label: "Scope", color: DATA_COLOR_OTHER },
+          { id: "ideal", label: "Ideal", color: "var(--border-strong)" },
         ]}
       />
       {last && (
@@ -889,7 +940,7 @@ export function Burndown({
             : ""}
         </p>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -937,18 +988,23 @@ export function SprintPanel({
     );
 
   return (
-    <Panel
-      title={bare ? undefined : title}
-      actions={
-        bare ? undefined : (
-          <>
-            <Badge tone={STATE_TONE[sprint.state] ?? "neutral"}>{sprint.state}</Badge>
-            {sprint.rollover_pending && <Badge tone="caution">spillover pending</Badge>}
-            {sprint.archived && <Badge tone="neutral">archived</Badge>}
-          </>
-        )
-      }
-    >
+    <Card>
+      {/* NO HEADER AT ALL WHEN BARE, rather than a header with nothing in it:
+          an [ObjectHeader] above already names this sprint and its state, and
+          a `Card.Header` drawn empty would still spend its rule and its row. */}
+      {!bare && (
+        <Card.Header
+          actions={
+            <>
+              <Tag variant={STATE_TONE[sprint.state] ?? "neutral"}>{sprint.state}</Tag>
+              {sprint.rollover_pending && <Tag variant="warning">spillover pending</Tag>}
+              {sprint.archived && <Tag variant="neutral">archived</Tag>}
+            </>
+          }
+        >
+          <Card.Title>{title}</Card.Title>
+        </Card.Header>
+      )}
       <p className="muted">
         {fmtDate(sprint.start_at)} →{" "}
         {sprint.closed_at ? fmtDate(sprint.closed_at) : fmtDate(sprint.end_at)}
@@ -968,21 +1024,24 @@ export function SprintPanel({
           fullMeans="achieved"
         />
       )}
-      <StatRow cols={5}>
-        <Stat label="Committed" value={f.committed} sub={measure} />
-        <Stat label="Added" value={f.added} sub="arrived after the start" />
-        <Stat label="Removed" value={f.removed} sub="pulled out, not carried" />
-        <Stat label="Done" value={f.done} sub="delivered inside the window" />
-        <Stat label="Remaining" value={f.remaining} sub={`${f.tasks} tasks`} />
-      </StatRow>
+      {/* FIVE FIGURES IN A GROUP THAT DRAWS FOUR COLUMNS AT MOST — `columns`
+          is a closed set over there, so the fifth wraps rather than squeezing
+          every tile below the width a number needs. See the report. */}
+      <StatGroup columns={4}>
+        <StatCard label="Committed" value={f.committed} sub={measure} />
+        <StatCard label="Added" value={f.added} sub="arrived after the start" />
+        <StatCard label="Removed" value={f.removed} sub="pulled out, not carried" />
+        <StatCard label="Done" value={f.done} sub="delivered inside the window" />
+        <StatCard label="Remaining" value={f.remaining} sub={`${f.tasks} tasks`} />
+      </StatGroup>
       {/* UNESTIMATED IS THE HONESTY COLUMN. A sprint reporting 8 of 34 points
           done where half its tasks carry no estimate is reporting on half a
           sprint. */}
       {f.unestimated > 0 && (
-        <Banner tone="info">
+        <Callout variant="info">
           {f.unestimated} of {f.tasks} tasks carry no {measure}, so these figures describe only the
           rest.
-        </Banner>
+        </Callout>
       )}
       {sprint.by_assignee && sprint.by_assignee.length > 0 && (
         <DataGrid
@@ -1070,6 +1129,6 @@ export function SprintPanel({
           ]}
         />
       )}
-    </Panel>
+    </Card>
   );
 }

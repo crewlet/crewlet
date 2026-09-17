@@ -3,14 +3,15 @@
  *
  * # Why this is a hook and not a component
  *
- * There were two tab components in this tree. `ui/primitives.tsx`'s `Tabs` is
- * the widget four screens actually render: it mints the `aria-controls` and
- * `aria-labelledby` pair so the strip controls a panel rather than merely
- * claiming to, and it moves focus with the arrow keys. Beside it sat a second
- * one here, complete down to its own roving focus, imported by nobody. Two
- * implementations of one gesture is the shape where one of them drifts, and
- * the one that drifted was the one nothing rendered — so the widget stays in
- * `ui/` where its callers are, and what was genuinely missing survives here.
+ * There were two tab widgets in this tree before there was a design system:
+ * `ui/primitives.tsx`'s `Tabs`, which four screens rendered, and a second one
+ * here, complete down to its own roving focus and imported by nobody. Both are
+ * gone — `@crewlethq/ui`'s `Tabs` mints the `aria-controls`/`aria-labelledby`
+ * pair and moves focus with the arrow keys, which is every part of the gesture
+ * a component can own.
+ *
+ * What it cannot own is the part below, and that is why this file is a HOOK
+ * and not a widget: no tab component knows which tabs an object HAS.
  *
  * # What was genuinely missing
  *

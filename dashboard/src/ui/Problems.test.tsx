@@ -58,13 +58,21 @@ test("values, routes, references and links are picked out of a sentence", () => 
 
   // A SEALED ENTRY wears the face it wears in a field and on the Secrets
   // screen: it names something in the store, not a path in the document.
+  //
+  // THE VARIANT IS uilet's NOW — `crewlet-inline-code--reference`, where this
+  // file drew `is-reference` itself — and it is asserted AGAINST THE PATH CHIP
+  // in the same sentence rather than against a spelling alone: the claim is
+  // that the two are drawn as different kinds of thing, and a single hardcoded
+  // name cannot fail on both chips losing their variant together.
   const ref = screen.getByText("${ATLASSIAN_ORG_ID}");
+  const path = screen.getByText("integrations.github.provisioning.org");
   expect(ref.tagName).toBe("CODE");
-  expect(ref.className).toContain("is-reference");
+  expect(path.tagName).toBe("CODE");
+  expect(ref.className).toContain("crewlet-inline-code--reference");
+  expect(path.className).not.toContain("crewlet-inline-code--reference");
 
   expect(screen.getByText("/webhooks/confluence").tagName).toBe("CODE");
   expect(screen.getByText('"auto"').tagName).toBe("CODE");
-  expect(screen.getByText("integrations.github.provisioning.org").tagName).toBe("CODE");
 
   // A LINK IS SOMEWHERE TO GO, and it opens in a new tab: this sits in a
   // dialog holding a half-filled form, and following it in place would throw
@@ -115,4 +123,23 @@ test("several problems are one line each", () => {
   expect(container.querySelectorAll("li").length).toBe(2);
   // The route inside the second one is still picked out.
   expect(screen.getByText("/webhooks/confluence").tagName).toBe("CODE");
+});
+
+// A CHIP INSIDE A REFUSAL CARRIES THE REFUSAL'S INK.
+//
+// This is drawn inside something already saying the value cannot be saved —
+// a danger Callout on the setup dialog, a field's error line — and a chip
+// that kept its own quiet grey put a calm identifier in the middle of an
+// alarming sentence. In ordinary prose the chip keeps that grey, which is
+// what says "this is a string you type", so the two are checked together:
+// the tone is a fact about where the sentence is drawn, not about the chip.
+test("a path inside a refusal takes the message's ink, and one in prose does not", () => {
+  const { unmount } = render(<Problems detail="integrations.jira: required value missing" />);
+  expect(screen.getByText("integrations.jira").className).toContain("crewlet-inline-code--inherit");
+  unmount();
+
+  render(<span>{marked("see integrations.jira.project for the key")}</span>);
+  expect(screen.getByText("integrations.jira.project").className).not.toContain(
+    "crewlet-inline-code--inherit",
+  );
 });

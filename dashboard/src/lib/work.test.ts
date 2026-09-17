@@ -10,6 +10,7 @@
 
 import { expect, test } from "vitest";
 import {
+  TYPE_ICON,
   totalHint,
   anyFilter,
   bucketByDay,
@@ -96,11 +97,26 @@ test("a status takes the project's label, then the shipped one, then itself", ()
 
 // A TYPE IS AN ICON, and a company's own type is the neutral box rather than
 // nothing: a card with no mark reads as a card whose type failed to load.
+//
+// THE NAMES ARE THE DESIGN SYSTEM'S. They read as Material Symbols rather than
+// as words we chose, which is the point: one vocabulary means the mark a table
+// asks for and the mark `~/ui/glyph.tsx` draws cannot be two different ideas
+// spelled the same. `bug_report` is one of the four this build holds because
+// `@crewlethq/icons` has not vendored it — see `src/ui/symbols/README.md`.
 test("every shipped type has its own icon and an unknown one falls back", () => {
-  expect(typeIcon("bug")).toBe("bug");
+  expect(typeIcon("bug")).toBe("bug_report");
   expect(typeIcon("milestone")).toBe("flag");
-  expect(typeIcon("incident")).toBe("box");
-  expect(typeIcon(undefined)).toBe("box");
+  expect(typeIcon("incident")).toBe("package_2");
+  expect(typeIcon(undefined)).toBe("package_2");
+});
+
+// AND NO TWO TYPES SHARE A MARK, which is the property the table exists for
+// and the one a rename can quietly break: every substitution in the port was a
+// choice between drawings, so two types landing on one glyph would read as one
+// type with nothing in the build to say otherwise.
+test("no two work types draw the same mark", () => {
+  const marks = Object.values(TYPE_ICON);
+  expect([...new Set(marks)].sort()).toEqual([...marks].sort());
 });
 
 test("a type takes the company's own name for it", () => {

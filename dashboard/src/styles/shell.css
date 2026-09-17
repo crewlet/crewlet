@@ -65,26 +65,6 @@
   min-height: var(--toolbar-h);
 }
 
-.degraded {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  font-size: var(--fs-xs);
-  border-bottom: 1px solid var(--border-subtle);
-  flex: none;
-}
-
-.degraded.caution {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
-}
-
-.degraded.critical {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
-}
-
 .palette {
   width: min(620px, 100%);
   background: var(--surface-1);
@@ -107,10 +87,6 @@
   background: transparent;
   font-size: var(--fs-md);
   color: var(--text);
-}
-
-.palette-input:focus {
-  outline: none;
 }
 
 .palette-results {

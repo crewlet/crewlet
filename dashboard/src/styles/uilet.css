@@ -1,0 +1,194 @@
+/* ===========================================================================
+   Our token names, resolved to uilet's.
+
+   WHY A SHEET AND NOT A RENAME. Every stylesheet in this tree — frame.css,
+   screens.css, components.css, shell.css — is written against short names
+   (`--space-4`, `--fs-sm`, `--surface-1`). uilet publishes the same ideas
+   under a canonical namespace (`--spacing-4`, `--font-size-sm`,
+   `--color-surface-topbar`). Aliasing is how the design system arrives
+   without rewriting ~3,000 lines of CSS that are not about colour at all,
+   and it is uilet's OWN migration route: `@crewlethq/tokens/css/legacy` does
+   exactly this for eighteen names. This is the same sheet for ours.
+
+   WHAT IT DELIBERATELY DOES NOT COVER: the layout constants. `--rail-w`,
+   `--sidebar-w`, `--peek-w`, `--row-h`, `--page-bar-h`, `--sticky-top` and
+   `--stat-cols` are facts about THIS application's chrome, not design
+   tokens, and uilet has no opinion about them. They stay in tokens.css.
+
+   THE VALUES ARE UILET'S, NOT OURS. That is the point of adopting it: the
+   ramps mostly coincide (every `--spacing-*` step is identical), and where
+   they differ the design system wins — our `--fs-xl` was 1.375rem and theirs
+   is 1.25rem. A rung that moved is noted at the line.
+
+   Import AFTER uilet's own sheets and BEFORE ours, which is the order
+   main.tsx sets: their variables must exist for these to resolve, and ours
+   must be able to override an alias for the handful of cases where our
+   stylesheets need a value uilet does not carry.
+   ======================================================================== */
+
+:root {
+  /* ---- Spacing: identical ramps, differently numbered above 6 ---------- */
+  --space-0: var(--spacing-0);
+  --space-1: var(--spacing-1);
+  --space-2: var(--spacing-2);
+  --space-3: var(--spacing-3);
+  --space-4: var(--spacing-4);
+  --space-5: var(--spacing-5);
+  --space-6: var(--spacing-6);
+  /* Ours skipped 7, 9, 11 and 13–15; theirs is contiguous. Same pixels. */
+  --space-8: var(--spacing-7); /* 32px */
+  --space-10: var(--spacing-8); /* 40px */
+  --space-12: var(--spacing-9); /* 48px */
+  --space-16: var(--spacing-10); /* 64px */
+
+  /* ---- Type ------------------------------------------------------------
+     The bottom of the ramp is the same scale under different names — their
+     `compact` is our `xs` and carries our own comment about table cells. The
+     top three rungs are uilet's and are SMALLER than ours were: xl 1.375 →
+     1.25, 2xl 1.75 → 1.5, 3xl 2.25 → 2. Screen titles and stat values shrink
+     a little, which is the design system asserting its scale. */
+  --fs-3xs: var(--font-size-2xs); /* 11px */
+  --fs-2xs: var(--font-size-xs); /* 12px */
+  --fs-xs: var(--font-size-compact); /* 13px */
+  --fs-sm: var(--font-size-sm); /* 14px — body */
+  --fs-md: var(--font-size-md);
+  --fs-lg: var(--font-size-lg);
+  --fs-xl: var(--font-size-xl);
+  --fs-2xl: var(--font-size-2xl);
+  --fs-3xl: var(--font-size-3xl);
+
+  --fw-normal: var(--font-weight-regular);
+  --fw-medium: var(--font-weight-medium);
+  --fw-semibold: var(--font-weight-semibold);
+  --fw-bold: var(--font-weight-bold);
+
+  --lh-tight: var(--font-line-height-tight);
+  --lh-snug: var(--font-line-height-snug);
+  --lh-normal: var(--font-line-height-normal);
+  --lh-relaxed: var(--font-line-height-relaxed);
+
+  --track-tight: var(--font-letter-spacing-tight);
+  --track-normal: var(--font-letter-spacing-normal);
+  --track-wide: var(--font-letter-spacing-wide);
+
+  /* The faces, which arrive with `@crewlethq/tokens/css/fonts`. */
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
+
+  /* ---- Radius: xs and sm identical; md 10 → 8 and lg 14 → 12 ----------- */
+  --r-xs: var(--radius-xs);
+  --r-sm: var(--radius-sm);
+  --r-md: var(--radius-md);
+  --r-lg: var(--radius-lg);
+  --r-full: var(--radius-pill);
+
+  /* ---- Elevation ------------------------------------------------------- */
+  --shadow-1: var(--shadow-sm);
+  --shadow-2: var(--shadow-md);
+  --shadow-3: var(--shadow-lg);
+
+  /* ---- Motion ----------------------------------------------------------
+     `--ease-out` was cubic-bezier(0.16, 1, 0.3, 1), which is theirs to the
+     digit — under the name `emphasized`, because their `easing-out` is the
+     gentler CSS keyword. Taking `emphasized` keeps our curve. */
+  --dur: var(--motion-duration-base);
+  --dur-fast: var(--motion-duration-fast);
+  --dur-slow: var(--motion-duration-slow);
+  --ease: var(--motion-easing-default);
+  --ease-out: var(--motion-easing-emphasized);
+
+  /* ---- Stacking --------------------------------------------------------
+     `--z-drawer` has no exact peer; a drawer is an overlay below a modal,
+     which is what `overlay` names. */
+  --z-sticky: var(--z-index-sticky);
+  --z-drawer: var(--z-index-overlay);
+  --z-popover: var(--z-index-popover);
+  --z-modal: var(--z-index-modal);
+  --z-toast: var(--z-index-toast);
+
+  /* ---- Surfaces --------------------------------------------------------
+     FIGURE AND GROUND, kept. Ours has an opaque page under opaque panels, so
+     the panels have to resolve to an OPAQUE colour in both themes — which is
+     the `topbar` ramp, not the `subtle`/`muted` one, whose dark values are
+     translucent overlays meant to sit on top of a background rather than to
+     be one. Mapping panels onto those would make every panel in dark mode a
+     5%-white wash over black, and the page would read as one flat field. */
+  --bg: var(--color-surface-background);
+  --bg-sunken: var(--color-surface-subtle);
+  --surface-1: var(--color-surface-topbar);
+  --surface-2: var(--color-surface-topbar-lift);
+  --surface-3: var(--color-surface-topbar-active);
+  --surface-inset: var(--color-surface-inset);
+  --surface-hover: var(--color-surface-hover);
+  --surface-active: var(--color-surface-pressed);
+  --surface-glass: var(--color-surface-glass);
+
+  /* ---- Lines ----------------------------------------------------------- */
+  --border-subtle: var(--color-border-default);
+  --border: var(--color-border-hover);
+  --border-strong: var(--color-border-strong);
+
+  /* ---- Text ------------------------------------------------------------
+     Four rungs onto four. `--text-faint` is DECORATION ONLY in our sheets and
+     `--color-text-muted` is theirs for the same job; `--heading` is a shade
+     above body in ours and uilet does not draw that distinction, so it takes
+     `text-primary` and headings stop being fractionally darker than text. */
+  --text: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-tertiary);
+  --text-faint: var(--color-text-muted);
+  --heading: var(--color-text-primary);
+  --text-on-fill: var(--color-text-on-accent);
+
+  /* ---- Brand -----------------------------------------------------------
+     OUR ACCENT BECOMES THEIRS, which is the most visible thing this sheet
+     does: #5b2fd6 → uilet's accent blue. The frame spends the accent in
+     exactly two places by design — the current rail row and the current
+     sidebar row — so this repaints those and every focus ring.
+
+     `--color-brand-ACCENT`, not `--color-brand-PRIMARY`. Primary is uilet's
+     neutral: black in light, white in dark. It is the right colour for a
+     filled button and the wrong one for "where you are", which has to read
+     AS a colour against a page that is already black or white — mapped to
+     primary, the current row's tint would be the page tinted with the page.
+     The accent family is the one that carries a hue, and it has the `-ink`
+     and `-soft` rungs ours does. */
+  --accent: var(--color-brand-accent);
+  --accent-hover: var(--color-brand-accent-hover);
+  --accent-ink: var(--color-brand-accent-ink);
+  --accent-soft: var(--color-brand-accent-soft);
+  --accent-line: var(--color-brand-accent-soft-strong);
+  --focus: var(--color-focus);
+
+  /* ---- Status ----------------------------------------------------------
+     Ours is positive/caution/critical/info; theirs is the same four under
+     `feedback`, with the same -ink and -soft rungs and a -line we did not
+     have. */
+  --positive: var(--color-feedback-success);
+  --positive-ink: var(--color-feedback-success-ink);
+  --positive-soft: var(--color-feedback-success-soft);
+  --caution: var(--color-feedback-warning);
+  --caution-ink: var(--color-feedback-warning-ink);
+  --caution-soft: var(--color-feedback-warning-soft);
+  --critical: var(--color-feedback-danger);
+  --critical-ink: var(--color-feedback-danger-ink);
+  --critical-soft: var(--color-feedback-danger-soft);
+  --info: var(--color-feedback-info);
+  --info-ink: var(--color-feedback-info-ink);
+  --info-soft: var(--color-feedback-info-soft);
+
+  /* ---- The phase palette, which uilet already carries ------------------
+     Three phases with an ink and a soft each, under `--color-phase-*`. This
+     is the clearest sign the two systems share an ancestor: the vocabulary
+     is ours, the values are theirs. */
+  --phase-onboarding: var(--color-phase-onboarding);
+  --phase-onboarding-ink: var(--color-phase-onboarding-ink);
+  --phase-execute: var(--color-phase-execute);
+  --phase-execute-ink: var(--color-phase-execute-ink);
+  --phase-review: var(--color-phase-review);
+  --phase-review-ink: var(--color-phase-review-ink);
+
+  /* ---- Scrollbars ------------------------------------------------------ */
+  --scrollbar: var(--color-scrollbar);
+  --scrollbar-hover: var(--color-scrollbar-hover);
+}

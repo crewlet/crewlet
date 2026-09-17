@@ -25,7 +25,7 @@
  */
 
 import { Shell } from "./Shell.tsx";
-import { ToastProvider } from "~/ui/Toast.tsx";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { useRoute } from "./router.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { MyWork } from "~/routes/me/MyWork.tsx";
@@ -226,10 +226,37 @@ export function App() {
     // The toast host wraps the shell rather than sitting inside a screen: an
     // outcome has to survive the navigation the write causes, and a provider
     // mounted per screen is unmounted by exactly that.
+    //
+    // uilet's provider, whose `ok` / `failed` are ours verbatim — a success
+    // dismisses itself and a failure stays until it is taken back. What it
+    // adds is the part ours only asserted: two live regions rather than one,
+    // so a refusal is announced assertively while a confirmation stays
+    // polite, and a `max` that drops the oldest instead of letting a burst of
+    // writes bury the screen.
     <ToastProvider>
-      <Shell>
-        <Screen />
-      </Shell>
+      {/* THE ONE PORTAL TARGET, DECLARED RATHER THAN FALLEN BACK TO. Every
+          overlay uilet draws — a Modal, a Select's listbox, a Popover, and
+          the palette, which takes the layer without the frame — asks
+          `useLayerContainer()` where to go, and with no host mounted that
+          answers `document.body`: a fallback, and one that puts each surface
+          outside `#root` as a sibling of the application, in whatever order
+          the session happened to open them.
+
+          The host is one absolutely-positioned box covering the shell, inert
+          until something is drawn in it, holding the whole layer band in a
+          stacking context of its own. `body` has `overflow: hidden` here and
+          the shell is the window, so the box IS the viewport and nothing
+          moves on screen — what changes is that the application says where
+          its overlays live.
+
+          INSIDE THE TOAST PROVIDER, so the toaster is rendered after the host
+          and paints above it. A toast reports what a write inside a dialog
+          did; it has to be readable over the dialog that caused it. */}
+      <LayerHost>
+        <Shell>
+          <Screen />
+        </Shell>
+      </LayerHost>
     </ToastProvider>
   );
 }

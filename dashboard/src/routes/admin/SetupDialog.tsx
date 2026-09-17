@@ -40,12 +40,16 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button } from "~/ui/primitives.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
+import { Button, Callout, InlineCode, Modal, Tag, useToast } from "@crewlethq/ui";
+import {
+  CableGlyph,
+  ContentCopyGlyph,
+  DescriptionGlyph,
+  InfoGlyph,
+  LinkGlyph,
+} from "@crewlethq/icons/glyphs";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
-import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
@@ -874,17 +878,26 @@ export function SetupDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
       title={connecting ? `Connect ${title}` : `${title} settings`}
-      icon="plug"
+      icon={<CableGlyph size="md" />}
       onClose={onClose}
+      // A CONNECT IS SEVERAL WRITES IN ORDER — the credential sealed, the
+      // `${VAR}` pointer merged, the epoch advanced — so a dismissal
+      // half-way leaves a company in a state nobody chose and nobody saw.
       dismissable={!busy}
-      width={560}
+      closeDisabledReason="Waiting for the engine to finish writing."
+      size="md"
+      stackBody
       onSubmit={() => void submit()}
       footer={
+        // NO `.spacer` ANY MORE. uilet's footer pushes its actions to the
+        // inline end itself, and carries a `footerStart` slot for what the
+        // spacer used to be shoved past — so the hand-spelled push is one of
+        // the things the port takes away rather than carries over.
         <>
-          <span className="spacer" />
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={busy}>
@@ -912,26 +925,27 @@ export function SetupDialog({
           </p>
         ))}
         {manualSeats && (
-          <div className="banner neutral">
-            <Icon name="info" size="sm" />
+          <Callout variant="neutral">
             {/* ONE LINE. What follows it is the roster of agents to
                 configure, which says the rest by being there. */}
             <span>{title} does not support automatic agent provisioning at the moment.</span>
-          </div>
+          </Callout>
         )}
         {manual.map((section) => (
-          <div key={sectionKey(section)} className="banner neutral">
-            <Icon name="link" size="sm" />
+          // THE LINK MARK RATHER THAN THE NEUTRAL TONE'S INFO GLYPH: what this
+          // strip carries IS an address, and the glyph is the half of the
+          // sentence a reader sees first.
+          <Callout key={sectionKey(section)} variant="neutral" icon={<LinkGlyph size="md" />}>
             <span className="col" style={{ gap: 4 }}>
               <span>
-                Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
+                Deliveries arrive at <InlineCode>{section.tool.public_url}</InlineCode>
               </span>
               <span className="t-caption">
                 This engine registers no webhook for {section.name}, so paste that address into{" "}
                 {section.name}&apos;s own settings yourself.
               </span>
             </span>
-          </div>
+          </Callout>
         ))}
 
         {plainGroups.map(({ section, heading, connect }) => (
@@ -966,9 +980,9 @@ export function SetupDialog({
                 {/* SOLID WHEN IT IS DONE. Outlined, the one row a reader
                     scans for (the finished one) was the quietest thing on the
                     card. */}
-                <Badge tone={done ? "positive" : "caution"} outline={!done}>
+                <Tag variant={done ? "success" : "warning"} appearance={done ? "soft" : "outline"}>
                   {done ? "Configured" : "Needs setup"}
-                </Badge>
+                </Tag>
               </summary>
               <div className="int-seat-fields">
                 {/* NO DELIVERY-ADDRESS BANNER. This agent's route is IN the
@@ -993,18 +1007,17 @@ export function SetupDialog({
                     there, and both causes (no public address, a role name
                     past Slack's cap) are one edit away from fixed. */}
                 {!seat?.manifest && seat?.manifest_note && (
-                  <div className="banner caution">
-                    <Icon name="alert" size="sm" />
+                  <Callout variant="warning">
                     <span className="col" style={{ gap: 4 }}>
                       <span>No app manifest for {heading} yet.</span>
                       <span className="t-caption">{marked(seat.manifest_note)}</span>
                     </span>
-                  </div>
+                  </Callout>
                 )}
                 {seat?.manifest && (
                   <details className="int-manifest">
                     <summary className="int-summary int-manifest-summary">
-                      <Icon name="file" size="sm" />
+                      <DescriptionGlyph size="sm" />
                       {/* NOT "for SRE Lead". The block this sits in is that
                           agent's and carries their name two lines above, so
                           repeating it here says nothing and pushes the words
@@ -1014,10 +1027,18 @@ export function SetupDialog({
                       {/* COPYING IT DOES NOT OPEN IT. A button inside a
                           summary toggles the disclosure on its way through,
                           so an operator who only wanted the text got the
-                          forty lines they were copying instead of it. */}
+                          forty lines they were copying instead of it.
+
+                          AND THAT IS WHY IT IS NOT uilet's `CopyButton`.
+                          That one owns its own handler and passes the event
+                          to nobody, so there is no way to cancel the
+                          summary's default from inside it. The plain button
+                          plus `navigator.clipboard` is what keeps the
+                          disclosure shut. */}
                       <Button
-                        size="sm"
-                        icon="copy"
+                        size="small"
+                        variant="secondary"
+                        leadingIcon={<ContentCopyGlyph size="sm" />}
                         onClick={(e) => {
                           e.preventDefault();
                           void navigator.clipboard?.writeText(seat.manifest ?? "");
@@ -1082,7 +1103,7 @@ export function SetupDialog({
                 `<title>` CHILD that draws one, so the hover would be silently
                 absent. The same words reach a screen reader as text. */}
             <span className="int-form-why" title={WHY_SECRETS}>
-              <Icon name="info" size="sm" />
+              <InfoGlyph size="sm" />
               <span className="sr-only">{WHY_SECRETS}</span>
             </span>
             <span>
@@ -1094,16 +1115,16 @@ export function SetupDialog({
       </div>
 
       {error && (
-        <div className="banner critical">
-          <Icon name="alert" size="sm" />
-          {/* THE PROBLEMS, not the paragraph. A validation refusal is several
-              of them joined with newlines, which HTML collapses into one run
-              where the second problem's config path lands inside the first
-              one's sentence. See [Problems]. */}
+        // THE BANNER IS uilet's, THE CONTENT IS OURS. A validation refusal is
+        // several problems joined with newlines, which HTML collapses into one
+        // run where the second problem's config path lands inside the first
+        // one's sentence; `Callout` takes one body and has no list of its own,
+        // so it holds [Problems] rather than replacing it.
+        <Callout variant="danger" role="alert">
           <Problems detail={error} />
-        </div>
+        </Callout>
       )}
-    </Dialog>
+    </Modal>
   );
 
   /**

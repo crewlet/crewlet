@@ -22,7 +22,13 @@
 
 import { useMemo, type ReactNode } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import {
+  CalendarTodayGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  ScheduleGlyph,
+} from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -41,9 +47,9 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 
 /** The ledger's two outcomes, and nothing else — see the note above. */
-const OUTCOME_TONE: Record<string, "positive" | "caution" | "neutral"> = {
-  fired: "positive",
-  skipped_catchup: "caution",
+const OUTCOME_TONE: Record<string, "success" | "warning" | "neutral"> = {
+  fired: "success",
+  skipped_catchup: "warning",
 };
 
 /** The identity a ledger row and a schedule row share. */
@@ -111,9 +117,9 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
       value: row.next_run ? (
         <span title={fmtDateTime(row.next_run)}>{inTime(row.next_run, now)}</span>
       ) : row.problem ? (
-        <Badge tone="critical" title={row.problem}>
+        <Tag variant="danger" title={row.problem}>
           {row.problem}
-        </Badge>
+        </Tag>
       ) : (
         <span className="faint">
           {row.enabled ? "never — the calendar does not reach it" : "disabled"}
@@ -143,19 +149,19 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
 function scheduleStatus(row: ScheduleRow | undefined): ReactNode {
   if (!row) {
     return (
-      <Badge outline title="the ledger outlives the configuration">
+      <Tag appearance="outline" title="the ledger outlives the configuration">
         no longer declared
-      </Badge>
+      </Tag>
     );
   }
   if (row.problem) {
     return (
-      <Badge tone="critical" title={row.problem}>
+      <Tag variant="danger" title={row.problem}>
         cannot fire
-      </Badge>
+      </Tag>
     );
   }
-  if (!row.enabled) return <Badge outline>disabled</Badge>;
+  if (!row.enabled) return <Tag appearance="outline">disabled</Tag>;
   return undefined;
 }
 
@@ -172,7 +178,10 @@ function scheduleStatus(row: ScheduleRow | undefined): ReactNode {
 function ScheduleDefinition({ row }: { row: ScheduleRow }) {
   const said = describeCron(row.cron);
   return (
-    <Panel title="Definition" icon="file">
+    <Card>
+      <Card.Header icon={<DescriptionGlyph size="sm" />}>
+        <Card.Title>Definition</Card.Title>
+      </Card.Header>
       <PropertiesRail
         groups={[
           {
@@ -223,7 +232,7 @@ function ScheduleDefinition({ row }: { row: ScheduleRow }) {
           },
         ]}
       />
-    </Panel>
+    </Card>
   );
 }
 
@@ -284,11 +293,13 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
   // so a panel repeating it alone would be the same value twice.
   if (upcoming.length <= 1) return null;
   return (
-    <Panel
-      title="And after that"
-      icon="calendar"
-      subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone || "UTC"}`}
-    >
+    <Card>
+      <Card.Header
+        icon={<CalendarTodayGlyph size="sm" />}
+        subtitle={`the next ${upcoming.length} fires this expression works out to, evaluated in ${row.timezone || "UTC"}`}
+      >
+        <Card.Title>And after that</Card.Title>
+      </Card.Header>
       <ol className="fires">
         {upcoming.map((at) => (
           <li key={at.toISOString()} className="row gap-2">
@@ -310,7 +321,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
           above are the same fires shown in your own timezone.
         </p>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -419,42 +430,43 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   return (
     <>
       <PageActions>
-        {<Badge outline>{plural(schedules.length, "schedule")} defined</Badge>}
+        {<Tag appearance="outline">{plural(schedules.length, "schedule")} defined</Tag>}
       </PageActions>
       <PageNote>
         Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up,
         and a run is capped on wall clock.
       </PageNote>
 
-      <Panel padding="none">
-        <StatRow cols={3}>
-          <Stat
-            icon="calendar"
-            label="Schedules"
-            value={schedules.length}
-            sub="across every seat and unit"
-          />
-          <Stat
-            icon="clock"
-            label="Firing within the hour"
-            value={due.length}
-            sub={due.length ? due.map((s) => s.name).join(", ") : "nothing due soon"}
-          />
-          <Stat
-            icon="alert"
-            label="Cannot fire"
-            tone={broken.length ? "critical" : undefined}
-            value={broken.length}
-            sub={
-              broken.length
-                ? broken.map((s) => s.name).join(", ")
-                : "every expression parses and every timezone resolves"
-            }
-          />
-        </StatRow>
-      </Panel>
+      {/* The flush Panel is gone: StatGroup draws that surface itself. */}
+      <StatGroup columns={3}>
+        <StatCard
+          icon={<CalendarTodayGlyph size="xs" />}
+          label="Schedules"
+          value={schedules.length}
+          sub="across every seat and unit"
+        />
+        <StatCard
+          icon={<ScheduleGlyph size="xs" />}
+          label="Firing within the hour"
+          value={due.length}
+          sub={due.length ? due.map((s) => s.name).join(", ") : "nothing due soon"}
+        />
+        <StatCard
+          icon={<ErrorGlyph size="xs" />}
+          label="Cannot fire"
+          tone={broken.length ? "danger" : undefined}
+          value={broken.length}
+          sub={
+            broken.length
+              ? broken.map((s) => s.name).join(", ")
+              : "every expression parses and every timezone resolves"
+          }
+        />
+      </StatGroup>
 
-      {loading && !schedules.length && <Skeleton rows={4} />}
+      {loading && !schedules.length && (
+        <Skeleton variant="text" rows={4} label="Loading schedules" />
+      )}
       <QueryState
         error={error}
         loading={loading}
@@ -467,7 +479,10 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               }
         }
       >
-        <Panel title="Defined" icon="calendar" count={schedules.length} padding="none">
+        <Card padding="none">
+          <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={schedules.length}>
+            <Card.Title>Defined</Card.Title>
+          </Card.Header>
           <DataGrid
             rows={schedules}
             rowKey={rowID}
@@ -489,7 +504,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 cell: (s) => (
                   <span className="row gap-1">
                     <span className="truncate">{s.name}</span>
-                    {!s.enabled && <Badge outline>disabled</Badge>}
+                    {!s.enabled && <Tag appearance="outline">disabled</Tag>}
                   </span>
                 ),
               },
@@ -506,7 +521,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   s.scope_type === "role" ? (
                     <SeatCell handle={s.scope_id} />
                   ) : (
-                    <Badge outline>{s.scope_id}</Badge>
+                    <Tag appearance="outline">{s.scope_id}</Tag>
                   ),
               },
               {
@@ -580,9 +595,9 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   ) : s.problem ? (
                     // THE REASON, not a blank. A schedule whose timezone was
                     // renamed shows nothing under Next and looks merely idle.
-                    <Badge tone="critical" title={s.problem}>
+                    <Tag variant="danger" title={s.problem}>
                       {s.problem}
-                    </Badge>
+                    </Tag>
                   ) : (
                     <Dash title="disabled, or the calendar never reaches it" />
                   ),
@@ -599,7 +614,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                     <span className="row gap-1">
                       <DateCell at={run.fired_at} now={now} />
                       {run.outcome && (
-                        <Badge tone={OUTCOME_TONE[run.outcome] ?? "neutral"}>{run.outcome}</Badge>
+                        <Tag variant={OUTCOME_TONE[run.outcome] ?? "neutral"}>{run.outcome}</Tag>
                       )}
                     </span>
                   );
@@ -607,9 +622,12 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
             ]}
           />
-        </Panel>
+        </Card>
 
-        <Panel title="Recent runs" icon="clock" count={runs.length} padding="none">
+        <Card padding="none">
+          <Card.Header icon={<ScheduleGlyph size="sm" />} count={runs.length}>
+            <Card.Title>Recent runs</Card.Title>
+          </Card.Header>
           <DataGrid
             name="runs"
             rows={runs}
@@ -646,7 +664,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Scope",
                 shrink: true,
                 sortValue: (r) => `${r.scope_type}:${r.scope_id}`,
-                cell: (r) => <Badge outline>{r.scope_id}</Badge>,
+                cell: (r) => <Tag appearance="outline">{r.scope_id}</Tag>,
               },
               {
                 // WHICH SEAT this fire woke. A unit schedule targeting `each`
@@ -669,8 +687,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // "—" claims the ledger recorded something it did not.
                 cell: (r) =>
                   r.outcome ? (
-                    <Badge
-                      tone={OUTCOME_TONE[r.outcome] ?? "neutral"}
+                    <Tag
+                      variant={OUTCOME_TONE[r.outcome] ?? "neutral"}
                       title={
                         r.outcome === "skipped_catchup"
                           ? "the tick was missed and fell outside the catchup window"
@@ -678,7 +696,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       }
                     >
                       {r.outcome}
-                    </Badge>
+                    </Tag>
                   ) : (
                     <Dash title="the ledger recorded no outcome for this fire" />
                   ),
@@ -705,7 +723,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
     </>
   );
@@ -774,7 +792,7 @@ function OneSchedule({
           in full. */}
       <ObjectHeader
         kind="Schedule"
-        icon="calendar"
+        icon="calendar_today"
         identifier={`${scopeType}:${scopeId}`}
         title={name}
         // NEITHER THE BADGE NOR THE NOTE MAKES THE CLAIM BEFORE THE ANSWER
@@ -802,17 +820,18 @@ function OneSchedule({
               }
         }
       >
-        <Panel
-          title="Fires"
-          icon="clock"
-          count={runs.length}
-          padding="none"
-          // SAYS WHEN IT CUT: a page that filled is indistinguishable from a
-          // schedule that has fired exactly that many times.
-          subtitle={
-            truncated ? `the newest ${runs.length} — older fires are past this page` : undefined
-          }
-        >
+        <Card padding="none">
+          <Card.Header
+            icon={<ScheduleGlyph size="sm" />}
+            count={runs.length}
+            // SAYS WHEN IT CUT: a page that filled is indistinguishable from a
+            // schedule that has fired exactly that many times.
+            subtitle={
+              truncated ? `the newest ${runs.length} — older fires are past this page` : undefined
+            }
+          >
+            <Card.Title>Fires</Card.Title>
+          </Card.Header>
           <DataGrid
             name="fires"
             rows={runs}
@@ -839,7 +858,7 @@ function OneSchedule({
                 sortValue: (r) => r.outcome,
                 cell: (r) =>
                   r.outcome ? (
-                    <Badge tone={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Badge>
+                    <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
                   ) : (
                     <Dash title="the ledger recorded no outcome for this fire" />
                   ),
@@ -864,7 +883,7 @@ function OneSchedule({
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
     </>
   );
@@ -916,7 +935,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
       <ObjectHeader
         size="peek"
         kind="Schedule"
-        icon="calendar"
+        icon="calendar_today"
         identifier={`${scopeType}:${scopeId}`}
         // THE NAME OUT OF THE ADDRESS, not out of the row: a schedule the
         // configuration has dropped still has a name, and a rail that waited
@@ -927,7 +946,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
         facts={row ? scheduleFacts(row, now) : undefined}
       />
       <div className="col gap-3">
-        {loading && !answered && <Skeleton rows={6} />}
+        {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}
         <QueryState
           error={defined.error || history.error}
           loading={loading}
@@ -947,17 +966,18 @@ export function SchedulePeek({ scope }: { scope: string }) {
               {row && <ScheduleDefinition row={row} />}
               {row && <NextFires row={row} now={now} count={PEEK_FIRES} />}
 
-              <Panel
-                title="Last fires"
-                icon="clock"
-                count={runs.length}
-                padding="none"
-                // WHICH OF THE COUNT IS DRAWN. The chip is the ledger's own
-                // total and the rows are the newest few of it — a panel that
-                // said 12 over three rows and nothing else would read as a
-                // list that failed to finish rendering.
-                subtitle={runs.length > PEEK_RUNS ? `the newest ${PEEK_RUNS} of them` : undefined}
-              >
+              <Card padding="none">
+                <Card.Header
+                  icon={<ScheduleGlyph size="sm" />}
+                  count={runs.length}
+                  // WHICH OF THE COUNT IS DRAWN. The chip is the ledger's own
+                  // total and the rows are the newest few of it — a panel that
+                  // said 12 over three rows and nothing else would read as a
+                  // list that failed to finish rendering.
+                  subtitle={runs.length > PEEK_RUNS ? `the newest ${PEEK_RUNS} of them` : undefined}
+                >
+                  <Card.Title>Last fires</Card.Title>
+                </Card.Header>
                 {runs.length > 0 ? (
                   <div className="list">
                     {runs.slice(0, PEEK_RUNS).map((r) => (
@@ -967,7 +987,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                       >
                         <div className="row gap-1">
                           {r.outcome ? (
-                            <Badge tone={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Badge>
+                            <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
                           ) : (
                             <Dash title="the ledger recorded no outcome for this fire" />
                           )}
@@ -990,14 +1010,14 @@ export function SchedulePeek({ scope }: { scope: string }) {
                     ))}
                   </div>
                 ) : (
-                  <Empty
-                    inline
-                    icon="clock"
+                  <EmptyState
+                    size="compact"
+                    icon={<ScheduleGlyph size={32} />}
                     title="This schedule has not fired"
-                    hint="A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record."
+                    description="A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record."
                   />
                 )}
-              </Panel>
+              </Card>
             </>
           )}
         </QueryState>

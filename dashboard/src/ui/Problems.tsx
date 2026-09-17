@@ -12,10 +12,24 @@
  * of one face makes a reader parse the punctuation to find out which is
  * which: a config path is a place in their document, a `${VAR}` is an entry
  * in their secret store, a route is an address on this engine, and a link is
- * somewhere to go.
+ * somewhere to go. Each of those is uilet's [InlineCode] now, which is where
+ * the two faces this file drew by hand already live: `reference` holds a
+ * `${NAME}`'s braces on one line, because a pointer torn across a line break
+ * names nothing.
+ *
+ * THIS IS CONTENT, NOT A CONTAINER, and that is the one part of the port that
+ * did not happen. [Callout] is a card with ONE body and no list of its own,
+ * and this is the body: the setup dialog already puts it in a danger Callout
+ * (`SetupDialog.tsx`), and [Field] puts the same thing in a field's error
+ * line, which is one sentence rather than a card. Made a Callout itself it
+ * would nest one inside the dialog's and box every refused field on the form.
+ * What makes the two compose is `tone`: a chip inside a message carries that
+ * message's ink, or a calm grey identifier sits in the middle of an alarming
+ * sentence.
  */
 
 import type { ReactNode } from "react";
+import { InlineCode, type InlineCodeTone } from "@crewlethq/ui";
 
 /** One problem: where it is, and what to do about it. */
 export interface Problem {
@@ -101,8 +115,16 @@ const token =
  * found: a config path, a route, a `${VAR}` and a quoted value are what these
  * sentences are full of, and asking every one of them to annotate those would
  * be asking every author to remember.
+ *
+ * `tone` is which ink the chips take, and it is a fact about WHERE the
+ * sentence is drawn rather than about the sentence. In ordinary prose — a
+ * requirement's help line, a disconnect dialog's path — a chip keeps the code
+ * face's own quiet ink, which is what says "this is a string you type". Inside
+ * a refusal it takes the message's, or a calm grey identifier sits in the
+ * middle of an alarming sentence. [Problems] is the one caller that asks for
+ * `inherit`; everything else takes the default.
  */
-export function marked(text: string): ReactNode[] {
+export function marked(text: string, tone: InlineCodeTone = "default"): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
   let key = 0;
@@ -121,9 +143,9 @@ export function marked(text: string): ReactNode[] {
       );
     } else if (ticked) {
       out.push(
-        <code key={key++} className="inline">
+        <InlineCode key={key++} tone={tone}>
           {ticked}
-        </code>,
+        </InlineCode>,
       );
     } else if (url) {
       out.push(
@@ -133,15 +155,18 @@ export function marked(text: string): ReactNode[] {
       );
     } else if (ref) {
       out.push(
-        <code key={key++} className="inline is-reference">
+        // A SEALED ENTRY'S NAME, which is one token a reader copies back: the
+        // `reference` variant is what keeps its braces together, because a
+        // pointer broken across a line names nothing.
+        <InlineCode key={key++} variant="reference" tone={tone}>
           {ref}
-        </code>,
+        </InlineCode>,
       );
     } else {
       out.push(
-        <code key={key++} className="inline">
+        <InlineCode key={key++} tone={tone}>
           {route ?? quoted ?? path}
-        </code>,
+        </InlineCode>,
       );
     }
     last = at + whole.length;
@@ -150,7 +175,13 @@ export function marked(text: string): ReactNode[] {
   return out;
 }
 
-/** Problems renders a refusal as one line per thing that is wrong. */
+/**
+ * Problems renders a refusal as one line per thing that is wrong.
+ *
+ * INSIDE SOMETHING THAT IS ALREADY SAYING THIS IS BAD — a danger Callout, a
+ * field's error line — so the chips take that message's ink rather than their
+ * own. See the note at the top for why this is not the Callout itself.
+ */
 export function Problems({ detail }: { detail: string }) {
   const problems = split(detail);
   // ONE PROBLEM IS A SENTENCE, not a list of one: a bullet on its own reads
@@ -160,9 +191,9 @@ export function Problems({ detail }: { detail: string }) {
     if (!only) return null;
     return (
       <span>
-        {only.path && <code className="inline">{only.path}</code>}
+        {only.path && <InlineCode tone="inherit">{only.path}</InlineCode>}
         {only.path && " "}
-        {marked(only.text)}
+        {marked(only.text, "inherit")}
       </span>
     );
   }
@@ -170,9 +201,9 @@ export function Problems({ detail }: { detail: string }) {
     <ul className="problems">
       {problems.map((p, i) => (
         <li key={i}>
-          {p.path && <code className="inline">{p.path}</code>}
+          {p.path && <InlineCode tone="inherit">{p.path}</InlineCode>}
           {p.path && " "}
-          {marked(p.text)}
+          {marked(p.text, "inherit")}
         </li>
       ))}
     </ul>

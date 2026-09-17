@@ -32,9 +32,8 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Callout, InlineCode, Input, Modal } from "@crewlethq/ui";
+import { DnsGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 
@@ -81,20 +80,27 @@ export function GateDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
       title={`${verb} ${node}`}
-      icon="server"
+      icon={<DnsGlyph size="md" />}
       onClose={onClose}
+      // THE ONE WRITE ON THIS SCREEN, and its outcome is three-valued: a
+      // dialog dismissed while the append is in flight leaves the operator
+      // unable to tell `applied` from `pending` from `unknown`, which is the
+      // whole distinction this dialog exists to render.
       dismissable={!busy}
-      width={560}
+      closeDisabledReason="Waiting for the log to acknowledge."
+      size="md"
+      stackBody
       footer={
         result ? (
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="tertiary" onClick={onClose}>
             Close
           </Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose} disabled={busy}>
+            <Button variant="tertiary" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
             <Button
@@ -113,37 +119,35 @@ export function GateDialog({
           <p className="t-body secondary" style={{ margin: 0 }}>
             {evict ? (
               <>
-                The trim stops waiting for <code className="inline">{node}</code>, so the log may
-                advance past records that node never applied. It stays COUNTED for one fence window
-                first — about a minute — so a node that is still running is certain to have noticed
-                before its position stops holding the floor.
+                The trim stops waiting for <InlineCode>{node}</InlineCode>, so the log may advance
+                past records that node never applied. It stays COUNTED for one fence window first —
+                about a minute — so a node that is still running is certain to have noticed before
+                its position stops holding the floor.
               </>
             ) : (
               <>
-                <code className="inline">{node}</code> is counted again and the trim waits for it
-                once more. This is refused when the node&apos;s own position is already below the
+                <InlineCode>{node}</InlineCode> is counted again and the trim waits for it once
+                more. This is refused when the node&apos;s own position is already below the
                 published floor: there would be nothing left on the log for it to replay.
               </>
             )}
           </p>
 
           {evict && (
-            <div className="banner caution" role="alert">
-              <Icon name="alert" size="sm" />
+            <Callout variant="warning" role="alert">
               <span>
                 Records this node never applied become deletable. Its disk still holds every row it
                 did apply — an eviction is about what the FLEET waits for, not about that
                 machine&apos;s data.
               </span>
-            </div>
+            </Callout>
           )}
 
           <label className="col" style={{ gap: 6 }}>
             <span className="t-caption">
-              Type <code className="inline">{node}</code> to confirm
+              Type <InlineCode>{node}</InlineCode> to confirm
             </span>
-            <input
-              className="input"
+            <Input
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               autoFocus
@@ -152,16 +156,15 @@ export function GateDialog({
           </label>
 
           {error && (
-            <div className="banner critical" role="alert">
-              <Icon name="alert" size="sm" />
+            <Callout variant="danger" role="alert">
               <span>{error}</span>
-            </div>
+            </Callout>
           )}
         </>
       )}
 
       {result && <GateOutcome result={result} evict={evict} />}
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -174,18 +177,20 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
   switch (result.outcome) {
     case "applied":
       return (
-        <div className="banner positive" role="status">
-          <Icon name="check" size="sm" />
+        <Callout variant="success" role="status">
           <span>
-            <code className="inline">{result.node}</code> is {evict ? "evicted" : "readmitted"},
-            durable{at != null && <> at sequence {at}</>} and in this node&apos;s own rows.
+            <InlineCode>{result.node}</InlineCode> is {evict ? "evicted" : "readmitted"}, durable
+            {at != null && <> at sequence {at}</>} and in this node&apos;s own rows.
           </span>
-        </div>
+        </Callout>
       );
     case "pending":
+      // THE CLOCK RATHER THAN THE TONE'S OWN MARK. Callout draws a warning
+      // triangle for `warning`, and this outcome is not a fault — it is a
+      // record already on the log that this node has not reached yet, so the
+      // glyph that says "wait" is the honest one.
       return (
-        <div className="banner caution" role="status">
-          <Icon name="clock" size="sm" />
+        <Callout variant="warning" role="status" icon={<ScheduleGlyph size="md" />}>
           <span className="col" style={{ gap: 6 }}>
             <span>
               <strong>Durable, not yet applied here.</strong> The record is on the log
@@ -197,15 +202,14 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
               Retrying would append a second record for a gesture that already landed.
             </span>
           </span>
-        </div>
+        </Callout>
       );
     default:
       // THE ONE OUTCOME WHERE RETRYING IS CORRECT, so it is the one that
       // renders as a failure — and it carries the op id, because retrying
       // with the same one is what makes the retry idempotent.
       return (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert">
           <span className="col" style={{ gap: 6 }}>
             <span>
               <strong>No acknowledgement.</strong> Nothing can be established about this gesture —
@@ -214,11 +218,11 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
             {result.op_id && (
               <span className="t-caption faint">
                 Retry with the same operation id so a landed record is not duplicated:{" "}
-                <code className="inline">{result.op_id}</code>
+                <InlineCode>{result.op_id}</InlineCode>
               </span>
             )}
           </span>
-        </div>
+        </Callout>
       );
   }
 }

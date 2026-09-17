@@ -26,16 +26,34 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Button,
+  Callout,
+  Card,
+  EmptyState,
+  IconButton,
+  InlineCode,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  useToast,
+} from "@crewlethq/ui";
+import {
+  AddGlyph,
+  CloseGlyph,
+  DatabaseGlyph,
+  EditGlyph,
+  KeyGlyph,
+  ShieldGlyph,
+} from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, Dash, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { useToast } from "~/ui/Toast.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
@@ -248,7 +266,10 @@ function CredentialBody({
         </section>
       )
     : ({ title, children }: { title: string; children: React.ReactNode }) => (
-        <Panel title={title}>{children}</Panel>
+        <Card>
+          <Card.Header>{title}</Card.Header>
+          {children}
+        </Card>
       );
 
   return (
@@ -259,8 +280,7 @@ function CredentialBody({
             where there is room for the list, and it is the list an operator
             needs before they touch the row. */}
         {paths === null ? (
-          <div className="banner caution">
-            <Icon name="alert" size="sm" />
+          <Callout variant="warning">
             <span className="col" style={{ gap: 4 }}>
               <span>
                 The active configuration could not be read, so it is not known whether anything
@@ -268,7 +288,7 @@ function CredentialBody({
               </span>
               {unknown && <span className="t-caption faint">{unknown}</span>}
             </span>
-          </div>
+          </Callout>
         ) : paths.length === 0 ? (
           <p className="t-body">
             No field in the active configuration names this. Removing it would change nothing the
@@ -285,9 +305,7 @@ function CredentialBody({
             </p>
             <span className="col" style={{ gap: 2 }}>
               {paths.map((path) => (
-                <code className="inline" key={path}>
-                  {path}
-                </code>
+                <InlineCode key={path}>{path}</InlineCode>
               ))}
             </span>
           </div>
@@ -322,7 +340,7 @@ function CredentialBody({
           <div className="t-label">The value</div>
           <p className="t-body">
             Never sent to this page, here or anywhere else in the dashboard. Reading one is{" "}
-            <code className="inline">crewlet secrets get</code>, which logs the access.
+            <InlineCode>crewlet secrets get</InlineCode>, which logs the access.
           </p>
         </section>
       )}
@@ -346,17 +364,17 @@ export function CredentialPeek({ name }: { name: string }) {
 
   return (
     <>
-      {loading && rows === null && <Skeleton rows={6} />}
+      {loading && rows === null && <Skeleton variant="text" rows={6} label="Loading" />}
       <QueryState error={error} loading={loading}>
         {/* NOT AN EMPTY RAIL. A name that matches no row is a hand-edited URL
             or a credential removed since the link was made, and naming the one
             that resolved to nothing is more use than a header over no row. */}
         {rows && !row && (
-          <Empty
-            inline
-            icon="key"
+          <EmptyState
+            size="compact"
+            icon={<KeyGlyph size="xl" />}
             title={`No credential called “${name}”`}
-            hint="The fleet holds no row under this name. It may have been removed, or the name may be spelled differently in the config that points at it."
+            description="The fleet holds no row under this name. It may have been removed, or the name may be spelled differently in the config that points at it."
           />
         )}
         {row && (
@@ -366,7 +384,7 @@ export function CredentialPeek({ name }: { name: string }) {
               kind="Credential"
               icon="key"
               title={row.name}
-              status={<Badge outline>{row.source}</Badge>}
+              status={<Tag appearance="outline">{row.source}</Tag>}
               facts={credentialFacts(row, readersOf(row.name), now)}
             />
             <div className="col gap-3">
@@ -444,9 +462,13 @@ export function Secrets({ name }: { name?: string }) {
   return (
     <>
       <PageActions>
-        {<Badge outline>{plural(list.length, "credential")} held</Badge>}
+        {<Tag appearance="outline">{plural(list.length, "credential")} held</Tag>}
         {
-          <Button icon="plus" variant="primary" onClick={() => setWriting({ editing: "" })}>
+          <Button
+            leadingIcon={<AddGlyph size="sm" />}
+            variant="primary"
+            onClick={() => setWriting({ editing: "" })}
+          >
             Store a secret
           </Button>
         }
@@ -456,41 +478,48 @@ export function Secrets({ name }: { name?: string }) {
         a value.
       </PageNote>
 
-      <div className="banner neutral">
-        <Icon name="shield" size="sm" />
+      {/* THE SHIELD, NOT THE TONE'S OWN INFO MARK. This strip is about where
+          the values live and who can read them, and the glyph is half the
+          sentence. */}
+      <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
         <span className="col" style={{ gap: 4 }}>
           <span>
             These live in the fleet's coordination store, sealed with the Tier A keyring, and every
-            node reads them. A <code className="inline">${"{VAR}"}</code> in the company config
-            resolves here first and falls back to the process environment.
+            node reads them. A <InlineCode>${"{VAR}"}</InlineCode> in the company config resolves
+            here first and falls back to the process environment.
           </span>
           <span className="t-caption">
             Values are never sent to this page. Reading one is{" "}
-            <code className="inline">crewlet secrets get</code>, which logs the access. A new value
-            reaches a running seat at the next configuration activation or restart.
+            <InlineCode>crewlet secrets get</InlineCode>, which logs the access. A new value reaches
+            a running seat at the next configuration activation or restart.
           </span>
         </span>
-      </div>
+      </Callout>
 
-      <Panel padding="none">
-        <StatRow cols={3}>
-          <Stat icon="key" label="Credentials" value={list.length} sub="names the fleet holds" />
-          <Stat
-            icon="database"
+      <Card padding="none">
+        <StatGroup columns={3}>
+          <StatCard
+            icon={<KeyGlyph size="xs" />}
+            label="Credentials"
+            value={list.length}
+            sub="names the fleet holds"
+          />
+          <StatCard
+            icon={<DatabaseGlyph size="xs" />}
             label="In the secret store"
             value={fromStore}
             sub="the rest resolve from this process's environment"
           />
-          <Stat
-            icon="shield"
+          <StatCard
+            icon={<ShieldGlyph size="xs" />}
             label="Distinct key ids"
             value={new Set(list.map((r) => r.key_id)).size}
             sub="a rekey moves every value onto a new one"
           />
-        </StatRow>
-      </Panel>
+        </StatGroup>
+      </Card>
 
-      {loading && rows === null && <Skeleton rows={4} />}
+      {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
         error={error}
         loading={loading}
@@ -503,7 +532,7 @@ export function Secrets({ name }: { name?: string }) {
               }
         }
       >
-        <Panel padding="none">
+        <Card padding="none">
           <DataGrid<SecretRow>
             rows={list}
             rowKey={(s) => s.name}
@@ -536,7 +565,7 @@ export function Secrets({ name }: { name?: string }) {
                 header: "Source",
                 shrink: true,
                 sortValue: (s) => s.source,
-                cell: (s) => <Badge outline>{s.source}</Badge>,
+                cell: (s) => <Tag appearance="outline">{s.source}</Tag>,
               },
               {
                 key: "key",
@@ -572,17 +601,19 @@ export function Secrets({ name }: { name?: string }) {
                 shrink: true,
                 cell: (s) => (
                   <span className="row gap-1">
-                    <Button
+                    <IconButton
                       size="sm"
                       variant="ghost"
-                      icon="pencil"
+                      icon={<EditGlyph size="sm" />}
+                      label={`Edit ${s.name}`}
                       title={`Edit ${s.name}`}
                       onClick={rowAction(() => setWriting({ editing: s.name }))}
                     />
-                    <Button
+                    <IconButton
                       size="sm"
                       variant="ghost"
-                      icon="x"
+                      icon={<CloseGlyph size="sm" />}
+                      label={`Remove ${s.name}`}
                       title={`Remove ${s.name}`}
                       onClick={rowAction(() => setRemoving(s.name))}
                     />
@@ -591,7 +622,7 @@ export function Secrets({ name }: { name?: string }) {
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
 
       {/* THE CREDENTIAL THIS PATH NAMES. Rendered under the table rather than
@@ -605,7 +636,7 @@ export function Secrets({ name }: { name?: string }) {
             kind="Credential"
             icon="key"
             title={addressedRow.name}
-            status={<Badge outline>{addressedRow.source}</Badge>}
+            status={<Tag appearance="outline">{addressedRow.source}</Tag>}
             facts={credentialFacts(addressedRow, readersOf(addressedRow.name), now)}
           />
           <CredentialBody
@@ -616,10 +647,10 @@ export function Secrets({ name }: { name?: string }) {
         </>
       )}
       {addressed && !addressedRow && rows && (
-        <Empty
-          icon="key"
+        <EmptyState
+          icon={<KeyGlyph size="xl" />}
           title={`No credential called “${addressed}”`}
-          hint="The fleet holds no row under this name. It may have been removed since the link was made, or the name may be spelled differently in the config that points at it."
+          description="The fleet holds no row under this name. It may have been removed since the link was made, or the name may be spelled differently in the config that points at it."
         />
       )}
 
@@ -671,8 +702,8 @@ function Readers({ paths }: { paths: string[] | null }) {
     return <Dash title="no field in the active configuration names it" />;
   }
   return (
-    <Badge outline title={paths.join("\n")}>
+    <Tag appearance="outline" title={paths.join("\n")}>
       {plural(paths.length, "field")}
-    </Badge>
+    </Tag>
   );
 }

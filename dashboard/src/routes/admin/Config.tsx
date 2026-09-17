@@ -11,24 +11,40 @@
 
 import { useCallback, useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import {
-  Badge,
   Button,
-  Code,
+  Callout,
+  Card,
+  CodeBlock,
   CopyButton,
-  Empty,
-  Panel,
-  Segmented,
+  EmptyState,
+  InlineCode,
   Skeleton,
-} from "~/ui/primitives.tsx";
+  Tag,
+} from "@crewlethq/ui";
+import {
+  DescriptionGlyph,
+  DnsGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  ScheduleGlyph,
+  TuneGlyph,
+} from "@crewlethq/icons/glyphs";
+import { QueryState } from "~/components/common.tsx";
+// OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
+// mode: with `semantics="radio"` its arrow keys COMMIT the option they land
+// on, and every group on this screen drives a `useParam` — the lens pushes a
+// history entry and re-runs the screen's query, and the collection picker
+// re-runs `config_entities`. Arrowing across four lenses under that control
+// is four queries nobody asked for and four Back presses to undo. See the
+// note on `useRovingGroup`; this is the trade the pattern itself names.
+import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -126,9 +142,9 @@ function revisionFacts(revision: RevisionMeta, now: number): Fact[] {
  * exactly where somebody goes looking for the revision that never landed.
  */
 function RevisionState({ revision }: { revision: RevisionMeta }) {
-  if (revision.is_active) return <Badge tone="positive">active</Badge>;
-  if (revision.activated_at) return <Badge outline>superseded</Badge>;
-  return <Badge outline>never activated</Badge>;
+  if (revision.is_active) return <Tag variant="success">active</Tag>;
+  if (revision.activated_at) return <Tag appearance="outline">superseded</Tag>;
+  return <Tag appearance="outline">never activated</Tag>;
 }
 
 /**
@@ -171,7 +187,7 @@ function AppliedAcross({
   // contradicts itself.
   const body =
     loading && !answered ? (
-      <Skeleton rows={2} />
+      <Skeleton variant="text" rows={2} label="Loading" />
     ) : !answered ? (
       <p className="t-body faint">
         The lease table did not answer, so which nodes are on this revision is not known.
@@ -214,9 +230,10 @@ function AppliedAcross({
     );
   }
   return (
-    <Panel title="Across the fleet" icon="server">
+    <Card>
+      <Card.Header icon={<DnsGlyph size="sm" />}>Across the fleet</Card.Header>
       {body}
-    </Panel>
+    </Card>
   );
 }
 
@@ -225,15 +242,15 @@ function NodeLine({ node, state }: { node: FleetNode; state: "here" | "elsewhere
   const on = node.config_revision_id ?? "";
   return (
     <div className="row gap-2">
-      <code className="inline">{node.id}</code>
+      <InlineCode>{node.id}</InlineCode>
       {state === "here" ? (
-        <Badge tone="positive">applied</Badge>
+        <Tag variant="success">applied</Tag>
       ) : state === "elsewhere" ? (
-        <Badge tone="caution" title={on}>
+        <Tag variant="warning" title={on}>
           on {on.slice(0, 10)}
-        </Badge>
+        </Tag>
       ) : (
-        <Badge outline>not saying</Badge>
+        <Tag appearance="outline">not saying</Tag>
       )}
       {/* THE APPLY THAT FAILED. A node can report this revision and have
           refused it — `config_status` is the other half of the record, and a
@@ -295,9 +312,10 @@ function RevisionBody({
           {provenance}
         </section>
       ) : (
-        <Panel title="Where it came from" icon="file">
+        <Card>
+          <Card.Header icon={<DescriptionGlyph size="sm" />}>Where it came from</Card.Header>
           {provenance}
-        </Panel>
+        </Card>
       )}
       <AppliedAcross
         revisionId={revision.revision_id}
@@ -340,18 +358,18 @@ export function RevisionPeek({ id }: { id: string }) {
 
   return (
     <>
-      {audit.loading && !audit.data && <Skeleton rows={6} />}
+      {audit.loading && !audit.data && <Skeleton variant="text" rows={6} label="Loading" />}
       <QueryState error={audit.error} loading={audit.loading}>
         {/* NOT AN EMPTY RAIL. A `peek=revision:` arrives from a pasted URL as
             often as from a row, and naming the id that resolved to nothing —
             and the window it was looked for in — is more use than a header
             over no revision. */}
         {audit.data && !revision && (
-          <Empty
-            inline
-            icon="clock"
+          <EmptyState
+            size="compact"
+            icon={<ScheduleGlyph size="xl" />}
             title="No such revision in the recent history"
-            hint={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
+            description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
           />
         )}
         {revision && (
@@ -359,7 +377,7 @@ export function RevisionPeek({ id }: { id: string }) {
             <ObjectHeader
               size="peek"
               kind="Revision"
-              icon="file"
+              icon="description"
               identifier={revision.revision_id.slice(0, 10)}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
@@ -492,10 +510,10 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             value={lens}
             onChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: "file" },
+              { value: "active", label: "Active", icon: "description" },
               { value: "entities", label: "Entities", icon: "layers" },
-              { value: "audit", label: "History", icon: "clock" },
-              { value: "diff", label: "Diff", icon: "gitBranch" },
+              { value: "audit", label: "History", icon: "schedule" },
+              { value: "diff", label: "Diff", icon: "fork_right" },
             ]}
           />
         }
@@ -511,28 +529,28 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
           question. */}
       {revisionPath !== undefined && (
         <>
-          {audit.loading && !audit.data && <Skeleton rows={4} />}
+          {audit.loading && !audit.data && <Skeleton variant="text" rows={4} label="Loading" />}
           <QueryState error={audit.error} loading={audit.loading}>
             {audit.data && !addressed && (
-              <Empty
-                icon="clock"
+              <EmptyState
+                icon={<ScheduleGlyph size="xl" />}
                 title="No such revision in the recent history"
-                hint={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
+                description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
               />
             )}
             {addressed && (
               <>
                 <ObjectHeader
                   kind="Revision"
-                  icon="file"
+                  icon="description"
                   identifier={addressed.revision_id.slice(0, 10)}
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
                   facts={revisionFacts(addressed, now)}
                   actions={
                     <Button
-                      size="sm"
-                      icon="gitBranch"
+                      size="small"
+                      leadingIcon={<ForkRightGlyph size="sm" />}
                       onClick={() => {
                         setRevision(addressed.revision_id);
                         setLens("diff");
@@ -556,26 +574,35 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
 
       {lens === "active" && (
         <>
-          {active.loading && <Skeleton rows={6} />}
+          {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
           <QueryState error={active.error} loading={active.loading}>
             {active.data ? (
-              <Panel
-                title="Active revision"
-                icon="file"
-                subtitle="as the engine resolved it"
-                actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
-              >
+              <Card>
+                <Card.Header
+                  icon={<DescriptionGlyph size="sm" />}
+                  subtitle="as the engine resolved it"
+                  actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
+                >
+                  Active revision
+                </Card.Header>
                 <div className="col gap-1">
-                  <Code plain selectable label="The active company configuration, as JSON">
-                    {pretty}
-                  </Code>
+                  <CodeBlock
+                    plain
+                    selectable
+                    label="The active company configuration, as JSON"
+                    code={pretty}
+                  />
                   <span className="t-caption">
                     Click into the revision, and ⌘A / Ctrl+A selects it alone rather than the page.
                   </span>
                 </div>
-              </Panel>
+              </Card>
             ) : (
-              <Empty icon="sliders" title={NO_REVISION.title} hint={NO_REVISION.hint} />
+              <EmptyState
+                icon={<TuneGlyph size="xl" />}
+                title={NO_REVISION.title}
+                description={NO_REVISION.hint}
+              />
             )}
           </QueryState>
         </>
@@ -595,7 +622,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             }}
             options={ENTITY_KINDS.map((k) => ({ value: k.kind, label: k.label }))}
           />
-          {ids.loading && !ids.data && <Skeleton rows={4} />}
+          {ids.loading && !ids.data && <Skeleton variant="text" rows={4} label="Loading" />}
           <QueryState
             error={ids.error}
             loading={ids.loading}
@@ -611,69 +638,72 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             }
           >
             <div className="row gap-3 wrap" style={{ alignItems: "flex-start" }}>
-              <Panel
-                title={ENTITY_KINDS.find((k) => k.kind === kind)?.label ?? kind}
-                icon="layers"
-                count={(ids.data?.ids ?? []).length}
-                padding="none"
-              >
+              <Card padding="none">
+                <Card.Header icon={<LayersGlyph size="sm" />} count={(ids.data?.ids ?? []).length}>
+                  {ENTITY_KINDS.find((k) => k.kind === kind)?.label ?? kind}
+                </Card.Header>
                 <div className="col">
                   {(ids.data?.ids ?? []).map((id) => (
                     <Button
                       key={id}
-                      variant={id === entity ? "primary" : "ghost"}
-                      size="sm"
+                      variant={id === entity ? "primary" : "tertiary"}
+                      size="small"
                       onClick={() => setEntity(id === entity ? "" : id)}
                     >
-                      <code className="inline">{id}</code>
+                      <InlineCode>{id}</InlineCode>
                     </Button>
                   ))}
                 </div>
-              </Panel>
-              <Panel
-                title={entity || "Pick one"}
-                icon="file"
-                subtitle="as the active revision declares it"
-                actions={
-                  one.data?.entity ? (
-                    <CopyButton
-                      text={JSON.stringify(one.data.entity, null, 2)}
-                      title={`${entity}, as JSON`}
-                    />
-                  ) : undefined
-                }
-              >
+              </Card>
+              <Card>
+                <Card.Header
+                  icon={<DescriptionGlyph size="sm" />}
+                  subtitle="as the active revision declares it"
+                  actions={
+                    one.data?.entity ? (
+                      <CopyButton
+                        text={JSON.stringify(one.data.entity, null, 2)}
+                        title={`${entity}, as JSON`}
+                      />
+                    ) : undefined
+                  }
+                >
+                  {entity || "Pick one"}
+                </Card.Header>
                 {!entity ? (
-                  <Empty
-                    inline
-                    icon="layers"
+                  <EmptyState
+                    size="compact"
+                    icon={<LayersGlyph size="xl" />}
                     title="Pick one from the list"
-                    hint="Its own slice of the active document is shown here, rather than the whole thing."
+                    description="Its own slice of the active document is shown here, rather than the whole thing."
                   />
                 ) : one.loading && !one.data ? (
-                  <Skeleton rows={6} />
+                  <Skeleton variant="text" rows={6} label="Loading" />
                 ) : (
                   <QueryState error={one.error} loading={one.loading}>
                     {one.data ? (
-                      <Code plain selectable label={`${entity}, as JSON`}>
-                        {JSON.stringify(one.data.entity, null, 2)}
-                      </Code>
+                      <CodeBlock
+                        plain
+                        selectable
+                        label={`${entity}, as JSON`}
+                        code={JSON.stringify(one.data.entity, null, 2)}
+                      />
                     ) : (
                       // THE SAME SILENCE, IN THE PANEL. `entity` is a URL key,
                       // so a shared `?lens=entities&entity=…` lands here on a
                       // deployment with nothing active — and this rendered the
                       // literal word `null` as if it were the seat's own slice
                       // of the document.
-                      <Empty
-                        inline
-                        icon="sliders"
+                      <EmptyState
+                        size="compact"
+                        icon={<TuneGlyph size="xl" />}
                         title={NO_REVISION.title}
-                        hint="There is no active revision for this entity to be declared in."
+                        description="There is no active revision for this entity to be declared in."
                       />
                     )}
                   </QueryState>
                 )}
-              </Panel>
+              </Card>
             </div>
           </QueryState>
         </>
@@ -681,7 +711,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
 
       {(lens === "audit" || lens === "diff") && (
         <>
-          {audit.loading && <Skeleton rows={5} />}
+          {audit.loading && <Skeleton variant="text" rows={5} label="Loading" />}
           <QueryState
             error={audit.error}
             loading={audit.loading}
@@ -694,7 +724,10 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   }
             }
           >
-            <Panel title="Revisions" icon="clock" count={rows.length} padding="none">
+            <Card padding="none">
+              <Card.Header icon={<ScheduleGlyph size="sm" />} count={rows.length}>
+                Revisions
+              </Card.Header>
               <DataGrid<RevisionMeta>
                 rows={rows}
                 rowKey={(r) => r.revision_id}
@@ -720,7 +753,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                     cell: (r) => (
                       <span className="row gap-1">
                         <KeyCell value={r.revision_id.slice(0, 10)} />
-                        {r.is_active && <Badge tone="positive">active</Badge>}
+                        {r.is_active && <Tag variant="success">active</Tag>}
                       </span>
                     ),
                   },
@@ -752,24 +785,26 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   },
                 ]}
               />
-            </Panel>
+            </Card>
           </QueryState>
 
           {lens === "diff" && (
-            <Panel
-              title={revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
-              icon="gitBranch"
-              subtitle="against the active revision"
-            >
+            <Card>
+              <Card.Header
+                icon={<ForkRightGlyph size="sm" />}
+                subtitle="against the active revision"
+              >
+                {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
+              </Card.Header>
               {!revision ? (
-                <Empty
-                  inline
-                  icon="gitBranch"
+                <EmptyState
+                  size="compact"
+                  icon={<ForkRightGlyph size="xl" />}
                   title="Pick a revision above"
-                  hint="Its differences against the currently active document are shown here."
+                  description="Its differences against the currently active document are shown here."
                 />
               ) : diff.loading ? (
-                <Skeleton rows={4} />
+                <Skeleton variant="text" rows={4} label="Loading" />
               ) : (
                 <QueryState
                   error={diff.error}
@@ -811,31 +846,30 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                       // path turning undefined into a sentence.
                       <div className="t-caption faint" style={{ paddingTop: 6 }}>
                         {diff.data?.changes.length} of {diff.data?.changes_total} shown —{" "}
-                        <code className="inline">crewlet config diff</code> prints them all
+                        <InlineCode>crewlet config diff</InlineCode> prints them all
                       </div>
                     )}
                   </div>
                 </QueryState>
               )}
-            </Panel>
+            </Card>
           )}
         </>
       )}
 
-      <div className="banner neutral">
-        <Icon name="info" size="sm" />
+      <Callout variant="neutral">
         <span className="col" style={{ gap: 4 }}>
           <span>
-            This screen reads. Writing a revision is <code className="inline">PUT /config</code> or{" "}
-            <code className="inline">crewlet config import</code>, which validate against the
-            generated schema before anything is stored.
+            This screen reads. Writing a revision is <InlineCode>PUT /config</InlineCode> or{" "}
+            <InlineCode>crewlet config import</InlineCode>, which validate against the generated
+            schema before anything is stored.
           </span>
           <span className="t-caption">
             An activation is a compare-and-set on a shared pointer, so two operators cannot
             overwrite each other; each node then reconciles onto the new epoch on its own tick.
           </span>
         </span>
-      </div>
+      </Callout>
     </>
   );
 }

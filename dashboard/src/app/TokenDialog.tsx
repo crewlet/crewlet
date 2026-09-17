@@ -9,17 +9,18 @@
  * backoff must not reopen it forever. Dismissing it leaves the banner saying
  * what is wrong, with a button back to here.
  *
- * ON `ui/Dialog.tsx`, which was GENERALISED FROM THIS ONE and which this one
- * then went on not using. So the shell it hand-rolled had no Escape and no
- * focus trap — on the single modal in the product that collects a credential,
- * where tabbing out into the page behind and being unable to press escape are
- * the two things a reader tries first.
+ * ON uilet's [Modal], which is what `ui/Dialog.tsx` was — a veil, a frame, a
+ * head/body/foot and the behaviour around them — with the two things ours had
+ * to be told: the surface is named to a screen reader by an id the component
+ * mints rather than by a label a caller can forget, and the layer stack owns
+ * Escape, so a prompt raised over this one closes itself rather than this one.
+ * `footerStart` is the `<span className="spacer" />` ours pushed Sign out over
+ * with, as a real slot.
  */
 
-import { useRef, useState } from "react";
-import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
+import { useState } from "react";
+import { Button, Callout, FormField, InlineCode, Input, Modal, Text } from "@crewlethq/ui";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
 
 export function TokenDialog({
@@ -31,9 +32,6 @@ export function TokenDialog({
 }) {
   const [value, setValue] = useState(() => apiToken());
   const [refused, setRefused] = useState(false);
-  // THE SHELL FOCUSES THE FIRST CONTROL, which is this input — so there is no
-  // focus effect here any more, and the ref is only what the field needs.
-  const ref = useRef<HTMLInputElement>(null);
 
   // A credential you can set is one you must be able to drop — on a shared
   // machine especially, where the token outlives the person who typed it.
@@ -61,23 +59,26 @@ export function TokenDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
       title="API token"
-      icon="key"
+      icon={<KeyGlyph size="md" />}
       onClose={onClose}
       onSubmit={save}
+      stackBody
+      footerStart={
+        // Only when there is something to drop. An always-present sign-out on
+        // a surface nobody has signed into is a control that does nothing,
+        // next to the one that does the work.
+        apiToken() !== "" ? (
+          <Button variant="danger" onClick={signOut}>
+            Sign out
+          </Button>
+        ) : undefined
+      }
       footer={
         <>
-          {/* Only when there is something to drop. An always-present sign-out
-              on a surface nobody has signed into is a control that does
-              nothing, next to the one that does the work. */}
-          {apiToken() !== "" && (
-            <Button variant="danger" onClick={signOut}>
-              Sign out
-            </Button>
-          )}
-          <span className="spacer" />
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="tertiary" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit">
@@ -86,36 +87,42 @@ export function TokenDialog({
         </>
       }
     >
-      <p className="t-body secondary" style={{ margin: 0 }}>
+      <Text as="p" variant="body" tone="secondary">
         The engine is guarding this surface. Paste a bearer token matching one of the{" "}
-        <code className="inline">api.auth.tokens</code> entries in your{" "}
-        <code className="inline">crewlet.yaml</code>.
-      </p>
-      <div className="field">
-        <label htmlFor="token">Token</label>
-        <input
-          id="token"
-          ref={ref}
-          className="input"
-          type="password"
-          value={value}
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(e) => setValue(e.target.value)}
-        />
-        <span className="hint">
-          Stored in this browser only, and sent on the socket handshake and every guarded query.
-        </span>
-      </div>
+        <InlineCode>api.auth.tokens</InlineCode> entries in your{" "}
+        <InlineCode>crewlet.yaml</InlineCode>.
+      </Text>
+      {/* ON uilet's [FormField], which is what the hand-pairing here was. The
+          label, the help line and the `aria-describedby` tying them to the
+          control belong to the component now, so this screen writes the
+          sentence and nothing else: the id the label points at and the id the
+          help line is read from are minted together and cannot disagree. */}
+      <FormField
+        label="Token"
+        helper="Stored in this browser only, and sent on the socket handshake and every guarded query."
+      >
+        {(field) => (
+          <Input
+            id={field.id}
+            type="password"
+            width="full"
+            value={value}
+            autoComplete="off"
+            spellCheck={false}
+            aria-describedby={field.describedBy}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        )}
+      </FormField>
       {refused && (
-        <div className="banner critical">
-          <Icon name="alert" size="sm" />
-          <span>
-            This browser refused to store the token (private mode, or blocked site data). It will
-            work until you reload.
-          </span>
-        </div>
+        // LIVE, because it appears in response to a press the reader just
+        // made. Not `role="alert"`: the dialog is already what they are
+        // looking at, so nothing has to interrupt to get them there.
+        <Callout variant="danger" live="polite">
+          This browser refused to store the token (private mode, or blocked site data). It will work
+          until you reload.
+        </Callout>
       )}
-    </Dialog>
+    </Modal>
   );
 }

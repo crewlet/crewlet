@@ -302,18 +302,6 @@
   color: var(--text-secondary);
 }
 
-/* Thinking is an ASIDE, not content: it is what the model considered, not
-   what it decided. Marked by a rule down its edge so a reader can skip the
-   whole block by its shape rather than by reading it. */
-.disclosure.tone-reasoning .disclosure-body {
-  border-left: 2px solid var(--border-strong);
-  padding-left: var(--space-3);
-  margin-left: 2px;
-}
-.disclosure.tone-reasoning .disclosure-head {
-  color: var(--text-muted);
-}
-
 .tool-row {
   border-radius: var(--r-xs);
   background: var(--surface-1);
@@ -321,49 +309,6 @@
 }
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--critical) 40%, transparent);
-}
-
-.disclosure {
-  min-width: 0;
-}
-/* The toggle and the section's own controls are SIBLINGS. A copy button
-   nested inside the toggle would be a button inside a button — invalid, and
-   worse, clicking it would collapse the very thing it just copied.
-   `width: auto` on the head is load-bearing: it carries `width: 100%` for the
-   standalone case, which inside this row makes it claim the whole line and
-   push the controls onto one of their own. */
-.disclosure-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.disclosure-bar > .disclosure-head {
-  flex: 1;
-  width: auto;
-  min-width: 0;
-}
-.disclosure-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  width: 100%;
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-secondary);
-  text-align: left;
-  min-width: 0;
-}
-.disclosure-head:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-  border-radius: var(--r-xs);
-}
-.disclosure-body {
-  padding: var(--space-2);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
@@ -569,7 +514,6 @@
 .turn-row:hover,
 .seat-card:hover,
 .attention-row.clickable:hover,
-.brand:hover,
 .hit-title:hover {
   text-decoration: none;
 }
@@ -810,13 +754,45 @@
   padding-block: var(--space-2);
 }
 
-/* A failed tool's alert sat on its own line above the name: it was an inline
-   SVG inside a truncating single-line span, so it was the thing that wrapped.
-   The head is a row, and the mark is a non-shrinking item in it. */
-.disclosure-head > svg {
-  flex: none;
+/* A CARD TITLE ELLIPSES RATHER THAN CLIPPING, which is the one thing uilet's
+   own head cannot do for us. `.crewlet-card__title` is `white-space: nowrap`
+   inside a `.crewlet-card__header-main` that hides its overflow, and it is
+   itself a FLEX container — and `text-overflow` applies to a block container,
+   never to a flex one, so the package cannot ellipse a title even though it
+   means to. The title is cut mid-word at the header's edge instead.
+
+   The flex is there for a caller who puts a mark inside the title. No screen
+   here does: `Card.Header` has an `icon` slot of its own, and all 106
+   `Card.Title` call sites in this tree hold a single text expression — which
+   is what makes `block` safe here and would not make it safe upstream. The
+   ones that can actually run long are the data-driven ones: a unit's name, a
+   checklist's, a sprint's.
+
+   uilet's own rule survives untouched around this: the SUBTITLE still gives
+   way first (`flex-shrink: 100`), so this only ever applies once there is no
+   tail left to trade. What uilet needs is a `truncate` option on the title,
+   after which this rule and its ALLOWED entry both go. */
+.crewlet-card__title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.tool-row .disclosure-head {
+
+/* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
+   trigger sets `gap: var(--spacing-1)`, which is right for the card's own
+   folds (Prompt, Tool surface) where the chevron and two words are the whole
+   row. A tool call's head carries a mono name and, when it failed, a mark
+   beside it, and at one step those three read as one run-on token.
+
+   The mark's own `flex: none` is NOT restated here. It used to be, as
+   `.disclosure-head > svg`, because our mark was an inline SVG inside the
+   truncating title span and was therefore the thing that wrapped. It is
+   `meta` now — a sibling of the title — and uilet declares `flex: none` on
+   `.crewlet-disclosure__meta` and on its chevron. A second copy here would be
+   a second idea of a rule the package already states, and the selector would
+   not even match: the glyph is inside the meta span rather than a direct
+   child of the trigger. */
+.tool-row .crewlet-disclosure__trigger {
   gap: var(--space-2);
 }
 
@@ -1105,14 +1081,7 @@
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
-/* The counts and the inbound path, on the detail line rather than in a row of
-   their own: they are what the surface IS, not a second subject. */
-.int-row-facts {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-}
+
 /* THE CONNECT FORM, laid out the way the console's is.
    The field spacing is deliberately wider than the dialog's default stack:
    these are labelled inputs each carrying a help line, and at the tighter
@@ -1134,7 +1103,12 @@
    column head: right above a table, wrong above a question. These fields ARE
    questions, each with a sentence of help under it, and the console asks them
    in sentence case. Scoped rather than changed globally, because every other
-   form in the dashboard is a settings table where the micro-label belongs. */
+   form in the dashboard is a settings table where the micro-label belongs.
+
+   THE LABEL IS uilet's `.crewlet-label` NOW — `ui/Field.tsx` draws a
+   `FormField` — and `.field` is the class that file still puts on it, so the
+   selector reaches the same element it always did. Specificity is what makes
+   this land: `(0,2,1)` here against the package's `(0,1,0)`. */
 .int-form .field > label {
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
@@ -1606,11 +1580,6 @@ details > summary.int-summary::-webkit-details-marker {
    PANEL, so a card reads as an object on a surface rather than as a box drawn
    on a box. */
 
-/* ---- The project rail --------------------------------------------------- */
-
-/* The active row is the accent, exactly as a nav row is: the accent says
-   WHERE THE READER IS, and a rail is a second navigation. */
-
 /* ---- The main column and the project head ------------------------------- */
 
 .work-main {
@@ -1619,9 +1588,6 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-4);
   min-width: 0;
 }
-
-/* The name is what a person calls the project; the key is how they address
-   it. Both belong here and only one of them is an identifier. */
 
 /* The head's facts sit in a fixed order at a fixed size, so moving between
    two projects does not move the numbers — the same rule the phase header
@@ -1660,12 +1626,6 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--heading);
   font-variant-numeric: tabular-nums;
   min-width: 0;
-}
-/* The sprint takes the remaining width, because it is the one fact with a
-   bar in it and a bar in a content-width column is a bar nobody can read. */
-.work-fact.wide {
-  flex: 1 1 260px;
-  min-width: 220px;
 }
 
 /* ---- The filter bar ----------------------------------------------------- */
@@ -2001,10 +1961,7 @@ details > summary.int-summary::-webkit-details-marker {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.work-group {
-  display: flex;
-  flex-direction: column;
-}
+
 .work-group-head {
   display: flex;
   align-items: center;
@@ -2246,14 +2203,12 @@ details > summary.int-summary::-webkit-details-marker {
    row-shaped anchor the tracker adds joins the same set. */
 a.work-card,
 a.work-row,
-a.work-rail-item,
 a.work-cal-chip {
   color: inherit;
   text-decoration: none;
 }
 a.work-card:hover,
 a.work-row:hover,
-a.work-rail-item:hover,
 a.work-cal-chip:hover {
   text-decoration: none;
 }

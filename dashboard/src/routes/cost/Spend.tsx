@@ -25,20 +25,44 @@
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Meter, Panel, Segmented, Stat, StatRow } from "~/ui/primitives.tsx";
+import {
+  BarList,
+  Card,
+  Legend,
+  Meter,
+  StackedBar,
+  StatCard,
+  StatGroup,
+  Tag,
+  dataColor,
+} from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  LayersGlyph,
+  MemoryGlyph,
+  RefreshGlyph,
+  ScheduleGlyph,
+  TargetGlyph,
+  TimelineGlyph,
+  GroupGlyph,
+} from "@crewlethq/icons/glyphs";
+// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics` — `radio` commits the option the arrows land on — and both
+// strips here drive a `useParam` that re-runs `token_series`. Arrowing across
+// the six split dimensions under that control is six queries nobody asked for
+// and six history entries to press Back through. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
-import {
-  BarList,
-  Legend,
-  StackedBar,
-  StackedTimeSeries,
-  phaseColor,
-  vizColor,
-} from "~/ui/charts.tsx";
+// OURS, AND THERE IS NO PEER FOR EITHER. `Charts` exports a line `TimeSeries`
+// and a `StackedBar`, and this axis is neither: it is a column per bucket,
+// STACKED into bands, with the previous period drawn behind it as a ghost.
+// `phaseColor` has no peer either — uilet publishes `--color-phase-*` but no
+// function that picks one. See the report.
+import { StackedTimeSeries, phaseColor } from "~/ui/charts.tsx";
 import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "~/lib/spend.ts";
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer, TimeRange } from "~/lib/range.ts";
@@ -121,16 +145,28 @@ function SpendOverTime({ range }: { range: TimeRange }) {
   const unbanded = unbandedTokens(data);
 
   return (
-    <Panel
-      title="Over time"
-      icon="activity"
-      subtitle={bucket === "day" ? "one column per day" : "one column per hour"}
-    >
+    <Card>
+      <Card.Header
+        icon={<TimelineGlyph size="sm" />}
+        subtitle={bucket === "day" ? "one column per day" : "one column per hour"}
+      >
+        <Card.Title>Over time</Card.Title>
+      </Card.Header>
       <QueryState
         error={series.error}
         loading={series.loading}
         empty={
-          data && data.totals.calls === 0 ? { title: "No model calls in this window" } : undefined
+          data && data.totals.calls === 0
+            ? {
+                title: "No model calls in this window",
+                // THE SECOND SENTENCE, which is the whole reason `QueryState`
+                // exists: this empty list and a node whose store could not be
+                // read are the same headline and completely different
+                // problems. This was the last caller in the tree with only a
+                // headline, and the prop is required now.
+                hint: "Nothing ran, or nothing ran that reports tokens. Widen the window, or check that the seats you expect are running.",
+              }
+            : undefined
         }
       >
         {data && (
@@ -170,7 +206,9 @@ function SpendOverTime({ range }: { range: TimeRange }) {
               <span className="spacer" />
               <span className="t-caption">{fmtDateTime(data.until)}</span>
             </div>
-            <Legend items={bands.map((b) => ({ label: b.label, color: b.color }))} />
+            <Legend
+              items={bands.map((b) => ({ id: b.key || "other", label: b.label, color: b.color }))}
+            />
             {unbanded > 0 && (
               // THE GAP IS SAID OUT LOUD. Grouping by worker leaves out every
               // phase that is not a worker's, and a chart whose bands sum to
@@ -196,7 +234,7 @@ function SpendOverTime({ range }: { range: TimeRange }) {
           </div>
         )}
       </QueryState>
-    </Panel>
+    </Card>
   );
 }
 
@@ -271,6 +309,7 @@ export function Spend() {
     () =>
       (tokens?.by_phase ?? [])
         .map((p) => ({
+          id: p.phase,
           label: p.phase,
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
@@ -287,10 +326,12 @@ export function Spend() {
         .slice()
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .map((m, i) => ({
+          id: m.model,
           label: m.model,
           value: m.total_tokens,
           display: fmtCount(m.total_tokens),
-          color: vizColor(i),
+          // uilet publishes the data ramp, so `vizColor` goes with it.
+          color: dataColor(i),
           sub: `${m.calls.toLocaleString()} calls`,
         })),
     [tokens],
@@ -306,7 +347,7 @@ export function Spend() {
   return (
     <>
       <PageActions>
-        <Badge outline>{windowLabel(range.window)}</Badge>
+        <Tag appearance="outline">{windowLabel(range.window)}</Tag>
         <TimeRangePicker range={range} ariaLabel="Window" />
       </PageActions>
       <PageNote>
@@ -321,69 +362,73 @@ export function Spend() {
           nothing saying where their numbers came from. */}
       {!live && asked.error && <QueryState error={asked.error} loading={false} />}
 
-      <Panel padding="none">
-        <StatRow cols={4}>
-          {/* A COIN LABELS MONEY, and this counts tokens — the only glyph on
-              the screen that claimed a unit the figure beside it is not in. */}
-          <Stat
-            icon="layers"
-            label="Tokens"
-            value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
-            sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
-          />
-          <Stat
-            icon="cpu"
-            label="Model calls"
-            value={tokens ? fmtCount(tokens.totals.calls) : "—"}
-            sub={
-              tokens && tokens.totals.calls
-                ? `${fmtCount(Math.round(tokens.totals.total_tokens / tokens.totals.calls))} tokens per call`
-                : ""
-            }
-          />
-          <Stat
-            icon="arrowRight"
-            label="Input / output"
-            value={
-              tokens
-                ? `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
-                : "—"
-            }
-            sub="input includes any cached prefix, as the provider reports it"
-          />
-          <Stat
-            icon="clock"
-            label="Counted through"
-            value={tokens?.aggregated_through ? relTime(tokens.aggregated_through, now) : "—"}
-            sub={
-              tokens?.aggregated_through
-                ? fmtDateTime(tokens.aggregated_through)
-                : "no high-water mark yet"
-            }
-          />
-        </StatRow>
-      </Panel>
+      {/* The flush Panel is gone: StatGroup draws that surface itself. */}
+      <StatGroup columns={4}>
+        {/* A COIN LABELS MONEY, and this counts tokens — the only glyph on
+            the screen that claimed a unit the figure beside it is not in. */}
+        <StatCard
+          icon={<LayersGlyph size="xs" />}
+          label="Tokens"
+          value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
+          sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
+        />
+        <StatCard
+          icon={<MemoryGlyph size="xs" />}
+          label="Model calls"
+          value={tokens ? fmtCount(tokens.totals.calls) : "—"}
+          sub={
+            tokens && tokens.totals.calls
+              ? `${fmtCount(Math.round(tokens.totals.total_tokens / tokens.totals.calls))} tokens per call`
+              : ""
+          }
+        />
+        <StatCard
+          icon={<ArrowForwardGlyph size="xs" />}
+          label="Input / output"
+          value={
+            tokens
+              ? `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
+              : "—"
+          }
+          sub="input includes any cached prefix, as the provider reports it"
+        />
+        <StatCard
+          icon={<ScheduleGlyph size="xs" />}
+          label="Counted through"
+          value={tokens?.aggregated_through ? relTime(tokens.aggregated_through, now) : "—"}
+          sub={
+            tokens?.aggregated_through
+              ? fmtDateTime(tokens.aggregated_through)
+              : "no high-water mark yet"
+          }
+        />
+      </StatGroup>
 
       <SpendOverTime range={range} />
 
       {org && org.max > 0 && (
-        <Panel
-          title="Company budget meter"
-          icon="target"
-          subtitle="process-lifetime — not the window above"
-          actions={org.used >= org.max ? <Badge tone="critical">spent</Badge> : undefined}
-        >
+        <Card>
+          <Card.Header
+            icon={<TargetGlyph size="sm" />}
+            subtitle="process-lifetime — not the window above"
+            actions={org.used >= org.max ? <Tag variant="danger">spent</Tag> : undefined}
+          >
+            <Card.Title>Company budget meter</Card.Title>
+          </Card.Header>
+          {/* THEIR `label` IS THE ACCESSIBLE NAME, tied to the bar, so the
+              separate `ariaLabel` ours needed is gone — and with it the reason
+              the visible legend could not be the name. `valueText` carries the
+              true figures past the clamp, which is what ours put in
+              `aria-valuetext`. `fullMeans="spent"` is gone because that is the
+              only reading theirs has; see the report for what that costs the
+              screens measuring progress. */}
           <Meter
-            fullMeans="spent"
-            used={org.used}
+            value={org.used}
             max={org.max}
-            // A NOUN, not the legend beside it: "94% of the meter used" is
-            // the reading, and a name that changes with the value is not a
-            // name.
-            ariaLabel="Company token budget"
-            label={`${fmtPct(org.used, org.max, 1)} of the meter used`}
-            right={`${fmtExact(org.used)} / ${fmtExact(org.max)}`}
-            tone={org.used >= org.max ? "critical" : undefined}
+            label="Company token budget"
+            valueText={`${fmtExact(org.used)} of ${fmtExact(org.max)} tokens`}
+            hint={`${fmtPct(org.used, org.max, 1)} used · ${fmtExact(org.used)} / ${fmtExact(org.max)}`}
+            tone={org.used >= org.max ? "danger" : undefined}
           />
           {org.used >= org.max && (
             // AT THE CAP IS WHAT THE SHARED COUNTER CAN SAY. It is
@@ -395,19 +440,28 @@ export function Spend() {
               declined at the gate.
             </p>
           )}
-        </Panel>
+        </Card>
       )}
 
       <div className="grid grid-auto-lg">
-        <Panel title="By phase" icon="layers" subtitle="where the tokens actually go">
+        <Card>
+          <Card.Header icon={<LayersGlyph size="sm" />} subtitle="where the tokens actually go">
+            <Card.Title>By phase</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <BarList data={phase} emptyLabel="No model calls in this window." />
             {phase.length > 0 && (
-              <Legend items={phase.map((p) => ({ label: p.label, color: p.color }))} />
+              <Legend items={phase.map((p) => ({ id: p.id, label: p.label, color: p.color }))} />
             )}
           </div>
-        </Panel>
-        <Panel title="By model" icon="cpu" subtitle="from each completion's own reported model">
+        </Card>
+        <Card>
+          <Card.Header
+            icon={<MemoryGlyph size="sm" />}
+            subtitle="from each completion's own reported model"
+          >
+            <Card.Title>By model</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <BarList data={models} limit={8} emptyLabel="No model calls in this window." />
             <p className="t-caption">
@@ -415,24 +469,31 @@ export function Spend() {
               fallback chain serves several models under one key.
             </p>
           </div>
-        </Panel>
+        </Card>
       </div>
 
       {(tokens?.by_worker ?? []).length > 0 && (
-        <Panel title="Background workers" icon="refresh" subtitle="spend outside any seat's turn">
+        <Card>
+          <Card.Header icon={<RefreshGlyph size="sm" />} subtitle="spend outside any seat's turn">
+            <Card.Title>Background workers</Card.Title>
+          </Card.Header>
           <BarList
             data={(tokens?.by_worker ?? []).map((w, i) => ({
+              id: w.worker,
               label: w.worker,
               value: w.total_tokens,
               display: fmtCount(w.total_tokens),
-              color: vizColor(i),
+              color: dataColor(i),
               sub: `${w.calls} calls`,
             }))}
           />
-        </Panel>
+        </Card>
       )}
 
-      <Panel title="By seat" icon="users" count={seats.length} padding="none">
+      <Card padding="none">
+        <Card.Header icon={<GroupGlyph size="sm" />} count={seats.length}>
+          <Card.Title>By seat</Card.Title>
+        </Card.Header>
         <DataGrid
           rows={seats}
           rowKey={(a) => a.agent_id || a.role}
@@ -459,7 +520,7 @@ export function Spend() {
               // very seat — a second link over the name would swallow the plain
               // click the peek opens on and send the reader to the page the
               // rail was built to save them from.
-              cell: (a) => <TextCell icon="cpu">{a.role}</TextCell>,
+              cell: (a) => <TextCell icon="memory">{a.role}</TextCell>,
             },
             {
               key: "total",
@@ -483,6 +544,7 @@ export function Spend() {
               cell: (a) => (
                 <StackedBar
                   segments={phaseKeys.map((p) => ({
+                    id: p,
                     label: p,
                     value: a.by_phase?.[p]?.total_tokens ?? 0,
                     color: phaseColor(p),
@@ -516,13 +578,16 @@ export function Spend() {
           ]}
         />
         {phaseKeys.length > 0 && (
-          <footer className="panel-foot">
-            <Legend items={phaseKeys.map((p) => ({ label: p, color: phaseColor(p) }))} />
-          </footer>
+          <Card.Footer variant="meta">
+            <Legend items={phaseKeys.map((p) => ({ id: p, label: p, color: phaseColor(p) }))} />
+          </Card.Footer>
         )}
-      </Panel>
+      </Card>
 
-      <Panel title="Recent turns" icon="layers" count={turns.length} padding="none">
+      <Card padding="none">
+        <Card.Header icon={<LayersGlyph size="sm" />} count={turns.length}>
+          <Card.Title>Recent turns</Card.Title>
+        </Card.Header>
         <DataGrid
           name="turns"
           rows={turns}
@@ -553,7 +618,7 @@ export function Spend() {
               sortValue: (t) => t.role,
               // NOT `SeatCell` or the chip this drew: both are anchors and every
               // row here is one. The seat is a link again in the turn's own peek.
-              cell: (t) => <TextCell icon="cpu">{t.role}</TextCell>,
+              cell: (t) => <TextCell icon="memory">{t.role}</TextCell>,
             },
             {
               key: "total",
@@ -583,7 +648,7 @@ export function Spend() {
             },
           ]}
         />
-      </Panel>
+      </Card>
     </>
   );
 }

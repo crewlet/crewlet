@@ -25,8 +25,8 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Callout, Card, Skeleton } from "@crewlethq/ui";
+import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtExact } from "~/lib/format.ts";
 
@@ -73,21 +73,25 @@ export function Budgets() {
         through to whatever its chain names next.
       </PageNote>
 
-      <Panel
-        title="Durable budget counters"
-        icon="database"
-        subtitle="the fleet's shared ledger, not this process's meter"
-        padding="none"
-      >
-        {budgets.loading && !budgets.data && <Skeleton rows={3} />}
+      <Card padding="none">
+        <Card.Header
+          icon={<DatabaseGlyph size="sm" />}
+          subtitle="the fleet's shared ledger, not this process's meter"
+        >
+          <Card.Title>Durable budget counters</Card.Title>
+        </Card.Header>
+        {budgets.loading && !budgets.data && (
+          <Skeleton variant="text" rows={3} label="Loading the budget counters" />
+        )}
         {budgets.data && budgets.data.durable === false ? (
-          <div className="banner neutral" style={{ margin: "var(--space-3)" }}>
-            <Icon name="database" size="sm" />
-            <span>
-              The durable counter could not be READ — which is not the same as it being zero. It
-              lives in the fleet's coordination store; this node could not reach it.
-            </span>
-          </div>
+          <Callout
+            variant="neutral"
+            icon={<DatabaseGlyph size="md" />}
+            style={{ margin: "var(--space-3)" }}
+          >
+            The durable counter could not be READ — which is not the same as it being zero. It lives
+            in the fleet's coordination store; this node could not reach it.
+          </Callout>
         ) : (
           <QueryState error={budgets.error} loading={budgets.loading}>
             <DataGrid
@@ -123,7 +127,7 @@ export function Budgets() {
                   // draw: both are anchors, and this row is one now whose target
                   // is that same seat — a second link over the name would take
                   // the plain click the peek opens on.
-                  cell: (s) => <TextCell icon="cpu">{s.role}</TextCell>,
+                  cell: (s) => <TextCell icon="memory">{s.role}</TextCell>,
                 },
                 {
                   key: "used",
@@ -201,7 +205,7 @@ export function Budgets() {
             />
           </QueryState>
         )}
-      </Panel>
+      </Card>
     </>
   );
 }

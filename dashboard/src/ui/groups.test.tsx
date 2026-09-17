@@ -1,13 +1,13 @@
 /**
- * The keyboard contract of a group of choices, and the role each group claims.
+ * The keyboard contract of a group of choices, and the role the group claims.
  *
- * Both were missing, and they failed in opposite directions. `Segmented` and
- * `Tabs` rendered a row of ordinary buttons under `role="tablist"`: the ARIA
- * promised one tab stop with arrow keys inside it, and the DOM delivered N tab
- * stops with no arrow keys at all — so a keyboard reader got neither the
- * behaviour the role implies nor the behaviour plain buttons would have given
- * them. And `Segmented`'s role was wrong on top of that: a tab controls a
- * panel it labels, and not one call site does that.
+ * Both were missing, and they failed in opposite directions. `Segmented`
+ * rendered a row of ordinary buttons under `role="tablist"`: the ARIA promised
+ * one tab stop with arrow keys inside it, and the DOM delivered N tab stops
+ * with no arrow keys at all — so a keyboard reader got neither the behaviour
+ * the role implies nor the behaviour plain buttons would have given them. And
+ * the role was wrong on top of that: a tab controls a panel it labels, and not
+ * one call site does that.
  *
  * WHAT THE ARROWS DO is the third question, and the one these cases are most
  * careful about. They move focus and commit nothing, because seven of the nine
@@ -18,12 +18,20 @@
  * What IS asserted is both halves of the chain that ARE ours — the group hands
  * Enter and Space to the browser untouched, and every option is a real
  * `<button>` whose click commits the option focus is standing on.
+ *
+ * THE TAB LIST THAT SAT BESIDE THIS IS GONE, with the cases that covered it:
+ * a real tab strip is `@crewlethq/ui`'s `Tabs` now, which mints the
+ * `aria-controls`/`aria-labelledby` pair and moves focus with the arrows
+ * itself. What kept `Segmented` out of the package is written at its own
+ * definition — its `SegmentedControl` has no way to say that the arrows must
+ * not COMMIT — so these are the cases for that gap, and they delete the day it
+ * closes.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { Segmented, Tabs } from "./primitives.tsx";
+import { Segmented } from "./primitives.tsx";
 
 afterEach(cleanup);
 
@@ -60,6 +68,35 @@ function LiveSegmented({
 
 const tabstops = () => screen.getAllByRole("radio").map((b) => b.getAttribute("tabindex"));
 const checked = () => screen.getAllByRole("radio").map((b) => b.getAttribute("aria-checked"));
+
+// AN OPTION'S GLYPH IS DECORATION, and the option's NAME is its word.
+//
+// The icon is named rather than handed in as a node, so the size step is
+// decided once here rather than at nine call sites — and what that has to keep
+// true is the accessible name: a glyph that announced itself would make this
+// option read as "description Active" to a screen reader, saying the same
+// thing twice and saying the first half in a vocabulary nobody chose.
+test("an option with a glyph is still named by its label alone", () => {
+  render(
+    <Segmented<Lens>
+      ariaLabel="Org view"
+      value="chart"
+      onChange={() => {}}
+      options={[
+        { value: "chart", label: "Chart", icon: "account_tree" },
+        { value: "directory", label: "Directory", icon: "person" },
+        { value: "charter", label: "Charter" },
+      ]}
+    />,
+  );
+  expect(screen.getByRole("radio", { name: "Chart" })).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "Directory" })).toBeTruthy();
+  // DRAWN, not merely absent: without this the case passes on a component
+  // that dropped the glyph altogether.
+  const drawn = screen.getByRole("radio", { name: "Chart" }).querySelector("svg");
+  expect(drawn).not.toBeNull();
+  expect(drawn!.getAttribute("aria-hidden")).toBe("true");
+});
 
 // A SEGMENTED CONTROL IS A RADIO GROUP, NOT A TAB LIST.
 //
@@ -363,119 +400,6 @@ test("an automatic group commits as focus moves", () => {
   expect(document.activeElement).toBe(screen.getAllByRole("radio")[2]);
 });
 
-type Tab = "overview" | "model" | "cost";
-
-function LiveTabs() {
-  const [value, setValue] = useState<Tab>("overview");
-  return (
-    <Tabs<Tab>
-      ariaLabel="Seat sections"
-      value={value}
-      onChange={setValue}
-      options={[
-        { value: "overview", label: "Overview" },
-        { value: "model", label: "Model activity" },
-        { value: "cost", label: "Cost" },
-      ]}
-    />
-  );
-}
-
-// TABS KEEP THE TAB ROLE — they are the one control here that genuinely is a
-// tab list, with its panels directly beneath it — and they get manual
-// activation for the reason the pattern gives for it by name: a tab whose
-// panel is not displayed without noticeable latency should not be selected by
-// focus alone. Seat's strip is `useParam(…, "section")`, so each of its tabs
-// is a query and a history entry.
-// A TAB LIST WITHOUT A PANEL IS A ROW OF BUTTONS WEARING THE ROLE.
-//
-// The role was declared and the relationship was not: nothing carried
-// `role="tabpanel"`, nothing was referenced by `aria-controls`, and the
-// switched content was an ordinary run of siblings after the strip. A screen
-// reader could find the tabs and had no way to reach what the selected one
-// controlled — pressing Tab from a freshly chosen tab left the widget
-// entirely, so choosing a tab moved the reader further from the content they
-// had chosen.
-test("a tab list points at the panel it controls", () => {
-  function WithPanel() {
-    const [value, setValue] = useState<Tab>("overview");
-    return (
-      <Tabs<Tab>
-        ariaLabel="Seat sections"
-        value={value}
-        onChange={setValue}
-        options={[
-          { value: "overview", label: "Overview" },
-          { value: "model", label: "Model activity" },
-          { value: "cost", label: "Cost" },
-        ]}
-      >
-        <p>the {value} content</p>
-      </Tabs>
-    );
-  }
-  render(<WithPanel />);
-
-  const panel = screen.getByRole("tabpanel");
-  const [overview, model] = screen.getAllByRole("tab");
-
-  // The selected tab CONTROLS it, and the panel names that tab back.
-  expect(overview!.getAttribute("aria-controls")).toBe(panel.getAttribute("id"));
-  expect(panel.getAttribute("aria-labelledby")).toBe(overview!.getAttribute("id"));
-  expect(panel.textContent).toContain("overview");
-
-  // AND IT IS REACHABLE. Without a stop here, Tab from the selected tab
-  // leaves the widget and lands on whatever follows in the DOM.
-  expect(panel.getAttribute("tabindex")).toBe("0");
-
-  // An unselected tab controls NOTHING, because only the selected panel is
-  // rendered — an `aria-controls` pointing at an absent id offers a reader a
-  // jump that goes nowhere, which is worse than not offering one.
-  expect(model!.hasAttribute("aria-controls")).toBe(false);
-
-  // The relationship follows the selection.
-  fireEvent.click(model!);
-  const after = screen.getByRole("tabpanel");
-  expect(model!.getAttribute("aria-controls")).toBe(after.getAttribute("id"));
-  expect(after.textContent).toContain("model");
-  expect(overview!.hasAttribute("aria-controls")).toBe(false);
-});
-
-// TWO STRIPS ON ONE PAGE MUST NOT SHARE IDS. The ids are minted per instance
-// rather than from a constant, because a duplicated id makes `aria-controls`
-// ambiguous and a reader lands in the wrong panel.
-test("two tab lists mint their own ids", () => {
-  const strip = (label: string) => (
-    <Tabs<Tab>
-      ariaLabel={label}
-      value="overview"
-      onChange={() => {}}
-      options={[{ value: "overview", label: "Overview" }]}
-    >
-      <p>{label} content</p>
-    </Tabs>
-  );
-  render(
-    <>
-      {strip("First")}
-      {strip("Second")}
-    </>,
-  );
-  const [a, b] = screen.getAllByRole("tabpanel");
-  expect(a!.getAttribute("id")).not.toBe(b!.getAttribute("id"));
-  expect(a!.getAttribute("id")).toBeTruthy();
-});
-
-// A STRIP WITH NO CONTENT RENDERS NO PANEL, rather than an empty one claiming
-// to hold something.
-test("a tab list with no children exposes no panel", () => {
-  render(<LiveTabs />);
-  expect(screen.queryByRole("tabpanel")).toBeNull();
-  for (const tab of screen.getAllByRole("tab")) {
-    expect(tab.hasAttribute("aria-controls")).toBe(false);
-  }
-});
-
 // MANUAL ACTIVATION OWES THE READER A SENTENCE.
 //
 // A radio group's learned contract is that the arrows choose. This one moves
@@ -502,23 +426,4 @@ test("a manual group says how to choose", () => {
 test("an automatic group carries no such note", () => {
   render(<LiveSegmented activate="automatic" />);
   expect(screen.getByRole("radiogroup").hasAttribute("aria-describedby")).toBe(false);
-});
-
-test("a tab list keeps its role and selects only on activation", () => {
-  render(<LiveTabs />);
-  const list = screen.getByRole("tablist", { name: "Seat sections" });
-  const stops = () => screen.getAllByRole("tab").map((b) => b.getAttribute("tabindex"));
-  expect(stops()).toEqual(["0", "-1", "-1"]);
-
-  fireEvent.keyDown(list, { key: "ArrowRight" });
-  const [overview, model] = screen.getAllByRole("tab");
-  expect(document.activeElement).toBe(model);
-  expect(stops()).toEqual(["-1", "0", "-1"]);
-  // FOCUSED, NOT SELECTED: the panel below has not been swapped out from
-  // under a reader who was only looking.
-  expect(model!.getAttribute("aria-selected")).toBe("false");
-  expect(overview!.getAttribute("aria-selected")).toBe("true");
-
-  fireEvent.click(document.activeElement!);
-  expect(model!.getAttribute("aria-selected")).toBe("true");
 });

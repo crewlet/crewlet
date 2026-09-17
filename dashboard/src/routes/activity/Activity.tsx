@@ -23,7 +23,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
+import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
+import { CloseGlyph, SearchGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
@@ -272,12 +273,13 @@ export function Activity() {
   return (
     <>
       <PageActions>
-        <Badge outline>{windowLabel(range.window)}</Badge>
+        <Tag appearance="outline">{windowLabel(range.window)}</Tag>
         <TimeRangePicker range={range} ariaLabel="Window" />
         {filtered ? (
           <Button
-            icon="x"
-            size="sm"
+            leadingIcon={<CloseGlyph size="xs" />}
+            size="small"
+            variant="secondary"
             onClick={() => {
               setCategory("");
               setActor("");
@@ -294,22 +296,24 @@ export function Activity() {
         last 400 in memory; older rows are fetched. The store keeps 30 days.
       </PageNote>
 
-      <Panel
-        title="When"
-        icon="activity"
-        subtitle={
-          series.data
-            ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)}`
-            : undefined
-        }
-        actions={
-          series.data ? (
-            <span className="t-caption">
-              one bar per {series.data.bucket} — click one to narrow the window
-            </span>
-          ) : undefined
-        }
-      >
+      <Card>
+        <Card.Header
+          icon={<TimelineGlyph size="sm" />}
+          subtitle={
+            series.data
+              ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)}`
+              : undefined
+          }
+          actions={
+            series.data ? (
+              <span className="t-caption">
+                one bar per {series.data.bucket} — click one to narrow the window
+              </span>
+            ) : undefined
+          }
+        >
+          <Card.Title>When</Card.Title>
+        </Card.Header>
         <QueryState
           error={series.error}
           loading={series.loading}
@@ -331,28 +335,34 @@ export function Activity() {
             />
           )}
         </QueryState>
-      </Panel>
+      </Card>
 
       <div className="toolbar">
-        <div style={{ maxWidth: 300, flex: 1 }}>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            ariaLabel="Search events"
-            placeholder="Search summary, type or source"
-          />
-        </div>
-        <div style={{ maxWidth: 180 }}>
-          <SearchInput
-            value={actor}
-            onChange={setActor}
-            ariaLabel="Filter by actor"
-            placeholder="Actor"
-          />
-        </div>
-        <Chip on={!!onlyFailed} onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}>
+        {/* The wrappers these replace were a `style={{ maxWidth: 300 }}` and a
+            `style={{ maxWidth: 180 }}` — two numbers nobody had reconciled.
+            `width` is the same idea as a named step, so the search box and the
+            filter box beside it are sized by what they hold. */}
+        <Input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Search events"
+          placeholder="Search summary, type or source"
+          leading={<SearchGlyph size="sm" />}
+          width="md"
+        />
+        <Input
+          type="search"
+          value={actor}
+          onChange={(e) => setActor(e.target.value)}
+          aria-label="Filter by actor"
+          placeholder="Actor"
+          leading={<SearchGlyph size="sm" />}
+          width="sm"
+        />
+        <FilterChip pressed={!!onlyFailed} onPressedChange={(on) => setOnlyFailed(on ? "1" : "")}>
           Failures only
-        </Chip>
+        </FilterChip>
         <span className="spacer" />
       </div>
 
@@ -382,7 +392,7 @@ export function Activity() {
         }))}
       />
 
-      <Panel padding="none">
+      <Card padding="none">
         {rows.length ? (
           <div className="list">
             {rows.map((ev, i) => (
@@ -430,7 +440,12 @@ export function Activity() {
             <span>That is the beginning of the retained history.</span>
           ) : (
             <>
-              <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
+              <Button
+                size="small"
+                variant="secondary"
+                onClick={() => void loadOlder()}
+                disabled={paging}
+              >
                 {paging ? "Loading…" : `Load ${PAGE} older`}
               </Button>
               <span className="spacer" />
@@ -441,8 +456,8 @@ export function Activity() {
             </>
           )}
         </footer>
-      </Panel>
-      {paging && <Skeleton rows={3} />}
+      </Card>
+      {paging && <Skeleton variant="text" rows={3} label="Loading older events" />}
     </>
   );
 }

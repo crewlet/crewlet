@@ -14,8 +14,20 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Badge, cx, type Tone } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Avatar, Callout, Tag, cx } from "@crewlethq/ui";
+import {
+  ArrowUpwardGlyph,
+  CalendarTodayGlyph,
+  KeyboardArrowDownGlyph,
+  KeyboardArrowUpGlyph,
+  PersonGlyph,
+  RemoveGlyph,
+} from "@crewlethq/icons/glyphs";
+// STILL OURS: a task TYPE's mark is named by the company's own type table as a
+// value, and uilet's glyphs are components. The name -> drawing lookup stays in
+// `~/ui/Icon.tsx`, which is where one change moves every caller at once.
+import { Mark } from "~/ui/glyph.tsx";
+import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import { fmtDateCompact, fmtDateTime, relTime } from "~/lib/format.ts";
 import { fmtMinutes, statusLabel, STATUS_TONE, typeIcon, typeName } from "~/lib/work.ts";
@@ -33,7 +45,7 @@ export function TypeIcon({ type, types }: { type?: string; types?: WorkTypeDef[]
   const name = typeName(type, types) || "Untyped";
   return (
     <span className="work-type" title={name}>
-      <Icon name={typeIcon(type)} size="sm" />
+      <Mark name={typeIcon(type)} size="sm" />
       <span className="sr-only">{name}</span>
     </span>
   );
@@ -57,17 +69,22 @@ export function PriorityMark({ priority, word }: { priority?: string; word?: boo
   // the answer and a blank is a gap.
   if (!priority || priority === "none") return null;
   if (priority === "normal" && !word) return null;
-  const glyph =
+  // FOUR STEPS, FOUR SHAPES — the scale has to read without its colour, which
+  // is what this mark is for. uilet vendors no double chevron, so the top step
+  // takes the SOLID ARROW against high's chevron rather than two chevrons
+  // against one: a different drawing, and still a different drawing per step,
+  // which is the property that was load-bearing.
+  const Glyph =
     priority === "urgent"
-      ? "chevronsUp"
+      ? ArrowUpwardGlyph
       : priority === "high"
-        ? "chevronUp"
+        ? KeyboardArrowUpGlyph
         : priority === "low"
-          ? "chevronDown"
-          : "minus";
+          ? KeyboardArrowDownGlyph
+          : RemoveGlyph;
   return (
     <span className="work-prio" data-priority={priority} title={`${priority} priority`}>
-      <Icon name={glyph} size="xs" />
+      <Glyph size="xs" />
       {word ? <span>{priority}</span> : <span className="sr-only">{priority} priority</span>}
     </span>
   );
@@ -76,9 +93,9 @@ export function PriorityMark({ priority, word }: { priority?: string; word?: boo
 /** A status, in the project's own word and the tone its state carries. */
 export function StatusBadge({ status, defs }: { status: string; defs?: WorkStatusDef[] }) {
   return (
-    <Badge tone={(STATUS_TONE[status] ?? "neutral") as Tone} dot>
+    <Tag variant={uiletTone(STATUS_TONE[status] ?? "neutral")} dot>
       {statusLabel(status, defs)}
-    </Badge>
+    </Tag>
   );
 }
 
@@ -104,7 +121,7 @@ export function Assignee({
   if (!handle) {
     return (
       <span className="work-nobody" title="Unassigned">
-        <Icon name="user" size="xs" />
+        <PersonGlyph size="xs" />
         <span className="sr-only">Unassigned</span>
         {showName && <span className="muted">Unassigned</span>}
       </span>
@@ -113,7 +130,11 @@ export function Assignee({
   const label = seatName?.(handle) ?? handle;
   return (
     <span className="row gap-1" title={label}>
-      <Avatar name={label} size={size} />
+      {/* `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT. Ours was
+          `aria-hidden` either way and leant on a `title` on the wrapper, which
+          a screen reader is free to ignore — so the four columns that draw the
+          badge alone announced the assignee as nothing at all. */}
+      <Avatar name={label} size={size} decorative={showName} />
       {showName && <span className="truncate">{label}</span>}
     </span>
   );
@@ -134,7 +155,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
     // compact form, because a column of dates repeating one year on every
     // row is how the one date not in this year goes unnoticed.
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
-      <Icon name="calendar" size="xs" />
+      <CalendarTodayGlyph size="xs" />
       {fmtDateCompact(due, now)}
       {overdue && <span className="sr-only">— overdue</span>}
     </span>
@@ -188,9 +209,9 @@ export function BoardCard({
       <div className="work-card-title">{row.title}</div>
       <div className="work-card-foot">
         {row.blocked && (
-          <Badge tone="critical" outline>
+          <Tag variant="danger" appearance="outline">
             Blocked
-          </Badge>
+          </Tag>
         )}
         <DueMark due={row.due} overdue={row.overdue} now={now} />
         <SizeMark points={row.points} minutes={row.estimate_min} />
@@ -236,9 +257,9 @@ export function WorkRow({
       <span className="work-row-title truncate">
         {row.title}
         {row.blocked && (
-          <Badge tone="critical" outline>
+          <Tag variant="danger" appearance="outline">
             Blocked
-          </Badge>
+          </Tag>
         )}
       </span>
       {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below
@@ -336,39 +357,45 @@ export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
   return (
     <>
       {answer.complete === false && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <strong>
-              This answer is incomplete
-              {answer.incomplete
-                ? ` — ${answer.incomplete.records} record(s) this build cannot read`
-                : ""}
-            </strong>{" "}
-            Rows may be missing, rows that should have gone may still be here, and the counts were
-            computed over what is shown.
-            {answer.incomplete?.scope?.length
-              ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
-              : ""}
-            {answer.incomplete
-              ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-              : ""}
-          </span>
-        </div>
+        // `title` IS the bold lead-in this banner hand-rolled with a `strong`,
+        // and the `flex: 1` span goes with it: a Callout's content column
+        // already owns that. The severity stays a WARNING rather than a
+        // danger — the answer is usable, it just cannot account for
+        // everything, which is precisely what the sentence says.
+        <Callout
+          variant="warning"
+          title={`This answer is incomplete${
+            answer.incomplete
+              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
+              : ""
+          }`}
+        >
+          Rows may be missing, rows that should have gone may still be here, and the counts were
+          computed over what is shown.
+          {answer.incomplete?.scope?.length
+            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
+            : ""}
+          {answer.incomplete
+            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
+            : ""}
+        </Callout>
       )}
       {(answer.read_level || behind) && (
         <span className="work-coverage">
           {answer.read_level && (
-            <Badge outline title="How fresh this answer is, as the engine actually served it">
+            <Tag
+              appearance="outline"
+              title="How fresh this answer is, as the engine actually served it"
+            >
               {answer.read_level}
-            </Badge>
+            </Tag>
           )}
           {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
               apply is visible as its own state rather than as lag. */}
           {behind && (
-            <Badge tone="caution" outline>
+            <Tag variant="warning" appearance="outline">
               applied through {answer.applied_through} of {answer.log_seq}
-            </Badge>
+            </Tag>
           )}
         </span>
       )}

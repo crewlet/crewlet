@@ -25,7 +25,8 @@ import {
   type TimelineBar,
 } from "~/lib/timeline.ts";
 import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "./work.tsx";
-import { Badge, Empty, cx } from "~/ui/primitives.tsx";
+import { EmptyState, Tag, cx } from "@crewlethq/ui";
+import { TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
 
 /** How wide one day is, in pixels. */
@@ -247,9 +248,7 @@ function Band({
         <div className="tl-aside">
           {line.unscheduled.length > 0 && (
             <div className="tl-unscheduled">
-              <Badge tone="neutral" outline>
-                Unscheduled
-              </Badge>
+              <Tag appearance="outline">Unscheduled</Tag>
               <span className="tl-aside-note">
                 {plural(line.unscheduled.length, "item")} with neither a start nor a due date. They
                 have no bar because placing them would invent a schedule nobody set.
@@ -315,9 +314,13 @@ export function TimelineView({
 }) {
   if (groups.length === 0 && rows.length === 0) {
     return (
-      <Empty
+      // THE MARK SAYS WHICH SCREEN IS EMPTY. uilet's EmptyState draws an inbox
+      // by default, which is right for a feed and wrong here — this is the
+      // date axis, and it is the axis that has nothing on it.
+      <EmptyState
+        icon={<TimelineGlyph size={32} />}
         title="Nothing to lay out"
-        hint="No item on this node's copy of the tracker matches these filters."
+        description="No item on this node's copy of the tracker matches these filters."
       />
     );
   }

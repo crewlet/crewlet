@@ -25,6 +25,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import { isModalLayerOpen } from "@crewlethq/ui";
 
 /**
  * Whether the keyboard currently belongs to something the reader is typing in.
@@ -110,6 +111,23 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
     }
 
     function onKey(e: KeyboardEvent): void {
+      // A SURFACE ON THE LAYER STACK OWNS THE KEYBOARD, and this is the one
+      // rule the page cannot infer from the event. The stack calls
+      // `preventDefault()` on a press it handled and deliberately NOT
+      // `stopPropagation()` — which is the defensible choice for a library,
+      // and means every press still arrives here. So one Escape inside a
+      // dialog closed the dialog AND ran the page's own escape chord behind
+      // it: the peek rail under an open dialog shut at the same time, from a
+      // press the reader aimed at the dialog.
+      //
+      // It fails silently in the shape that matters — the dialog does close,
+      // so the gesture looks like it worked, and the second thing that closed
+      // is behind the surface you were reading. `isModalLayerOpen` is
+      // published for exactly this and is the only honest test: "was this
+      // press already somebody's" is a fact about the stack, not about the
+      // event.
+      if (isModalLayerOpen()) return;
+
       const key = e.key.toLowerCase();
       const meta = e.metaKey || e.ctrlKey;
       const typing = isTyping();

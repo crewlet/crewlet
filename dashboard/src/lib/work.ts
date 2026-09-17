@@ -16,7 +16,7 @@
  */
 
 import { browserDay, fmtDate, fmtDateTime, humanize, parseUTC } from "./format.ts";
-import type { IconName } from "~/ui/Icon.tsx";
+import type { MarkName } from "~/ui/glyph.tsx";
 import type {
   WorkActivityRecord,
   WorkChange,
@@ -91,18 +91,18 @@ export const PRIORITIES = ["none", "low", "normal", "high", "urgent"] as const;
  * slugs ship with the engine; a company's own type falls through to the
  * neutral box rather than to a generated anything.
  */
-export const TYPE_ICON: Record<string, IconName> = {
-  task: "checkSquare",
-  bug: "bug",
-  epic: "zap",
-  story: "book",
-  spike: "compass",
-  chore: "wrench",
+export const TYPE_ICON: Record<string, MarkName> = {
+  task: "check_circle",
+  bug: "bug_report",
+  epic: "bolt",
+  story: "book_2",
+  spike: "explore",
+  chore: "build",
   milestone: "flag",
 };
 
-export function typeIcon(slug: string | undefined): IconName {
-  return TYPE_ICON[slug ?? ""] ?? "box";
+export function typeIcon(slug: string | undefined): MarkName {
+  return TYPE_ICON[slug ?? ""] ?? "package_2";
 }
 
 /** What a type is called, preferring the company's own declaration. */

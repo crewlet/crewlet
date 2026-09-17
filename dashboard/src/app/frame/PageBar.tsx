@@ -19,8 +19,10 @@
 
 import { useCallback, useState, type ReactNode } from "react";
 import { href } from "../router.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { Button, cx } from "~/ui/primitives.tsx";
+import { Button, IconButton, Kbd, SearchTrigger, cx } from "@crewlethq/ui";
+import { ContentCopyGlyph, MenuGlyph } from "@crewlethq/icons/glyphs";
+// THE STAR HAS NO GLYPH IN UILET — see `StarPage` below.
+import { Mark } from "~/ui/glyph.tsx";
 import { PAGE_ACTIONS_SLOT } from "./PageActions.tsx";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 
@@ -89,8 +91,18 @@ export function CopyLink({ label = "Copy link" }: { label?: string }) {
       () => done("Blocked"),
     );
   }, []);
+  // NOT `Copyable`, which is the right part for an identifier: it DRAWS the
+  // value it copies, and what this copies is the page's whole URL. A page bar
+  // that rendered `http://host:8000/#/work/ENG-42?peek=seat:ada` where "Copy
+  // link" is would push the breadcrumb off the bar.
   return (
-    <Button size="sm" variant="ghost" icon="copy" onClick={copy} title={label}>
+    <Button
+      size="small"
+      variant="tertiary"
+      leadingIcon={<ContentCopyGlyph size="sm" />}
+      onClick={copy}
+      title={label}
+    >
       {said || label}
     </Button>
   );
@@ -123,16 +135,32 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
     setSaid(`${MaxStars} is the limit`);
     window.setTimeout(() => setSaid(""), 2_400);
   };
+  // THE STAR IS A DRAWING THIS BUILD HOLDS, because `@crewlethq/icons` has not
+  // vendored one and nothing in its set carries "kept" — `FlagGlyph` is the
+  // nearest and means a thing marked for attention rather than a thing you
+  // chose to keep. It is not ours in any sense except that we are holding it:
+  // it is the same Material Symbol at the same pinned commit, so it sits in
+  // the family rather than beside it. `src/ui/symbols/README.md` records the
+  // one command that retires it upstream.
+  //
+  // TWO DRAWINGS RATHER THAN ONE FILLED, which is the change from our Feather
+  // star: a stroked outline has an inside to fill and a Material Symbol does
+  // not, so `fill` on it would colour the whole mark instead of its middle.
+  // Upstream draws the pair and this picks between them.
   return (
     <Button
-      size="sm"
-      variant="ghost"
+      size="small"
+      variant="tertiary"
       onClick={onClick}
       title={said || (kept ? "Remove from Starred" : "Keep in Starred")}
-      aria-pressed={kept}
+      pressed={kept}
+      leadingIcon={<Mark name={kept ? "star-fill" : "star"} size="sm" />}
     >
-      <Icon name="star" size="sm" fill={kept ? "currentColor" : "none"} />
-      {said}
+      {/* `undefined` RATHER THAN `""` WHEN THERE IS NOTHING TO SAY: their
+          Button falls back to `title` for the accessible name only when it has
+          no children at all, and an empty label span is children. Without this
+          the star is an unnamed button for as long as it is not refusing. */}
+      {said || undefined}
     </Button>
   );
 }
@@ -155,8 +183,9 @@ export function PageBar({
     <header className="page-bar">
       {onToggleSidebar && (
         <span className="drawer-toggle">
-          <Button
-            icon="menu"
+          <IconButton
+            label="Navigation"
+            icon={<MenuGlyph size="sm" />}
             variant="ghost"
             size="sm"
             title="Navigation"
@@ -173,11 +202,24 @@ export function PageBar({
       <div className="row gap-1 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
       {actions}
       {viewer}
-      <button className="omni" onClick={onSearch} title="Search everything">
-        <Icon name="search" size="sm" />
-        <span className="omni-label">Search</span>
-        <kbd>⌘K</kbd>
-      </button>
+      {/* `SearchTrigger` IS `.omni`, down to the breakpoint that drops the
+          label and the hint — and it fixes the bug that shape has: ours was
+          named by its text, which `display: none` takes away, so under the
+          breakpoint a screen reader announced "button". Its name is on the
+          button.
+
+          AND THE KEYCAP IS NOW HONEST. `lib/keys.ts` matches `metaKey ||
+          ctrlKey`, so the chord has always worked on both platforms while the
+          hardcoded `⌘K` named a key a Windows or Linux reader does not have.
+          `Kbd keys={["Mod", "k"]}` draws the platform's own and reads it as a
+          sentence rather than as "place of interest sign K". */}
+      <SearchTrigger
+        label="Search"
+        title="Search everything"
+        onClick={onSearch}
+        keyshortcuts="Meta+K Control+K"
+        shortcut={<Kbd keys={["Mod", "k"]} subtle />}
+      />
     </header>
   );
 }

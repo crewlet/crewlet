@@ -23,8 +23,30 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Avatar,
+  Button,
+  ButtonLink,
+  Callout,
+  Card,
+  EmptyState,
+  InlineCode,
+  Skeleton,
+  Tag,
+  type Tone,
+} from "@crewlethq/ui";
+import {
+  CableGlyph,
+  KeyboardArrowDownGlyph,
+  KeyGlyph,
+  LayersGlyph,
+  LinkGlyph,
+  InboxGlyph,
+  RefreshGlyph,
+  SettingsGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
   Dash,
@@ -40,7 +62,6 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { Icon } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -58,7 +79,12 @@ import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/ty
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
-type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
+// THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
+// five-value union beside the one the design system publishes, which is the
+// drift `app/frame/tone.ts` was written to stop — so `Tone` is imported rather
+// than re-spelled, and `positive`/`caution`/`critical` are `success`/`warning`/
+// `danger` throughout. `brand` is in the type and is deliberately unused here:
+// a vendor is an identity, and identity never takes colour.
 
 /** One engine surface behind a tool: the key the API row carries, named. */
 export interface Surface {
@@ -158,11 +184,11 @@ export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating"
 export function phaseTone(phase: string): Tone {
   switch (phase) {
     case "ready":
-      return "positive";
+      return "success";
     case "degraded":
-      return "caution";
+      return "warning";
     case "unconfigured":
-      return "critical";
+      return "danger";
     // IN PROGRESS IS NOT NEUTRAL. Every one of these is an integration
     // that does not work YET — setting up agents, waiting for the provider,
     // waiting for a person, being taken away — and neutral is the tone this
@@ -173,7 +199,7 @@ export function phaseTone(phase: string): Tone {
     case "provisioning":
     case "activating":
     case "disconnecting":
-      return "caution";
+      return "warning";
     default:
       // A phase a newer node wrote. Rendered as-is in a neutral tone
       // rather than guessed at: claiming a surface is fine on the
@@ -364,7 +390,7 @@ export function rollUp(
     // engine is still working through, where telling a person to act would be
     // asking them to interrupt it.
     if (ingress && phase === "ready") {
-      return { tag: "Action needed", tone: "caution", outline: false };
+      return { tag: "Action needed", tone: "warning", outline: false };
     }
     return {
       // The ENGINE's word for the phase, not this screen's. `phase_label`
@@ -407,8 +433,8 @@ export function rollUp(
   // anything else is.
   if (tools.length > 0 && !tools.some((t) => t.can_provision)) {
     return ingress
-      ? { tag: "Action needed", tone: "caution", outline: false }
-      : { tag: "Connected", tone: "positive", outline: false };
+      ? { tag: "Action needed", tone: "warning", outline: false }
+      : { tag: "Connected", tone: "success", outline: false };
   }
   // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
   // reconcile interval after connecting, not a resting state, so the word is
@@ -423,7 +449,7 @@ export function rollUp(
     tag: "Connecting",
     // Amber for the same reason every in-progress phase is: this is the
     // window before the loop's first report, and it is not yet working.
-    tone: "caution",
+    tone: "warning",
     outline: true,
     busy: true,
   };
@@ -880,7 +906,7 @@ export function disconnectOrder(
 }
 
 /**
- * What is wrong with one surface, as badges.
+ * What is wrong with one surface, as tags.
  *
  * TWO READERS, ONE COPY. The card's surface row draws these under a tool the
  * operator has opened, and the peek draws them beside EVERY surface whether or
@@ -897,33 +923,33 @@ function SurfaceBadges({ row }: { row: IntegrationRow }) {
   return (
     <>
       {row.secret_usable === false && (
-        <Badge
-          tone="caution"
-          outline
+        <Tag
+          variant="warning"
+          appearance="outline"
           title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
         >
           secret unresolved
-        </Badge>
+        </Tag>
       )}
       {row.routes === false && (
-        <Badge
-          tone="caution"
-          outline
+        <Tag
+          variant="warning"
+          appearance="outline"
           title="deliveries are verified and stored, and no parser turns them into work for a seat"
         >
           routes nowhere
-        </Badge>
+        </Tag>
       )}
       {row.endpoint_current === false && (
-        <Badge
-          tone="caution"
-          outline
+        <Tag
+          variant="warning"
+          appearance="outline"
           title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
         >
           address moved
-        </Badge>
+        </Tag>
       )}
-      {row.enabled === false && <Badge outline>paused</Badge>}
+      {row.enabled === false && <Tag appearance="outline">paused</Tag>}
     </>
   );
 }
@@ -987,10 +1013,9 @@ function SurfaceRow({
         <div className="int-row-note">
           <span className="int-row-note-text">
             <span>
-              The event subscription was registered with{" "}
-              <code className="inline">{row.endpoint}</code>, but this engine now listens on{" "}
-              <code className="inline">{base ?? "no public address"}</code>. Update the address in{" "}
-              {surface.name} to keep receiving events.
+              The event subscription was registered with <InlineCode>{row.endpoint}</InlineCode>,
+              but this engine now listens on <InlineCode>{base ?? "no public address"}</InlineCode>.
+              Update the address in {surface.name} to keep receiving events.
             </span>
           </span>
         </div>
@@ -1274,16 +1299,22 @@ export function SeatStep({
       // that build a seat's app and they are the same kind of thing — the one
       // control on the row a person is meant to press — so drawing the second
       // as an ordinary button made the finished half look optional.
-      <a className="btn sm primary" href={seat.action_url} target="_blank" rel="noreferrer">
+      // A REAL ANCHOR WEARING THE BUTTON, which is what `ButtonLink` is for:
+      // this goes somewhere rather than doing something, so it has to be
+      // openable in a tab and copyable. `external` is what withholds the
+      // referrer and the opener and draws the mark that says the press leaves
+      // this application — the hand-written anchor carried the first half and
+      // never the second.
+      <ButtonLink variant="primary" size="small" external href={seat.action_url}>
         Install on {app}
-      </a>
+      </ButtonLink>
     );
   }
   if (seat.step !== "create_app") return null;
 
   return (
     <>
-      <Button size="sm" variant="primary" disabled={busy} onClick={() => void create()}>
+      <Button size="small" variant="primary" disabled={busy} onClick={() => void create()}>
         {busy ? `Opening ${app}` : `Create app on ${app}`}
       </Button>
       {refused && (
@@ -1401,17 +1432,17 @@ export function EntryRow({
   const actions = (
     <>
       {!titled && state.tag !== "" && (
-        <Badge tone={state.tone} outline={state.outline}>
+        <Tag variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
           {state.tag}
-        </Badge>
+        </Tag>
       )}
       {action && onConnect && (
-        <Button size="sm" variant="primary" onClick={() => onConnect()}>
+        <Button size="small" variant="primary" onClick={() => onConnect()}>
           {action.label}
         </Button>
       )}
       {!absent && onDisconnect && (
-        <Button size="sm" variant="ghost" onClick={onDisconnect}>
+        <Button size="small" variant="tertiary" onClick={onDisconnect}>
           Disconnect
         </Button>
       )}
@@ -1465,6 +1496,12 @@ export function EntryRow({
           </span>
         </button>
         <div className="int-card-actions">
+          {/* OURS, NOT `IconButton`. This square is a DISCLOSURE TRIGGER: it
+              carries `aria-expanded` and `aria-controls` over the card body,
+              and `.int-chevron` is what rotates the glyph when the card opens
+              — a state uilet's icon button has no expression for, since its
+              only stateful prop is `pressed`. The mark inside it is the
+              design system's. */}
           <button
             type="button"
             className={open ? "int-chevron is-open" : "int-chevron"}
@@ -1473,7 +1510,7 @@ export function EntryRow({
             aria-label={open ? `Hide ${entry.name} details` : `Show ${entry.name} details`}
             onClick={() => setOpen((was) => !was)}
           >
-            <Icon name="chevronDown" size="sm" />
+            <KeyboardArrowDownGlyph size="sm" />
           </button>
           {/* SETTINGS BESIDE THE DISCLOSURE, as a square the size of the
               chevron. It sat at the foot of the open card, which put an
@@ -1483,6 +1520,10 @@ export function EntryRow({
               it reads as chrome belonging to the row, next to the other
               control that does. */}
           {onConnect && !absent && (
+            // THE SAME SQUARE AS THE CHEVRON BESIDE IT, which is why it keeps
+            // `.int-chevron` and is not an `IconButton`: uilet's sizes it from
+            // its own scale, and a settings square a few pixels off its
+            // neighbour is the one thing this pair must not be.
             <button
               type="button"
               className="int-chevron"
@@ -1490,7 +1531,7 @@ export function EntryRow({
               title={`${entry.name} settings`}
               onClick={() => onConnect()}
             >
-              <Icon name="gear" size="sm" />
+              <SettingsGlyph size="sm" />
             </button>
           )}
           {actions}
@@ -1522,7 +1563,7 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <Avatar name={seat.name || seat.handle} size="sm" />
+                <Avatar name={seat.name || seat.handle} size="sm" decorative />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}
@@ -1581,7 +1622,7 @@ export function EntryRow({
                     {seat.detail ? (
                       seat.detail
                     ) : seat.inbound_path ? (
-                      <code className="inline">{seat.inbound_path}</code>
+                      <InlineCode>{seat.inbound_path}</InlineCode>
                     ) : (
                       "nothing set up for this agent"
                     )}
@@ -1666,15 +1707,15 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
     // A red agent under a surface saying "nothing has to be done" would be
     // the same contradiction in the other direction.
     return (
-      <Badge tone="caution" outline>
+      <Tag variant="warning" appearance="outline">
         not ready
-      </Badge>
+      </Tag>
     );
   }
   return (
-    <Badge tone={satisfied ? "positive" : "neutral"} outline={!satisfied}>
+    <Tag variant={satisfied ? "success" : "neutral"} appearance={satisfied ? "soft" : "outline"}>
       {satisfied ? "ready" : "not set up"}
-    </Badge>
+    </Tag>
   );
 }
 
@@ -1834,13 +1875,14 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
   const rows = deliveries.data?.events ?? [];
 
   return (
-    <Panel
-      title={`${name} deliveries`}
-      icon="inbox"
-      count={rows.length}
-      subtitle="what the provider actually sent, newest first"
-      padding="none"
-    >
+    <Card padding="none">
+      <Card.Header
+        icon={<InboxGlyph size="sm" />}
+        count={rows.length}
+        subtitle="what the provider actually sent, newest first"
+      >
+        {`${name} deliveries`}
+      </Card.Header>
       <QueryState
         error={deliveries.error}
         loading={deliveries.loading}
@@ -1943,15 +1985,18 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
         )}
       </QueryState>
       {rows.length >= DELIVERY_PAGE && (
-        <footer className="panel-foot">
+        // `Card.Footer` RATHER THAN OUR `.panel-foot`: this band is the
+        // design system's meta footer, which is the same thing the class drew
+        // — a rule, a quiet register and the card's own horizontal padding.
+        <Card.Footer variant="meta">
           <span className="t-caption">
             The newest {DELIVERY_PAGE}. Older deliveries are in the{" "}
             <a href={href(["activity", "events"], { category: "webhook" })}>event log</a>, which
             pages.
           </span>
-        </footer>
+        </Card.Footer>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -2207,6 +2252,29 @@ function useSetupRun(
 }
 
 /**
+ * A uilet variant, said in the tone names `app/frame/cells.tsx` still takes.
+ *
+ * The inverse of `app/frame/tone.ts`, and it exists for exactly as long as
+ * that file does: one cell in this screen is a frame component this port may
+ * not edit. `brand` and `info` have no status-cell spelling of their own and
+ * take neutral, which is what the cell drew for them before.
+ */
+function cellTone(variant: Tone): "positive" | "caution" | "critical" | "info" | "neutral" {
+  switch (variant) {
+    case "success":
+      return "positive";
+    case "warning":
+      return "caution";
+    case "danger":
+      return "critical";
+    case "info":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
+/**
  * How a pass ended, in the vocabulary the rest of this screen already uses.
  *
  * THE RUN'S REPORT IS WHERE THE TONE COMES FROM, not its findings. A run
@@ -2233,7 +2301,7 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
       return {
         glyph: "✕",
         label: "failed",
-        tone: "critical",
+        tone: "danger",
         title:
           run.error ||
           "the third-party app refused this pass; nothing it had already done is undone",
@@ -2319,12 +2387,13 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
     // this reader is being refused rather than told nothing has run — and the
     // banner at the top of the screen is where the token is supplied.
     return (
-      <Panel title="Provisioning passes" icon="refresh">
+      <Card>
+        <Card.Header icon={<RefreshGlyph size="sm" />}>Provisioning passes</Card.Header>
         <span className="t-caption">
           Reading what a pass found needs an operator token, so this is what the engine will not say
           without one.
         </span>
-      </Panel>
+      </Card>
     );
   }
 
@@ -2360,7 +2429,13 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
           <StatusCell
             glyph={state.glyph}
             label={state.label}
-            tone={state.tone}
+            // `app/frame/cells.tsx` still speaks OUR tone names, and it is
+            // another port's file, so the spelling is turned back at this one
+            // seam rather than this screen keeping a second vocabulary for
+            // the one cell that needs it. It goes when that file takes
+            // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
+            // translation in the other direction.
+            tone={cellTone(state.tone)}
             title={state.title}
           />
         );
@@ -2403,13 +2478,14 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   ];
 
   return (
-    <Panel
-      title="Provisioning passes"
-      icon="refresh"
-      count={runs.length}
-      subtitle={`what ${scope || "this node"} has run — a pass another node ran is remembered there`}
-      padding="none"
-    >
+    <Card padding="none">
+      <Card.Header
+        icon={<RefreshGlyph size="sm" />}
+        count={runs.length}
+        subtitle={`what ${scope || "this node"} has run — a pass another node ran is remembered there`}
+      >
+        Provisioning passes
+      </Card.Header>
       <DataGrid<SetupRun>
         rows={runs}
         rowKey={(run) => run.run_id}
@@ -2443,16 +2519,16 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
         // AT THE FOOT OF THE LIST IT CAME FROM, ruled off and inset the way
         // every other trailing note on a panel is — the grid itself is flush
         // to the panel's edges, as every grid in this product is.
-        <footer className="panel-foot">
+        <Card.Footer variant="meta">
           <PassDetail
             kind={open.kind}
             id={open.id}
             name={named.get(open.kind) ?? open.kind}
             now={now}
           />
-        </footer>
+        </Card.Footer>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -2479,7 +2555,7 @@ function PassDetail({
 }) {
   const { run, missing, guarded, loading } = useSetupRun(kind, id);
 
-  if (loading && !run) return <Skeleton rows={4} />;
+  if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
     return (
       <div className="int-row-note">
@@ -2658,11 +2734,11 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 
   if (!entry) {
     return (
-      <Empty
-        inline
-        icon="plug"
+      <EmptyState
+        size="compact"
+        icon={<CableGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
-        hint="The link that opened this names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
+        description="The link that opened this names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
       />
     );
   }
@@ -2681,14 +2757,14 @@ export function IntegrationPeek({ kind }: { kind: string }) {
       <ObjectHeader
         size="peek"
         kind="Integration"
-        icon="plug"
+        icon="cable"
         identifier={entry.key}
         title={entry.name}
         status={
           state.tag === "" ? undefined : (
-            <Badge tone={state.tone} outline={state.outline}>
+            <Tag variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
               {state.tag}
-            </Badge>
+            </Tag>
           )
         }
         // NO FACT LINE OVER A TOOL NOBODY HAS CONNECTED: every one of these is
@@ -2705,14 +2781,14 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         }
       />
       <div className="col gap-3">
-        {loading && !data && <Skeleton rows={6} />}
+        {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
         <QueryState error={error} loading={loading}>
           {data && present.length === 0 && (
-            <Empty
-              inline
-              icon="plug"
+            <EmptyState
+              size="compact"
+              icon={<CableGlyph size="xl" />}
               title={`${entry.name} is not connected`}
-              hint={`${entry.description}. Nothing in this company is configured for it, so no delivery reaches a seat and no pass runs against it.`}
+              description={`${entry.description}. Nothing in this company is configured for it, so no delivery reaches a seat and no pass runs against it.`}
             />
           )}
           {present.length > 0 && (
@@ -2723,7 +2799,10 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   asking whether this is the integration they meant: a tool
                   whose Jira is fine and whose Confluence is not is a different
                   object from one with no Confluence at all. */}
-              <Panel title="Surfaces" icon="layers" count={entry.surfaces.length}>
+              <Card>
+                <Card.Header icon={<LayersGlyph size="sm" />} count={entry.surfaces.length}>
+                  Surfaces
+                </Card.Header>
                 <ul className="int-rows">
                   {entry.surfaces.map((surface) => {
                     const row = rows.get(surface.key);
@@ -2749,9 +2828,9 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                         </div>
                         <div className="int-row-badges">
                           {row?.reconcile?.phase && (
-                            <Badge tone={phaseTone(row.reconcile.phase)} outline>
+                            <Tag variant={phaseTone(row.reconcile.phase)} appearance="outline">
                               {row.reconcile.phase_label || row.reconcile.phase.replace(/_/g, " ")}
-                            </Badge>
+                            </Tag>
                           )}
                           {row && <SurfaceBadges row={row} />}
                         </div>
@@ -2759,9 +2838,12 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                     );
                   })}
                 </ul>
-              </Panel>
+              </Card>
 
-              <Panel title="Findings" icon="alert" count={findings.length}>
+              <Card>
+                <Card.Header icon={<WarningGlyph size="sm" />} count={findings.length}>
+                  Findings
+                </Card.Header>
                 {findings.length > 0 ? (
                   <ul className="col int-findings">
                     {findings.map(({ surface, finding }, at) => (
@@ -2775,9 +2857,9 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                               for exactly this, and an ABSENT phase is "cannot
                               say" rather than fine — which is what
                               [phaseTone]'s neutral default draws. */}
-                          <Badge tone={phaseTone(finding.phase ?? "")} outline>
+                          <Tag variant={phaseTone(finding.phase ?? "")} appearance="outline">
                             {finding.kind.replace(/_/g, " ")}
-                          </Badge>
+                          </Tag>
                           {present.length > 1 && <span className="t-caption faint">{surface}</span>}
                         </span>
                         <span className="int-note-problem">
@@ -2801,14 +2883,15 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                       : "Nothing has reported on this integration yet, which is not the same as nothing being wrong."}
                   </span>
                 )}
-              </Panel>
+              </Card>
 
               {/* IS ANYTHING ARRIVING, per surface — the question the facts
                   above count and this one dates. `forge` is left out for the
                   reason the screen leaves it out of its delivery panels: it is
                   a relay, and its events are filed under the product they
                   belong to, so a row for it could only ever be empty. */}
-              <Panel title="Last delivery" icon="inbox">
+              <Card>
+                <Card.Header icon={<InboxGlyph size="sm" />}>Last delivery</Card.Header>
                 <ul className="int-rows">
                   {entry.surfaces
                     .filter((surface) => surface.key !== "forge")
@@ -2821,7 +2904,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                       />
                     ))}
                 </ul>
-              </Panel>
+              </Card>
             </>
           )}
         </QueryState>
@@ -2942,9 +3025,9 @@ export function Integrations({ kind }: { kind?: string }) {
     <>
       <PageActions>
         {
-          <Badge outline>
+          <Tag appearance="outline">
             {configured.length} of {CATALOG.length} configured
-          </Badge>
+          </Tag>
         }
       </PageActions>
       <PageNote>
@@ -2956,17 +3039,16 @@ export function Integrations({ kind }: { kind?: string }) {
           is one setting, and a screen that asked for it per integration would
           ask the operator to keep seven copies consistent. */}
       {setup.base && !setup.base.present && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning">
           <span className="col" style={{ gap: 4 }}>
             <span>No public address is set, so no third-party app can deliver to this engine.</span>
             <span className="t-caption">
-              Set <code className="inline">{setup.base.config_path}</code> to the HTTPS address
-              third-party apps reach this deployment on. Chat over an outbound socket, Mattermost,
-              is unaffected.
+              Set <InlineCode>{setup.base.config_path}</InlineCode> to the HTTPS address third-party
+              apps reach this deployment on. Chat over an outbound socket, Mattermost, is
+              unaffected.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
       {/* SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the
           engine answers `resolved` beside `present` as a three-valued field.
@@ -2976,36 +3058,33 @@ export function Integrations({ kind }: { kind?: string }) {
           screen that exists to say where deliveries land, saying nothing, on
           exactly the misconfiguration it should name. */}
       {setup.base?.present && setup.base.resolved !== false && (
-        <div className="banner neutral">
-          <Icon name="link" size="sm" />
+        <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
           <span>
-            Third-party apps reach this engine at <code className="inline">{setup.base.value}</code>
+            Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
           </span>
-        </div>
+        </Callout>
       )}
       {setup.base?.present && setup.base.resolved === false && (
-        <div className="banner caution">
-          <Icon name="alert" size="sm" />
+        <Callout variant="warning">
           <span className="col" style={{ gap: 4 }}>
             <span>
               The public address is configured as a reference that resolves to nothing, so no
               third-party app can deliver to this engine.
             </span>
             <span className="t-caption">
-              <code className="inline">{setup.base.config_path}</code> is set to{" "}
-              <code className="inline">
+              <InlineCode>{setup.base.config_path}</InlineCode> is set to{" "}
+              <InlineCode>
                 {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
-              </code>
+              </InlineCode>
               , which resolves to nothing. Export it, or seal it as a secret, and re-activate the
               revision — a reference is resolved from the snapshot taken when the revision is
               applied.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
       {setup.guarded && (
-        <div className="banner neutral">
-          <Icon name="key" size="sm" />
+        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
           <span>
             Setting an integration up needs an operator token. This screen is showing what it can
             read without one.
@@ -3015,10 +3094,10 @@ export function Integrations({ kind }: { kind?: string }) {
               anonymous reads allowed the socket is never refused, so a banner
               that only NAMES the missing credential leaves the reader with
               nothing on the page that can supply it. */}
-          <Button size="sm" icon="key" onClick={requestToken}>
+          <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={requestToken}>
             Set token
           </Button>
-        </div>
+        </Callout>
       )}
 
       {/* ONE OBJECT, ONE HEADER. `#/admin/integrations/{kind}` is a page about
@@ -3033,14 +3112,14 @@ export function Integrations({ kind }: { kind?: string }) {
       {focus && focusState && (
         <ObjectHeader
           kind="Integration"
-          icon="plug"
+          icon="cable"
           identifier={focus.key}
           title={focus.name}
           status={
             focusState.tag === "" ? undefined : (
-              <Badge tone={focusState.tone} outline={focusState.outline}>
+              <Tag variant={focusState.tone} appearance={focusState.outline ? "outline" : "soft"}>
                 {focusState.tag}
-              </Badge>
+              </Tag>
             )
           }
           facts={
@@ -3094,7 +3173,9 @@ export function Integrations({ kind }: { kind?: string }) {
 
       {/* BOTH HALVES, because a card drawn from one of them is a card with
           no buttons. See [useSetup]'s `loading`. */}
-      {((loading && !data) || setup.loading) && <Skeleton rows={6} />}
+      {((loading && !data) || setup.loading) && (
+        <Skeleton variant="text" rows={6} label="Loading" />
+      )}
       <QueryState error={error} loading={loading} empty={undefined}>
         {/* WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each half
             alphabetical. One flat list rather than panels: a capability
@@ -3113,10 +3194,10 @@ export function Integrations({ kind }: { kind?: string }) {
             A REFUSED setup read is not waiting: it answers, the banner says
             so, and the cards render without their writes. */}
         {kind && !focus && (
-          <Empty
-            icon="plug"
+          <EmptyState
+            icon={<CableGlyph size="xl" />}
             title={`This build serves no integration called “${kind}”`}
-            hint="The link that brought you here names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
+            description="The link that brought you here names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
           />
         )}
         {/* A KIND THAT NAMES NOTHING LISTS NOTHING, rather than falling back
@@ -3219,10 +3300,10 @@ export function Integrations({ kind }: { kind?: string }) {
             ))}
 
         {data && !kind && configured.length === 0 && (
-          <Empty
-            icon="plug"
+          <EmptyState
+            icon={<CableGlyph size="xl" />}
             title="No integration is connected yet"
-            hint="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
+            description="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
           />
         )}
       </QueryState>

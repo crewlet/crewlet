@@ -42,8 +42,18 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Code, Disclosure, PhaseTag, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Callout, CodeBlock, Disclosure, Tag, cx } from "@crewlethq/ui";
+import {
+  ChevronRightGlyph,
+  KeyboardArrowDownGlyph,
+  TerminalGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+// STILL OURS. `PhaseTag` HAS a peer — uilet's `Tag` carries `phase-onboarding`,
+// `phase-execute` and `phase-review` — but it is a primitive in `~/ui`, and
+// porting it THERE moves this card, the turn card and the seat screen in one
+// change rather than leaving three inlined copies of one variant table behind.
+import { PhaseTag } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -55,6 +65,19 @@ import {
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
+
+/**
+ * How tall a block of machine text is allowed to get before it scrolls itself.
+ *
+ * 460px, which is `.code`'s own ceiling in components.css and therefore the
+ * height every one of these blocks has had since the card was written — not a
+ * new number. It has to be STATED here because uilet's CodeBlock is unbounded
+ * unless a caller says otherwise, and its own doc says why that would be wrong
+ * on this card: a phase's verbatim system prompt runs to tens of kilobytes, and
+ * unbounded it pushes the prompt, the tool surface and the workers off the
+ * screen.
+ */
+const CODE_MAX_PX = 460;
 
 function ToolRow({
   name,
@@ -71,25 +94,55 @@ function ToolRow({
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
         mono
-        // A SIBLING of the name, not part of it. Inside the label it sat in
-        // a truncating single-line span and was the thing that wrapped, so a
-        // failed call showed its alert on its own line above the tool.
-        mark={
-          failed ? <Icon name="alert" size="xs" style={{ color: "var(--critical-ink)" }} /> : null
+        // `meta` IS our `mark`: a SIBLING of the name rather than part of it.
+        // Inside the title it sat in a truncating single-line span and was the
+        // thing that wrapped, so a failed call showed its alert on its own line
+        // above the tool.
+        meta={
+          failed ? <WarningGlyph size="xs" style={{ color: "var(--critical-ink)" }} /> : undefined
         }
-        label={name}
+        title={name}
+        // A TRANSCRIPT ITEM IS NOT A SECTION OF THE PAGE. uilet wraps a
+        // disclosure's trigger in a real heading by default, which is right for
+        // the card's own folds below (Prompt, Tool surface, Delegated to) and
+        // wrong for a tool call: a round with nine of them would put nine
+        // headings into the document outline of one phase.
+        headingLevel="none"
+        // Our Disclosure mounted its children only while open. `lazy` is how
+        // uilet spells that, and here it is the behaviour rather than an
+        // optimisation — a closed tool row must not put its result into the
+        // round's text.
+        lazy
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
           {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable
               block announces the name and nothing around it, and half a
               dozen regions called "Arguments" on one round is the same as
-              none. */}
-          <Code plain label={`${name} — arguments`}>
-            {args || "{}"}
-          </Code>
+              none.
+
+              `plain` MEANS SOMETHING ELSE OVER HERE: ours turned wrapping off,
+              theirs drops the header. Both are wanted — the block is bare in
+              this design and arguments are aligned JSON — so it is `plain` for
+              the header and `wrap={false}` for the columns. `maxHeight` is our
+              own `.code` ceiling, and it has to be stated: without one a
+              900-line record pushes the rest of the round off the screen. */}
+          <CodeBlock
+            plain
+            wrap={false}
+            maxHeight={CODE_MAX_PX}
+            selectable
+            label={`${name} — arguments`}
+            code={args || "{}"}
+          />
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <Code label={`${name} — ${failed ? "error" : "result"}`}>{result || "(empty)"}</Code>
+          <CodeBlock
+            plain
+            maxHeight={CODE_MAX_PX}
+            selectable
+            label={`${name} — ${failed ? "error" : "result"}`}
+            code={result || "(empty)"}
+          />
         </div>
       </Disclosure>
     </div>
@@ -185,7 +238,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
-              <Icon name="alert" size="xs" /> this attempt was abandoned mid-answer and retried
+              <WarningGlyph size="xs" /> this attempt was abandoned mid-answer and retried
             </div>
             {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
             {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
@@ -203,7 +256,20 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
               <p className="prose muted stream">{thinking}</p>
             </div>
           ) : (
-            <Disclosure label="Thinking" count={`${thinking.length} chars`} tone="reasoning">
+            // `aside` IS our `tone="reasoning"`, and uilet describes it in our
+            // own words — "what was considered rather than what was decided",
+            // a rule down its edge so a reader can skip the block by its shape.
+            // `round-thinking` stays on it for the reason the streaming branch
+            // above gives: both sit on the round's own left edge, so the block
+            // does not shift sideways when the round commits.
+            <Disclosure
+              className="round-thinking"
+              title="Thinking"
+              count={`${thinking.length} chars`}
+              variant="aside"
+              headingLevel="none"
+              lazy
+            >
               <p className="prose muted">{thinking}</p>
             </Disclosure>
           ))}
@@ -258,7 +324,7 @@ export function PhaseCard({
       )}
     >
       <header className="phase-head" onClick={() => setOpen((v) => !v)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+        {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
         <PhaseTag phase={record.phase} />
         {record.iteration > 1 && (
           <span className="t-caption" title="self-iterate round">
@@ -273,15 +339,18 @@ export function PhaseCard({
             {record.taskId}
           </span>
         )}
+        {/* NEUTRAL, because a worker template is an identity. uilet's tone doc
+            states the rule this card already kept: a tone says what a thing IS,
+            never who it is. */}
         {record.worker && (
-          <Badge outline mono title="worker template">
+          <Tag appearance="outline" monospace title="worker template">
             {record.worker}
-          </Badge>
+          </Tag>
         )}
         {!!nested?.length && (
-          <Badge outline title="calls this phase made">
+          <Tag appearance="outline" title="calls this phase made">
             {nested.length} {nested.length === 1 ? "worker" : "workers"}
-          </Badge>
+          </Tag>
         )}
         {showRole && record.role && <span className="t-cell truncate">{record.role}</span>}
 
@@ -290,38 +359,38 @@ export function PhaseCard({
         {/* Everything below is present on BOTH a live and a finished phase, in
             the same order, so the row does not reshape when it completes. */}
         {record.decision && (
-          <Badge tone={record.decision === "self_iterate" ? "caution" : "neutral"}>
+          <Tag variant={record.decision === "self_iterate" ? "warning" : "neutral"}>
             {decisionLabel(record.phase, record.decision)}
-          </Badge>
+          </Tag>
         )}
         {record.exhaustedRounds && (
-          <Badge tone="caution" title="the phase ran out of tool rounds">
+          <Tag variant="warning" title="the phase ran out of tool rounds">
             round cap
-          </Badge>
+          </Tag>
         )}
         {record.emptyAnswerRounds > 0 && (
-          <Badge
-            tone="caution"
+          <Tag
+            variant="warning"
             title="the model answered with nothing — no response and no tool call — and was re-asked"
           >
             {record.emptyAnswerRounds} empty
-          </Badge>
+          </Tag>
         )}
         {record.rescueFired && (
-          <Badge tone="caution" title="the phase did not submit on its first run and was re-asked">
+          <Tag variant="warning" title="the phase did not submit on its first run and was re-asked">
             rescued
-          </Badge>
+          </Tag>
         )}
         {record.backend === "sandbox" && (
-          <Badge tone="info" icon="terminal">
+          <Tag variant="info" leadingIcon={<TerminalGlyph />}>
             {record.codingAgent || "sandbox"}
-          </Badge>
+          </Tag>
         )}
-        {record.failed && <Badge tone="critical">{record.errorKind || "failed"}</Badge>}
+        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
         {record.live && (
-          <Badge tone={stale === "stalled" ? "critical" : stale ? "caution" : "info"} dot>
+          <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {stale === "stalled" ? "no update in 10m" : stale ? "no update in 2m" : "running"}
-          </Badge>
+          </Tag>
         )}
 
         <span className="phase-meta mono">{record.model || "—"}</span>
@@ -384,18 +453,8 @@ export function PhaseCard({
 
       {open && (
         <div className="phase-body">
-          {record.failed && record.error && (
-            <div className="banner critical">
-              <Icon name="alert" size="sm" />
-              <span>{record.error}</span>
-            </div>
-          )}
-          {record.notes && (
-            <div className="banner neutral">
-              <Icon name="info" size="sm" />
-              <span>{record.notes}</span>
-            </div>
-          )}
+          {record.failed && record.error && <Callout variant="danger">{record.error}</Callout>}
+          {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
 
           {/* The transcript. One block per round — thought, speech, calls —
               in the order they happened. Rounds append, so nothing above an
@@ -430,9 +489,11 @@ export function PhaseCard({
             <>
               {legacy.thinking && (
                 <Disclosure
-                  label="Thinking"
+                  title="Thinking"
                   count={`${legacy.thinking.length} chars`}
-                  tone="reasoning"
+                  variant="aside"
+                  headingLevel="none"
+                  lazy
                 >
                   <p className="prose muted">{legacy.thinking}</p>
                 </Disclosure>
@@ -465,25 +526,41 @@ export function PhaseCard({
           )}
 
           {(record.systemPrompt || record.userPrompt) && (
-            <Disclosure label="Prompt" count={`${record.phase} phase`}>
+            // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading
+            // — unlike a tool row, which is a transcript item. `lazy` matches
+            // what ours did: a closed fold mounted nothing, and a seat's system
+            // prompt is tens of kilobytes nobody asked for.
+            <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
               <div className="col gap-3">
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
                     {/* The tallest block on the page by a wide margin — a
                         seat's system prompt runs to tens of kilobytes — so
-                        this is the one that most needed to be reachable. */}
-                    <Code label={`The ${record.phase} phase's system prompt`}>
-                      {record.systemPrompt}
-                    </Code>
+                        this is the one that most needed to be reachable.
+                        `selectable` is how uilet grants that: ours measured
+                        the overflow and gave the stop to the blocks that
+                        scrolled, theirs ties the tab stop, the name and ⌘A
+                        into one flag. */}
+                    <CodeBlock
+                      plain
+                      maxHeight={CODE_MAX_PX}
+                      selectable
+                      label={`The ${record.phase} phase's system prompt`}
+                      code={record.systemPrompt}
+                    />
                   </div>
                 )}
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <Code label={`The ${record.phase} phase's user message`}>
-                      {record.userPrompt}
-                    </Code>
+                    <CodeBlock
+                      plain
+                      maxHeight={CODE_MAX_PX}
+                      selectable
+                      label={`The ${record.phase} phase's user message`}
+                      code={record.userPrompt}
+                    />
                   </div>
                 )}
               </div>
@@ -492,8 +569,9 @@ export function PhaseCard({
 
           {(record.toolsAvailable.length > 0 || record.toolCatalogue.length > 0) && (
             <Disclosure
-              label="Tool surface"
+              title="Tool surface"
               count={record.toolsAvailable.length + record.toolCatalogue.length}
+              lazy
             >
               <div className="col gap-2">
                 {record.toolsAvailable.length > 0 && (
@@ -503,10 +581,13 @@ export function PhaseCard({
                       <span className="faint"> · full JSON schemas were sent</span>
                     </div>
                     <div className="row wrap gap-1">
+                      {/* A TOOL NAME IS AN IDENTITY, so it stays neutral —
+                          uilet's tone doc names a tool among the four things
+                          that must. */}
                       {record.toolsAvailable.map((t) => (
-                        <Badge key={t} mono outline>
+                        <Tag key={t} monospace appearance="outline">
                           {t}
-                        </Badge>
+                        </Tag>
                       ))}
                     </div>
                   </div>
@@ -519,9 +600,9 @@ export function PhaseCard({
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolCatalogue.map((t) => (
-                        <Badge key={t} mono outline>
+                        <Tag key={t} monospace appearance="outline">
                           {t}
-                        </Badge>
+                        </Tag>
                       ))}
                     </div>
                   </div>
@@ -532,11 +613,12 @@ export function PhaseCard({
 
           {!!nested?.length && (
             <Disclosure
-              label="Delegated to"
+              title="Delegated to"
               count={`${nested.length} · ${fmtCount(
                 nested.reduce((n, r) => n + r.totalTokens, 0),
               )} tokens`}
               defaultOpen
+              lazy
             >
               <div className="phase-nest">
                 {nested.map((r) => (

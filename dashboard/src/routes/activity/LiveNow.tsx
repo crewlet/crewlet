@@ -32,11 +32,37 @@
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
-import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
+import {
+  ActivityStrip,
+  BarList,
+  Button,
+  Card,
+  EmptyState,
+  Legend,
+  Meter,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+// STILL OURS: the phase→token map. uilet publishes the three phase hues as
+// `--color-phase-*` (the alias sheet already points `--phase-*` at them) but
+// no function that picks one from a phase name, and its data ramp is
+// deliberately NOT that — a chart hue means "this series", never "execute".
+import { phaseColor } from "~/ui/charts.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { mergeRuns, RunStatus } from "./Runs.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import {
+  ArrowForwardGlyph,
+  Book2Glyph,
+  BoltGlyph,
+  GroupGlyph,
+  LinkGlyph,
+  NeurologyGlyph,
+  ScheduleGlyph,
+  TerminalGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 import {
   useAgents,
   useEvents,
@@ -177,6 +203,11 @@ export function LiveNow() {
     () =>
       (tokens?.by_phase ?? [])
         .map((p) => ({
+          // THE SERIES' OWN IDENTITY, which their BarList and Legend both
+          // require: a ranked list is re-ranked by every push, and a row
+          // keyed by position hands the focused row's node to whichever
+          // series has taken that place.
+          id: p.phase,
           label: p.phase,
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
@@ -194,6 +225,7 @@ export function LiveNow() {
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .slice(0, 6)
         .map((a) => ({
+          id: a.handle || a.role,
           label: a.role,
           value: a.total_tokens,
           display: fmtCount(a.total_tokens),
@@ -210,10 +242,14 @@ export function LiveNow() {
       <PageActions>
         {
           <>
-            <Badge outline>{plural(seatCount, "agent seat")}</Badge>
-            {humanCount > 0 && <Badge outline>{plural(humanCount, "human")}</Badge>}
+            <Tag appearance="outline">{plural(seatCount, "agent seat")}</Tag>
+            {humanCount > 0 && <Tag appearance="outline">{plural(humanCount, "human")}</Tag>}
             <TimeRangePicker range={range} ariaLabel="Activity window" />
-            <Button icon="brain" onClick={() => nav.to(["activity", "turns"])}>
+            <Button
+              variant="secondary"
+              leadingIcon={<NeurologyGlyph size="sm" />}
+              onClick={() => nav.to(["activity", "turns"])}
+            >
               Turns
             </Button>
           </>
@@ -226,62 +262,64 @@ export function LiveNow() {
       </PageNote>
 
       {/* 2. What the company is doing. */}
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon="zap"
-            label="Working now"
-            value={live.length}
-            sub={
-              live.length
-                ? live.map(({ seat }) => seat.name).join(", ")
-                : `${plural(idle, "seat")} idle and waiting for work`
-            }
-          />
-          <Stat
-            icon="terminal"
-            label="Coding runs"
-            value={inFlight.length}
-            sub={
-              parked > 0
-                ? `${plural(parked, "run")} paused on a question`
-                : "detached sandbox runs in flight"
-            }
-          />
-          <Stat
-            icon="activity"
-            label={`Events · last ${windowLabel(range.window)}`}
-            value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
-            sub={
-              stripTruncated
-                ? "the tab holds the last 400 events, so this hour is partial"
-                : "everything the engine published"
-            }
-          />
-          <Stat
-            icon="coin"
-            label="Tokens"
-            value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
-            sub={
-              tokens
-                ? `${tokens.totals.calls.toLocaleString()} model calls`
-                : "no spend has been recorded yet"
-            }
-          />
-        </StatRow>
-      </Panel>
+      {/* StatGroup IS the flush panel this row sat in — same surface, same
+          hairline, same clip — so there is no Panel around it any more. */}
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<BoltGlyph size="xs" />}
+          label="Working now"
+          value={live.length}
+          sub={
+            live.length
+              ? live.map(({ seat }) => seat.name).join(", ")
+              : `${plural(idle, "seat")} idle and waiting for work`
+          }
+        />
+        <StatCard
+          icon={<TerminalGlyph size="xs" />}
+          label="Coding runs"
+          value={inFlight.length}
+          sub={
+            parked > 0
+              ? `${plural(parked, "run")} paused on a question`
+              : "detached sandbox runs in flight"
+          }
+        />
+        <StatCard
+          icon={<TimelineGlyph size="xs" />}
+          label={`Events · last ${windowLabel(range.window)}`}
+          value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
+          sub={
+            stripTruncated
+              ? "the tab holds the last 400 events, so this hour is partial"
+              : "everything the engine published"
+          }
+        />
+        <StatCard
+          icon={<TokenGlyph size="xs" />}
+          label="Tokens"
+          value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
+          sub={
+            tokens
+              ? `${tokens.totals.calls.toLocaleString()} model calls`
+              : "no spend has been recorded yet"
+          }
+        />
+      </StatGroup>
 
       <div className="grid grid-auto-lg">
-        <Panel
-          title="Live seats"
-          icon="users"
-          count={live.length}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["company", "people"])}>
-              All seats
-            </Button>
-          }
-        >
+        <Card>
+          <Card.Header
+            icon={<GroupGlyph size="sm" />}
+            count={live.length}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["company", "people"])}>
+                All seats
+              </Button>
+            }
+          >
+            <Card.Title>Live seats</Card.Title>
+          </Card.Header>
           {live.length ? (
             <div className="seat-grid">
               {live.map(({ seat, agent }) => (
@@ -303,33 +341,42 @@ export function LiveNow() {
               ))}
             </div>
           ) : (
-            <Empty
-              inline
-              icon="clock"
+            <EmptyState
+              size="compact"
+              icon={<ScheduleGlyph size={32} />}
               title="No seat is mid-turn"
-              hint={
+              description={
                 seatCount
                   ? "Every seat is attached to its mailbox and waiting. Work arrives from a webhook, a schedule, or a colleague."
                   : "No agent seats are defined. Import a company configuration to spawn some."
               }
             />
           )}
-        </Panel>
+        </Card>
 
-        <Panel
-          title={`Activity · last ${windowLabel(range.window)}`}
-          icon="activity"
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
-              Event log
-            </Button>
-          }
-        >
+        <Card>
+          <Card.Header
+            icon={<TimelineGlyph size="sm" />}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["activity"])}>
+                Event log
+              </Button>
+            }
+          >
+            <Card.Title>{`Activity · last ${windowLabel(range.window)}`}</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
+            {/* THEIR STRIP IS ONE PICTURE WITH A NAME. Ours was sixty bare
+                divs with a per-cell `title` and no accessible name at all,
+                and it scaled opacity with the value as well as height —
+                which is the defect their own doc names, since the quietest
+                buckets then sat under 3:1. The per-cell tooltip is what is
+                lost; `summary` says the peak and the total instead. */}
             <ActivityStrip
               buckets={strip}
-              title={(b) =>
-                `${new Date(b.t).toLocaleTimeString()} — ${b.v} event${b.v === 1 ? "" : "s"}`
+              label={`Events over the last ${windowLabel(range.window)}`}
+              summary={({ peak, total, buckets }) =>
+                `${plural(total, "event")} over ${buckets} buckets, ${peak} in the busiest.`
               }
             />
             {stripTruncated && (
@@ -343,16 +390,16 @@ export function LiveNow() {
                 <EventRow key={ev.id} event={ev} />
               ))}
               {!events.length && (
-                <Empty
-                  inline
-                  icon="activity"
+                <EmptyState
+                  size="compact"
+                  icon={<TimelineGlyph size={32} />}
                   title="Nothing has happened yet"
-                  hint="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
+                  description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
                 />
               )}
             </div>
           </div>
-        </Panel>
+        </Card>
       </div>
 
       {/* WHAT IS IN A BOX, as rows rather than as one integer.
@@ -361,18 +408,19 @@ export function LiveNow() {
           that cannot answer which run or whose. Always drawn, empty included,
           for the reason every other section here is: a dashboard whose
           sections come and go with the data cannot be read at a glance. */}
-      <Panel
-        title="In a box"
-        icon="terminal"
-        count={inFlight.length}
-        subtitle="detached coding runs that have not finished"
-        padding="none"
-        actions={
-          <Button size="sm" variant="ghost" onClick={() => nav.to(["activity", "runs"])}>
-            All runs
-          </Button>
-        }
-      >
+      <Card padding="none">
+        <Card.Header
+          icon={<TerminalGlyph size="sm" />}
+          count={inFlight.length}
+          subtitle="detached coding runs that have not finished"
+          actions={
+            <Button size="small" variant="tertiary" onClick={() => nav.to(["activity", "runs"])}>
+              All runs
+            </Button>
+          }
+        >
+          <Card.Title>In a box</Card.Title>
+        </Card.Header>
         {inFlight.length > 0 ? (
           <div className="list">
             {inFlight.slice(0, IN_BOX_ROWS).map((run) => (
@@ -409,55 +457,65 @@ export function LiveNow() {
             )}
           </div>
         ) : (
-          <Empty
-            inline
-            icon="terminal"
+          <EmptyState
+            size="compact"
+            icon={<TerminalGlyph size={32} />}
             title="Nothing is running in a box"
-            hint="A coding run starts when a seat calls the sandbox tool. Every finished one is still in the record under Runs."
+            description="A coding run starts when a seat calls the sandbox tool. Every finished one is still in the record under Runs."
           />
         )}
-      </Panel>
+      </Card>
 
       <div className="grid grid-auto-lg">
-        <Panel
-          title="Spend by phase"
-          icon="coin"
-          subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["cost"])}>
-              Spend
-            </Button>
-          }
-        >
+        <Card>
+          <Card.Header
+            icon={<TokenGlyph size="sm" />}
+            subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["cost"])}>
+                Spend
+              </Button>
+            }
+          >
+            <Card.Title>Spend by phase</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <BarList data={phaseSpend} emptyLabel="No model calls in this window." />
             {phaseSpend.length > 0 && (
-              <Legend items={phaseSpend.map((p) => ({ label: p.label, color: p.color }))} />
+              <Legend
+                items={phaseSpend.map((p) => ({ id: p.id, label: p.label, color: p.color }))}
+              />
             )}
             {orgMeter && orgMeter.max > 0 && (
+              // THEIR LABEL IS THE ACCESSIBLE NAME, linked to the bar, so the
+              // separate `ariaLabel` ours needed is gone. `fullMeans="spent"`
+              // is gone too: theirs derives exactly that reading from the
+              // fill, which is the right one here. See the report for the
+              // reading it has no word for.
               <Meter
-                used={orgMeter.used}
+                value={orgMeter.used}
                 max={orgMeter.max}
-                ariaLabel="Company budget meter"
-                fullMeans="spent"
                 label={
                   <span title="a process-lifetime meter — not comparable to the spend window above">
                     Company budget meter
                   </span>
                 }
-                right={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
+                valueText={`${fmtCount(orgMeter.used)} of ${fmtCount(orgMeter.max)} tokens`}
+                hint={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
               />
             )}
           </div>
-        </Panel>
+        </Card>
 
-        <Panel
-          title="Top seats by spend"
-          icon="users"
-          subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
-        >
+        <Card>
+          <Card.Header
+            icon={<GroupGlyph size="sm" />}
+            subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
+          >
+            <Card.Title>Top seats by spend</Card.Title>
+          </Card.Header>
           <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
-        </Panel>
+        </Card>
       </div>
 
       <Section
@@ -467,19 +525,19 @@ export function LiveNow() {
         <div className="grid grid-auto">
           {[
             {
-              icon: "brain" as const,
+              icon: <NeurologyGlyph size="sm" />,
               title: "Turns",
               body: "Every phase the models ran, round by round, with the tools each round called and the prompts they saw.",
               path: ["activity", "turns"],
             },
             {
-              icon: "link" as const,
+              icon: <LinkGlyph size="sm" />,
               title: "Agent-to-agent",
               body: "The private channels seats opened with each other: one ask, one answer, then closed.",
               path: ["activity", "a2a"],
             },
             {
-              icon: "book" as const,
+              icon: <Book2Glyph size="sm" />,
               title: "Knowledge",
               body: "Search the company knowledge base the way an agent does, and read what each seat has learned for itself.",
               path: ["knowledge"],
@@ -488,11 +546,11 @@ export function LiveNow() {
             <a key={card.title} className="seat-card" href={href(card.path)}>
               <div className="row">
                 <span className="attention-icon" data-severity="info">
-                  <Icon name={card.icon} size="sm" />
+                  {card.icon}
                 </span>
                 <strong className="t-body">{card.title}</strong>
                 <span className="spacer" />
-                <Icon name="arrowRight" size="sm" />
+                <ArrowForwardGlyph size="sm" />
               </div>
               <span className="t-caption">{card.body}</span>
             </a>

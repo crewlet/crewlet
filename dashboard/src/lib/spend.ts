@@ -18,7 +18,7 @@
  * about how long an hour was. `lib/range.ts` is the one vocabulary now.
  */
 
-import { VIZ_OTHER, vizColor } from "~/ui/charts.tsx";
+import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 import type { SeriesPoint, TokenSeries } from "~/protocol/types.ts";
 
 export interface Band {
@@ -32,6 +32,12 @@ export interface Band {
 /**
  * The legend, in the engine's own order.
  *
+ * THE COLOURS ARE uilet's DATA RAMP — five hues and a residual, measured by
+ * the package's own palette suite — rather than a ramp of ours beside it. A
+ * band's colour is read by three surfaces here (the legend, the stacked
+ * columns and the per-phase bar list), so a second spelling of the same five
+ * values is the drift `textcut` and `whsec` are named after in this repo.
+ *
  * THE ORDER IS NOT RE-DERIVED. `by_group` is already biggest-first with the
  * residual last, and re-sorting here would put a residual larger than the
  * fifth band ahead of it — at which point it stops meaning "the rest".
@@ -44,7 +50,7 @@ export function bandsOf(series: TokenSeries | null): Band[] {
   return (series?.by_group ?? []).map((b, i) => ({
     key: b.other ? "" : b.group,
     label: b.other ? `other (${b.folded})` : b.group,
-    color: b.other ? VIZ_OTHER : vizColor(i),
+    color: b.other ? DATA_COLOR_OTHER : dataColor(i),
     total: b.total_tokens,
   }));
 }

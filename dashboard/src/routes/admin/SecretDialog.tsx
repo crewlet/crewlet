@@ -23,10 +23,9 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button } from "~/ui/primitives.tsx";
+import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { Field } from "~/ui/Field.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
 export function SecretDialog({
@@ -75,16 +74,29 @@ export function SecretDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
       title={editing ? `Edit ${editing}` : "Store a secret"}
-      icon="key"
+      icon={<KeyGlyph size="md" />}
       onClose={onClose}
+      // WHILE THE WRITE IS IN FLIGHT the veil, Escape and the close control
+      // all stop closing, and the control says why rather than looking inert:
+      // a credential whose outcome the operator has not seen must not be
+      // abandoned by a stray press.
       dismissable={!busy}
-      width={520}
+      closeDisabledReason="Waiting for the store to answer."
+      // `md` IS 560, AND THIS WAS 520. The number was never a decision — the
+      // remove dialog one press away on this same screen has always been 560,
+      // and two surfaces on one screen differing by forty pixels for no
+      // stated reason is what a published scale is for. Both are `md` now.
+      size="md"
+      // WHAT `.dialog-body col gap-3` WAS. The body is the stack now, so the
+      // fields and the banners under them are its own children.
+      stackBody
       onSubmit={() => void submit()}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>
@@ -95,8 +107,8 @@ export function SecretDialog({
     >
       {editing ? (
         <p className="t-body secondary" style={{ margin: 0 }}>
-          The value replaces what the fleet holds under <code className="inline">{editing}</code>.
-          Every node reads the same row, so nothing has to be copied anywhere.
+          The value replaces what the fleet holds under <InlineCode>{editing}</InlineCode>. Every
+          node reads the same row, so nothing has to be copied anywhere.
         </p>
       ) : (
         <Field
@@ -119,8 +131,7 @@ export function SecretDialog({
       />
 
       {editing && readers.length > 0 && (
-        <div className="banner neutral">
-          <Icon name="info" size="sm" />
+        <Callout variant="neutral">
           <span className="col" style={{ gap: 4 }}>
             <span>
               {readers.length === 1
@@ -136,15 +147,14 @@ export function SecretDialog({
               re-activated or the node restarts.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
 
       {error && (
-        <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert">
           <span>{error}</span>
-        </div>
+        </Callout>
       )}
-    </Dialog>
+    </Modal>
   );
 }

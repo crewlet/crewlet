@@ -13,8 +13,12 @@
  */
 
 import { useState } from "react";
-import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Tag, cx } from "@crewlethq/ui";
+import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
+// STILL OURS, and for the reason PhaseCard gives at its own import: `PhaseTag`
+// has a peer, but it is a `~/ui` primitive, so its port belongs to that file
+// rather than to a third inlined copy of the phase variant table.
+import { PhaseTag } from "~/ui/primitives.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -48,7 +52,7 @@ export function TurnCard({
   return (
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="sm" />
+        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="row gap-1">
             {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
@@ -74,17 +78,19 @@ export function TurnCard({
             places always, so a reader scanning a list can compare a column
             rather than hunt a row — and a source is exactly the kind of thing
             somebody scans down. */}
+        {/* NEUTRAL. A vendor is an identity, which uilet's tone doc names
+            among the four things a hue must never carry. */}
         {trigger?.integration && (
-          <Badge outline mono title="where this turn's trigger came from">
+          <Tag appearance="outline" monospace title="where this turn's trigger came from">
             {trigger.integration}
-          </Badge>
+          </Tag>
         )}
         {group.live && (
-          <Badge tone="info" dot>
+          <Tag variant="info" dot>
             running
-          </Badge>
+          </Tag>
         )}
-        {group.failed && <Badge tone="critical">failed</Badge>}
+        {group.failed && <Tag variant="danger">failed</Tag>}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE TURN'S ZERO IS AN ABSENCE. This
             read `totalTokens ? … : "—"`, so a turn that genuinely spent
             nothing — every phase on a subscription CLI, which reports no
@@ -137,9 +143,14 @@ export function TurnCard({
               like a row of hex, and the promise it makes was too far away to
               read as its label. */}
           <footer className="phase-foot">
+            {/* `secondary`, NOT the uilet default. Their Button defaults to
+                `primary` — the one action on a screen — and this card can be
+                one of forty in a feed. Ours defaulted to the quiet recipe, and
+                `secondary` is that recipe's name over here. */}
             <Button
-              size="sm"
-              icon="layers"
+              size="small"
+              variant="secondary"
+              leadingIcon={<LayersGlyph />}
               onClick={() => nav.to(["activity", "turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >

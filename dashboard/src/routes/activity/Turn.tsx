@@ -52,19 +52,37 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
-  Badge,
   Button,
-  Code,
-  CopyButton,
+  Callout,
+  Card,
+  CodeBlock,
   Disclosure,
-  DownloadButton,
-  Empty,
-  Panel,
-  PhaseTag,
+  EmptyState,
   Skeleton,
+  Tag,
   cx,
-} from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+} from "@crewlethq/ui";
+import {
+  Book2Glyph,
+  BoltGlyph,
+  CheckGlyph,
+  DatabaseGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  TimelineGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+// STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` and `DownloadButton` are
+// bare ACTIONS over text derived at press time — `Copyable` renders the value
+// it copies and is named by it, and nothing over there saves a file at all.
+// `PhaseTag` has a real peer (`Tag` carries the three phase variants), but it
+// is a primitive in `~/ui`, so porting it is that file's half rather than a
+// copy inlined into a route. See the report.
+import { CopyButton, DownloadButton, PhaseTag } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -561,9 +579,9 @@ export function turnFacts(view: TurnView): Fact[] {
 function turnStatus(view: TurnView): ReactNode {
   if (!view.running) return undefined;
   return (
-    <Badge tone="info" dot>
+    <Tag variant="info" dot>
       running
-    </Badge>
+    </Tag>
   );
 }
 
@@ -591,7 +609,7 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
   const repeated = woke !== "" && woke === omit;
   if (!woke || (repeated && !trigger?.integration && !triggerId)) return null;
   return (
-    <Panel padding="normal">
+    <Card>
       <div className="col gap-1">
         <div className="row gap-2">
           <span className="t-label">Woken by</span>
@@ -603,9 +621,9 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
               integration is the one thing the sentence does not reliably
               carry. */}
           {trigger?.integration && (
-            <Badge outline mono title="where this turn's trigger came from">
+            <Tag appearance="outline" monospace title="where this turn's trigger came from">
               {trigger.integration}
-            </Badge>
+            </Tag>
           )}
           <span className="spacer" />
           {triggerId && (
@@ -621,7 +639,7 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
             sentences. */}
         {!repeated && <p className="t-body measure">{woke}</p>}
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -657,12 +675,13 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
   const gated = blocks.filter((b) => !b.hit && b.gated);
   const empty = blocks.filter((b) => !b.hit && !b.gated);
   return (
-    <Panel
-      title="What the turn was given"
-      icon="book"
-      subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
-      padding="tight"
-    >
+    <Card padding="sm">
+      <Card.Header
+        icon={<Book2Glyph size="sm" />}
+        subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
+      >
+        <Card.Title>What the turn was given</Card.Title>
+      </Card.Header>
       <div className="col gap-2">
         {blocks.length === 0 && (
           <span className="t-caption">
@@ -700,21 +719,18 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
           )
         )}
         {gated.length > 0 && (
-          <div className="banner neutral">
-            <Icon name="info" size="sm" />
-            <span>
-              Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
-              these filters were skipped — the executor searches later with{" "}
-              <code className="inline">search_knowledge</code>, once it knows what the task needs.
-            </span>
-          </div>
+          <Callout variant="neutral">
+            Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
+            these filters were skipped — the executor searches later with{" "}
+            <code className="inline">search_knowledge</code>, once it knows what the task needs.
+          </Callout>
         )}
         {empty.length > 0 && (
           <span className="t-caption">Nothing to add from {list(empty.map((b) => b.label))}.</span>
         )}
         {weights.length > 0 && <PromptWeights rows={weights} />}
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -806,8 +822,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
       </time>
       <span className="what truncate">
         {event.failed && (
-          <Icon
-            name="alert"
+          <ErrorGlyph
             size="xs"
             style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
           />
@@ -938,17 +953,17 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       <PageActions>
         {
           <>
-            {role && <Badge outline>{role}</Badge>}
-            <Badge outline>{own.length} phases</Badge>
+            {role && <Tag appearance="outline">{role}</Tag>}
+            <Tag appearance="outline">{own.length} phases</Tag>
             {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records
                 alone. `phases.some(p => p.failed)` misses every turn the
                 engine killed BETWEEN phases — a refused charge, an exhausted
                 chain, a guard that fired — which are precisely the turns with
                 no failed phase record to find. */}
             {trouble > 0 && (
-              <Badge tone="critical" icon="alert">
+              <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
                 {trouble === 1 ? "1 problem" : `${trouble} problems`}
-              </Badge>
+              </Tag>
             )}
             {/* A HEADER BADGE, not a banner at the foot of the page. "This
                 turn was clean" is a property of the turn, so it belongs where
@@ -958,13 +973,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 weight, after everything, reading as an announcement about
                 nothing. */}
             {clean && (
-              <Badge
-                tone="positive"
-                icon="check"
+              <Tag
+                variant="success"
+                leadingIcon={<CheckGlyph size="xs" />}
                 title="no guard fired, no provider fell through, no call was refused"
               >
                 nothing went wrong
-              </Badge>
+              </Tag>
             )}
             {/* WHAT THE VIEW IS MISSING, in the header, because every other
                 badge beside it is a claim made from these rows. The `trace`
@@ -972,20 +987,25 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 it; `turn` did not carry one at all, so a cut turn looked
                 exactly like a short one. */}
             {cut && (
-              <Badge
-                tone="caution"
-                icon="alert"
+              <Tag
+                variant="warning"
+                leadingIcon={<WarningGlyph size="xs" />}
                 title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
               >
                 middle not shown
-              </Badge>
+              </Tag>
             )}
           </>
         }
         {
           <>
             {role && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["company", "people", role])}>
+              <Button
+                size="small"
+                variant="secondary"
+                leadingIcon={<PersonGlyph size="xs" />}
+                onClick={() => nav.to(["company", "people", role])}
+              >
                 The seat
               </Button>
             )}
@@ -997,8 +1017,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 {traceIds.map((id, i) => (
                   <Button
                     key={id}
-                    size="sm"
-                    icon="gitBranch"
+                    size="small"
+                    variant="secondary"
+                    leadingIcon={<ForkRightGlyph size="xs" />}
                     onClick={() => nav.to(["activity", "traces", id])}
                     title={`trace ${id}`}
                   >
@@ -1009,8 +1030,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             ) : (
               traceId && (
                 <Button
-                  size="sm"
-                  icon="gitBranch"
+                  size="small"
+                  variant="secondary"
+                  leadingIcon={<ForkRightGlyph size="xs" />}
                   onClick={() => nav.to(["activity", "traces", traceId])}
                 >
                   Trace
@@ -1036,7 +1058,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </>
         }
       </PageActions>
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
 
       {/* THE OBJECT'S OWN HEADER, and the turn id with it. The id used to be
           a lone `PageNote` under the page bar — a hand-rolled identity line,
@@ -1075,17 +1097,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             that are missing are the ending", which is the difference between
             a reader distrusting the page and a reader distrusting the turn. */}
         {cut && (
-          <div className="banner caution">
-            <Icon name="alert" size="sm" />
-            <span>
-              This turn published more than the store returns for one turn. What is here is its{" "}
-              <strong>opening and its ending</strong> — {events.length} events, so the records below
-              are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle
-              of a long self-iterating turn are not on this page, and neither is anything that went
-              wrong in them.{" "}
-              {traceId ? "The trace carries the same work from the trigger down." : ""}
-            </span>
-          </div>
+          <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+            This turn published more than the store returns for one turn. What is here is its{" "}
+            <strong>opening and its ending</strong> — {events.length} events, so the records below
+            are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle of
+            a long self-iterating turn are not on this page, and neither is anything that went wrong
+            in them. {traceId ? "The trace carries the same work from the trigger down." : ""}
+          </Callout>
         )}
 
         <TurnBrief view={view} omit={title} />
@@ -1095,22 +1113,26 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             entirely on a healthy turn, which is the state the flat list could
             never reach. */}
         {story.wentWrong.length > 0 && (
-          <Panel
-            title="What went wrong"
-            icon="alert"
-            count={story.wentWrong.length}
-            subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
-            padding="none"
-          >
+          <Card padding="none">
+            <Card.Header
+              icon={<ErrorGlyph size="sm" />}
+              count={story.wentWrong.length}
+              subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
+            >
+              <Card.Title>What went wrong</Card.Title>
+            </Card.Header>
             <EventList events={story.wentWrong} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {(prefetch.length > 0 || weights.length > 0) && (
           <Given blocks={prefetch} weights={weights} />
         )}
 
-        <Panel title="Phases" icon="brain" count={own.length} padding="tight">
+        <Card padding="sm">
+          <Card.Header icon={<NeurologyGlyph size="sm" />} count={own.length}>
+            <Card.Title>Phases</Card.Title>
+          </Card.Header>
           <div className="col gap-2">
             {own.map((p, i) => (
               <PhaseCard key={p.key} record={p} nested={nested.get(p.key)} defaultOpen={i === 0} />
@@ -1121,59 +1143,63 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               </span>
             )}
           </div>
-        </Panel>
+        </Card>
 
         {story.did.length > 0 && (
-          <Panel
-            title="What else it did"
-            icon="zap"
-            count={story.did.length}
-            subtitle="work outside the tool loop: coding runs, delegations, colleagues"
-            padding="none"
-          >
+          <Card padding="none">
+            <Card.Header
+              icon={<BoltGlyph size="sm" />}
+              count={story.did.length}
+              subtitle="work outside the tool loop: coding runs, delegations, colleagues"
+            >
+              <Card.Title>What else it did</Card.Title>
+            </Card.Header>
             <EventList events={story.did} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {story.leftBehind.length > 0 && (
-          <Panel
-            title="What the seat learned"
-            icon="database"
-            count={story.leftBehind.length}
-            // "What it left behind" read as work abandoned rather than as
-            // memory written. This is the reflection pass — it runs AFTER the
-            // last phase, on auxiliary workers of its own, and everything in
-            // it is something the seat now knows that it did not before.
-            subtitle="the reflection pass, once the phases were done"
-            padding="none"
-          >
+          <Card padding="none">
+            <Card.Header
+              icon={<DatabaseGlyph size="sm" />}
+              count={story.leftBehind.length}
+              // "What it left behind" read as work abandoned rather than as
+              // memory written. This is the reflection pass — it runs AFTER the
+              // last phase, on auxiliary workers of its own, and everything in
+              // it is something the seat now knows that it did not before.
+              subtitle="the reflection pass, once the phases were done"
+            >
+              <Card.Title>What the seat learned</Card.Title>
+            </Card.Header>
             <EventList events={story.leftBehind} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {story.rest.length > 0 && (
-          <Panel
-            title="Also published"
-            icon="activity"
-            count={story.rest.length}
-            subtitle="rows this build has no particular place for"
-            padding="none"
-          >
+          <Card padding="none">
+            <Card.Header
+              icon={<TimelineGlyph size="sm" />}
+              count={story.rest.length}
+              subtitle="rows this build has no particular place for"
+            >
+              <Card.Title>Also published</Card.Title>
+            </Card.Header>
             <div className="list">
               {story.rest.map((e) => (
                 <EventRow key={e.id} event={e as unknown as FeedRow} showDate />
               ))}
             </div>
-          </Panel>
+          </Card>
         )}
 
         {(rec.summary || rec.learning) && (
-          <Panel
-            title="The turn's own record"
-            icon="file"
-            subtitle="the two events the engine closes every turn with"
-            padding="tight"
-          >
+          <Card padding="sm">
+            <Card.Header
+              icon={<DescriptionGlyph size="sm" />}
+              subtitle="the two events the engine closes every turn with"
+            >
+              <Card.Title>The turn&rsquo;s own record</Card.Title>
+            </Card.Header>
             <div className="col gap-2">
               {conversation && (
                 <PropertiesRail
@@ -1205,30 +1231,40 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   without saying which. */}
               {rec.summary && (
                 <Disclosure
-                  label="agent_turn_completed — the dashboard's summary"
+                  title="agent_turn_completed — the dashboard's summary"
                   actions={
                     <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
                   }
                 >
-                  <Code selectable label="agent_turn_completed, as JSON">
-                    {summaryJSON}
-                  </Code>
+                  <CodeBlock
+                    plain
+                    copyable={false}
+                    maxHeight={460}
+                    selectable
+                    label="agent_turn_completed, as JSON"
+                    code={summaryJSON}
+                  />
                 </Disclosure>
               )}
               {rec.learning && (
                 <Disclosure
-                  label="turn_completed — the learning subsystem's record"
+                  title="turn_completed — the learning subsystem's record"
                   actions={
                     <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
                   }
                 >
-                  <Code selectable label="turn_completed, as JSON">
-                    {learningJSON}
-                  </Code>
+                  <CodeBlock
+                    plain
+                    copyable={false}
+                    maxHeight={460}
+                    selectable
+                    label="turn_completed, as JSON"
+                    code={learningJSON}
+                  />
                 </Disclosure>
               )}
             </div>
-          </Panel>
+          </Card>
         )}
       </QueryState>
     </>
@@ -1255,7 +1291,10 @@ export function TurnScreen({ turnId }: { turnId: string }) {
  */
 function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
   return (
-    <Panel title="Phases" icon="brain" count={phases.length} padding="tight">
+    <Card padding="sm">
+      <Card.Header icon={<NeurologyGlyph size="sm" />} count={phases.length}>
+        <Card.Title>Phases</Card.Title>
+      </Card.Header>
       <div className="col gap-2">
         {phases.map((p) => {
           const ms = phaseDuration(p);
@@ -1270,11 +1309,11 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
                   </span>
                 )}
                 {p.live && (
-                  <Badge tone="info" dot>
+                  <Tag variant="info" dot>
                     running
-                  </Badge>
+                  </Tag>
                 )}
-                {p.failed && <Badge tone="critical">{p.errorKind || "failed"}</Badge>}
+                {p.failed && <Tag variant="danger">{p.errorKind || "failed"}</Tag>}
                 <span className="spacer" />
                 <span className="phase-meta" title="tokens this phase spent">
                   {fmtCount(p.totalTokens)}
@@ -1303,7 +1342,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
           </span>
         )}
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -1328,14 +1367,14 @@ export function TurnPeek({ turnId }: { turnId: string }) {
   // over six absent facts would be none of the three.
   const nothing = view.events.length === 0 && view.phases.length === 0;
   if (nothing) {
-    if (view.loading) return <Skeleton rows={6} />;
+    if (view.loading) return <Skeleton variant="text" rows={6} label="Loading the turn" />;
     if (view.error) return <QueryState error={view.error} loading={false} />;
     return (
-      <Empty
-        inline
-        icon="layers"
+      <EmptyState
+        size="compact"
+        icon={<LayersGlyph size={32} />}
         title="No events carry this turn id"
-        hint="A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble."
+        description="A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble."
       />
     );
   }
@@ -1363,14 +1402,11 @@ export function TurnPeek({ turnId }: { turnId: string }) {
               opening and its ending and not its middle, and a rail that said
               nothing would report a long turn as a short one. */}
           {view.cut && (
-            <div className="banner caution">
-              <Icon name="alert" size="sm" />
-              <span>
-                The store stopped at its per-turn cap. This is the turn&rsquo;s opening and its
-                ending — the phases from its middle are not here, and neither is anything that went
-                wrong in them.
-              </span>
-            </div>
+            <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+              The store stopped at its per-turn cap. This is the turn&rsquo;s opening and its ending
+              — the phases from its middle are not here, and neither is anything that went wrong in
+              them.
+            </Callout>
           )}
           <PhaseStrip phases={view.own} />
           <TurnBrief view={view} omit={title} />

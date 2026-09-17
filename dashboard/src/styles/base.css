@@ -175,34 +175,6 @@ img {
    Named for what they MEAN, not for their size, so a change of scale is one
    edit here rather than a search for `font-size: 11px`. */
 
-.t-display {
-  font-size: var(--fs-3xl);
-  font-weight: var(--fw-semibold);
-  letter-spacing: -0.03em;
-  line-height: 1.05;
-  font-variant-numeric: tabular-nums;
-}
-.t-stat {
-  font-size: var(--fs-2xl);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-.t-title {
-  font-size: var(--fs-xl);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-}
-.t-heading {
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-}
-.t-lead {
-  font-size: var(--fs-md);
-  font-weight: var(--fw-medium);
-}
 .t-body {
   font-size: var(--fs-sm);
 }
@@ -259,13 +231,6 @@ img {
   white-space: nowrap;
   min-width: 0;
 }
-.clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
 .measure {
   max-width: var(--measure);
 }
@@ -292,12 +257,6 @@ img {
 .row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-.row-top {
-  display: flex;
-  align-items: flex-start;
   gap: var(--space-2);
   min-width: 0;
 }
@@ -339,10 +298,6 @@ img {
 .gap-4 {
   gap: var(--space-4);
 }
-.gap-6 {
-  gap: var(--space-6);
-}
-
 /* A grid that lays cards out at a minimum readable width and stops. `auto-fit`
    with `minmax` is what makes every screen in the product respond without a
    single breakpoint of its own. */
@@ -352,9 +307,6 @@ img {
 }
 .grid-auto {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-}
-.grid-auto-sm {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 .grid-auto-lg {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));

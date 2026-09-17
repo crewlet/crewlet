@@ -12,3 +12,15 @@ declare module "*.md?raw" {
   const content: string;
   export default content;
 }
+
+/**
+ * The vendored drawings' checksum file, likewise as its own bytes.
+ *
+ * It carries no extension because `shasum -a 256 -c SHA256SUMS` is how the file
+ * is verified by hand and by `@crewlethq/icons`' own build, and a name that
+ * only the type system liked would be a name neither of those commands knows.
+ */
+declare module "*/SHA256SUMS?raw" {
+  const content: string;
+  export default content;
+}

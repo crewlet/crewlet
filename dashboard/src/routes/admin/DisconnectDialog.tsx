@@ -17,9 +17,8 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Avatar, Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Avatar, Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
+import { CableGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 
@@ -221,64 +220,76 @@ export function DisconnectDialog({
   // of that promise nobody could see.
   if (orphans) {
     return (
-      <Dialog
+      <Modal
+        open
         title={owed ? `Disconnecting ${name}` : `${name} disconnected`}
-        icon="plug"
+        icon={<CableGlyph size="md" />}
         onClose={onClose}
-        width={520}
+        // `md` IS 560, AND THIS WAS 520. Nothing chose 520: the setup dialog
+        // this card's other button opens has always been 560, and the two
+        // surfaces of one screen differing by forty pixels is exactly the
+        // drift a published scale removes.
+        size="md"
+        // THE BODY IS THE STACK, which is what the `.col gap-3` wrapper
+        // inside it used to be. One of them is enough.
+        stackBody
         footer={
           <Button variant="primary" onClick={onClose}>
             Done
           </Button>
         }
       >
-        <div className="col gap-3">
+        <p className="t-body secondary" style={{ margin: 0 }}>
+          These credentials are still in your secret store. They are named rather than deleted: one
+          you share with another deployment is not something this button decides about.
+        </p>
+        <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
+          {orphans.map((name) => (
+            <li key={name}>
+              <InlineCode>{name}</InlineCode>
+            </li>
+          ))}
+        </ul>
+        {/* THE ORDER MATTERS WHILE A TEARDOWN IS STILL OWED, and getting it
+            wrong is not cosmetic: the loop removes the webhooks and the
+            accounts AFTERWARDS, using these very credentials. Revoke one
+            first and the teardown cannot authenticate — and it retries, so
+            the card sits in Disconnecting for ever over accounts that are
+            still live. Told to wait, the operator does the same work in the
+            order that works. */}
+        {owed ? (
           <p className="t-body secondary" style={{ margin: 0 }}>
-            These credentials are still in your secret store. They are named rather than deleted:
-            one you share with another deployment is not something this button decides about.
+            <strong>Wait until the card stops reporting Disconnecting.</strong> The engine is still
+            removing what {name} holds at the app, and it signs in with these credentials to do it.
+            Once it has finished, revoke each one at the app and remove it with{" "}
+            <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
           </p>
-          <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
-            {orphans.map((name) => (
-              <li key={name}>
-                <code className="inline">{name}</code>
-              </li>
-            ))}
-          </ul>
-          {/* THE ORDER MATTERS WHILE A TEARDOWN IS STILL OWED, and getting it
-              wrong is not cosmetic: the loop removes the webhooks and the
-              accounts AFTERWARDS, using these very credentials. Revoke one
-              first and the teardown cannot authenticate — and it retries, so
-              the card sits in Disconnecting for ever over accounts that are
-              still live. Told to wait, the operator does the same work in the
-              order that works. */}
-          {owed ? (
-            <p className="t-body secondary" style={{ margin: 0 }}>
-              <strong>Wait until the card stops reporting Disconnecting.</strong> The engine is
-              still removing what {name} holds at the app, and it signs in with these credentials to
-              do it. Once it has finished, revoke each one at the app and remove it with{" "}
-              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
-            </p>
-          ) : (
-            <p className="t-body secondary" style={{ margin: 0 }}>
-              Revoke each one at the app, then remove it with{" "}
-              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
-            </p>
-          )}
-        </div>
-      </Dialog>
+        ) : (
+          <p className="t-body secondary" style={{ margin: 0 }}>
+            Revoke each one at the app, then remove it with{" "}
+            <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
+          </p>
+        )}
+      </Modal>
     );
   }
 
   return (
-    <Dialog
+    <Modal
+      open
       title={`Disconnect ${name}`}
-      icon="plug"
+      icon={<CableGlyph size="md" />}
       onClose={onClose}
+      // A DISCONNECT IS SEVERAL SURFACES IN ORDER, and one of them may be
+      // sitting out a busy vendor for up to forty-five seconds. Dismissing
+      // part-way is how a tool ends up half disconnected with nobody told.
       dismissable={!busy}
-      width={520}
+      closeDisabledReason="Waiting for the engine to finish disconnecting."
+      size="md"
+      stackBody
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="danger" onClick={() => void submit(false)} disabled={busy}>
@@ -287,108 +298,116 @@ export function DisconnectDialog({
         </>
       }
     >
-      <div className="col gap-3">
-        <p className="t-body secondary" style={{ margin: 0 }}>
-          Agents stop working in {name}. The engine removes the webhooks it registered, then drops
-          the integration from your company configuration.
-        </p>
+      <p className="t-body secondary" style={{ margin: 0 }}>
+        Agents stop working in {name}. The engine removes the webhooks it registered, then drops the
+        integration from your company configuration.
+      </p>
 
-        <label className="int-choice">
-          <input
-            type="checkbox"
-            checked={removeSeats}
-            disabled={busy}
-            onChange={(e) => setRemoveSeats(e.target.checked)}
-          />
-          <span className="col" style={{ gap: 2 }}>
-            <span className="t-body">Also remove the accounts Crewlet created</span>
-            <span className="t-caption faint">
-              Each agent&apos;s account at the vendor is deleted. What those accounts wrote stays,
-              but they can do nothing more. Leave this off to keep them.
-            </span>
+      <label className="int-choice">
+        <input
+          type="checkbox"
+          checked={removeSeats}
+          disabled={busy}
+          onChange={(e) => setRemoveSeats(e.target.checked)}
+        />
+        <span className="col" style={{ gap: 2 }}>
+          <span className="t-body">Also remove the accounts Crewlet created</span>
+          <span className="t-caption faint">
+            Each agent&apos;s account at the vendor is deleted. What those accounts wrote stays, but
+            they can do nothing more. Leave this off to keep them.
           </span>
-        </label>
+        </span>
+      </label>
 
-        {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
-            which stops it acting at once, and cannot delete the app itself:
-            neither vendor offers that at any permission this engine could
-            hold. So the agents are named, as agents rather than as handles in
-            a sentence, each with the page that finishes it off.
+      {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
+          which stops it acting at once, and cannot delete the app itself:
+          neither vendor offers that at any permission this engine could
+          hold. So the agents are named, as agents rather than as handles in
+          a sentence, each with the page that finishes it off.
 
-            A ROW PER AGENT, not a bulleted list of links: this is the same
-            roster the card shows, and the question it answers is "which of my
-            colleagues do I still have to go and remove", which is a list of
-            people rather than a list of URLs. */}
-        {removeSeats && apps && apps.length > 0 && (
-          <div className="col gap-2">
-            <span className="t-caption faint">
-              Each agent&apos;s app is uninstalled, which stops it acting immediately. Deleting the
-              app itself is yours to do{appPath ? <>: {marked(appPath)}</> : null}.
-            </span>
-            <ul className="int-rows">
-              {apps.map((app) => (
-                <li key={app.handle} className="int-row int-seat-row">
-                  <Avatar name={app.name || app.handle} size="sm" />
-                  <div className="int-row-identity">
-                    <span className="int-row-name">{app.name || app.handle}</span>
-                  </div>
-                  <a
-                    className="t-caption int-row-link"
-                    href={app.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Icon name="external" size="xs" />
-                    Link to delete
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+          A ROW PER AGENT, not a bulleted list of links: this is the same
+          roster the card shows, and the question it answers is "which of my
+          colleagues do I still have to go and remove", which is a list of
+          people rather than a list of URLs. */}
+      {removeSeats && apps && apps.length > 0 && (
+        <div className="col gap-2">
+          <span className="t-caption faint">
+            Each agent&apos;s app is uninstalled, which stops it acting immediately. Deleting the
+            app itself is yours to do{appPath ? <>: {marked(appPath)}</> : null}.
+          </span>
+          <ul className="int-rows">
+            {apps.map((app) => (
+              <li key={app.handle} className="int-row int-seat-row">
+                {/* DECORATIVE: the row states the agent's name in the line
+                      beside it, and an avatar that announced it too would say
+                      one thing twice. */}
+                <Avatar name={app.name || app.handle} size="sm" decorative />
+                <div className="int-row-identity">
+                  <span className="int-row-name">{app.name || app.handle}</span>
+                </div>
+                <a
+                  className="t-caption int-row-link"
+                  href={app.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <OpenInNewGlyph size="xs" />
+                  Link to delete
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
-        {/* NOT AN ERROR, so not the error banner. Something else is writing
-            at this surface — a reconcile tick, or an operator's own pass —
-            and the disconnect has not failed, it has not started yet. This
-            dialog used to stop dead at that refusal, which on a card
-            covering three surfaces left the tool half disconnected. */}
-        {waitingOn && !error && (
-          <div className="banner">
-            <Icon name="clock" size="sm" />
-            <span>
-              {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
-              trying.
-            </span>
-          </div>
-        )}
+      {/* NOT AN ERROR, so not the error banner. Something else is writing
+          at this surface — a reconcile tick, or an operator's own pass —
+          and the disconnect has not failed, it has not started yet. This
+          dialog used to stop dead at that refusal, which on a card
+          covering three surfaces left the tool half disconnected. */}
+      {waitingOn && !error && (
+        // NOT AN ERROR AND NOT A WARNING, so the neutral tone and the clock
+        // rather than either feedback mark: nothing has failed, the surface
+        // is simply held by something else and the next attempt is already
+        // scheduled.
+        <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
+          <span>
+            {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
+            trying.
+          </span>
+        </Callout>
+      )}
 
-        {error && (
-          <div className="banner critical">
-            <Icon name="alert" size="sm" />
-            <span className="col" style={{ gap: 4 }}>
-              {stuck && (
-                <span>
-                  This disconnect was already asked for and {name} has not let the engine finish it.
-                </span>
-              )}
-              <span>{error}</span>
-              {/* THE WAY OUT of a teardown that can never succeed: a
+      {error && (
+        <Callout variant="danger" role="alert">
+          <span className="col" style={{ gap: 4 }}>
+            {stuck && (
+              <span>
+                This disconnect was already asked for and {name} has not let the engine finish it.
+              </span>
+            )}
+            <span>{error}</span>
+            {/* THE WAY OUT of a teardown that can never succeed: a
                   revoked credential, an instance that is gone. Offered
                   only after one has actually failed, because it leaves
                   the vendor holding things nobody will remove. */}
-              <span className="t-caption faint">
-                Forcing drops the integration without waiting for {name}. Whatever it still holds
-                becomes yours to remove there.
-              </span>
-              <span>
-                <Button size="sm" variant="ghost" onClick={() => void submit(true)} disabled={busy}>
-                  Disconnect anyway
-                </Button>
-              </span>
+            <span className="t-caption faint">
+              Forcing drops the integration without waiting for {name}. Whatever it still holds
+              becomes yours to remove there.
             </span>
-          </div>
-        )}
-      </div>
-    </Dialog>
+            <span>
+              <Button
+                size="small"
+                variant="tertiary"
+                onClick={() => void submit(true)}
+                disabled={busy}
+              >
+                Disconnect anyway
+              </Button>
+            </span>
+          </span>
+        </Callout>
+      )}
+    </Modal>
   );
 }

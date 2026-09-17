@@ -35,8 +35,11 @@ import {
   type ReactNode,
 } from "react";
 import { useParam } from "../router.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
-import { Button, Empty, cx } from "~/ui/primitives.tsx";
+import { Button, EmptyState, cx } from "@crewlethq/ui";
+import { KeyboardArrowDownGlyph, KeyboardArrowUpGlyph } from "@crewlethq/icons/glyphs";
+// A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
+// every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
+import { Mark, type MarkName } from "~/ui/glyph.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 
 export interface GridColumn<T> {
@@ -170,7 +173,7 @@ export function DataGrid<T>({
   isFailed?: (row: T) => boolean;
   defaultSort?: string;
   serverSorted?: boolean;
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: IconName };
+  empty?: { title: ReactNode; hint?: ReactNode; icon?: MarkName };
   footer?: ReactNode;
   onLoadMore?: () => void;
   /** "40 of 312 loaded" — what an export would actually contain. */
@@ -309,7 +312,15 @@ export function DataGrid<T>({
   if (flat.length === 0 && empty) {
     return (
       <div className="grid-wrap">
-        <Empty inline icon={empty.icon} title={empty.title} hint={empty.hint} />
+        {/* `compact` IS OUR `inline`: an empty state inside a panel rather
+            than across a screen. The mark is left to theirs when a screen
+            names none — their default is the same inbox drawing ours was. */}
+        <EmptyState
+          size="compact"
+          icon={empty.icon && <Mark name={empty.icon} size={32} />}
+          title={empty.title}
+          description={empty.hint}
+        />
       </div>
     );
   }
@@ -401,7 +412,12 @@ export function DataGrid<T>({
               disabled={!column.sortValue}
             >
               <span className="truncate">{column.header}</span>
-              {sorted && <Icon name={sort?.desc ? "chevronDown" : "chevronUp"} size="xs" />}
+              {sorted &&
+                (sort?.desc ? (
+                  <KeyboardArrowDownGlyph size="xs" />
+                ) : (
+                  <KeyboardArrowUpGlyph size="xs" />
+                ))}
             </button>
           );
         })}
@@ -435,7 +451,7 @@ export function DataGrid<T>({
           <span className="spacer" />
           {loadedNote && <span className="t-caption">{loadedNote}</span>}
           {onLoadMore && (
-            <Button size="sm" onClick={onLoadMore}>
+            <Button size="small" variant="secondary" onClick={onLoadMore}>
               Load more
             </Button>
           )}

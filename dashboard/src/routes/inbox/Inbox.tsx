@@ -35,8 +35,19 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Banner, Button, Empty, Panel, Segmented, Skeleton } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Callout, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics`: `radio` commits the option the arrows land on, and `tabs`
+// demands a `panelId` naming a TabPanel neither of these rows controls. Both
+// strips here drive a `useParam` that re-runs `work_inbox`, so arrowing across
+// the three states would ask the engine three times and leave three history
+// entries to press Back through. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
+import { ArrowForwardGlyph, CloseGlyph, InboxGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+// A CONDITION'S MARK IS DATA — `lib/attention.ts` names it, and that name is
+// still one of ours. Resolving it to a glyph is the other half of this port and
+// belongs in that file; see the report.
+import { Mark } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
@@ -140,16 +151,16 @@ export function Inbox() {
           is anybody's fault. The engine half of this screen works for all
           three, which is why the page is not simply locked. */}
       {viewer.anonymous ? (
-        <Banner tone="caution">
+        <Callout variant="warning">
           No API token is presented, so this browser is nobody. The engine's own conditions are
           below; a person's notices need a credential bound to their seat.
-        </Banner>
+        </Callout>
       ) : viewer.unbound ? (
-        <Banner tone="caution">
+        <Callout variant="warning">
           This token is <code className="inline">{viewer.operatorID}</code> and no seat claims it.
           Give a human seat <code className="inline">contact.crewlet_operator_id</code> with that
           value and this becomes their inbox.
-        </Banner>
+        </Callout>
       ) : null}
 
       <PageNote>
@@ -158,19 +169,20 @@ export function Inbox() {
       </PageNote>
 
       {attention.length > 0 && (
-        <Panel
-          title="Needs a person"
-          icon="alert"
-          count={attention.length}
-          subtitle="Conditions the engine raised — each names what it costs to leave it."
-          padding="none"
-        >
+        <Card padding="none">
+          <Card.Header
+            icon={<WarningGlyph size="sm" />}
+            count={attention.length}
+            subtitle="Conditions the engine raised — each names what it costs to leave it."
+          >
+            <Card.Title>Needs a person</Card.Title>
+          </Card.Header>
           <div className="list">
             {attention.map((item) => (
               <AttentionRow key={item.id} item={item} now={now} />
             ))}
           </div>
-        </Panel>
+        </Card>
       )}
 
       {viewer.handle && (
@@ -197,7 +209,12 @@ export function Inbox() {
             />
             <span className="spacer" />
             {reason && (
-              <Button size="sm" icon="x" onClick={() => setReason("")}>
+              <Button
+                size="small"
+                variant="secondary"
+                leadingIcon={<CloseGlyph size="xs" />}
+                onClick={() => setReason("")}
+              >
                 {reasonPhrase(reason)}
               </Button>
             )}
@@ -222,7 +239,9 @@ export function Inbox() {
             />
           )}
 
-          {inbox.loading && !inbox.data && <Skeleton rows={5} />}
+          {inbox.loading && !inbox.data && (
+            <Skeleton variant="text" rows={5} label="Loading the inbox" />
+          )}
 
           <QueryState
             error={inbox.error}
@@ -262,10 +281,10 @@ export function Inbox() {
       )}
 
       {!viewer.handle && !viewer.loading && attention.length === 0 && (
-        <Empty
-          icon="inbox"
+        <EmptyState
+          icon={<InboxGlyph size={32} />}
           title="Nothing needs a person"
-          hint="The engine raised no conditions. With a credential bound to a seat, this screen also shows what reached that person."
+          description="The engine raised no conditions. With a credential bound to a seat, this screen also shows what reached that person."
         />
       )}
     </>
@@ -277,15 +296,15 @@ function AttentionRow({ item, now }: { item: Attention; now: number }) {
   const body = (
     <>
       <span className="attention-icon" data-severity={item.severity}>
-        <Icon name={item.icon} size="sm" />
+        <Mark name={item.icon} size="sm" />
       </span>
       <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
         <strong className="t-cell truncate">{item.title}</strong>
         <span className="t-caption">{item.detail}</span>
       </span>
-      {item.who && <Badge outline>{item.who}</Badge>}
+      {item.who && <Tag appearance="outline">{item.who}</Tag>}
       {item.at && <span className="t-caption">{relTime(item.at, now)}</span>}
-      {item.path && <Icon name="arrowRight" size="sm" />}
+      {item.path && <ArrowForwardGlyph size="sm" />}
     </>
   );
   return item.path ? (
@@ -313,18 +332,18 @@ function NoticeRow({
         <span className="row gap-1">
           {/* THE REASON, FIRST. It is the fact nothing else on this row
               carries, and the one no other tracker records. */}
-          <Badge outline title={reasonWhy(notice.reason)}>
+          <Tag appearance="outline" title={reasonWhy(notice.reason)}>
             {reasonPhrase(notice.reason)}
-          </Badge>
+          </Tag>
           {notice.addressed && (
-            <Badge tone="caution" title="this asks something of you">
+            <Tag variant="warning" title="this asks something of you">
               asks
-            </Badge>
+            </Tag>
           )}
           {notice.fallback && (
-            <Badge outline title="nobody better was found for this">
+            <Tag appearance="outline" title="nobody better was found for this">
               fallback
-            </Badge>
+            </Tag>
           )}
           {notice.subject_key && (
             <a className="mono t-link" href={href(["work", notice.subject_key])}>

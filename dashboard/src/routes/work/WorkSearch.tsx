@@ -55,7 +55,8 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { StatusBadge } from "~/components/work.tsx";
-import { Button, Empty } from "~/ui/primitives.tsx";
+import { Button, EmptyState, Input } from "@crewlethq/ui";
+import { ScheduleGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -117,34 +118,40 @@ export function WorkSearch() {
           setQ(typed.trim());
         }}
       >
-        <label className="field" style={{ flex: 1 }}>
-          <span className="sr-only">Search the company&rsquo;s work</span>
-          <input
+        {/* THE NAME MOVES FROM A HIDDEN `<label>` ONTO THE FIELD ITSELF.
+            Their `Input` owns the box, the leading slot and the focus ring,
+            and it takes no label of its own — so the accessible name is an
+            `aria-label` rather than a visually hidden span this screen had to
+            remember to write. Same sentence, same reader. */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Input
             type="search"
-            className="input"
+            width="full"
+            aria-label="Search the company’s work"
+            leading={<SearchGlyph size="sm" />}
             placeholder="A phrase — the words somebody would have written"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
           />
-        </label>
-        <Button variant="primary" icon="search" type="submit">
+        </div>
+        <Button variant="primary" leadingIcon={<SearchGlyph size="sm" />} type="submit">
           Search
         </Button>
       </form>
 
       {q.trim() === "" ? (
-        <Empty
-          icon="search"
+        <EmptyState
+          icon={<SearchGlyph size="xl" />}
           title="Type what you half remember"
-          hint="The ranking is over titles, bodies and comments — the words somebody actually wrote, rather than a key or a status."
+          description="The ranking is over titles, bodies and comments — the words somebody actually wrote, rather than a key or a status."
         />
       ) : hits.data && !hits.data.available ? (
         // NOT AN EMPTY RESULT. See the file head: this node has the items and
         // not yet the index, and a reader told "no matches" acts on it.
-        <Empty
-          icon="clock"
+        <EmptyState
+          icon={<ScheduleGlyph size="xl" />}
           title="This node is still indexing"
-          hint={
+          description={
             hits.data.note ||
             "It joined recently, so the company's work is not all findable from here yet. The board's own filters answer in the meantime."
           }

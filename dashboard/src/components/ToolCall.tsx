@@ -16,8 +16,12 @@
 
 import { useState } from "react";
 import { callText, callsFor, type Subject, type ToolCall as Call } from "~/lib/toolcall.ts";
-import { Badge, Button, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, InlineCode, Tag, cx, useClipboard } from "@crewlethq/ui";
+import {
+  ChevronRightGlyph,
+  ContentCopyGlyph,
+  KeyboardArrowDownGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** How long the copy button says it worked. */
 const COPIED_MS = 1_400;
@@ -42,14 +46,14 @@ export function ToolCallBlock({ subject, viewer }: { subject: Subject; viewer?: 
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="sm" />
+        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <span>Change this with your assistant</span>
       </button>
       {open && (
         <div className="toolcall-body">
           <p className="toolcall-note">
             This dashboard only reads. Paste one of these to the assistant you have connected to{" "}
-            <code className="inline">/operator/mcp</code>, edited as you need it.
+            <InlineCode>/operator/mcp</InlineCode>, edited as you need it.
           </p>
           {calls.map((call) => (
             <CallRow key={call.tool} call={call} />
@@ -67,33 +71,38 @@ export function ToolCallBlock({ subject, viewer }: { subject: Subject; viewer?: 
 }
 
 function CallRow({ call }: { call: Call }) {
-  const [copied, setCopied] = useState(false);
+  // UILET'S CLIPBOARD, NOT OURS, AND IT FIXES A DEAD BUTTON.
+  //
+  // This used to `await navigator.clipboard.writeText` and swallow the throw.
+  // The Clipboard API is gated on a SECURE CONTEXT, so `navigator.clipboard`
+  // is simply undefined on the plain-http origin an operator reads a remote
+  // dashboard at — which is exactly the reader this block exists for, since
+  // they are the one with an assistant on the other side of it. There, the
+  // press did nothing, said nothing, and left the operator to select the call
+  // by hand. `useClipboard` keeps the deprecated `execCommand` path for that
+  // origin and honours its boolean rather than assuming it worked.
+  //
+  // The wording is unchanged: "Copy", then "Copied". A failure still makes no
+  // claim, which is what ours meant to do and could not.
+  const clip = useClipboard({ resetMs: COPIED_MS });
   const text = callText(call);
-  async function copy(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), COPIED_MS);
-    } catch {
-      // A blocked clipboard is ordinary — a page served over plain HTTP, or
-      // a permission the reader declined. The call is on screen and
-      // selectable either way, so the button simply stops claiming it
-      // worked rather than raising anything.
-      setCopied(false);
-    }
-  }
   return (
     <div className={cx("toolcall-row", call.destructive && "is-destructive")}>
       <div className="toolcall-head">
         <span className="toolcall-label">{call.label}</span>
         {call.destructive && (
-          <Badge tone="critical" outline>
+          <Tag variant="danger" appearance="outline">
             irreversible
-          </Badge>
+          </Tag>
         )}
         <span className="spacer" />
-        <Button size="sm" variant="ghost" icon="copy" onClick={copy}>
-          {copied ? "Copied" : "Copy"}
+        <Button
+          size="small"
+          variant="tertiary"
+          leadingIcon={<ContentCopyGlyph />}
+          onClick={() => void clip.copy(text)}
+        >
+          {clip.state === "copied" ? "Copied" : "Copy"}
         </Button>
       </div>
       <code className="toolcall-code">{text}</code>

@@ -41,7 +41,15 @@
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Panel, Segmented, Skeleton } from "~/ui/primitives.tsx";
+import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
+import { GroupGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
+// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics`: `radio` selects as the arrows move, `tabs` is manual but
+// demands a `panelId` naming a TabPanel neither of these rows controls. Both
+// rows here drive a `useParam` that re-runs this screen's query, which is the
+// exact case our own `activate="manual"` exists for — arrowing across three
+// options would ask the engine three times. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -243,7 +251,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   return (
     <>
       <TurnLens view={view} onChange={onChange}>
-        <Badge outline>{windowLabel(range.window)}</Badge>
+        <Tag appearance="outline">{windowLabel(range.window)}</Tag>
         <TimeRangePicker range={range} ariaLabel="Window" />
       </TurnLens>
       <PageNote>
@@ -251,14 +259,16 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
         the same window one level down, where a single turn can be sixty rows.
       </PageNote>
 
-      <Panel
-        title="When"
-        icon="activity"
-        subtitle={`${plural(rows.length, "turn")} on this page, over ${spanWords(since, until)}`}
-        actions={
-          <span className="t-caption">one bar per {bucket} — click one to narrow the window</span>
-        }
-      >
+      <Card>
+        <Card.Header
+          icon={<TimelineGlyph size="sm" />}
+          subtitle={`${plural(rows.length, "turn")} on this page, over ${spanWords(since, until)}`}
+          actions={
+            <span className="t-caption">one bar per {bucket} — click one to narrow the window</span>
+          }
+        >
+          <Card.Title>When</Card.Title>
+        </Card.Header>
         {rows.length > 0 ? (
           <Histogram
             bars={bars}
@@ -273,22 +283,22 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
           // the window, which a widened range or a cleared filter may change.
           <span className="t-caption">No turn on this page started in this window.</span>
         )}
-      </Panel>
+      </Card>
 
       <div className="row gap-2 wrap">
         <Button
-          size="sm"
-          variant={role ? "primary" : undefined}
+          size="small"
+          variant={role ? "primary" : "secondary"}
           onClick={() => setRole("")}
-          icon="users"
+          leadingIcon={<GroupGlyph size="xs" />}
         >
           {role || "every seat"}
         </Button>
         {seats.slice(0, 8).map((seat) => (
           <Button
             key={seat.name}
-            size="sm"
-            variant={role === seat.name ? "primary" : undefined}
+            size="small"
+            variant={role === seat.name ? "primary" : "secondary"}
             onClick={() => setRole(role === seat.name ? "" : seat.name)}
           >
             {seat.name}
@@ -307,7 +317,9 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
         />
       </div>
 
-      {list.loading && rows.length === 0 && <Skeleton rows={6} />}
+      {list.loading && rows.length === 0 && (
+        <Skeleton variant="text" rows={6} label="Loading turns" />
+      )}
       <QueryState
         error={list.error}
         loading={list.loading}
@@ -365,7 +377,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               // The seat's own page is one click away from the turn.
               cell: (t) =>
                 t.role ? (
-                  <TextCell icon="cpu">{t.role}</TextCell>
+                  <TextCell icon="memory">{t.role}</TextCell>
                 ) : (
                   // NOT a dash: a turn with no seat is not a turn whose seat
                   // went unrecorded, it is the engine's own work.
@@ -399,17 +411,17 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               cell: (t) => (
                 <span className="row gap-1">
                   {!t.complete && (
-                    <Badge
-                      tone="info"
+                    <Tag
+                      variant="info"
                       title="no completion record — running, or it died mid-flight"
                     >
                       running
-                    </Badge>
+                    </Tag>
                   )}
                   {t.failed && (
-                    <Badge tone="caution" title="at least one event of this turn was a failure">
+                    <Tag variant="warning" title="at least one event of this turn was a failure">
                       failure
-                    </Badge>
+                    </Tag>
                   )}
                 </span>
               ),

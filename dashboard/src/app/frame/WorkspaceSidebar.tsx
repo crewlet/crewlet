@@ -21,6 +21,7 @@
  * that carries one — `activity/turns` stays current when a seat narrows it,
  * because the seat row is the narrower answer and both are true.
  *
+ *
  * # Selection is derived, never held
  *
  * Which row is current comes from the route. Held in state it would survive a
@@ -37,8 +38,15 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute, samePath } from "../router.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
-import { SearchInput, cx, type Tone } from "~/ui/primitives.tsx";
+import { Input, StatusDot, cx } from "@crewlethq/ui";
+import { ChevronRightGlyph, KeyboardArrowDownGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+// A ROW'S MARK IS DATA — it comes from `app/nav.ts`'s destinations table by
+// way of `workspaces/sidebars.tsx`, and from each workspace's own builder — so
+// it travels as a NAME and is resolved here. See the registry's own doc for
+// why that entry point is separate from the glyphs themselves.
+import { markByName, type MarkName } from "~/ui/glyph.tsx";
+import { type Tone } from "~/ui/primitives.tsx";
+import { uiletTone } from "~/ui/primitives.tsx";
 
 export interface SidebarRow {
   key: string;
@@ -47,7 +55,7 @@ export interface SidebarRow {
   path: string[];
   /** Query carried with the path — allowed only where the ROW IS the list. */
   query?: Record<string, string>;
-  icon?: IconName;
+  icon?: MarkName;
   /** A state mark, never an identity colour. */
   tone?: Tone;
   count?: number;
@@ -66,6 +74,12 @@ export interface SidebarSection {
   collapsible?: boolean;
   /** Rendered in place of rows when there are none — never a blank section. */
   empty?: ReactNode;
+}
+
+/** A row's own mark, resolved from the name the destinations table carries. */
+function RowGlyph({ name }: { name: MarkName }) {
+  const Glyph = markByName(name);
+  return <Glyph size="sm" />;
 }
 
 /** Whether this row, or anything under it, is the page being read. */
@@ -135,13 +149,18 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
     <>
       <div className={cx("side-row", current && "current")} style={{ "--depth": depth } as never}>
         {hasChildren ? (
+          // OURS RATHER THAN `IconButton`: the twist is a 16px slot in a tree
+          // row, and `IconButton`'s smallest step is a 24px square — the WCAG
+          // 2.2 pointer floor, which is right for a row action and would make
+          // every row in every workspace tree eight pixels taller here. The
+          // chevrons inside it are theirs.
           <button
             className="side-twist"
             onClick={() => setOpenedByHand(!open)}
             aria-label={open ? `Collapse ${row.label}` : `Expand ${row.label}`}
             aria-expanded={open}
           >
-            <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+            {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
           </button>
         ) : (
           <span className="side-twist" aria-hidden="true" />
@@ -151,8 +170,13 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
           href={href(row.path, row.query)}
           aria-current={current ? "page" : undefined}
         >
-          {row.icon && <Icon name={row.icon} size="sm" />}
-          {row.tone && <i className={cx("side-dot", row.tone)} aria-hidden="true" />}
+          {row.icon && <RowGlyph name={row.icon} />}
+          {/* THEIRS, and it is the same 6px mark in the same tones — with the
+              neutral one measured: ours drew it on `--text-faint`, which is
+              2.33:1 against a light page, where `StatusDot` takes the tertiary
+              step at 4.87:1. It hides itself from assistive technology, so the
+              `aria-hidden` that used to be spelled here is theirs now. */}
+          {row.tone && <StatusDot tone={uiletTone(row.tone)} />}
           <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
             <span className="truncate">{row.label}</span>
             {row.sub && <span className="side-sub truncate">{row.sub}</span>}
@@ -212,11 +236,14 @@ export function WorkspaceSidebar({
         </div>
         {head}
         <div className="side-filter">
-          <SearchInput
+          <Input
+            type="search"
             value={filter}
-            onChange={setFilter}
-            ariaLabel={`Filter ${title}`}
+            onChange={(e) => setFilter(e.target.value)}
+            aria-label={`Filter ${title}`}
             placeholder="Filter"
+            inputSize="sm"
+            leading={<SearchGlyph size="sm" />}
           />
         </div>
         <div className="side-tree">

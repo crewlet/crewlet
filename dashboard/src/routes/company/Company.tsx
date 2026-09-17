@@ -23,8 +23,24 @@ import { useMemo, type CSSProperties } from "react";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { StateBadge, Section } from "~/components/common.tsx";
-import { Avatar, Badge, Empty, Panel, Segmented, Skeleton } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Avatar, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  AccountTreeGlyph,
+  ArrowForwardGlyph,
+  CrownGlyph,
+  ExploreGlyph,
+  FlagGlyph,
+  FolderGlyph,
+  GroupGlyph,
+  ShieldGlyph,
+  TargetGlyph,
+} from "@crewlethq/icons/glyphs";
+// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics`: `radio` commits the option the arrows land on, and this lens
+// drives a `useTab`, which pushes a history entry and swaps the whole screen.
+// Arrowing between chart and charter under that control is history a reader
+// then has to press Back through. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import type { OrgUnit } from "~/protocol/index.ts";
@@ -62,13 +78,23 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
           className={`org-node${seat.kind === "human" ? " human" : ""}`}
           href={href(["company", "people", seat.handle])}
         >
-          <Avatar name={seat.name} human={seat.kind === "human"} />
+          {/* THEIR `variant="dashed"` IS OUR `human`, and it means the same
+              thing: a human seat is DRAWN rather than tinted, because the
+              engine does not run it and that is structure, not status. Their
+              `md` is 32px where ours was 26, so the step moves down one. */}
+          <Avatar
+            name={seat.name}
+            size="sm"
+            variant={seat.kind === "human" ? "dashed" : "solid"}
+            decorative
+            title={seat.name}
+          />
           <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
             <span className="truncate t-cell">{seat.name}</span>
             <span className="truncate t-caption mono">@{seat.handle}</span>
           </span>
           {seat.kind === "human" ? (
-            <Badge outline>human</Badge>
+            <Tag appearance="outline">human</Tag>
           ) : (
             <StateBadge agent={agents.find((a) => a.role === seat.name)} sandboxes={sandboxes} />
           )}
@@ -96,13 +122,13 @@ function SubUnitLinks({ units }: { units: OrgUnit[] }) {
           className="thread-entry"
           href={href(["company", "units", child.id || child.name])}
         >
-          <Icon name="folder" size="sm" />
+          <FolderGlyph size="sm" />
           <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
             <strong className="t-cell truncate">{child.name}</strong>
             {child.purpose && <span className="t-caption truncate">{child.purpose}</span>}
           </span>
-          <Badge outline>{child.type || "unit"}</Badge>
-          <Icon name="arrowRight" size="sm" />
+          <Tag appearance="outline">{child.type || "unit"}</Tag>
+          <ArrowForwardGlyph size="sm" />
         </a>
       ))}
     </div>
@@ -172,18 +198,18 @@ export function CompanyScreen() {
     return (
       <div className="org-unit">
         <div className="org-unit-head">
-          <Icon name="folder" size="sm" style={{ color: "var(--text-faint)" }} />
+          <FolderGlyph size="sm" style={{ color: "var(--text-faint)" }} />
           <strong className="t-body truncate">{unit.name}</strong>
-          <Badge outline>{unit.type || "unit"}</Badge>
+          <Tag appearance="outline">{unit.type || "unit"}</Tag>
           {effectiveLead && (
-            <Badge
-              tone="neutral"
-              icon="crown"
+            <Tag
+              variant="neutral"
+              leadingIcon={<CrownGlyph size="xs" />}
               title={explicitLead ? "explicit lead" : "inherited from the parent unit"}
             >
               {effectiveLead}
               {!explicitLead && <span className="faint"> (inherited)</span>}
-            </Badge>
+            </Tag>
           )}
           <span className="spacer" />
           <span className="t-caption">{plural(seats.length, "seat")}</span>
@@ -212,7 +238,7 @@ export function CompanyScreen() {
             value={lens}
             onChange={setLens}
             options={[
-              { value: "chart", label: "Chart", icon: "sitemap" },
+              { value: "chart", label: "Chart", icon: "account_tree" },
               { value: "charter", label: "Charter", icon: "flag" },
             ]}
           />
@@ -225,19 +251,22 @@ export function CompanyScreen() {
       {lens === "chart" && (
         <>
           {rootSeats.length > 0 && (
-            <Panel title="Org-wide" icon="crown" subtitle="seats above every unit">
+            <Card>
+              <Card.Header icon={<CrownGlyph size="sm" />} subtitle="seats above every unit">
+                <Card.Title>Org-wide</Card.Title>
+              </Card.Header>
               <SeatLinks seats={rootSeats} />
-            </Panel>
+            </Card>
           )}
           <div className="org-tree">
             {(org?.units ?? []).map((unit) => (
               <UnitBlock key={unit.name} unit={unit} depth={0} />
             ))}
             {!(org?.units ?? []).length && !rootSeats.length && (
-              <Empty
-                icon="sitemap"
+              <EmptyState
+                icon={<AccountTreeGlyph size={32} />}
                 title="No organisation is loaded"
-                hint="The org tree comes from the active company configuration."
+                description="The org tree comes from the active company configuration."
               />
             )}
           </div>
@@ -246,17 +275,26 @@ export function CompanyScreen() {
 
       {lens === "charter" && (
         <div className="col gap-4">
-          <Panel title="Mission" icon="target">
+          <Card>
+            <Card.Header icon={<TargetGlyph size="sm" />}>
+              <Card.Title>Mission</Card.Title>
+            </Card.Header>
             <p className="t-body measure">
               {org?.mission || <span className="faint">No mission is set.</span>}
             </p>
-          </Panel>
+          </Card>
           {org?.vision && (
-            <Panel title="Vision" icon="compass">
+            <Card>
+              <Card.Header icon={<ExploreGlyph size="sm" />}>
+                <Card.Title>Vision</Card.Title>
+              </Card.Header>
               <p className="t-body measure">{org.vision}</p>
-            </Panel>
+            </Card>
           )}
-          <Panel title="Policies" icon="shield" count={org?.policies?.length ?? 0}>
+          <Card>
+            <Card.Header icon={<ShieldGlyph size="sm" />} count={org?.policies?.length ?? 0}>
+              <Card.Title>Policies</Card.Title>
+            </Card.Header>
             {org?.policies?.length ? (
               <ol className="col gap-2" style={{ paddingLeft: "var(--space-4)", margin: 0 }}>
                 {org.policies.map((p, i) => (
@@ -266,18 +304,21 @@ export function CompanyScreen() {
                 ))}
               </ol>
             ) : (
-              <Empty
-                inline
-                icon="shield"
+              <EmptyState
+                size="compact"
+                icon={<ShieldGlyph size={32} />}
                 title="No policies are set"
-                hint="Policies render into every planner's prompt in full. They are the company's standing instructions."
+                description="Policies render into every planner's prompt in full. They are the company's standing instructions."
               />
             )}
-          </Panel>
+          </Card>
           <Section title="Unit goals" hint="what each team is for">
             <div className="grid grid-auto">
               {index.units.map((u) => (
-                <Panel key={u.name} title={u.name} subtitle={u.type}>
+                <Card key={u.name}>
+                  <Card.Header subtitle={u.type}>
+                    <Card.Title>{u.name}</Card.Title>
+                  </Card.Header>
                   {u.purpose && <p className="t-caption">{u.purpose}</p>}
                   {u.goals?.length ? (
                     <ul
@@ -293,7 +334,7 @@ export function CompanyScreen() {
                   ) : (
                     <span className="t-caption faint">No goals set.</span>
                   )}
-                </Panel>
+                </Card>
               ))}
             </div>
           </Section>
@@ -325,7 +366,13 @@ export function UnitScreen({ id }: { id: string }) {
   usePageLabels(unit ? { [id]: unit.name } : {});
 
   if (!unit) {
-    return <Empty icon="sitemap" title={`No unit called “${id}”`} hint={NO_UNIT_HINT} />;
+    return (
+      <EmptyState
+        icon={<AccountTreeGlyph size={32} />}
+        title={`No unit called “${id}”`}
+        description={NO_UNIT_HINT}
+      />
+    );
   }
 
   const { seats, facts } = unitView(index, unit);
@@ -342,20 +389,26 @@ export function UnitScreen({ id }: { id: string }) {
 
       <ObjectHeader
         kind="Unit"
-        icon="sitemap"
+        icon="account_tree"
         identifier={unit.id || undefined}
         title={unit.name}
         facts={facts}
       />
 
       {unit.purpose && (
-        <Panel title="Purpose" icon="target">
+        <Card>
+          <Card.Header icon={<TargetGlyph size="sm" />}>
+            <Card.Title>Purpose</Card.Title>
+          </Card.Header>
           <p className="t-body measure">{unit.purpose}</p>
-        </Panel>
+        </Card>
       )}
 
       {unit.goals?.length ? (
-        <Panel title="Goals" icon="flag" count={unit.goals.length}>
+        <Card>
+          <Card.Header icon={<FlagGlyph size="sm" />} count={unit.goals.length}>
+            <Card.Title>Goals</Card.Title>
+          </Card.Header>
           <ul className="col gap-1" style={{ paddingLeft: "var(--space-4)", margin: 0 }}>
             {unit.goals.map((g, i) => (
               <li key={i} className="t-cell">
@@ -363,27 +416,36 @@ export function UnitScreen({ id }: { id: string }) {
               </li>
             ))}
           </ul>
-        </Panel>
+        </Card>
       ) : null}
 
-      <Panel
-        title="Seats"
-        icon="users"
-        count={seats.length}
-        subtitle="everyone in this unit and everything under it"
-        padding="none"
-      >
+      <Card padding="none">
+        <Card.Header
+          icon={<GroupGlyph size="sm" />}
+          count={seats.length}
+          subtitle="everyone in this unit and everything under it"
+        >
+          <Card.Title>Seats</Card.Title>
+        </Card.Header>
         {seats.length > 0 ? (
           <SeatLinks seats={seats} style={{ padding: "var(--space-3)" }} />
         ) : (
-          <Empty inline icon="users" title="No seats in this unit" hint={NO_SEATS_HINT} />
+          <EmptyState
+            size="compact"
+            icon={<GroupGlyph size={32} />}
+            title="No seats in this unit"
+            description={NO_SEATS_HINT}
+          />
         )}
-      </Panel>
+      </Card>
 
       {(unit.children ?? []).length > 0 && (
-        <Panel title="Sub-units" icon="sitemap" count={(unit.children ?? []).length} padding="none">
+        <Card padding="none">
+          <Card.Header icon={<AccountTreeGlyph size="sm" />} count={(unit.children ?? []).length}>
+            <Card.Title>Sub-units</Card.Title>
+          </Card.Header>
           <SubUnitLinks units={unit.children ?? []} />
-        </Panel>
+        </Card>
       )}
     </>
   );
@@ -419,8 +481,15 @@ export function UnitPeek({ id }: { id: string }) {
   const unit = index.units.find((u) => (u.id || u.name) === id || u.name === id);
 
   if (!unit) {
-    if (!connected) return <Skeleton rows={6} />;
-    return <Empty inline icon="sitemap" title={`No unit called “${id}”`} hint={NO_UNIT_HINT} />;
+    if (!connected) return <Skeleton variant="text" rows={6} label="Loading the org tree" />;
+    return (
+      <EmptyState
+        size="compact"
+        icon={<AccountTreeGlyph size={32} />}
+        title={`No unit called “${id}”`}
+        description={NO_UNIT_HINT}
+      />
+    );
   }
 
   const { seats, facts } = unitView(index, unit);
@@ -431,7 +500,7 @@ export function UnitPeek({ id }: { id: string }) {
       <ObjectHeader
         size="peek"
         kind="Unit"
-        icon="sitemap"
+        icon="account_tree"
         identifier={unit.id || undefined}
         title={unit.name}
         facts={facts}
@@ -441,30 +510,44 @@ export function UnitPeek({ id }: { id: string }) {
             "Is this the one I meant" is the question the rail answers, and a
             purpose that is simply missing from the panel reads as a unit
             whose purpose the reader failed to scroll to. */}
-        <Panel title="Purpose" icon="target">
+        <Card>
+          <Card.Header icon={<TargetGlyph size="sm" />}>
+            <Card.Title>Purpose</Card.Title>
+          </Card.Header>
           {unit.purpose ? (
             <p className="t-body measure">{unit.purpose}</p>
           ) : (
             <span className="muted">No purpose is written for this unit.</span>
           )}
-        </Panel>
+        </Card>
 
         {/* THE SEATS THEMSELVES, not just the count in the facts above: a
             reader recognises a team by who is in it long before they
             recognise it by its name, and the badge on each row is the other
             half of "what is it doing". */}
-        <Panel title="Seats" icon="users" count={seats.length} padding="none">
+        <Card padding="none">
+          <Card.Header icon={<GroupGlyph size="sm" />} count={seats.length}>
+            <Card.Title>Seats</Card.Title>
+          </Card.Header>
           {seats.length > 0 ? (
             <SeatLinks seats={seats} style={{ padding: "var(--space-3)" }} />
           ) : (
-            <Empty inline icon="users" title="No seats in this unit" hint={NO_SEATS_HINT} />
+            <EmptyState
+              size="compact"
+              icon={<GroupGlyph size={32} />}
+              title="No seats in this unit"
+              description={NO_SEATS_HINT}
+            />
           )}
-        </Panel>
+        </Card>
 
         {children.length > 0 && (
-          <Panel title="Sub-units" icon="sitemap" count={children.length} padding="none">
+          <Card padding="none">
+            <Card.Header icon={<AccountTreeGlyph size="sm" />} count={children.length}>
+              <Card.Title>Sub-units</Card.Title>
+            </Card.Header>
             <SubUnitLinks units={children} />
-          </Panel>
+          </Card>
         )}
       </div>
     </>

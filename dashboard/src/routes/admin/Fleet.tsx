@@ -31,8 +31,28 @@
 
 import { useMemo } from "react";
 
+import {
+  Callout,
+  Card,
+  EmptyState,
+  InlineCode,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+import {
+  DnsGlyph,
+  GroupGlyph,
+  KeyGlyph,
+  MemoryGlyph,
+  PersonGlyph,
+  PowerSettingsNewGlyph,
+  TargetGlyph,
+  TuneGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Banner, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   Dash,
@@ -49,7 +69,6 @@ import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plural } from "~/lib/format.ts";
@@ -64,10 +83,11 @@ import { RetentionPanels } from "./Retention.tsx";
  */
 const POLL_MS = 15_000;
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
-  ok: "positive",
-  degraded: "caution",
-  error: "critical",
+/** The apply status the control plane reports, as a [Tag] variant. */
+const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  ok: "success",
+  degraded: "warning",
+  error: "danger",
 };
 
 /** Seconds on the wire, milliseconds in a [DurationCell] — converted once. */
@@ -109,8 +129,8 @@ function FleetScreen() {
       <PageActions>
         {
           <>
-            <Badge outline>{plural(nodes.length, "node")}</Badge>
-            {data?.this_node && <Badge tone="accent">you are on {data.this_node}</Badge>}
+            <Tag appearance="outline">{plural(nodes.length, "node")}</Tag>
+            {data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}
           </>
         }
       </PageActions>
@@ -121,25 +141,24 @@ function FleetScreen() {
       </PageNote>
 
       {error && (
-        <div className="banner critical">
-          <Icon name="alert" size="sm" />
+        <Callout variant="danger" role="alert">
           <span>
             This poll failed ({error}). What is below is the last reading that succeeded — on this
             screen above all, do not read it as now.
           </span>
-        </div>
+        </Callout>
       )}
 
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon="server"
+      <Card padding="none">
+        <StatGroup columns={4}>
+          <StatCard
+            icon={<DnsGlyph size="xs" />}
             label="Live nodes"
             value={nodes.length}
             sub="holding an unexpired lease"
           />
-          <Stat
-            icon="users"
+          <StatCard
+            icon={<GroupGlyph size="xs" />}
             label="Seats placed"
             value={data?.seats?.length ?? 0}
             sub={
@@ -148,8 +167,8 @@ function FleetScreen() {
                 : "every role has a home"
             }
           />
-          <Stat
-            icon="alert"
+          <StatCard
+            icon={<WarningGlyph size="xs" />}
             label="Unplaceable"
             value={data?.unplaceable?.length ?? 0}
             sub={
@@ -158,16 +177,16 @@ function FleetScreen() {
                 : "nothing is stranded"
             }
           />
-          <Stat
-            icon="sliders"
+          <StatCard
+            icon={<TuneGlyph size="xs" />}
             label="Behind on config"
             value={behind.length}
             sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
           />
-        </StatRow>
-      </Panel>
+        </StatGroup>
+      </Card>
 
-      {loading && !data && <Skeleton rows={4} />}
+      {loading && !data && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
         error={null}
         loading={loading}
@@ -180,7 +199,10 @@ function FleetScreen() {
               }
         }
       >
-        <Panel title="Nodes" icon="server" count={nodes.length} padding="none">
+        <Card padding="none">
+          <Card.Header icon={<DnsGlyph size="sm" />} count={nodes.length}>
+            Nodes
+          </Card.Header>
           <DataGrid<FleetNode>
             rows={nodes}
             rowKey={(n) => n.id}
@@ -210,9 +232,9 @@ function FleetScreen() {
                 sortValue: (n) => n.id,
                 cell: (n) => (
                   <span className="row gap-1">
-                    <code className="inline">{n.id}</code>
-                    {n.id === data?.this_node && <Badge tone="accent">this one</Badge>}
-                    {n.draining && <Badge tone="caution">draining</Badge>}
+                    <InlineCode>{n.id}</InlineCode>
+                    {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
+                    {n.draining && <Tag variant="warning">draining</Tag>}
                   </span>
                 ),
               },
@@ -255,13 +277,13 @@ function FleetScreen() {
                 header: "Posture",
                 shrink: true,
                 sortValue: (n) => n.posture ?? "",
-                // A BADGE RATHER THAN A `StatusCell`: the control plane's
+                // A TAG RATHER THAN A `StatusCell`: the control plane's
                 // postures are a vocabulary the node itself chooses a word
                 // from — `serve`, `hold`, whatever it reports — and a glyph
                 // would claim a binary this column does not have.
                 cell: (n) =>
                   n.posture ? (
-                    <Badge tone={n.posture === "serve" ? "positive" : "caution"}>{n.posture}</Badge>
+                    <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
                   ) : (
                     <Dash title="this node has published no presence heartbeat" />
                   ),
@@ -273,9 +295,9 @@ function FleetScreen() {
                 sortValue: (n) => n.config_status ?? "",
                 cell: (n) => (
                   <span className="row gap-1">
-                    <Badge tone={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
+                    <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
                       {n.config_status || "unknown"}
-                    </Badge>
+                    </Tag>
                     {data && (n.config_epoch ?? 0) < data.target_epoch && (
                       <span
                         className="t-caption faint"
@@ -307,32 +329,30 @@ function FleetScreen() {
               },
             ]}
           />
-        </Panel>
+        </Card>
 
         {nodes.some((n) => n.config_error) && (
-          <Panel title="Config apply errors" icon="alert">
+          <Card>
+            <Card.Header icon={<WarningGlyph size="sm" />}>Config apply errors</Card.Header>
             <div className="col gap-2">
               {nodes
                 .filter((n) => n.config_error)
                 .map((n) => (
-                  <div key={n.id} className="banner critical">
-                    <Icon name="alert" size="sm" />
+                  <Callout key={n.id} variant="danger" role="alert">
                     <span>
-                      <code className="inline">{n.id}</code> — {n.config_error}
+                      <InlineCode>{n.id}</InlineCode> — {n.config_error}
                     </span>
-                  </div>
+                  </Callout>
                 ))}
             </div>
-          </Panel>
+          </Card>
         )}
 
         <div className="grid grid-auto-lg">
-          <Panel
-            title="Seat placement"
-            icon="users"
-            count={data?.seats?.length ?? 0}
-            padding="none"
-          >
+          <Card padding="none">
+            <Card.Header icon={<GroupGlyph size="sm" />} count={data?.seats?.length ?? 0}>
+              Seat placement
+            </Card.Header>
             <DataGrid<FleetSeatLease>
               name="seats"
               rows={data?.seats ?? []}
@@ -351,7 +371,7 @@ function FleetScreen() {
                   // NOT `SeatCell`, and not the seat chip this column used to
                   // draw: both are links and every row here is one now, and an
                   // anchor inside an anchor is markup no browser agrees about.
-                  cell: (s) => <TextCell icon="cpu">{s.handle}</TextCell>,
+                  cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
                 },
                 {
                   key: "node",
@@ -377,14 +397,12 @@ function FleetScreen() {
                 },
               ]}
             />
-          </Panel>
+          </Card>
 
-          <Panel
-            title="Company-wide duties"
-            icon="cpu"
-            count={data?.duties?.length ?? 0}
-            padding="none"
-          >
+          <Card padding="none">
+            <Card.Header icon={<MemoryGlyph size="sm" />} count={data?.duties?.length ?? 0}>
+              Company-wide duties
+            </Card.Header>
             <DataGrid<FleetDutyLease>
               name="duties"
               rows={data?.duties ?? []}
@@ -420,7 +438,7 @@ function FleetScreen() {
                 },
               ]}
             />
-          </Panel>
+          </Card>
         </div>
 
         {/* `> 0`, NOT the bare length. `0 || 0` is `0`, and React renders a
@@ -429,30 +447,29 @@ function FleetScreen() {
             an operator reading this page is looking for a number that is
             wrong, and here was one with no label at all. */}
         {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (
-          <Panel title="Not running anywhere" icon="alert">
+          <Card>
+            <Card.Header icon={<WarningGlyph size="sm" />}>Not running anywhere</Card.Header>
             <div className="col gap-2">
               {data?.unmanned_roles?.map((r) => (
-                <div key={r} className="banner caution">
-                  <Icon name="user" size="sm" />
+                <Callout key={r} variant="warning" icon={<PersonGlyph size="md" />}>
                   <span>
                     <strong>{r}</strong> has no seat running on any node. Work published to its
                     mailbox waits there — a durable subscription retains it — but nothing is
                     consuming it.
                   </span>
-                </div>
+                </Callout>
               ))}
               {data?.unplaceable?.map((u) => (
-                <div key={u.handle} className="banner caution">
-                  <Icon name="target" size="sm" />
+                <Callout key={u.handle} variant="warning" icon={<TargetGlyph size="md" />}>
                   <span>
                     <strong>{u.handle}</strong> cannot be placed
                     {u.placement ? ` — it is pinned to ${u.placement}` : ""}
                     {u.reason ? `: ${u.reason}` : ", and no live node satisfies its constraint."}
                   </span>
-                </div>
+                </Callout>
               ))}
             </div>
-          </Panel>
+          </Card>
         )}
       </QueryState>
 
@@ -470,7 +487,7 @@ function FleetScreen() {
 // ---------------------------------------------------------------------------
 
 /**
- * The two badges a node wears beside its title, or NOTHING AT ALL.
+ * The two tags a node wears beside its title, or NOTHING AT ALL.
  *
  * An empty element would still take a gap in the header row, so a healthy node
  * on a single-node company would sit with a hole where a state it is not in
@@ -483,8 +500,8 @@ function nodeFlags(node: FleetNode, thisNode?: string): React.ReactNode {
     <span className="row gap-1">
       {/* The accent says WHERE THE READER IS, which is the one thing it is
           reserved for; `draining` is a state and takes a state's tone. */}
-      {here && <Badge tone="accent">this one</Badge>}
-      {node.draining && <Badge tone="caution">draining</Badge>}
+      {here && <Tag variant="brand">this one</Tag>}
+      {node.draining && <Tag variant="warning">draining</Tag>}
     </span>
   );
 }
@@ -516,14 +533,14 @@ export function NodeScreen({ id }: { id: string }) {
         }
       </PageActions>
 
-      {loading && !data && <Skeleton rows={6} />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
       <QueryState error={error} loading={loading}>
         {data &&
           (node ? (
             <>
               <ObjectHeader
                 kind="Node"
-                icon="server"
+                icon="dns"
                 // NO IDENTIFIER BESIDE THE TITLE: a node's id IS its name, and
                 // a header that printed it twice would spend its widest line
                 // saying one thing.
@@ -532,7 +549,8 @@ export function NodeScreen({ id }: { id: string }) {
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
               />
               <NodePanels node={node} answer={data} now={now} />
-              <Panel title="Placement" icon="sliders">
+              <Card>
+                <Card.Header icon={<TuneGlyph size="sm" />}>Placement</Card.Header>
                 <div className="col gap-2">
                   <div className="row wrap gap-2">
                     <span className="t-label">Roles</span>
@@ -549,13 +567,13 @@ export function NodeScreen({ id }: { id: string }) {
                   </div>
                   {node.owner && (
                     <p className="t-caption faint">
-                      Fencing token <code className="inline">{node.owner}</code> — this node's id
-                      plus a per-process suffix, so a restart is a new owner of the same leases.
+                      Fencing token <InlineCode>{node.owner}</InlineCode> — this node's id plus a
+                      per-process suffix, so a restart is a new owner of the same leases.
                       {node.protocol != null && ` Seat protocol v${node.protocol}.`}
                     </p>
                   )}
                 </div>
-              </Panel>
+              </Card>
             </>
           ) : (
             <NoSuchNode id={id} />
@@ -591,7 +609,7 @@ export function NodePeek({ id }: { id: string }) {
 
   return (
     <>
-      {loading && !data && <Skeleton rows={6} />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
       <QueryState error={error} loading={loading}>
         {data &&
           (node ? (
@@ -599,7 +617,7 @@ export function NodePeek({ id }: { id: string }) {
               <ObjectHeader
                 size="peek"
                 kind="Node"
-                icon="server"
+                icon="dns"
                 title={node.id}
                 status={nodeFlags(node, data.this_node)}
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
@@ -740,11 +758,13 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           land somewhere addressable: what this process is doing NOW, and
           which revision it is doing it on. The second half is the question an
           operator came for; the first is the one they check next. */}
-      <Panel
-        title="Running"
-        icon="power"
-        subtitle="what this process is doing, and the revision it is doing it on"
-      >
+      <Card>
+        <Card.Header
+          icon={<PowerSettingsNewGlyph size="sm" />}
+          subtitle="what this process is doing, and the revision it is doing it on"
+        >
+          Running
+        </Card.Header>
         <div className="col gap-2">
           <div className="row wrap gap-2">
             {/* THE ONE QUESTION THIS PANEL EXISTS FOR, as a state rather than
@@ -763,17 +783,17 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               tone={node.config_status === "error" ? "critical" : current ? "positive" : "caution"}
               title={`applied epoch ${applied}, the fleet has activated ${answer.target_epoch}`}
             />
-            <Badge tone={STATUS_TONE[node.config_status ?? ""] ?? "neutral"}>
+            <Tag variant={STATUS_TONE[node.config_status ?? ""] ?? "neutral"}>
               {node.config_status || "unknown"}
-            </Badge>
+            </Tag>
             <span className="spacer" />
             <span className="t-caption faint">reported</span>
             <DateCell at={node.config_reported_at} now={now} />
           </div>
           {node.config_error && (
-            <Banner tone="critical" icon="alert">
+            <Callout variant="danger" role="alert">
               It could not apply that revision: {node.config_error}
-            </Banner>
+            </Callout>
           )}
           <div className="row wrap gap-2">
             <span className="t-label">In flight</span>
@@ -789,15 +809,16 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             cannot, which is what the apply error above is.
           </p>
         </div>
-      </Panel>
+      </Card>
 
-      <Panel
-        title="Leases"
-        icon="key"
-        count={seats.length}
-        subtitle="its own, and one per seat it holds"
-        padding="none"
-      >
+      <Card padding="none">
+        <Card.Header
+          icon={<KeyGlyph size="sm" />}
+          count={seats.length}
+          subtitle="its own, and one per seat it holds"
+        >
+          Leases
+        </Card.Header>
         <div className="row wrap gap-2" style={{ padding: "var(--space-3)" }}>
           <span className="t-label">Its own lease</span>
           <DurationCell ms={leaseMs(node.expires_in)} />
@@ -823,7 +844,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               header: "Seat",
               sortValue: (s) => s.handle,
               // NOT `SeatCell`: it is a link and this row is one already.
-              cell: (s) => <TextCell icon="cpu">{s.handle}</TextCell>,
+              cell: (s) => <TextCell icon="memory">{s.handle}</TextCell>,
             },
             {
               key: "ttl",
@@ -835,9 +856,12 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             },
           ]}
         />
-      </Panel>
+      </Card>
 
-      <Panel title="Duties" icon="cpu" count={duties.length} padding="none">
+      <Card padding="none">
+        <Card.Header icon={<MemoryGlyph size="sm" />} count={duties.length}>
+          Duties
+        </Card.Header>
         <DataGrid<FleetDutyLease>
           name="node-duties"
           rows={duties}
@@ -864,7 +888,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             },
           ]}
         />
-      </Panel>
+      </Card>
     </>
   );
 }
@@ -880,11 +904,11 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
  */
 function NoSuchNode({ id, inline }: { id: string; inline?: boolean }) {
   return (
-    <Empty
-      inline={inline}
-      icon="server"
+    <EmptyState
+      size={inline ? "compact" : "default"}
+      icon={<DnsGlyph size="xl" />}
       title={`No node called “${id}” holds a lease`}
-      hint="Either it never existed, or it stopped renewing and the fleet has since dropped it — a node is live exactly as long as its lease is."
+      description="Either it never existed, or it stopped renewing and the fleet has since dropped it — a node is live exactly as long as its lease is."
     />
   );
 }

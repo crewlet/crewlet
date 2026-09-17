@@ -26,22 +26,27 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import {
-  Badge,
-  Empty,
-  Panel,
-  SearchInput,
-  Segmented,
-  Select,
-  Skeleton,
-  cx,
-} from "~/ui/primitives.tsx";
+import { Card, cx, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+// OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics`: `radio` selects as the arrows move, `tabs` is manual but
+// demands a `panelId` naming a TabPanel neither of these rows controls. Both
+// rows here drive a `useParam` — the kind filter re-runs this screen's query
+// and the diff lens gates one of its own — which is exactly the case our
+// `activate="manual"` exists for. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, NumberCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import {
+  AccountTreeGlyph,
+  CheckGlyph,
+  DescriptionGlyph,
+  ScheduleGlyph,
+  SearchGlyph,
+  TimelineGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -54,9 +59,9 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
-  published: "positive",
-  draft: "caution",
+const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  published: "success",
+  draft: "warning",
   trashed: "neutral",
 };
 
@@ -176,18 +181,18 @@ function pageFacts({
 function pageFlags(page: Page): React.ReactNode {
   return (
     <span className="row gap-1">
-      <Badge tone={STATUS_TONE[page.status] ?? "neutral"} dot>
+      <Tag variant={STATUS_TONE[page.status] ?? "neutral"} dot>
         {page.status}
-      </Badge>
+      </Tag>
       {page.skill && (
-        <Badge tone="info" title="Injected into a phase by the tool-skill registry">
+        <Tag variant="info" title="Injected into a phase by the tool-skill registry">
           tool skill
-        </Badge>
+        </Tag>
       )}
       {page.onboarding && (
-        <Badge tone="caution" title="Where a new seat's reading starts">
+        <Tag variant="warning" title="Where a new seat's reading starts">
           onboarding
-        </Badge>
+        </Tag>
       )}
     </span>
   );
@@ -275,19 +280,36 @@ export function Pages({ container: fromPath }: { container?: string }) {
 
       <div className="toolbar">
         <div style={{ flex: 1, maxWidth: 360 }}>
-          <SearchInput
+          {/* THEIR FIELD, WITH THE GLYPH IN ITS LEADING SLOT — which is what
+              our own `SearchInput` was, plus the name carried as an
+              `aria-label` rather than a prop of its own. */}
+          <Input
+            type="search"
+            width="full"
             value={title}
-            onChange={setTitle}
-            ariaLabel="Find a page by title"
+            onChange={(e) => setTitle(e.target.value)}
+            aria-label="Find a page by title"
+            leading={<SearchGlyph size="sm" />}
             placeholder="Words from the title"
           />
         </div>
+        {/* THE "ANY" ROW IS AN OPTION RATHER THAN A PLACEHOLDER: their
+            `placeholder` only labels the empty trigger, and a reader who has
+            chosen a container needs a row to choose their way back out. */}
         <Select
+          // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+          // `width: 100%` unless told otherwise, and its own doc says why that
+          // is wrong here: "a filter row of full-width selects is one question
+          // per line, which is not what a filter bar is".
+          width="auto"
           value={container}
-          onChange={setContainer}
+          onChange={(value) => setContainer(String(value))}
           ariaLabel="Container"
-          anyLabel="Every container"
-          options={containerKeys}
+          active={container !== ""}
+          options={[
+            { value: "", label: "Every container" },
+            ...containerKeys.map((key) => ({ value: key, label: key })),
+          ]}
         />
         <Segmented
           value={kind}
@@ -304,21 +326,25 @@ export function Pages({ container: fromPath }: { container?: string }) {
       {containers.data?.containers?.length ? (
         <div className="row wrap" style={{ gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
           {containers.data.containers.map((c) => (
-            <Badge
+            // A BADGE THAT ACTS IS A `FilterChip` OVER THERE, which is the
+            // whole of this change: our own `Badge` grew an `onClick` and a
+            // `pressed` so a count could filter the list, and theirs is that
+            // control outright — a button, its pressed state and a hit area
+            // that clears the 24px floor, none of which this screen has to
+            // spell any more.
+            <FilterChip
               key={c.key}
-              outline={container !== c.key}
-              tone={container === c.key ? "info" : "neutral"}
               title={c.purpose || c.name || c.key}
               onClick={() => setContainer(container === c.key ? "" : c.key)}
               pressed={container === c.key}
             >
               {c.key}
-            </Badge>
+            </FilterChip>
           ))}
         </div>
       ) : null}
 
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the pages" />}
 
       <QueryState
         error={error}
@@ -344,7 +370,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 }
         }
       >
-        <Panel>
+        <Card>
           <DataGrid<PageSummary>
             rows={rows}
             rowKey={(r) => r.id}
@@ -371,7 +397,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 // NOT AN ANCHOR: the row is one now, and a title that was also
                 // a link would be the one part of the row where a plain click
                 // meant something different from everywhere else on it.
-                cell: (r) => <TextCell icon="file">{r.title}</TextCell>,
+                cell: (r) => <TextCell icon="description">{r.title}</TextCell>,
               },
               {
                 key: "container",
@@ -385,9 +411,9 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 // make the control and the thing it controls look like two
                 // different vocabularies.
                 cell: (r) => (
-                  <Badge outline mono>
+                  <Tag appearance="outline" monospace>
                     {r.container}
-                  </Badge>
+                  </Tag>
                 ),
               },
               {
@@ -400,13 +426,13 @@ export function Pages({ container: fromPath }: { container?: string }) {
                     // A TOOL SKILL IS MACHINERY, marked so a reader does not
                     // take it for guidance somebody wrote to be read: it is
                     // documentation the engine injects into a phase.
-                    <Badge tone="info" title="Injected into a phase by the tool-skill registry">
+                    <Tag variant="info" title="Injected into a phase by the tool-skill registry">
                       tool skill
-                    </Badge>
+                    </Tag>
                   ) : r.onboarding ? (
-                    <Badge tone="caution" title="Where a new seat's reading starts">
+                    <Tag variant="warning" title="Where a new seat's reading starts">
                       onboarding
-                    </Badge>
+                    </Tag>
                   ) : (
                     <span className="muted">page</span>
                   ),
@@ -417,9 +443,9 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 shrink: true,
                 sortValue: (r) => r.status,
                 cell: (r) => (
-                  <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
+                  <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
                     {r.status}
-                  </Badge>
+                  </Tag>
                 ),
               },
               {
@@ -460,7 +486,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
     </>
   );
@@ -502,13 +528,13 @@ export function PageView({ container, title }: { container: string; title: strin
       <PageActions>
         {page ? (
           <>
-            <Badge tone={STATUS_TONE[page.status] ?? "neutral"} dot>
+            <Tag variant={STATUS_TONE[page.status] ?? "neutral"} dot>
               {page.status}
-            </Badge>
-            <Badge outline mono>
+            </Tag>
+            <Tag appearance="outline" monospace>
               v{page.version}
-            </Badge>
-            {page.skill && <Badge tone="info">tool skill</Badge>}
+            </Tag>
+            {page.skill && <Tag variant="info">tool skill</Tag>}
           </>
         ) : undefined}
       </PageActions>
@@ -529,7 +555,7 @@ export function PageView({ container, title }: { container: string; title: strin
         ) : undefined}
       </PageNote>
 
-      {loading && <Skeleton rows={8} />}
+      {loading && <Skeleton variant="text" rows={8} label="Loading the page" />}
 
       <QueryState error={error} loading={loading}>
         {page && (
@@ -550,7 +576,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 the status is the one fact that must survive the scroll. */}
             <ObjectHeader
               kind="Page"
-              icon="file"
+              icon="description"
               // NO IDENTIFIER BESIDE THE TITLE. A page is addressed by its
               // container and its title — both are already here, one as the
               // first fact and one as the title itself — and the only other
@@ -560,16 +586,19 @@ export function PageView({ container, title }: { container: string; title: strin
               facts={pageFacts({ page, history, now, seatName })}
             />
 
-            <Panel>
+            <Card>
               {page.body ? (
                 <div className="prose md">{renderMarkdown(page.body)}</div>
               ) : (
                 <span className="muted">This page has no body.</span>
               )}
-            </Panel>
+            </Card>
 
             {data.children?.length ? (
-              <Panel title={`Children (${data.children.length})`}>
+              <Card>
+                <Card.Header>
+                  <Card.Title>{`Children (${data.children.length})`}</Card.Title>
+                </Card.Header>
                 <ul className="list">
                   {data.children.map((child) => (
                     <li key={child.id}>
@@ -577,20 +606,26 @@ export function PageView({ container, title }: { container: string; title: strin
                     </li>
                   ))}
                 </ul>
-              </Panel>
+              </Card>
             ) : null}
 
             {page.watchers?.length ? (
-              <Panel title="Watching">
+              <Card>
+                <Card.Header>
+                  <Card.Title>Watching</Card.Title>
+                </Card.Header>
                 <div className="row wrap" style={{ gap: "var(--space-2)" }}>
                   {page.watchers.map((w) => (
                     <SeatChip key={w} name={seatName(w)} handle={w} />
                   ))}
                 </div>
-              </Panel>
+              </Card>
             ) : null}
 
-            <Panel title={`Comments (${data.comments?.length ?? 0})`}>
+            <Card>
+              <Card.Header>
+                <Card.Title>{`Comments (${data.comments?.length ?? 0})`}</Card.Title>
+              </Card.Header>
               {data.comments?.length ? (
                 <div className="col gap-3">
                   {data.comments.map((c) => (
@@ -609,7 +644,7 @@ export function PageView({ container, title }: { container: string; title: strin
               ) : (
                 <span className="muted">Nobody has commented.</span>
               )}
-            </Panel>
+            </Card>
 
             <PageHistory pageID={page.id} history={history} seatName={seatName} now={now} />
 
@@ -706,31 +741,34 @@ export function PagePeek({ id }: { id: string }) {
   // page they never saw in a list.
   if (error === "not_found") {
     return (
-      <Empty
-        inline
-        icon="file"
+      <EmptyState
+        size="compact"
+        icon={<DescriptionGlyph size="xl" />}
         title={`No page at “${id}”`}
-        hint="A page is addressed by its container and its title. It may have been renamed, moved to another container, or trashed — or this node's copy of the knowledge base has not caught up with it yet."
+        description="A page is addressed by its container and its title. It may have been renamed, moved to another container, or trashed — or this node's copy of the knowledge base has not caught up with it yet."
       />
     );
   }
 
   return (
     <>
-      {loading && !data && <Skeleton rows={6} />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the page" />}
       <QueryState error={error} loading={loading}>
         {page && (
           <>
             <ObjectHeader
               size="peek"
               kind="Page"
-              icon="file"
+              icon="description"
               title={page.title}
               status={pageFlags(page)}
               facts={pageFacts({ page, history, now, seatName })}
             />
             <div className="col gap-3">
-              <Panel title="The page" icon="file">
+              <Card>
+                <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                  <Card.Title>The page</Card.Title>
+                </Card.Header>
                 {page.body ? (
                   <>
                     <div className="prose md">{renderMarkdown(excerpt.head)}</div>
@@ -747,9 +785,12 @@ export function PagePeek({ id }: { id: string }) {
                   // failed to scroll to.
                   <span className="muted">This page has no body.</span>
                 )}
-              </Panel>
+              </Card>
 
-              <Panel title="Where it sits" icon="sitemap" count={children.length}>
+              <Card>
+                <Card.Header icon={<AccountTreeGlyph size="sm" />} count={children.length}>
+                  <Card.Title>Where it sits</Card.Title>
+                </Card.Header>
                 <div className="col gap-2">
                   {/* THE ANCESTOR CHAIN, outermost first — the same breadcrumb
                       the page draws, because a title alone says nothing about
@@ -776,9 +817,12 @@ export function PagePeek({ id }: { id: string }) {
                     <span className="muted">Nothing is filed under it.</span>
                   )}
                 </div>
-              </Panel>
+              </Card>
 
-              <Panel title="Saves" icon="clock" count={history.length}>
+              <Card>
+                <Card.Header icon={<ScheduleGlyph size="sm" />} count={history.length}>
+                  <Card.Title>Saves</Card.Title>
+                </Card.Header>
                 {history.length > 0 ? (
                   <div className="col gap-2">
                     {history.slice(0, PEEK_SAVES).map((rev) => (
@@ -805,7 +849,7 @@ export function PagePeek({ id }: { id: string }) {
                     Only this version exists — nobody has saved over it.
                   </span>
                 )}
-              </Panel>
+              </Card>
             </div>
           </>
         )}
@@ -920,7 +964,10 @@ function PageHistory({
   const stat = useMemo(() => diffStat(diff.flatMap((section) => section.lines)), [diff]);
 
   return (
-    <Panel title={`History (${history.length})`} icon="clock">
+    <Card>
+      <Card.Header icon={<ScheduleGlyph size="sm" />}>
+        <Card.Title>{`History (${history.length})`}</Card.Title>
+      </Card.Header>
       {history.length ? (
         <div className="list">
           {history.map((rev) => (
@@ -931,7 +978,7 @@ function PageHistory({
               onClick={() => setOpen(rev.version === version ? "" : String(rev.version))}
             >
               <span className="row gap-2">
-                <Icon name="file" size="sm" />
+                <DescriptionGlyph size="sm" />
                 <span className="mono">v{rev.version}</span>
                 <span>{rev.author ? seatName(rev.author) : "the engine"}</span>
                 {rev.message && <span className="muted truncate">{rev.message}</span>}
@@ -982,11 +1029,11 @@ function PageHistory({
                         // only the title leaves the body untouched, and a
                         // pane of unmarked lines reads as one that failed
                         // to load.
-                        <Empty
-                          inline
-                          icon="check"
+                        <EmptyState
+                          size="compact"
+                          icon={<CheckGlyph size="xl" />}
                           title="This save did not change the body"
-                          hint="A page's title, its labels and its place in the tree are saved beside its body — this version's prose is the one before it."
+                          description="A page's title, its labels and its place in the tree are saved beside its body — this version's prose is the one before it."
                         />
                       ) : (
                         <>
@@ -1014,18 +1061,18 @@ function PageHistory({
               // of revisions, so an older one is an ordinary absence — and
               // saying which of the two happened is the whole point.
               !body.loading && (
-                <Empty
-                  inline
-                  icon="clock"
+                <EmptyState
+                  size="compact"
+                  icon={<ScheduleGlyph size="xl" />}
                   title="This node no longer holds that version"
-                  hint="A page keeps a bounded number of revisions. The entry above is the record that it existed."
+                  description="A page keeps a bounded number of revisions. The entry above is the record that it existed."
                 />
               )
             )}
           </QueryState>
         </div>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -1055,7 +1102,10 @@ function PageChanges({
   const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
   const changes = feed.data?.changes ?? [];
   return (
-    <Panel title={`Activity (${changes.length})`} icon="activity">
+    <Card>
+      <Card.Header icon={<TimelineGlyph size="sm" />}>
+        <Card.Title>{`Activity (${changes.length})`}</Card.Title>
+      </Card.Header>
       <QueryState
         error={feed.error}
         loading={feed.loading}
@@ -1072,7 +1122,7 @@ function PageChanges({
           {changes.map((change) => (
             <div key={change.id} className="thread-entry">
               <span className="row gap-2">
-                <Badge outline>{change.kind}</Badge>
+                <Tag appearance="outline">{change.kind}</Tag>
                 <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
                 {change.quiet && (
                   <span className="faint t-caption" title="this change announced nothing">
@@ -1097,6 +1147,6 @@ function PageChanges({
           ))}
         </div>
       </QueryState>
-    </Panel>
+    </Card>
   );
 }

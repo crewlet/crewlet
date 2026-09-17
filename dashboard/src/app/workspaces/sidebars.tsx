@@ -318,6 +318,11 @@ export function useKeptSections(workspace: string): SidebarSection[] {
           key: `star-${s.path.join("/")}`,
           label: s.label,
           path: s.path,
+          // THE SAME STAR THE PAGE BAR'S CONTROL DRAWS, which is the whole
+          // requirement: the mark that fills this section and the mark you
+          // press to fill it have to be one drawing. `@crewlethq/icons` has
+          // not vendored a star, so it is one of the four this build holds —
+          // see `src/ui/symbols/README.md`.
           icon: "star" as const,
         })),
       });
@@ -332,7 +337,7 @@ export function useKeptSections(workspace: string): SidebarSection[] {
           key: `recent-${r.path.join("/")}`,
           label: r.label,
           path: r.path,
-          icon: "clock" as const,
+          icon: "schedule" as const,
         })),
       });
     }

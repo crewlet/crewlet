@@ -30,8 +30,13 @@
 
 import type { ReactNode } from "react";
 import { href } from "../router.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
-import { Badge, cx, type Tone } from "~/ui/primitives.tsx";
+import { Tag, cx } from "@crewlethq/ui";
+import { MemoryGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
+// A `TextCell`'s mark is named by whichever screen draws the column, so the
+// name→drawing lookup stays in `~/ui/Icon.tsx` — one change there moves every
+// caller onto uilet's glyphs at once.
+import { Mark, type MarkName } from "~/ui/glyph.tsx";
+import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 
 /** An identifier — a key, a handle, an id. Monospaced, and usually a link. */
@@ -109,15 +114,31 @@ export function SeatCell({
   if (!handle) return <Dash title="nobody" />;
   return (
     <a className="cell-seat" href={href(["company", "people", handle])} title={`@${handle}`}>
+      {/* THE MARK IS NEUTRAL AND STAYS NEUTRAL: a seat is an identity, and
+          colour here would say a state it does not have. What separates the
+          two kinds is the drawing and the dashed ring, not a hue. */}
       <span className={cx("seat-mark", kind === "human" && "human")} aria-hidden="true">
-        <Icon name={kind === "human" ? "user" : "cpu"} size="xs" />
+        {kind === "human" ? <PersonGlyph size="xs" /> : <MemoryGlyph size="xs" />}
       </span>
       <span className="truncate">{name || handle}</span>
     </a>
   );
 }
 
-/** A state glyph with its word — never colour alone. */
+/**
+ * A state glyph with its word — never colour alone.
+ *
+ * OURS, BECAUSE THE GLYPH IS THE CALLER'S. `StatusDot` draws one filled 6px
+ * mark per tone, and half of what this column says is the HOLLOW counterpart:
+ * `●` against `○` is how Fleet says "running the active revision" against "no
+ * apply reported", and how Retention says whether the trim still waits for a
+ * node. There is no unfilled state in the tone set and no way to hand one in,
+ * so a port would have had to spend a second colour on the negative case —
+ * which is colour carrying identity, the one thing the tone rule forbids.
+ *
+ * Nor is it a `Tag`: a tag is a pill, and this is a mark beside prose inside a
+ * table cell that already has a column heading naming it.
+ */
 export function StatusCell({
   glyph,
   label,
@@ -159,10 +180,13 @@ export function TagsCell({ tags, max = 3 }: { tags?: string[] | null; max?: numb
   const rest = list.length - shown.length;
   return (
     <span className="row gap-1 wrap">
+      {/* NEUTRAL AND OUTLINE: a tag names a thing, and uilet's tone doc draws
+          the same line ours does — identity takes no colour. `outline` is
+          their `appearance`, which is what our `outline` prop was. */}
       {shown.map((tag) => (
-        <Badge key={tag} outline>
+        <Tag key={tag} appearance="outline" size="xs">
           {tag}
-        </Badge>
+        </Tag>
       ))}
       {rest > 0 && (
         <span className="t-caption" title={list.slice(max).join(", ")}>
@@ -173,7 +197,23 @@ export function TagsCell({ tags, max = 3 }: { tags?: string[] | null; max?: numb
   );
 }
 
-/** A small proportion bar, for a cell that is a fraction of something. */
+/**
+ * A small proportion bar, for a cell that is a fraction of something.
+ *
+ * OURS, BECAUSE A COLUMN OF BARS HAS TO LINE UP. This is a fixed 64px bar
+ * drawn inline inside a grid cell, and uilet's `Meter` is a block flex column
+ * that takes the width it is given: dropped into the Budgets column it would
+ * be 120px on that screen and something else on the next, so two bars at the
+ * same fraction would be different lengths and the column would stop being
+ * readable at a glance. `Meter` publishes no width, no intrinsic size and no
+ * inline form — its `compact` size only drops the legend a type step, and the
+ * legend is hidden here anyway.
+ *
+ * What their Meter has that ours does not is `role="meter"` with
+ * `aria-valuenow`/`valuemin`/`valuemax`, where ours is a `role="img"` named by
+ * its label. That is worth having and is the thing to take from it if `Meter`
+ * ever grows a fixed-width form.
+ */
 export function MeterCell({
   used,
   max,
@@ -195,10 +235,10 @@ export function MeterCell({
 }
 
 /** Plain text with an icon, truncated. */
-export function TextCell({ children, icon }: { children: ReactNode; icon?: IconName }) {
+export function TextCell({ children, icon }: { children: ReactNode; icon?: MarkName }) {
   return (
     <span className="row" style={{ gap: 6, minWidth: 0 }}>
-      {icon && <Icon name={icon} size="xs" />}
+      {icon && <Mark name={icon} size="xs" />}
       <span className="truncate">{children}</span>
     </span>
   );

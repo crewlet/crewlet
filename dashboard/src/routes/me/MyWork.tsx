@@ -30,7 +30,8 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Badge, Banner, Empty, Panel, Select, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Callout, Card, EmptyState, Select, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import { ErrorGlyph, HelpGlyph, InboxGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -109,14 +110,14 @@ export function MyWork() {
           theirs. */}
       <PageActions>
         {whose ? (
-          <Badge
-            outline={whose !== viewer.handle}
-            tone={whose === viewer.handle ? "positive" : undefined}
+          <Tag
+            appearance={whose === viewer.handle ? "soft" : "outline"}
+            variant={whose === viewer.handle ? "success" : "neutral"}
           >
             {whose === viewer.handle
               ? "yours"
               : `${index.byHandle.get(whose)?.name ?? whose}’s day`}
-          </Badge>
+          </Tag>
         ) : undefined}
         {
           <a className="t-link" href={href(["work"])}>
@@ -130,12 +131,22 @@ export function MyWork() {
       </PageNote>
 
       <div className="toolbar">
+        {/* THE EMPTY OPTION IS A REAL ROW, not their `placeholder`: choosing
+            nobody is a state this screen has — it is how a reader gets back to
+            "pick somebody" — and a placeholder is only ever the label over an
+            unset value, with nothing to select. */}
         <Select
+          // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+          // `width: 100%` unless told otherwise, and its own doc says why that
+          // is wrong here: "a filter row of full-width selects is one question
+          // per line, which is not what a filter bar is".
+          width="auto"
           value={whose}
-          onChange={setHandle}
+          onChange={(value) => setHandle(String(value))}
           ariaLabel="Whose"
-          anyLabel="Pick somebody"
-          options={handles}
+          placeholder="Pick somebody"
+          active={whose !== ""}
+          options={[{ value: "", label: "Pick somebody" }, ...handles]}
         />
         <span className="spacer" />
         <Coverage answer={mine} />
@@ -147,19 +158,23 @@ export function MyWork() {
           the last of them is a choice anybody can make on this screen. */}
       {!whose &&
         (viewer.anonymous ? (
-          <Empty
-            icon="key"
+          <EmptyState
+            icon={<KeyGlyph size={32} />}
             title="No credential is presented"
-            hint="A day belongs to a person, and this browser has not said who it is. Set an API token, or pick somebody below to read their day."
+            description="A day belongs to a person, and this browser has not said who it is. Set an API token, or pick somebody below to read their day."
           />
         ) : viewer.unbound ? (
-          <Empty
-            icon="user"
+          <EmptyState
+            icon={<PersonGlyph size={32} />}
             title="This token is not bound to a person"
-            hint={`Give a human seat contact.crewlet_operator_id: ${viewer.operatorID} in the company configuration and this becomes their day. Until then, pick somebody below.`}
+            description={`Give a human seat contact.crewlet_operator_id: ${viewer.operatorID} in the company configuration and this becomes their day. Until then, pick somebody below.`}
           />
         ) : (
-          <Empty title="Nobody chosen" hint="A day belongs to somebody." />
+          <EmptyState
+            icon={<InboxGlyph size={32} />}
+            title="Nobody chosen"
+            description="A day belongs to somebody."
+          />
         ))}
 
       {whose && (
@@ -170,42 +185,51 @@ export function MyWork() {
                   and a day rendered as complete when it is not is a person
                   who thinks they are done. */}
               {mine.complete === false && (
-                <Banner tone="caution">
+                <Callout variant="warning">
                   This node could not account for every change yet, so a block may be short.
-                </Banner>
+                </Callout>
               )}
-              <StatRow cols={4}>
-                <Stat label="Priorities" value={mine.priorities.length} sub="in the stored order" />
-                <Stat label="Assigned" value={mine.assigned.length} />
-                <Stat
+              <StatGroup columns={4}>
+                <StatCard
+                  label="Priorities"
+                  value={mine.priorities.length}
+                  sub="in the stored order"
+                />
+                <StatCard label="Assigned" value={mine.assigned.length} />
+                <StatCard
                   label="Asked"
                   value={mine.asked_of_me.length}
-                  icon={mine.asked_of_me.length ? "alert" : undefined}
+                  icon={mine.asked_of_me.length ? <ErrorGlyph size="xs" /> : undefined}
                   sub="waiting on an answer"
                 />
-                <Stat label="Unblocked" value={mine.unblocked_recent.length} sub="newly workable" />
-              </StatRow>
+                <StatCard
+                  label="Unblocked"
+                  value={mine.unblocked_recent.length}
+                  sub="newly workable"
+                />
+              </StatGroup>
 
               {/* WHAT REACHED THEM, and WHY. Every other block on this
                   screen answers "what is on you"; this one answers "what
                   happened that you were told about", which is the question
                   an inbox is. The reason is the row's opening fact because
                   it is the one nothing else in this category records. */}
-              <Panel
-                title="Reached you"
-                icon="inbox"
-                count={inbox.data?.unread ?? notices.length}
-                padding="none"
-                subtitle={
-                  inbox.data
-                    ? `${notices.length} most recent · counting as primary: ${(
-                        inbox.data.primary_reasons ?? []
-                      )
-                        .map(reasonPhrase)
-                        .join(" · ")}`
-                    : undefined
-                }
-              >
+              <Card padding="none">
+                <Card.Header
+                  icon={<InboxGlyph size="sm" />}
+                  count={inbox.data?.unread ?? notices.length}
+                  subtitle={
+                    inbox.data
+                      ? `${notices.length} most recent · counting as primary: ${(
+                          inbox.data.primary_reasons ?? []
+                        )
+                          .map(reasonPhrase)
+                          .join(" · ")}`
+                      : undefined
+                  }
+                >
+                  <Card.Title>Reached you</Card.Title>
+                </Card.Header>
                 <QueryState
                   error={inbox.error}
                   loading={inbox.loading}
@@ -235,16 +259,16 @@ export function MyWork() {
                             {notice.excerpt || notice.kind.replace(/_/g, " ")}
                           </span>
                           {notice.addressed && (
-                            <Badge tone="caution" title="this asks something of them">
+                            <Tag variant="warning" title="this asks something of them">
                               asks
-                            </Badge>
+                            </Tag>
                           )}
-                          <Badge
-                            outline
+                          <Tag
+                            appearance="outline"
                             title={notice.fallback ? "nobody better was found" : undefined}
                           >
                             {reasonPhrase(notice.reason)}
-                          </Badge>
+                          </Tag>
                           <span className="t-caption">{relTime(notice.at, now)}</span>
                         </div>
                         {notice.actor && (
@@ -259,11 +283,11 @@ export function MyWork() {
                     ))}
                   </div>
                 </QueryState>
-                <footer className="panel-foot">
+                <Card.Footer variant="meta">
                   Read and snoozed marks are written by {ownDay ? "your" : "this person's"} own
                   assistant, through mark_inbox — the dashboard shows what it recorded.
-                </footer>
-              </Panel>
+                </Card.Footer>
+              </Card>
 
               <Asks rows={mine.asked_of_me} now={now} chrome={chrome} />
               <TaskBlock
@@ -318,9 +342,12 @@ export function TaskBlock({
   // board it came from: this page used to render four of a row's facts and
   // the board six, and only one of the two knew a task could be blocked.
   return (
-    <Panel title={title} subtitle={hint} count={rows.length} padding="none">
+    <Card padding="none">
+      <Card.Header subtitle={hint} count={rows.length}>
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
       <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
-    </Panel>
+    </Card>
   );
 }
 
@@ -339,7 +366,10 @@ export function Asks({
 }) {
   if (rows.length === 0) return null;
   return (
-    <Panel title="Asked of you" count={rows.length} icon="help">
+    <Card>
+      <Card.Header icon={<HelpGlyph size="sm" />} count={rows.length}>
+        <Card.Title>Asked of you</Card.Title>
+      </Card.Header>
       <div className="col gap-3">
         {rows.map((ask) => (
           // THE CAUTION RAIL, the same mark a question wears in a thread:
@@ -362,7 +392,7 @@ export function Asks({
           </div>
         ))}
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -373,7 +403,10 @@ export function Asks({
 export function Checklist({ rows }: { rows: WorkChecklistRow[] }) {
   if (rows.length === 0) return null;
   return (
-    <Panel title="Checklist items" count={rows.length} subtitle="On other people's tasks.">
+    <Card>
+      <Card.Header count={rows.length} subtitle="On other people's tasks.">
+        <Card.Title>Checklist items</Card.Title>
+      </Card.Header>
       {rows.map((item) => (
         <div key={`${item.task}:${item.item}`} className={`work-check${item.done ? " done" : ""}`}>
           <a className="mono t-link" href={href(["work", item.task_key])}>
@@ -384,6 +417,6 @@ export function Checklist({ rows }: { rows: WorkChecklistRow[] }) {
           <span className="muted truncate">{item.task_title}</span>
         </div>
       ))}
-    </Panel>
+    </Card>
   );
 }

@@ -10,7 +10,8 @@
  *
  * THAT LAST PART IS THE ONE THIS PRODUCT ACTUALLY NEEDS. The objects here are
  * mostly written by agents, and "in progress" is a different fact from "moved
- * to in progress by ada, eleven minutes ago, in turn ↗". `ObjectHeader` has
+ * to in progress by ada, eleven minutes ago, in turn ↗" — the arrow being
+ * the same `arrow_outward` the peek rail's own Open draws. `ObjectHeader` has
  * carried [SetBy] since it was written, because a header shows the same six
  * facts; a rail shows thirty, and it is the thirty that a reader asks "who
  * did that" about.
@@ -31,6 +32,7 @@
  */
 
 import { Fragment, type ReactNode } from "react";
+import { ArrowOutwardGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
 import type { SetBy } from "./ObjectHeader.tsx";
 
@@ -97,7 +99,7 @@ export function PropertiesRail({ groups }: { groups: PropertyGroup[] }) {
                       <>
                         {" · "}
                         <a className="t-link" href={href(["activity", "turns", p.setBy.turnId])}>
-                          turn ↗
+                          turn <ArrowOutwardGlyph size="xs" />
                         </a>
                       </>
                     )}

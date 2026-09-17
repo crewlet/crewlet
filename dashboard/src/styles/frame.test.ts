@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -79,18 +79,29 @@ describe("the frame's layout", () => {
     );
   });
 
-  test("a panel title is capped by its head, so a long one ellipses", () => {
-    // `flex: 0 0 auto` is about the competition with the subtitle — the title
-    // must not be the one that gives way — and on its own it also means the
-    // item is never clamped at all: its used main size is its max-content
-    // width, the inner `truncate` span never shrinks, `text-overflow` never
-    // fires, and `.panel-flush`'s clip cuts a checklist's or a sprint's name
-    // mid-word at the panel edge. A max main size is what flexbox still
-    // applies at a flex factor of 0.
-    const head = block(sheet("components.css"), ".panel-head > .panel-title");
-    expect(head).toMatch(/flex:\s*0 0 auto/);
-    expect(head).toMatch(/max-width:\s*100%/);
-  });
+  // THE PANEL TITLE'S CAP IS GONE WITH THE PANEL, deliberately and not by
+  // oversight. It asserted `flex: 0 0 auto` and `max-width: 100%` on
+  // `.panel-head > .panel-title`, and Panel is one of the fifteen components
+  // `@crewlethq/ui` replaced — the recipe, the class and the element are all
+  // deleted, so there is no markup left to repoint the assertion at.
+  //
+  // Its two claims did not survive together, which is the actual reason this
+  // is a deletion rather than a rewrite:
+  //
+  //  - "The title never gives way first" SURVIVES, and it is uilet's now,
+  //    made the other way round: `.crewlet-card__subtitle { flex-shrink: 100 }`
+  //    lets the subtitle absorb the shrink instead of pinning the title at a
+  //    flex factor of 0. Restating that here would be a second idea of one
+  //    rule with nothing comparing the two — the failure `textcut` and
+  //    `whsec` are named after in this repository — and the package states it
+  //    beside the value, where a bump moves both at once.
+  //  - "A long one ELLIPSES" does NOT survive. uilet's `.crewlet-card__title`
+  //    is `white-space: nowrap` with no `text-overflow`, and the clip is on
+  //    `.crewlet-card__header-main`, so a title with nowhere left to go is CUT
+  //    at the row's end. That is a real difference from what this rule drew
+  //    and it belongs to whoever owns the Card call sites; a stylesheet rule
+  //    cannot fix it from here, because `text-overflow` on a flex container
+  //    does not reach its flex items.
 
   test("the toolbar's band is a real height, and only a screen with one offsets", () => {
     // `--sticky-top` is what the heads above are offset by, so the band has to
@@ -111,8 +122,13 @@ test("no stylesheet negates a var() with a unary minus", () => {
   // auto` resolves to the static position and painted the active workspace's
   // accent bar straight down the middle of its icon. The spelling that works
   // is `calc(-1 * var(--x))`.
+  // EVERY SHEET IN THE DIRECTORY, read rather than listed. The five names
+  // that used to be written here were a list nobody was going to extend:
+  // `tokens.css`, `uilet.css` and `fonts.css` were never in it, and a sheet
+  // added tomorrow would not be either — so the one check that catches this
+  // would silently stop covering the file it was added for.
   const found: string[] = [];
-  for (const name of ["base.css", "components.css", "frame.css", "screens.css", "shell.css"]) {
+  for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
     const text = sheet(name);
     for (const m of text.matchAll(/[:\s(]-var\(/g)) {
       found.push(`${name}:${text.slice(0, m.index).split("\n").length}`);

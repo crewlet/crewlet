@@ -17,8 +17,13 @@
 import { useCallback, useState } from "react";
 import { RAIL, type Workspace } from "../nav.ts";
 import { href } from "../router.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { cx } from "~/ui/primitives.tsx";
+import { cx } from "@crewlethq/ui";
+import { ChevronLeftGlyph, ChevronRightGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+// A ROW'S MARK IS DATA, so it arrives as a NAME and is resolved here — which
+// is the one case `@crewlethq/icons/glyphs/registry` exists for, and why it is
+// a separate entry point: importing it pulls in every drawing, and the three
+// literal glyphs above cost only themselves.
+import { markByName } from "~/ui/glyph.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 
 const COLLAPSE_KEY = "crewlet.rail.collapsed";
@@ -85,6 +90,7 @@ export function AppRail({
       <div className="rail-rows">
         {RAIL.map((row) => {
           const badge = badges?.[row.key] ?? null;
+          const Glyph = markByName(row.icon);
           return (
             <a
               key={row.key}
@@ -94,7 +100,7 @@ export function AppRail({
               title={collapsed ? `${row.label} — ${row.hint}` : row.hint}
             >
               <span className="rail-glyph">
-                <Icon name={row.icon} size="md" />
+                <Glyph size="md" />
                 {badge && (
                   <span
                     className={cx("rail-badge", badge.attention && "attention")}
@@ -106,7 +112,7 @@ export function AppRail({
                 {/* THE LOCK IS ON THE ROW, not instead of it. */}
                 {row.guarded && locked && (
                   <span className="rail-lock" title="needs an operator credential">
-                    <Icon name="key" size="xs" />
+                    <KeyGlyph size="xs" />
                   </span>
                 )}
               </span>
@@ -118,13 +124,19 @@ export function AppRail({
 
       <div className="rail-foot">
         {footer}
+        {/* OURS RATHER THAN `IconButton`: this is not a square. It is a
+            full-width 22px strip across the foot of an 80px rail, and
+            `IconButton` is a control-step square whose smallest size floors at
+            24px for WCAG 2.2 — which is the right floor for a row action and
+            the wrong shape for a rail's own hinge. The glyph inside it is
+            theirs. */}
         <button
           className="rail-collapse"
           onClick={onToggle}
           title={collapsed ? "Expand the rail ([)" : "Collapse the rail ([)"}
           aria-label={collapsed ? "Expand the rail" : "Collapse the rail"}
         >
-          <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size="sm" />
+          {collapsed ? <ChevronRightGlyph size="sm" /> : <ChevronLeftGlyph size="sm" />}
         </button>
       </div>
     </nav>

@@ -18,9 +18,13 @@
  * the dimension exists and is quiet, which is an answer — and is dropped when
  * the set is derived from the rows, where its absence is all there is to say.
  * The caller decides by what it passes.
+ *
+ * THE CHIPS ARE uilet's, the scope note is ours: a row of filters that says
+ * what its counts are counts OF has no peer, and it is the sentence this
+ * component exists for.
  */
 
-import { Chip } from "~/ui/primitives.tsx";
+import { FilterChip, FilterChipGroup } from "@crewlethq/ui";
 
 /** One value of the dimension. */
 export interface Facet {
@@ -63,24 +67,47 @@ export function FacetRail({
 }) {
   if (facets.length === 0) return null;
   return (
-    <div className="facet-row" role="group" aria-label={name}>
-      <Chip on={!value} onClick={() => onChange("")}>
-        {allLabel}
-      </Chip>
-      {facets.map((f) => (
-        <Chip
-          key={f.value}
-          on={value === f.value}
-          count={f.count}
-          title={f.title}
-          // A SECOND PRESS CLEARS IT. A chip that only ever narrows makes
-          // the reader hunt for a "clear" button to undo the thing they
-          // just did, which is the one gesture every list gets wrong.
-          onClick={() => onChange(value === f.value ? "" : f.value)}
-        >
-          {f.label}
-        </Chip>
-      ))}
+    <div className="facet-row">
+      {/*
+        TOGGLE SEMANTICS, although exactly one of these is ever on.
+        `FilterChipGroup`'s radio mode welds ACTIVATION to the role — its
+        arrows move focus and click the chip they land on — and every caller
+        here drives a `useParam` that re-runs the screen's query. Arrowing
+        across six categories under that control is six queries nobody asked
+        for. Toggle is also what this rail has always announced: our own chip
+        was a plain `aria-pressed` button, Tab reached each one, and nothing
+        about what a reader hears changes by porting onto the same shape.
+        What would close the gap upstream is a manual-activation knob on the
+        radio mode — the one our `Segmented` has and `SegmentedControl` does
+        not. See the report.
+
+        The dimension's name is the group's accessible name and is not drawn,
+        which is where it has always been: these rails sit directly under the
+        control they narrow, and a second visible "CATEGORY" above six chips
+        labels what the reader is already looking at.
+      */}
+      <FilterChipGroup label={name} hideLabel>
+        <FilterChip pressed={!value} onPressedChange={() => onChange("")}>
+          {allLabel}
+        </FilterChip>
+        {facets.map((f) => (
+          <FilterChip
+            key={f.value}
+            pressed={value === f.value}
+            // `null` is "we cannot say yet" and must draw nothing at all —
+            // `undefined` is what the chip reads as absent, and a `null` left
+            // to fall through renders an empty count span beside the label.
+            count={f.count ?? undefined}
+            title={f.title}
+            // A SECOND PRESS CLEARS IT. A chip that only ever narrows makes
+            // the reader hunt for a "clear" button to undo the thing they
+            // just did, which is the one gesture every list gets wrong.
+            onPressedChange={() => onChange(value === f.value ? "" : f.value)}
+          >
+            {f.label}
+          </FilterChip>
+        ))}
+      </FilterChipGroup>
       <span className="t-caption">{SCOPE_NOTE[over]}</span>
     </div>
   );

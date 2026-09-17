@@ -1,12 +1,36 @@
 /**
- * The component library.
+ * What is left of the component library once the dashboard draws
+ * `@crewlethq/ui`.
  *
- * Each of these is a recipe from `styles/components.css` given a typed props
- * surface. The reason they are components rather than class names a screen
- * remembers to spell: the previous dashboard hand-wrote 97 template strings
- * carrying `data-k` keys and `data-action` names, and its shell carried a
- * branch for one screen's rows because that screen forgot to handle its own
- * clicks. A typed prop cannot be forgotten.
+ * Everything with a peer in the design system is gone — the badge, the panel,
+ * the empty state, the stat row, the skeleton, the select, the tabs, the
+ * avatar, the banner, the disclosure, the search input, the button, the chip
+ * and `cx` itself all come from the package now, and a second recipe for a
+ * mark the package already draws is exactly the shape this file was written to
+ * stop being.
+ *
+ * WHAT SURVIVES IS OF THREE KINDS, and the distinction is the useful part of
+ * this file:
+ *
+ *  1. A VOCABULARY the package does not have and should not: `Tone`, the six
+ *     words the engine's own payloads are spelled in, and the single
+ *     translation of them into the package's spelling.
+ *  2. A TABLE, not a recipe: `PhaseTag` draws the package's `Tag` and adds
+ *     the one thing the package cannot know — which of the SIX phase strings
+ *     the engine emits map onto the three hues it publishes, and that the
+ *     other three take neutral.
+ *  3. FIVE CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
+ *     written at its own definition: `Segmented` (its `SegmentedControl` has
+ *     no way to stop the arrows committing), `Meter` (no unknown ceiling, no
+ *     direction), `Code` (no focus without select-all), `CopyButton` (its
+ *     `useClipboard` welds the write to a reset policy, and one half of that
+ *     policy is a timer nothing can clear) and `DownloadButton` (no peer at
+ *     all). The CHROME of the last two is the package's even where their
+ *     contract is not.
+ *
+ * Each of (3) names, at its definition, exactly what `@crewlethq/ui` would
+ * have to grow for this file to lose it. That list is the point of keeping
+ * them here rather than quietly reimplementing the package beside it.
  */
 
 import {
@@ -15,218 +39,122 @@ import {
   useId,
   useRef,
   useState,
-  type CSSProperties,
   type KeyboardEvent,
-  type MouseEvent,
   type ReactNode,
 } from "react";
-import { Icon, type IconName } from "./Icon.tsx";
+import { CheckGlyph, ContentCopyGlyph, ErrorGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Tag, cx, type TagVariant, type Tone as UiletTone } from "@crewlethq/ui";
+import { Mark, type MarkName } from "./glyph.tsx";
 
+// ---------------------------------------------------------------------------
+// Vocabulary
+// ---------------------------------------------------------------------------
+
+/**
+ * The six words this product says about state.
+ *
+ * Kept although `@crewlethq/ui` has its own six, because they are the words
+ * the ENGINE uses: an event's severity, a seat's health, a reconcile finding
+ * and a tool's status all reach a screen spelled this way, and a dashboard
+ * carrying the package's spelling instead would be translating at the point
+ * where the data ARRIVES rather than at the point where it is drawn.
+ */
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
 
-export function cx(...parts: (string | false | null | undefined)[]): string {
-  return parts.filter(Boolean).join(" ");
+/**
+ * Our tone vocabulary, said in uilet's.
+ *
+ * The two sets name the same six ideas and agree on what they are FOR — uilet's
+ * own tone doc carries this product's rule verbatim ("a tone says what a thing
+ * IS, never who it is") — but they spell three of them differently: our
+ * `positive`, `caution` and `critical` are their `success`, `warning` and
+ * `danger`, and our `accent` is their `brand`.
+ *
+ * ONE TRANSLATION, not one per call site. The engine side of this repository
+ * has paid for the alternative three times (`textcut`, `whsec`, `jsprovision`):
+ * a rule spelled at each site is a rule whose copies come to disagree, and the
+ * disagreement here is silent — a wrong `variant` string renders the neutral
+ * pill rather than failing, so a caution reads as "nothing in particular" and
+ * nothing in the build says so.
+ *
+ * It lives BESIDE `Tone` because that is the only place both spellings are in
+ * view: a reader adding a seventh word to the union sees, in the next
+ * paragraph, that it needs a uilet word too — and the `Record` below fails the
+ * build if they do not give it one.
+ */
+const SPELLING: Record<Tone, UiletTone> = {
+  neutral: "neutral",
+  positive: "success",
+  caution: "warning",
+  critical: "danger",
+  info: "info",
+  accent: "brand",
+};
+
+/** The uilet variant a tone of ours is drawn as. */
+export function uiletTone(tone: Tone): UiletTone {
+  return SPELLING[tone];
 }
 
 // ---------------------------------------------------------------------------
-// Surface
+// Marks
 // ---------------------------------------------------------------------------
 
-export function Panel({
-  title,
-  subtitle,
-  icon,
-  count,
-  actions,
-  children,
-  padding = "normal",
-  className,
-  style,
-}: {
-  title?: ReactNode;
-  subtitle?: ReactNode;
-  icon?: IconName;
-  count?: number | null;
-  actions?: ReactNode;
-  children?: ReactNode;
-  padding?: "normal" | "tight" | "none";
-  className?: string;
-  style?: CSSProperties;
-}) {
-  return (
-    <section className={cx("panel-flush", className)} style={style}>
-      {(title || actions) && (
-        <header className="panel-head">
-          <div className="panel-title truncate">
-            {icon && <Icon name={icon} size="sm" style={{ color: "var(--text-muted)" }} />}
-            <span className="truncate">{title}</span>
-            {count != null && <span className="count-chip">{count}</span>}
-          </div>
-          {subtitle && <span className="panel-sub truncate">{subtitle}</span>}
-          <span className="spacer" />
-          {actions}
-        </header>
-      )}
-      <div
-        className={cx("panel-body", padding === "tight" && "tight", padding === "none" && "none")}
-      >
-        {children}
-      </div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Controls
-// ---------------------------------------------------------------------------
-
-export function Button({
-  children,
-  icon,
-  variant = "default",
-  size = "md",
-  onClick,
-  disabled,
-  title,
-  type = "button",
-  block,
-  active,
-}: {
-  children?: ReactNode;
-  icon?: IconName;
-  variant?: "default" | "primary" | "ghost" | "danger";
-  size?: "md" | "sm";
-  /**
-   * The event is passed through, so a button inside an element with a
-   * default action of its own can stop it. A Copy button in a `<summary>`
-   * toggled the disclosure on its way through, giving an operator who only
-   * wanted the text the whole block they were copying instead.
-   */
-  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
-  disabled?: boolean;
-  title?: string;
-  type?: "button" | "submit";
-  block?: boolean;
-  active?: boolean;
-}) {
-  return (
-    <button
-      type={type}
-      className={cx(
-        "btn",
-        variant !== "default" && variant,
-        size === "sm" && "sm",
-        !children && "icon",
-        block && "block",
-      )}
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={!children ? title : undefined}
-      aria-pressed={active}
-    >
-      {icon && <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />}
-      {children}
-    </button>
-  );
-}
-
-export function Badge({
-  children,
-  tone = "neutral",
-  icon,
-  dot,
-  outline,
-  mono,
-  title,
-  onClick,
-  pressed,
-}: {
-  children: ReactNode;
-  tone?: Tone;
-  icon?: IconName;
-  dot?: boolean;
-  outline?: boolean;
-  mono?: boolean;
-  title?: string;
-  /** Makes the badge a real button — see the note below. */
-  onClick?: () => void;
-  /** For a badge that toggles a filter, whether that filter is on. */
-  pressed?: boolean;
-}) {
-  const className = cx(
-    "badge",
-    tone !== "neutral" && tone,
-    outline && "outline",
-    mono && "mono",
-    onClick && "actionable",
-    pressed && "pressed",
-  );
-  const inner = (
-    <>
-      {dot && <i className={cx("dot", tone !== "neutral" && tone)} />}
-      {icon && <Icon name={icon} size="xs" />}
-      {children}
-    </>
-  );
-  // A BUTTON when it acts, a span when it does not. A count that filters the
-  // list has to be reachable by keyboard and announce its pressed state; a
-  // span with a click handler is neither, and looks identical to the inert
-  // badges beside it.
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className={className}
-        title={title}
-        onClick={onClick}
-        aria-pressed={!!pressed}
-      >
-        {inner}
-      </button>
-    );
-  }
-  return (
-    <span className={className} title={title}>
-      {inner}
-    </span>
-  );
-}
+/**
+ * Which uilet variant draws a phase.
+ *
+ * Phase is the one categorical identity this product spends colour on outside
+ * a chart, because it is what a reader follows across the Model, Seat,
+ * Activity and Trace screens — and `TagVariant` carries that vocabulary
+ * already, on the design system's own hues (`--color-phase-*`), measured to
+ * stay separable under protan and deutan vision.
+ *
+ * THE PREFIX IS THE POINT: uilet spells them `phase-onboarding`,
+ * `phase-execute` and `phase-review` so a phase and a state can never be
+ * confused for one another inside one union, and a bare `execute` is a type
+ * error rather than a pill that quietly renders neutral.
+ */
+const PHASE_VARIANT: Record<string, TagVariant> = {
+  onboarding: "phase-onboarding",
+  execute: "phase-execute",
+  review: "phase-review",
+};
 
 /**
  * A phase mark.
  *
- * Phase is the one categorical identity the product spends colour on outside a
- * chart, because it is what a reader follows across the Model, Seat, Activity
- * and Trace screens. The three hues are measured to stay separable under
- * protan and deutan vision, and the word is always present beside the colour.
+ * The engine emits three phases beyond the three uilet draws — `subagent`,
+ * `auxiliary` and `judge` — and there is no hue for them, which is the right
+ * answer rather than a gap: they take the neutral pill, exactly as this drew
+ * them before the port, and the word beside the colour is what a reader
+ * actually reads. An unknown phase off the wire lands there too, which is the
+ * behaviour a rolling upgrade needs.
  */
-export function PhaseTag({ phase, children }: { phase: string; children?: ReactNode }) {
+export function PhaseTag({ phase }: { phase: string }) {
   const key = (phase || "").toLowerCase();
-  return (
-    <span className="phase-tag" data-phase={key}>
-      {children ?? (key || "—")}
-    </span>
-  );
+  return <Tag variant={PHASE_VARIANT[key] ?? "neutral"}>{key || "—"}</Tag>;
 }
+
+// ---------------------------------------------------------------------------
+// Choice
+// ---------------------------------------------------------------------------
 
 /**
  * One tab stop for a whole group, and the arrow keys that move within it.
  *
- * BOTH `Segmented` and `Tabs` need it, and it is the half each of them was
- * missing. A radio group and a tab list share one keyboard contract — the
- * group is ONE stop in the page's tab order, arrows move within it, Home and
- * End jump to the ends — and a group of plain buttons has the opposite
- * behaviour: every option is its own tab stop, and arrow keys do nothing. On
- * the density control in the shell that is three extra stops before a
- * keyboard reader reaches the page content, on every screen.
+ * A radio group's keyboard contract is that the group is ONE stop in the
+ * page's tab order, arrows move within it, and Home and End jump to the ends.
+ * A group of plain buttons has the opposite behaviour: every option is its own
+ * tab stop, and arrow keys do nothing. On the density control in the shell
+ * that is three extra stops before a keyboard reader reaches the page content,
+ * on every screen.
  *
  * ARROWS MOVE FOCUS AND COMMIT NOTHING, which is what the pattern calls
  * MANUAL activation, and it is the default here because of what these groups
  * are wired to. Seven of the nine sites drive a `useParam`: five push a
  * history entry and every one of them re-runs the screen's query, which
  * `socket.query` mints fresh with no cache, no dedupe and no coalescing. So
- * under selection-follows-focus, arrowing from the first option of Seat's tab
+ * under selection-follows-focus, arrowing from the first option of a lens
  * strip to the last is four queries nobody asked for and four history entries
  * a reader then has to press Back through — and the reader most likely to
  * arrow through every option to hear what is there is the one using a screen
@@ -348,15 +276,38 @@ function useRovingGroup<T extends string>(
 /**
  * One of N choices, drawn as a joined row.
  *
+ * # Why this is not `@crewlethq/ui`'s `SegmentedControl`
+ *
+ * WHAT IS MISSING THERE IS AN `activate` PROP. `SegmentedControl` derives
+ * activation from its `semantics` and offers no way to separate the two:
+ * `radio` hands `useRoving` a select-on-move callback, so the arrows COMMIT,
+ * and `tabs` moves focus only but claims `role="tablist"` and demands a
+ * `panelId` for the `tabpanel` it controls.
+ *
+ * Neither is this control. Not one of the nine call sites is a tab widget —
+ * they pick a theme, a density, a grouping, a scope, a window, a kind and
+ * three lenses, and several sit in a screen head with the content they affect
+ * hundreds of pixels below — so `tabs` would promise a reader a panel
+ * relationship that does not exist. And `radio` is exactly what this IS, with
+ * the one behaviour it cannot have: Config's lens pushes a history entry and
+ * re-runs an uncached query per option, so arrow-to-commit is a query per
+ * keystroke.
+ *
+ * So the gap is one prop — `activate: "manual" | "automatic"` on the `radio`
+ * semantics, which is `useRoving`'s second argument already and is simply not
+ * reachable from outside. With it, this component and its hook both delete and
+ * every call site becomes `<SegmentedControl semantics="radio"
+ * activate="manual" …>`. The second half of that gap is the tab stop:
+ * `SegmentedControl` keeps it on the SELECTED option, and under manual
+ * activation the stop has to travel with FOCUS instead, or tabbing out and
+ * back drops the reader somewhere they did not leave.
+ *
+ * # What it is
+ *
  * A RADIO GROUP, not a tab list. It used to declare `role="tablist"` with
- * `role="tab"` children, and not one of its call sites is a tab widget: they
- * pick a theme, a density, a grouping, a scope, a window and a kind. A tab
- * controls a `tabpanel` it is adjacent to and labels; these narrow, regroup or
- * re-scope what is already on the screen, and several of them sit in a screen
- * head with the content they affect hundreds of pixels below. Announcing them
- * as tabs promises a reader a panel relationship that does not exist, which is
- * a mis-role rather than a missing handler — and it would not have been fixed
- * by adding the keyboard behaviour alone.
+ * `role="tab"` children, and announcing these as tabs is a mis-role rather
+ * than a missing handler — it would not have been fixed by adding the
+ * keyboard behaviour alone.
  */
 export function Segmented<T extends string>({
   value,
@@ -367,7 +318,10 @@ export function Segmented<T extends string>({
   activate = "manual",
 }: {
   value: T;
-  options: { value: T; label: ReactNode; icon?: IconName; title?: string }[];
+  /** `icon` is a NAME rather than a node, so the size step below is decided
+      once here rather than at each of the nine call sites — the shape
+      `Dialog`, `ObjectHeader` and `cells` already take a mark in. */
+  options: { value: T; label: ReactNode; icon?: MarkName; title?: string }[];
   onChange: (value: T) => void;
   size?: "sm";
   ariaLabel: string;
@@ -430,244 +384,11 @@ export function Segmented<T extends string>({
           title={o.title}
           onClick={() => onChange(o.value)}
         >
-          {o.icon && <Icon name={o.icon} size="xs" />}
+          {o.icon && <Mark name={o.icon} size="xs" />}
           {o.label}
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * A tab list, and the one control here that genuinely is one: its options sit
- * directly above the panel each of them shows.
- *
- * WHICH IS ONLY TRUE IF THE PANEL SAYS SO. The role was declared and the
- * relationship was not: no rendered element carried `role="tabpanel"`, nothing
- * was referenced by `aria-controls`, and the switched content was an ordinary
- * run of siblings after the strip. A screen reader could find the tabs and
- * then had no way to reach what the selected one controlled — pressing Tab
- * from a freshly chosen tab left the widget and landed on whatever came next
- * in the DOM, so choosing a tab moved the reader FURTHER from the content they
- * had just chosen.
- *
- * So the panel is part of this component rather than the caller's problem:
- * pass the content as `children` and both ids, the `aria-controls` and the
- * `aria-labelledby` back-reference are minted here. The alternative — a
- * documented id convention each caller follows — is a convention each caller
- * can follow halfway, and a half-wired widget is indistinguishable from a
- * whole one at a glance.
- */
-export function Tabs<T extends string>({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  activate = "manual",
-  children,
-}: {
-  value: T;
-  options: { value: T; label: ReactNode; icon?: IconName; count?: number | null }[];
-  onChange: (value: T) => void;
-  ariaLabel: string;
-  /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
-  activate?: "manual" | "automatic";
-  /**
-   * What the selected tab shows. Passing it is what makes this a tab WIDGET
-   * rather than a row of buttons wearing the tab role — see the note on the
-   * component. Omit it only for a strip whose content genuinely cannot be one
-   * element.
-   */
-  children?: ReactNode;
-}) {
-  const { box, onKeyDown, stop } = useRovingGroup(
-    options.map((o) => o.value),
-    value,
-    onChange,
-    activate,
-  );
-  // THE COMPONENT MINTS BOTH IDS, rather than taking a base from the caller.
-  // The relationship is the half that was missing, and a caller asked to
-  // supply ids is a caller who can wire one end and forget the other — which
-  // reads exactly like a complete widget and is not one.
-  const base = useId();
-  const tabID = `${base}-tab`;
-  const panelID = `${base}-panel`;
-  return (
-    <>
-      <div ref={box} className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
-        {options.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            data-roving
-            role="tab"
-            id={o.value === value ? tabID : undefined}
-            // ONLY ON THE SELECTED TAB, because only its panel is rendered.
-            // The others control nothing that exists, and an `aria-controls`
-            // pointing at an absent id is worse than an absent one: a reader
-            // is offered a jump that goes nowhere.
-            aria-controls={o.value === value && children !== undefined ? panelID : undefined}
-            aria-selected={o.value === value}
-            tabIndex={o.value === stop ? 0 : -1}
-            onClick={() => onChange(o.value)}
-          >
-            {o.icon && <Icon name={o.icon} size="sm" />}
-            {o.label}
-            {o.count != null && <span className="count-chip">{o.count}</span>}
-          </button>
-        ))}
-      </div>
-      {children !== undefined && (
-        // A SIBLING OF THE STRIP, not a child of it. Both are flex children of
-        // the screen's own column, which is where their spacing comes from —
-        // nesting the panel inside the strip's box would inherit the strip's
-        // row layout instead.
-        //
-        // FOCUSABLE, which is the point of the relationship rather than a
-        // detail of it: a reader who selects a tab presses Tab next, and
-        // without a stop here focus leaves the widget entirely and lands on
-        // whatever follows in the DOM — so selecting a tab moved them further
-        // from the content they selected.
-        <div className="tabpanel" role="tabpanel" id={panelID} aria-labelledby={tabID} tabIndex={0}>
-          {children}
-        </div>
-      )}
-    </>
-  );
-}
-
-export function Chip({
-  children,
-  on,
-  onClick,
-  count,
-  title,
-}: {
-  children: ReactNode;
-  on?: boolean;
-  onClick?: () => void;
-  count?: number | null;
-  title?: string;
-}) {
-  return (
-    <button className="chip" aria-pressed={!!on} onClick={onClick} title={title}>
-      {children}
-      {count != null && <span className="chip-count">{count}</span>}
-    </button>
-  );
-}
-
-export function SearchInput({
-  value,
-  onChange,
-  placeholder,
-  ariaLabel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  ariaLabel: string;
-}) {
-  return (
-    <div className="search-input">
-      <Icon name="search" size="sm" />
-      <input
-        className="input"
-        type="search"
-        value={value}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
-  );
-}
-
-/**
- * A picker over a known set of values.
- *
- * Exists because the alternatives were both wrong for a bounded set. A free
- * text box that filters on EXACT equality — which is what a role filter does,
- * on the server and in memory alike — silently returns nothing the moment
- * somebody types a prefix, while looking exactly like a search that found no
- * matches. And a row of chips is one control per option, so it only works
- * while the set is small and quietly disappears when it is not.
- */
-export function Select({
-  value,
-  onChange,
-  options,
-  ariaLabel,
-  anyLabel = "Any",
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  /**
-   * A bare string is its own label, and a pair separates the two.
-   *
-   * The pair is not a convenience. Every value this control sends is a WIRE
-   * value — a status slug, a handle, a sprint number — and every one of them
-   * has a word a person uses instead: a picker offering `in_progress` and
-   * `ada` is a picker written in the database's vocabulary, and one that sent
-   * "In progress" would be refused by the engine's own closed set.
-   */
-  options: (string | { value: string; label: string })[];
-  ariaLabel: string;
-  anyLabel?: string;
-}) {
-  const rows = options.map((o) => (typeof o === "string" ? { value: o, label: o } : o));
-  return (
-    <div className={cx("picker", value && "on")}>
-      <select
-        className="input"
-        value={value}
-        aria-label={ariaLabel}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">{anyLabel}</option>
-        {rows.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <Icon name="chevronDown" size="xs" />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
-
-/**
- * A seat's monogram. Deliberately neutral — see the note in components.css.
- */
-export function Avatar({
-  name,
-  size = "md",
-  human,
-}: {
-  name: string;
-  size?: "sm" | "md" | "lg";
-  human?: boolean;
-}) {
-  const initials =
-    (name || "?")
-      .split(/[\s\-_.]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0])
-      .join("") || "?";
-  return (
-    <span
-      className={cx("avatar", size !== "md" && size, human && "human")}
-      title={name}
-      aria-hidden="true"
-    >
-      {initials}
-    </span>
   );
 }
 
@@ -677,6 +398,32 @@ export function Avatar({
 
 /**
  * A bar: how full something is, and WHICH WAY FULL MEANS.
+ *
+ * # Why this is not `@crewlethq/ui`'s `Meter`
+ *
+ * TWO GAPS, and each of them makes a bar say something untrue on a screen this
+ * dashboard ships today.
+ *
+ *  1. THERE IS NO WAY TO SAY "NO CEILING". `Meter` draws `role="meter"`
+ *     unconditionally with `aria-valuemax={max}`, and `aria-valuemax` defaults
+ *     to 100 when it is absent or NOT GREATER than the minimum — so a company
+ *     with no token budget, which reaches this component as `max={0}`,
+ *     announces "0 out of 100": a confident claim that nothing has been spent,
+ *     where the truth is that nobody has said what the limit is. What it would
+ *     need is an `unbounded` prop, or the rule below — a non-positive `max`
+ *     draws the bar as decoration and leaves the legend to carry what IS
+ *     known. Its `aria-valuenow` is unclamped too, which is the second half of
+ *     the ARIA note further down.
+ *
+ *  2. `meterTone` HAS THE "SPENT" POLARITY WELDED IN — `>= 100` is `danger`,
+ *     `>= 75` is `warning` — so a bar measuring PROGRESS reads a finished goal
+ *     as a crisis and a goal three quarters of the way there as a warning.
+ *     `routes/work/Goals.tsx` measures progress. A caller can override with
+ *     `tone`, but an override computed per call site from the same ratio is
+ *     the rule spelled at every site rather than once, which is precisely what
+ *     `fullMeans` exists to replace. What it would need is a
+ *     `fullMeans`/`polarity` prop feeding `meterTone`, or a second exported
+ *     ramp for the achieved direction.
  *
  * # The direction is the caller's to state, because it is not derivable
  *
@@ -709,7 +456,7 @@ export function Avatar({
  * pass a percentage sentence rather than a noun, and two sites pass none at
  * all because the meter sits in a table cell whose column heading does the
  * naming for a sighted reader. So the name is a required prop of its own,
- * exactly as it is on [Segmented], [Tabs] and Select.
+ * exactly as it is on [Segmented].
  *
  * And `aria-valuenow` may not exceed `aria-valuemax`. The fill is clamped —
  * a bar cannot be 130% long — but the value was not, so a budget LOWERED
@@ -790,129 +537,43 @@ export function Meter({
   );
 }
 
-export function StatRow({ cols, children }: { cols?: number; children: ReactNode }) {
-  return (
-    <div className="stat-row" style={{ "--stat-cols": cols ?? 4 } as CSSProperties}>
-      {children}
-    </div>
-  );
-}
-
-export function Stat({
-  label,
-  value,
-  unit,
-  sub,
-  icon,
-  tone,
-}: {
-  label: ReactNode;
-  value: ReactNode;
-  unit?: ReactNode;
-  sub?: ReactNode;
-  icon?: IconName;
-  /**
-   * The STATE this number is in, when it has one — the ink of the value moves
-   * to that tone's step.
-   *
-   * Deliberately absent from most stats. Colour carries state and never
-   * identity, and a token count or an elapsed time is not in a state: tinting
-   * every tile would spend the four status hues on decoration and leave the
-   * one tile that means something indistinguishable from its neighbours. Use
-   * it where the value IS an outcome — a turn's decision, a probe's verdict —
-   * and nowhere else.
-   */
-  tone?: Exclude<Tone, "neutral" | "accent">;
-}) {
-  return (
-    <div className="stat">
-      <div className="stat-label">
-        {icon && <Icon name={icon} size="xs" />}
-        {label}
-      </div>
-      <div className={cx("stat-value truncate", tone && `tone-${tone}`)}>
-        {value}
-        {unit && <span className="unit">{unit}</span>}
-      </div>
-      <div className="stat-sub truncate">{sub}</div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// States
+// Record
 // ---------------------------------------------------------------------------
 
-/**
- * An empty state that says WHY it is empty and what would fill it.
- *
- * `hint` is not optional politeness. "No events" on a company that has never
- * run and "no events" on a node with no event store are the same sentence and
- * completely different problems, and the reader cannot tell them apart from
- * the list.
- */
-export function Empty({
-  icon = "inbox",
-  title,
-  hint,
-  action,
-  inline,
-}: {
-  icon?: IconName;
-  title: ReactNode;
-  hint?: ReactNode;
-  action?: ReactNode;
-  inline?: boolean;
-}) {
-  return (
-    <div className={cx("empty", inline && "inline")}>
-      <Icon name={icon} size="xl" />
-      <div className="empty-title">{title}</div>
-      {hint && <div className="empty-sub">{hint}</div>}
-      {action}
-    </div>
-  );
-}
-
-export function Banner({
-  tone = "neutral",
-  icon,
-  children,
-  action,
-}: {
-  tone?: "neutral" | "info" | "caution" | "critical";
-  icon?: IconName;
-  children: ReactNode;
-  action?: ReactNode;
-}) {
-  const fallback: IconName = tone === "critical" ? "alert" : tone === "caution" ? "alert" : "info";
-  return (
-    <div className={cx("banner", tone)} role={tone === "critical" ? "alert" : undefined}>
-      <Icon name={icon ?? fallback} size="sm" />
-      <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
-      {action}
-    </div>
-  );
-}
-
-export function Skeleton({ rows = 3, height = 14 }: { rows?: number; height?: number }) {
-  return (
-    <div className="col" aria-busy="true" aria-live="polite">
-      {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="skeleton" style={{ height, width: `${100 - (i % 3) * 12}%` }} />
-      ))}
-      <span className="sr-only">Loading</span>
-    </div>
-  );
-}
 /**
  * A block of preformatted text, optionally one that OWNS select-all.
  *
- * `selectable` makes the block focusable and gives ⌘A / Ctrl+A a local
- * meaning while it has focus: select this block, not the document. That is
- * the one keyboard gesture a reader brings to a screen whose point is a
- * single record, and the browser's own answer to it — the nav, the stat row,
- * every phase card and the record — is never what they wanted.
+ * # Why this is not `@crewlethq/ui`'s `CodeBlock`
+ *
+ * `CodeBlock` is the better block wherever a block is selectable, and every
+ * screen whose blocks are has already moved to it. What it cannot express is
+ * the OTHER case: `selectable` is one boolean carrying three things —
+ * `tabIndex={0}`, the `role="region"` with its required `label`, and the
+ * Command/Control+A capture — and its type deliberately welds the label to the
+ * flag, so a block cannot be focusable without also taking the key.
+ *
+ * That trade is wrong for a tool call's arguments, and measurably so. `.code`
+ * is `overflow: auto` under a `max-height`, so ANY block past the cap is a
+ * scroll container, and in Chrome and Safari a scroll container is only
+ * reachable by keyboard if something makes it focusable — while a tab stop on
+ * EVERY block would put one in front of each of a phase card's dozens of tool
+ * arguments, most of them three lines that never overflow. So the stop is
+ * given to the blocks that need it, which is a fact about the RENDERED BOX and
+ * not about any prop: the same content overflows or does not depending on the
+ * viewport.
+ *
+ * What `CodeBlock` would need is either a `focusWhenScrollable` prop that
+ * measures its own box, or `selectable` split from label-and-focus so a block
+ * can be a named region without owning ⌘A.
+ *
+ * # What `selectable` means here
+ *
+ * It makes the block focusable and gives ⌘A / Ctrl+A a local meaning while it
+ * has focus: select this block, not the document. That is the one keyboard
+ * gesture a reader brings to a screen whose point is a single record, and the
+ * browser's own answer to it — the nav, the stat row, every phase card and the
+ * record — is never what they wanted.
  *
  * INTERCEPTED ON THE ELEMENT, not on the document. A document-level handler
  * would have to guess which block the reader meant, and it would take the
@@ -926,84 +587,22 @@ interface CodeProps {
   /** Take ⌘A / Ctrl+A while focused. */
   selectable?: boolean;
   /**
-   * What this block is.
+   * What this block is: "The turn record, as JSON".
    *
-   * REQUIRED ON EVERY BLOCK, not only on a selectable one, and that is the
-   * defect this replaced. `.code` is `overflow: auto` with a `max-height`, so
-   * ANY block taller than 460px is a scroll container — and in Chrome and
-   * Safari a scroll container is only reachable by keyboard if something
-   * makes it focusable. The `selectable` ones were, because ⌘A needed it; the
-   * others were not, and they are the tall ones: a phase card's verbatim
-   * system prompt is tens of kilobytes, and a keyboard reader could not
-   * scroll it at all. Taking focus without a name is the other half of that
-   * trade — a tab stop a screen reader announces as nothing — so the two
-   * arrive together or neither does.
+   * REQUIRED ON EVERY BLOCK, not only on a selectable one, because any block
+   * may turn out to scroll and a block that scrolls takes focus — see the
+   * note above. Taking focus without a name is a tab stop a screen reader
+   * announces as nothing, so the two arrive together or neither does.
    */
   label: string;
 }
 
-/**
- * A labelled section the reader opens.
- *
- * Lifted out of PhaseCard when a second screen needed one. The alternative was
- * a bare `<details>`, and a bare `<details>` is not the same control: it draws
- * the platform's own marker instead of the chevron every other expander here
- * uses, it takes none of the hover, inset or type of `.disclosure-head`, and
- * it cannot carry a count chip or a status mark. Two expanders that behave the
- * same and look different is the specific thing this component library exists
- * to stop.
- */
-export function Disclosure({
-  label,
-  count,
-  children,
-  defaultOpen,
-  mono,
-  tone,
-  mark,
-  actions,
-}: {
-  label: ReactNode;
-  count?: ReactNode;
-  children: ReactNode;
-  defaultOpen?: boolean;
-  mono?: boolean;
-  tone?: "reasoning";
-  /** A status mark, rendered as its OWN item in the head's row. */
-  mark?: ReactNode;
-  /** Controls that belong to the section, kept OUT of the toggle. Rendered
-      beside the head rather than inside it: a button nested in a button is
-      not a thing, and clicking a copy control must not also collapse the
-      thing it copied. */
-  actions?: ReactNode;
-}) {
-  const [open, setOpen] = useState(!!defaultOpen);
-  return (
-    <div className={cx("disclosure", tone && `tone-${tone}`)}>
-      <div className="disclosure-bar">
-        <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-          <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
-          {mark}
-          <span className={cx("truncate", mono && "mono")}>{label}</span>
-          {count != null && <span className="count-chip">{count}</span>}
-        </button>
-        {actions}
-      </div>
-      {open && <div className="disclosure-body">{children}</div>}
-    </div>
-  );
-}
-
 export function Code({ children, plain, selectable, label }: CodeProps) {
   const box = useRef<HTMLPreElement>(null);
-  // WHETHER THIS BLOCK ACTUALLY SCROLLS, measured rather than assumed.
-  //
-  // A tab stop on every code block would put one in front of each of a phase
-  // card's tool arguments — dozens on a long round — and most of them are
-  // three lines that never overflow. So the stop is given to the blocks that
-  // need it, which is a fact about the rendered box and not about any prop:
-  // the same content overflows or does not depending on the viewport. Firefox
-  // does this natively and Chrome and Safari do not, hence measuring.
+  // WHETHER THIS BLOCK ACTUALLY SCROLLS, measured rather than assumed — the
+  // whole of why this is not `CodeBlock`, argued at the top. MEASURED because
+  // Firefox makes a scroll container focusable on its own and Chrome and
+  // Safari do not, so there is nothing to read the answer off.
   const [scrolls, setScrolls] = useState(false);
   useEffect(() => {
     const node = box.current;
@@ -1013,7 +612,7 @@ export function Code({ children, plain, selectable, label }: CodeProps) {
     const measure = () =>
       setScrolls(node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth);
     measure();
-    // The box is resized by the window, by a Disclosure opening above it and
+    // The box is resized by the window, by a disclosure opening above it and
     // by its own content arriving on a streamed frame, and none of those is
     // a render of THIS component. ResizeObserver is the only one of the
     // three it can see.
@@ -1066,6 +665,10 @@ export function Code({ children, plain, selectable, label }: CodeProps) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Hand-off
+// ---------------------------------------------------------------------------
+
 /**
  * How long a confirmation holds before the control offers its action again.
  *
@@ -1088,6 +691,14 @@ const CONFIRMED_HOLD_MS = 2000;
  * acquires it. The engine has the same lesson written down twice, in
  * `internal/textcut` and `internal/api/httpjson`.
  *
+ * THE CHROME IS UILET'S AND THE CONTRACT IS OURS. What is drawn is
+ * `@crewlethq/ui`'s `Button`, wearing the two outcome glyphs the package's own
+ * copy control wears, so a copy button here and a `Copyable` elsewhere on the
+ * page are the same mark. What this adds is the two behaviours uilet's
+ * `CopyButton` does not have and a download has no peer for at all: a refusal
+ * that HOLDS, and a live region keyed on the attempt, so an identical outcome
+ * twice running is still a change something announces.
+ *
  * `run` returns whether it landed. It may be async — the Clipboard API is —
  * and it must not throw: a refusal is a `false`, because the caller is the
  * only frame that knows what a refusal MEANS to say about.
@@ -1105,7 +716,9 @@ function FeedbackButton({
   size = "sm",
 }: {
   run: () => boolean | Promise<boolean>;
-  icon: IconName;
+  /** The glyph at rest. A COMPONENT, which is how every uilet control takes
+      one, and what lets the outcome glyphs below stand in its place. */
+  icon: ReactNode;
   /** What the control offers, at rest. */
   label: string;
   /** The same control once it worked — short, because it is a button. */
@@ -1177,13 +790,30 @@ function FeedbackButton({
   }, [run]);
 
   const said = state === "done" ? doneSaid : state === "failed" ? failedSaid : "";
+  // The glyph step this button's own type size asks for. The mark is the only
+  // signal the swap gives a sighted reader, so the outcomes are drawn at the
+  // step the resting glyph was.
+  const glyph = size === "sm" ? "xs" : "sm";
 
   return (
     <span className="row gap-1">
       <Button
-        size={size}
-        variant={variant}
-        icon={state === "done" ? "check" : state === "failed" ? "alert" : icon}
+        // OUR TWO WORDS, SAID IN UILET'S. `ghost` is the transparent one and
+        // `default` the bordered one this product has always drawn; the
+        // package spells them `tertiary` and `secondary`, and its own default
+        // is `primary`, which is neither. Translated in one place rather than
+        // at the three call sites, for the reason [uiletTone] gives above.
+        size={size === "sm" ? "small" : "medium"}
+        variant={variant === "ghost" ? "tertiary" : "secondary"}
+        leadingIcon={
+          state === "done" ? (
+            <CheckGlyph size={glyph} />
+          ) : state === "failed" ? (
+            <ErrorGlyph size={glyph} />
+          ) : (
+            icon
+          )
+        }
         onClick={onClick}
         title={state === "failed" ? failedSaid : title}
       >
@@ -1211,6 +841,9 @@ function FeedbackButton({
  * twice per tool round — so a string prop means a full `JSON.stringify` of
  * the whole turn on every push, for a button nobody has clicked. Resolved on
  * click, it costs nothing until it is asked for.
+ *
+ * The same union `useClipboard`'s `copy` takes, so the copy path hands it
+ * straight through and only the download path has to resolve it.
  */
 type Text = string | (() => string);
 
@@ -1235,6 +868,34 @@ function resolve(text: Text): string {
  *  2. **A copy with no feedback is indistinguishable from a dead button.**
  *     The clipboard is invisible; the only way a reader learns it worked is
  *     if the control says so.
+ *
+ * # WHY THE WRITE IS STILL OURS, and what would retire it
+ *
+ * `@crewlethq/ui` publishes [useClipboard], which is the same two rules and
+ * should be the only copy of them in the tree. It cannot be used here yet, and
+ * the reason is not style: the hook does not expose the WRITE, only a write
+ * welded to a reset policy, and that policy breaks two things this control is
+ * measured on.
+ *
+ *  - A REFUSAL SETTLES BACK. `copy` arms `setState("idle")` for `resetMs`
+ *    after BOTH outcomes, so a refused copy reverts to offering its action —
+ *    which is indistinguishable from a button that was never pressed, and is
+ *    the exact state [FeedbackButton] exists to leave. That half is
+ *    survivable: the boolean `copy` returns is the same answer without the
+ *    reset, and ignoring `state` recovers it.
+ *  - THE TIMER IS ARMED AFTER THE AWAIT, WITH NO LIVENESS GUARD. The hook's
+ *    only cleanup is an unmount effect that clears whatever timer exists AT
+ *    that moment; a clipboard write held behind a permission prompt settles
+ *    later, and the `setTimeout` it then arms is the one timer nothing can
+ *    clear. That half is not survivable from outside the hook, and it is
+ *    asserted here ("an answer that arrives after the screen is gone arms
+ *    nothing") — measured, not theorised: the suite goes red on it.
+ *
+ * So what uilet would need is either a guard of its own (an unmount ref
+ * checked after the await, exactly as below) or an exported `writeClipboard`,
+ * so a caller that owns its own outcome can take the write without the
+ * policy. With either, [copyToClipboard] and [execCommandCopy] below delete
+ * and this becomes `const { copy } = useClipboard()`.
  */
 export function CopyButton({
   text,
@@ -1253,7 +914,7 @@ export function CopyButton({
   return (
     <FeedbackButton
       run={run}
-      icon="copy"
+      icon={<ContentCopyGlyph size={size === "sm" ? "xs" : "sm"} />}
       label={label}
       doneLabel="Copied"
       failedLabel="Copy failed"
@@ -1274,6 +935,12 @@ export function CopyButton({
  * other is attached to a bug report or kept beside the incident. A clipboard
  * also holds exactly one thing, so copying two turns to compare them is not a
  * gesture that exists.
+ *
+ * NO PEER AT ALL in `@crewlethq/ui`: there is a `CopyButton` and a `Copyable`,
+ * and nothing that saves. What the package would need is the mirror of
+ * `useClipboard` — a `useDownload` owning the two checks below, the anchor and
+ * the revoke — after which this control is the package's `Button` and nothing
+ * else.
  *
  * Its failure modes are not the clipboard's, and one of them is worse than a
  * dead button:
@@ -1312,7 +979,7 @@ export function DownloadButton({
   return (
     <FeedbackButton
       run={run}
-      icon="download"
+      icon={<SaveGlyph size={size === "sm" ? "xs" : "sm"} />}
       label={label}
       // WHAT WAS OBSERVED, which is a HAND-OFF. There is no completion event
       // on an `<a download>`: `saveTextFile` returns true because the click
@@ -1357,6 +1024,13 @@ function execCommandCopy(text: string): boolean {
   field.style.position = "fixed";
   field.style.top = "-1000px";
   field.style.opacity = "0";
+  // WHERE FOCUS WAS, because `select()` takes it and `remove()` drops it on
+  // the document body: after a fallback copy the reader's next Tab started
+  // from the top of the page rather than from the button they had just
+  // pressed, on exactly the plain-http origin this branch exists for. Read
+  // before the field is in the document and restored after it is gone —
+  // `isConnected` because the click may have unmounted whatever held it.
+  const held = document.activeElement;
   document.body.appendChild(field);
   try {
     field.select();
@@ -1365,6 +1039,7 @@ function execCommandCopy(text: string): boolean {
     return false;
   } finally {
     field.remove();
+    if (held instanceof HTMLElement && held.isConnected) held.focus();
   }
 }
 

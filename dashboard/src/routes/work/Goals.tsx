@@ -35,8 +35,31 @@ import { useMemo, type ReactNode } from "react";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Chip, Empty, Meter, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { Select } from "~/ui/primitives.tsx";
+import {
+  Card,
+  EmptyState,
+  FilterChip,
+  Select,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+import {
+  CheckGlyph,
+  GroupGlyph,
+  TargetGlyph,
+  TimelineGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+// OURS, AND THE THREE THINGS THEIR `Meter` CANNOT DO. Every bar on this screen
+// reads FULL AS ACHIEVED, and `meterTone` has the opposite polarity welded in
+// (>= 100% is `danger`), so a finished goal would draw red. Their legend is
+// also all-or-nothing — `hideLabel` hides the value text with the label — so
+// the capacity-style bars elsewhere in this workspace cannot exist at all, and
+// their meter keeps `role="meter"` with no scale, announcing "0 of 100" where
+// nobody has said what the limit is. See the report.
+import { Meter } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { fmtDate, plural, relTime } from "~/lib/format.ts";
@@ -57,12 +80,12 @@ import { ToolCallBlock } from "~/components/ToolCall.tsx";
  *  later renders as itself rather than vanishing. */
 const HEALTH: Record<
   string,
-  { label: string; tone: "positive" | "caution" | "critical" | "neutral" }
+  { label: string; tone: "success" | "warning" | "danger" | "neutral" }
 > = {
-  on_track: { label: "On track", tone: "positive" },
-  at_risk: { label: "At risk", tone: "caution" },
-  off_track: { label: "Off track", tone: "critical" },
-  done: { label: "Done", tone: "positive" },
+  on_track: { label: "On track", tone: "success" },
+  at_risk: { label: "At risk", tone: "warning" },
+  off_track: { label: "Off track", tone: "danger" },
+  done: { label: "Done", tone: "success" },
 };
 
 /**
@@ -82,8 +105,8 @@ function goalFlags(goal: WorkGoal): ReactNode {
   if (!health && !goal.archived) return undefined;
   return (
     <span className="row gap-1">
-      {health && <Badge tone={health.tone}>{health.label}</Badge>}
-      {goal.archived && <Badge outline>Archived</Badge>}
+      {health && <Tag variant={health.tone}>{health.label}</Tag>}
+      {goal.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
   );
 }
@@ -204,7 +227,7 @@ export function Goals() {
 
   return (
     <>
-      <PageActions>{<Badge outline>{plural(goals.length, "goal")}</Badge>}</PageActions>
+      <PageActions>{<Tag appearance="outline">{plural(goals.length, "goal")}</Tag>}</PageActions>
       <PageNote>
         The tier above projects: an outcome, who owns it, and what its targets say. The percentage
         is computed from the work every time it is read — nothing stores one, so nothing can
@@ -212,46 +235,62 @@ export function Goals() {
       </PageNote>
 
       {!loading && !error && goals.length > 0 && (
-        <StatRow cols={3}>
-          <Stat icon="target" label="Goals" value={goals.length} sub="not archived" />
-          <Stat
-            icon="alert"
+        <StatGroup columns={3}>
+          <StatCard
+            icon={<TargetGlyph size="xs" />}
+            label="Goals"
+            value={goals.length}
+            sub="not archived"
+          />
+          <StatCard
+            icon={<WarningGlyph size="xs" />}
             label="At risk or off track"
             value={atRisk.length}
             sub={atRisk.length ? atRisk.map((g) => g.name).join(", ") : "nobody has raised one"}
           />
-          <Stat
-            icon="check"
+          <StatCard
+            icon={<CheckGlyph size="xs" />}
             label="Targets"
             value={goals.reduce((n, g) => n + (g.targets?.length ?? 0), 0)}
             sub="across every goal on screen"
           />
-        </StatRow>
+        </StatGroup>
       )}
 
       <div className="toolbar">
+        {/* THE "ANY" ROW IS AN OPTION RATHER THAN A PLACEHOLDER: their
+            `placeholder` only labels the empty trigger, and a reader who has
+            chosen a group needs a row to choose their way back out of it. */}
         <Select
+          // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+          // `width: 100%` unless told otherwise, and its own doc says why that
+          // is wrong here: "a filter row of full-width selects is one question
+          // per line, which is not what a filter bar is".
+          width="auto"
           value={group}
-          onChange={setGroup}
+          onChange={(value) => setGroup(String(value))}
           ariaLabel="Group"
-          anyLabel="Every group"
-          options={groups}
+          active={group !== ""}
+          options={[
+            { value: "", label: "Every group" },
+            ...groups.map((name) => ({ value: name, label: name })),
+          ]}
         />
-        <Chip
-          on={archived === "true"}
+        <FilterChip
+          pressed={archived === "true"}
           onClick={() => setArchived(archived ? "" : "true")}
           title="Include archived goals"
         >
           Archived
-        </Chip>
+        </FilterChip>
         {owner && (
-          <Chip on onClick={() => setOwner("")} title="Clear this filter">
+          <FilterChip pressed onClick={() => setOwner("")} title="Clear this filter">
             {index.byHandle.get(owner)?.name ?? owner}
-          </Chip>
+          </FilterChip>
         )}
       </div>
 
-      {loading && !goals.length && <Skeleton rows={4} />}
+      {loading && !goals.length && <Skeleton variant="text" rows={4} label="Loading goals" />}
 
       <QueryState
         error={error}
@@ -316,27 +355,32 @@ export function GoalPanel({
     goal.name
   );
   return (
-    <Panel
-      title={title}
-      icon="target"
-      actions={
-        <span className="row gap-2">
-          {goal.group && <Badge outline>{goal.group}</Badge>}
-          {goalFlags(goal)}
-        </span>
-      }
-    >
+    <Card>
+      <Card.Header
+        icon={<TargetGlyph size="sm" />}
+        actions={
+          <span className="row gap-2">
+            {goal.group && <Tag appearance="outline">{goal.group}</Tag>}
+            {goalFlags(goal)}
+          </span>
+        }
+      >
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
       <div className="row gap-2 wrap" style={{ marginBottom: "var(--space-3)" }}>
         {goal.owners.map((handle) => (
           // THE CHIP SHOWS A NAME AND SENDS A HANDLE: the word is for the
-          // reader and the value is the filter's.
-          <Chip
+          // reader and the value is the filter's. `FilterChip` rather than a
+          // plain `Tag`, because this is what a filter toggle IS over there —
+          // and it carries the button, the `aria-pressed` and the hit area
+          // our own `Chip` had to spell out.
+          <FilterChip
             key={handle}
             onClick={() => onOwner(handle)}
             title={`Only ${seatName(handle)}'s goals`}
           >
             {seatName(handle)}
-          </Chip>
+          </FilterChip>
         ))}
         {goal.due_at && (
           <span className="t-caption faint" title={fmtDate(goal.due_at)}>
@@ -348,7 +392,7 @@ export function GoalPanel({
       {goal.description && <p className="t-body">{goal.description}</p>}
 
       <GoalTargets goal={goal} />
-    </Panel>
+    </Card>
   );
 }
 
@@ -449,7 +493,10 @@ export function GoalOwners({
 }) {
   const owners = goal.owners ?? [];
   return (
-    <Panel title="Owners" icon="users" count={owners.length} padding="none">
+    <Card padding="none">
+      <Card.Header icon={<GroupGlyph size="sm" />} count={owners.length}>
+        <Card.Title>Owners</Card.Title>
+      </Card.Header>
       {owners.length > 0 ? (
         <div className="list">
           {owners.map((handle) => {
@@ -462,14 +509,14 @@ export function GoalOwners({
           })}
         </div>
       ) : (
-        <Empty
-          inline
-          icon="users"
+        <EmptyState
+          size="compact"
+          icon={<GroupGlyph size="xl" />}
           title="Nobody owns this goal"
-          hint="A goal with no owner is a goal nobody declares the health of — the check-in below is a person's judgement, and there is nobody here to make it."
+          description="A goal with no owner is a goal nobody declares the health of — the check-in below is a person's judgement, and there is nobody here to make it."
         />
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -526,7 +573,7 @@ export function Goal({ id }: { id: string }) {
         {goal?.description ||
           "A goal is the tier above projects: what the company is trying to move, and what says whether it moved."}
       </PageNote>
-      {loading && !goal && <Skeleton rows={4} />}
+      {loading && !goal && <Skeleton variant="text" rows={4} label="Loading the goal" />}
       <QueryState
         error={error}
         loading={loading}
@@ -542,14 +589,16 @@ export function Goal({ id }: { id: string }) {
               facts={goalFacts({ goal, now, seatName })}
             />
 
-            <Panel
-              title="Targets"
-              icon="check"
-              count={goal.targets?.length ?? 0}
-              subtitle="what says whether the outcome moved"
-            >
+            <Card>
+              <Card.Header
+                icon={<CheckGlyph size="sm" />}
+                count={goal.targets?.length ?? 0}
+                subtitle="what says whether the outcome moved"
+              >
+                <Card.Title>Targets</Card.Title>
+              </Card.Header>
               <GoalTargets goal={goal} />
-            </Panel>
+            </Card>
 
             <GoalOwners goal={goal} seat={seat} />
 
@@ -595,16 +644,17 @@ export function GoalCheckIns({
   const shown = latest ? updates.slice(0, 1) : updates;
   const behind = updates.length - shown.length;
   return (
-    <Panel
-      title={latest ? "Latest check-in" : "Check-ins"}
-      icon="activity"
-      // NO COUNT CHIP ON THE RAIL'S, because the panel deliberately shows one
-      // of them: a chip reading 7 over a single entry is a panel that looks
-      // like it failed to render the other six.
-      count={latest ? undefined : updates.length}
-      padding="none"
-      subtitle="the only part of a goal a person writes"
-    >
+    <Card padding="none">
+      <Card.Header
+        icon={<TimelineGlyph size="sm" />}
+        // NO COUNT CHIP ON THE RAIL'S, because the panel deliberately shows
+        // one of them: a chip reading 7 over a single entry is a panel that
+        // looks like it failed to render the other six.
+        count={latest ? undefined : updates.length}
+        subtitle="the only part of a goal a person writes"
+      >
+        <Card.Title>{latest ? "Latest check-in" : "Check-ins"}</Card.Title>
+      </Card.Header>
       {shown.length > 0 ? (
         <div className="list">
           {shown.map((update, i) => (
@@ -612,7 +662,7 @@ export function GoalCheckIns({
               <div className="row gap-1">
                 <strong className="t-cell">{seatName(update.author)}</strong>
                 {update.health && HEALTH[update.health] && (
-                  <Badge tone={HEALTH[update.health]!.tone}>{HEALTH[update.health]!.label}</Badge>
+                  <Tag variant={HEALTH[update.health]!.tone}>{HEALTH[update.health]!.label}</Tag>
                 )}
                 <span className="spacer" />
                 <span className="t-caption" title={update.at}>
@@ -637,7 +687,7 @@ export function GoalCheckIns({
           why — the engine never infers one from progress.
         </div>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -681,7 +731,7 @@ export function GoalPeek({ id }: { id: string }) {
 
   return (
     <>
-      {loading && !data && <Skeleton rows={6} />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the goal" />}
       <QueryState error={error} loading={loading}>
         {data &&
           (goal ? (
@@ -699,22 +749,27 @@ export function GoalPeek({ id }: { id: string }) {
                     one. "Is this the one I meant" is the question the rail
                     answers, and a description that is simply missing from the
                     panel reads as one the reader failed to scroll to. */}
-                <Panel title="Outcome" icon="target">
+                <Card>
+                  <Card.Header icon={<TargetGlyph size="sm" />}>
+                    <Card.Title>Outcome</Card.Title>
+                  </Card.Header>
                   {goal.description ? (
                     <p className="t-body measure">{goal.description}</p>
                   ) : (
                     <span className="muted">No description is written for this goal.</span>
                   )}
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Targets"
-                  icon="check"
-                  count={goal.targets?.length ?? 0}
-                  subtitle="what says whether the outcome moved"
-                >
+                <Card>
+                  <Card.Header
+                    icon={<CheckGlyph size="sm" />}
+                    count={goal.targets?.length ?? 0}
+                    subtitle="what says whether the outcome moved"
+                  >
+                    <Card.Title>Targets</Card.Title>
+                  </Card.Header>
                   <GoalTargets goal={goal} />
-                </Panel>
+                </Card>
 
                 <GoalCheckIns goal={goal} seatName={seatName} now={now} latest />
               </div>
@@ -724,7 +779,12 @@ export function GoalPeek({ id }: { id: string }) {
             // goal id reaches this from a pasted URL and from a bookmark as
             // often as from a row, so the honest answer names the id that
             // resolved to nothing and says what its absence means.
-            <Empty inline icon="target" title={`No goal with id “${id}”`} hint={NO_GOAL_HINT} />
+            <EmptyState
+              size="compact"
+              icon={<TargetGlyph size="xl" />}
+              title={`No goal with id “${id}”`}
+              description={NO_GOAL_HINT}
+            />
           ))}
       </QueryState>
     </>

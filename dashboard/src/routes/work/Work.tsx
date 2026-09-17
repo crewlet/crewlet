@@ -35,7 +35,7 @@
  * Back means "off this list" rather than "untick one".
  */
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { buildHash, href, useParam, useRoute } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -57,21 +57,46 @@ import {
 } from "~/components/work.tsx";
 import { TimelineView } from "~/components/timeline.tsx";
 import {
-  Badge,
-  Banner,
+  BarList,
   Button,
-  Chip,
+  Callout,
+  Card,
   cx,
-  Empty,
-  Meter,
-  Panel,
-  SearchInput,
-  Segmented,
+  DATA_COLOR_OTHER,
+  dataColor,
+  EmptyState,
+  FilterChip,
+  IconButton,
+  Input,
+  Legend,
   Select,
   Skeleton,
+  StackedBar,
   Tabs,
-} from "~/ui/primitives.tsx";
-import { BarList, StackedBar, Legend } from "~/ui/charts.tsx";
+  Tag,
+} from "@crewlethq/ui";
+import {
+  CalendarTodayGlyph,
+  ChevronLeftGlyph,
+  ChevronRightGlyph,
+  CloseGlyph,
+  DashboardGlyph,
+  ListGlyph,
+  SearchGlyph,
+  TimelineGlyph,
+} from "@crewlethq/icons/glyphs";
+// OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics`: `radio` selects as the arrows move, `tabs` is manual but
+// demands a `panelId` naming a TabPanel this row does not control. The scope
+// row drives a `useParam` that re-runs the board's query, which is exactly
+// what our own `activate="manual"` exists for — arrowing across three options
+// would ask the engine three times.
+import { Segmented } from "~/ui/primitives.tsx";
+// AND OURS FOR THE METER, because the sprint bar below carries a VALUE and no
+// visible label: their legend is all-or-nothing (`hideLabel` hides the value
+// text with the label), and their `meterTone` welds in the polarity "full is
+// bad", so a delivered sprint would draw red. See the report.
+import { Meter } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -123,13 +148,22 @@ import type {
   WorkView,
 } from "~/protocol/index.ts";
 
-/** The icon a view's tab wears, by what it draws. */
-const VIEW_ICON = {
-  list: "menu",
-  board: "columns",
-  calendar: "calendar",
-  timeline: "activity",
+/** The glyph a view's tab wears, by what it draws.
+ *
+ *  A COMPONENT RATHER THAN A NAME, which is the whole of the icon change: the
+ *  tab strip takes a rendered node, so the table holds the glyphs themselves
+ *  and an unknown shape falls through to the list mark. */
+const VIEW_GLYPH = {
+  list: ListGlyph,
+  board: DashboardGlyph,
+  calendar: CalendarTodayGlyph,
+  timeline: TimelineGlyph,
 } as const;
+
+function viewGlyph(type: string): ReactNode {
+  const Glyph = VIEW_GLYPH[type as keyof typeof VIEW_GLYPH] ?? ListGlyph;
+  return <Glyph size="sm" />;
+}
 
 export function Work({ project = "" }: { project?: string }) {
   const org = useOrg();
@@ -399,58 +433,96 @@ export function Work({ project = "" }: { project?: string }) {
           <Tabs
             ariaLabel="Views"
             value={chosenView}
-            onChange={(key) => applyView(views.find((v) => v.key === key) ?? views[0]!)}
-            options={views.map((v) => ({
+            onValueChange={(key) => applyView(views.find((v) => v.key === key) ?? views[0]!)}
+            items={views.map((v) => ({
               value: v.key,
               label: `${v.pinned ? "★ " : ""}${v.name}`,
-              icon: VIEW_ICON[v.type] ?? "menu",
+              icon: viewGlyph(v.type),
             }))}
           />
         )}
 
         <div className="work-filters">
           <div className="work-filters-search">
-            <SearchInput
+            {/* THEIR FIELD, WITH THE GLYPH IN ITS LEADING SLOT — which is
+                what our own `SearchInput` was: an input, a mark and a name. */}
+            <Input
+              type="search"
+              width="full"
               value={q}
-              onChange={setQ}
-              ariaLabel="Find an item by key or title"
+              onChange={(e) => setQ(e.target.value)}
+              aria-label="Find an item by key or title"
+              leading={<SearchGlyph size="sm" />}
               placeholder="Key or title"
             />
           </div>
+          {/* EVERY "ANY" ROW IS AN OPTION RATHER THAN A PLACEHOLDER. Their
+              `placeholder` only labels an empty trigger, and a reader who has
+              chosen needs a row to choose their way back out of. */}
           <Select
+            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+            // `width: 100%` unless told otherwise, and its own doc says why that
+            // is wrong here: "a filter row of full-width selects is one question
+            // per line, which is not what a filter bar is".
+            width="auto"
             value={status}
-            onChange={setStatus}
+            onChange={(value) => setStatus(String(value))}
             ariaLabel="Status"
-            anyLabel="Any status"
-            options={STATUSES.map((s) => ({
-              value: s.value,
-              label: statusLabel(s.value, detail?.statuses),
-            }))}
+            active={status !== ""}
+            options={[
+              { value: "", label: "Any status" },
+              ...STATUSES.map((s) => ({
+                value: s.value,
+                label: statusLabel(s.value, detail?.statuses),
+              })),
+            ]}
           />
           {(catalogue.data?.types ?? []).length > 0 && (
             <Select
+              // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+              // `width: 100%` unless told otherwise, and its own doc says why that
+              // is wrong here: "a filter row of full-width selects is one question
+              // per line, which is not what a filter bar is".
+              width="auto"
               value={type}
-              onChange={setType}
+              onChange={(value) => setType(String(value))}
               ariaLabel="Type"
-              anyLabel="Any type"
-              options={(catalogue.data?.types ?? [])
-                .filter((t) => !t.archived)
-                .map((t) => ({ value: t.slug, label: t.name }))}
+              active={type !== ""}
+              options={[
+                { value: "", label: "Any type" },
+                ...(catalogue.data?.types ?? [])
+                  .filter((t) => !t.archived)
+                  .map((t) => ({ value: t.slug, label: t.name })),
+              ]}
             />
           )}
           <Select
+            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+            // `width: 100%` unless told otherwise, and its own doc says why that
+            // is wrong here: "a filter row of full-width selects is one question
+            // per line, which is not what a filter bar is".
+            width="auto"
             value={priority}
-            onChange={setPriority}
+            onChange={(value) => setPriority(String(value))}
             ariaLabel="Priority"
-            anyLabel="Any priority"
-            options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+            active={priority !== ""}
+            options={[
+              { value: "", label: "Any priority" },
+              ...PRIORITIES.map((p) => ({ value: p, label: p })),
+            ]}
           />
           <Select
+            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+            // `width: 100%` unless told otherwise, and its own doc says why that
+            // is wrong here: "a filter row of full-width selects is one question
+            // per line, which is not what a filter bar is".
+            width="auto"
             value={assignee}
-            onChange={setAssignee}
+            onChange={(value) => setAssignee(String(value))}
             ariaLabel="Assignee"
-            anyLabel="Anybody"
+            active={assignee !== ""}
             options={[
+              { value: "", label: "Anybody" },
               // UNASSIGNED IS A VALUE, not a missing filter — it is the one
               // question a lead actually opens a board to ask.
               { value: "none", label: "Unassigned" },
@@ -459,11 +531,17 @@ export function Work({ project = "" }: { project?: string }) {
           />
           {project && detail?.sprints && (
             <Select
+              // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+              // `width: 100%` unless told otherwise, and its own doc says why that
+              // is wrong here: "a filter row of full-width selects is one question
+              // per line, which is not what a filter bar is".
+              width="auto"
               value={sprint}
-              onChange={setSprint}
+              onChange={(value) => setSprint(String(value))}
               ariaLabel="Sprint"
-              anyLabel="Any sprint"
+              active={sprint !== ""}
               options={[
+                { value: "", label: "Any sprint" },
                 { value: "active", label: "Active sprint" },
                 { value: "next", label: "Next sprint" },
                 { value: "none", label: "Backlog" },
@@ -476,29 +554,42 @@ export function Work({ project = "" }: { project?: string }) {
           )}
           {shape !== "calendar" && (
             <Select
+              // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+              // `width: 100%` unless told otherwise, and its own doc says why that
+              // is wrong here: "a filter row of full-width selects is one question
+              // per line, which is not what a filter bar is".
+              width="auto"
               value={groupBy}
               onChange={(value) => {
-                setGroupBy(value);
+                setGroupBy(String(value));
                 // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the
                 // axis changes it narrows the board to a key the new axis
                 // has never heard of, which answers nothing.
                 setGroup("");
               }}
               ariaLabel="Group by"
-              anyLabel={shape === "board" ? "By status" : "No grouping"}
-              options={GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
-                value: a.value,
-                label: a.label,
-              }))}
+              active={groupBy !== ""}
+              options={[
+                { value: "", label: shape === "board" ? "By status" : "No grouping" },
+                ...GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
+                  value: a.value,
+                  label: a.label,
+                })),
+              ]}
             />
           )}
           {shape === "list" && (
             <Select
+              // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+              // `width: 100%` unless told otherwise, and its own doc says why that
+              // is wrong here: "a filter row of full-width selects is one question
+              // per line, which is not what a filter bar is".
+              width="auto"
               value={sort}
-              onChange={setSort}
+              onChange={(value) => setSort(String(value))}
               ariaLabel="Sort"
-              anyLabel="Default order"
-              options={SORTS}
+              active={sort !== ""}
+              options={[{ value: "", label: "Default order" }, ...SORTS]}
             />
           )}
           {/* THREE SEGMENTS, not a checkbox: "open", "closed" and
@@ -515,22 +606,27 @@ export function Work({ project = "" }: { project?: string }) {
               { value: "", label: "All" },
             ]}
           />
-          <Chip
-            on={filters.blocked}
+          <FilterChip
+            pressed={filters.blocked}
             onClick={() => setBlocked(filters.blocked ? "" : "true")}
             title="Only work that cannot move"
           >
             Blocked
-          </Chip>
-          <Chip
-            on={filters.overdue}
+          </FilterChip>
+          <FilterChip
+            pressed={filters.overdue}
             onClick={() => setOverdue(filters.overdue ? "" : "true")}
             title="Only open work past its due date"
           >
             Overdue
-          </Chip>
+          </FilterChip>
           {anyFilter(filters) && (
-            <Button size="sm" variant="ghost" icon="x" onClick={clearFilters}>
+            <Button
+              size="small"
+              variant="tertiary"
+              leadingIcon={<CloseGlyph size="sm" />}
+              onClick={clearFilters}
+            >
               Clear
             </Button>
           )}
@@ -546,29 +642,33 @@ export function Work({ project = "" }: { project?: string }) {
         </div>
 
         {group && groups.length > 0 && (
-          <Banner tone="info">
+          <Callout
+            variant="info"
+            action={
+              <Button size="small" variant="tertiary" onClick={() => setGroup("")}>
+                Show every column
+              </Button>
+            }
+          >
             Showing one column of this board.
-            <Button size="sm" variant="ghost" onClick={() => setGroup("")}>
-              Show every column
-            </Button>
-          </Banner>
+          </Callout>
         )}
         {data?.groups_overlap && (
-          <Banner tone="info">
+          <Callout variant="info">
             One item can be on several of these columns, so the counts add up to more than the
             total.
-          </Banner>
+          </Callout>
         )}
         {data?.groups_dropped ? (
-          <Banner tone="caution">
+          <Callout variant="warning">
             {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit and
             are not shown. Narrow the board to bring them into range.
-          </Banner>
+          </Callout>
         ) : null}
 
         <div className="work-body">
           <div className="col gap-4" style={{ minWidth: 0 }}>
-            {loading && !data && <Skeleton rows={6} />}
+            {loading && !data && <Skeleton variant="text" rows={6} label="Loading the board" />}
 
             <QueryState
               error={error}
@@ -761,17 +861,19 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
 
   return (
     <>
-      {state.loading && !state.data && <Skeleton rows={6} />}
+      {state.loading && !state.data && (
+        <Skeleton variant="text" rows={6} label="Loading the project" />
+      )}
       <QueryState error={state.error} loading={state.loading}>
         {detail && (
           <>
             <ObjectHeader
               size="peek"
               kind="Project"
-              icon="columns"
+              icon="view_column"
               identifier={detail.key}
               title={detail.name}
-              status={detail.archived ? <Badge outline>archived</Badge> : undefined}
+              status={detail.archived ? <Tag appearance="outline">archived</Tag> : undefined}
               facts={projectFacts(detail, chrome)}
             />
             <div className="col gap-3">
@@ -782,7 +884,10 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                   and a purpose is the sentence that answers it. */}
               {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
 
-              <Panel title="Where the work stands" icon="columns">
+              <Card>
+                <Card.Header icon={<DashboardGlyph size="sm" />}>
+                  <Card.Title>Where the work stands</Card.Title>
+                </Card.Header>
                 <div className="col gap-3">
                   {/* A BAR OF NOTHING IS NOT A CENSUS — three zero segments
                       draw an empty track that reads as a chart which failed
@@ -818,21 +923,28 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                     )}
                   </QueryState>
                 </div>
-              </Panel>
+              </Card>
 
-              <Panel
-                title={sprintLabel(detail)}
-                icon="calendar"
-                subtitle="what the team committed to, and how much of it has landed"
-              >
+              <Card>
+                <Card.Header
+                  icon={<CalendarTodayGlyph size="sm" />}
+                  subtitle="what the team committed to, and how much of it has landed"
+                >
+                  <Card.Title>{sprintLabel(detail)}</Card.Title>
+                </Card.Header>
                 <SprintFigure detail={detail} />
-              </Panel>
+              </Card>
 
-              <Panel
-                title="Recent activity"
-                icon="activity"
-                count={feed.data ? records.length : null}
-              >
+              <Card>
+                <Card.Header
+                  icon={<TimelineGlyph size="sm" />}
+                  // A NULL COUNT IS NO COUNT, which is the read still being in
+                  // flight rather than a feed with nothing in it. Theirs takes
+                  // `undefined` for that, so the null is converted here.
+                  count={feed.data ? records.length : undefined}
+                >
+                  <Card.Title>Recent activity</Card.Title>
+                </Card.Header>
                 <QueryState error={feed.error} loading={feed.loading}>
                   {feed.data &&
                     (records.length > 0 ? (
@@ -865,7 +977,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                       <span className="muted">Nothing has changed in this project yet.</span>
                     ))}
                 </QueryState>
-              </Panel>
+              </Card>
             </div>
           </>
         )}
@@ -883,11 +995,11 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
  */
 function NoSuchProject({ projectKey }: { projectKey: string }) {
   return (
-    <Empty
-      inline
-      icon="columns"
+    <EmptyState
+      size="compact"
+      icon={<DashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
-      hint="A project key is declared by a unit in the company configuration. Either it never existed, or the unit that declared it has since been renamed — the workspace list is what this company actually has."
+      description="A project key is declared by a unit in the company configuration. Either it never existed, or the unit that declared it has since been renamed — the workspace list is what this company actually has."
     />
   );
 }
@@ -941,13 +1053,19 @@ export function WorkspaceHead({
         <Fact label="Closed">{counts.closed}</Fact>
       </div>
       {projects.length > 1 && (
-        <Panel title="Open work by project" icon="columns" padding="normal">
+        <Card>
+          <Card.Header icon={<DashboardGlyph size="sm" />}>
+            <Card.Title>Open work by project</Card.Title>
+          </Card.Header>
           <BarList
             data={projectsByOpen(projects).map((p) => ({
+              // THEIR BAR IS KEYED ON AN `id`, and a project key is the one
+              // stable thing a row here has.
+              id: p.key,
               // THE LINK IS THE LABEL, not the bar.
               //
-              // A row that carried both an `href` and an `onClick` would do
-              // BOTH on a plain click: `BarDatum` hands its `onClick` no
+              // A row that carried both an `href` and an `onSelect` would do
+              // BOTH on a plain click: `BarDatum` hands its `onSelect` no
               // event, so nothing there can call `preventDefault`, and the
               // anchor's own navigation would land on the project's page a
               // moment after the rail opened. Moving the anchor inside the
@@ -968,11 +1086,11 @@ export function WorkspaceHead({
               value: p.task_counts.open,
               display: p.task_counts.open,
               sub: `${p.task_counts.done} done · ${p.task_counts.closed} closed`,
-              color: "var(--viz-1)",
+              color: dataColor(0),
             }))}
             emptyLabel="No project holds any open work."
           />
-        </Panel>
+        </Card>
       )}
     </>
   );
@@ -1007,10 +1125,10 @@ export function ProjectHead({
           a `truncate`d inline box, which is no bar at all. */}
       <ObjectHeader
         kind="Project"
-        icon="columns"
+        icon="view_column"
         identifier={detail.key}
         title={detail.name}
-        status={detail.archived ? <Badge outline>archived</Badge> : undefined}
+        status={detail.archived ? <Tag appearance="outline">archived</Tag> : undefined}
         facts={projectFacts(detail, chrome)}
       />
       {detail.purpose && <p className="t-body measure">{detail.purpose}</p>}
@@ -1084,16 +1202,16 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
       {/* A UNIT THE CHART NO LONGER HAS is a finding, not a blank: it is what
           leaves a project's work routed to nobody. */}
       {!detail.unit.resolved && (
-        <Banner tone="caution">
+        <Callout variant="warning">
           This project names the unit <span className="mono">{detail.unit.key}</span>, which the
           current org chart does not have — work filed here routes to nobody.
-        </Banner>
+        </Callout>
       )}
       {pending.length > 0 && (
-        <Banner tone="caution">
+        <Callout variant="warning">
           Sprint{pending.length === 1 ? "" : "s"} {pending.join(", ")} closed with the spillover
           still undecided — the unfinished work is waiting on a lead.
-        </Banner>
+        </Callout>
       )}
     </>
   );
@@ -1107,15 +1225,18 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
  * an unlabelled stack of three colours is three colours.
  */
 function ProjectCensus({ counts }: { counts: WorkTaskCounts }) {
+  // AN `id` PER SEGMENT, which is what both of their components key on — and
+  // it is the status word rather than the position, so a census that gains a
+  // fourth group later does not renumber the three that were there.
   const segments = [
-    { label: "Open", value: counts.open, color: "var(--info)" },
-    { label: "Done", value: counts.done, color: "var(--positive)" },
-    { label: "Closed", value: counts.closed, color: "var(--viz-other)" },
+    { id: "open", label: "Open", value: counts.open, color: "var(--info)" },
+    { id: "done", label: "Done", value: counts.done, color: "var(--positive)" },
+    { id: "closed", label: "Closed", value: counts.closed, color: DATA_COLOR_OTHER },
   ];
   return (
     <>
       <StackedBar segments={segments} />
-      <Legend items={segments.map(({ label, color }) => ({ label, color }))} />
+      <Legend items={segments.map(({ id, label, color }) => ({ id, label, color }))} />
     </>
   );
 }
@@ -1362,7 +1483,7 @@ export function List({
     return (
       <div className="col gap-3">
         {groups.map((group) => (
-          <Panel key={group.key || "—"} padding="none">
+          <Card key={group.key || "—"} padding="none">
             <header className="work-group-head">
               <span className="truncate">
                 {groupLabel(axis, group, {
@@ -1395,14 +1516,14 @@ export function List({
                 </a>
               </div>
             )}
-          </Panel>
+          </Card>
         ))}
       </div>
     );
   }
   if (rows.length === 0) return null;
   return (
-    <Panel padding="none">
+    <Card padding="none">
       <RowList
         rows={rows}
         now={now}
@@ -1411,7 +1532,7 @@ export function List({
         onOpen={onOpen}
         selected={selected}
       />
-    </Panel>
+    </Card>
   );
 }
 
@@ -1441,25 +1562,29 @@ export function CalendarView({
   const buckets = useMemo(() => bucketByDay(rows), [rows]);
   const undated = rows.length - [...buckets.values()].flat().length;
   return (
-    <Panel padding="none">
+    <Card padding="none">
       <div className="work-cal">
         <div className="work-cal-nav">
-          <Button
+          {/* AN ICON WITH NO LABEL IS AN `IconButton` OVER THERE, and the name
+              is a required prop rather than a `title` a caller remembers. */}
+          <IconButton
             size="sm"
             variant="ghost"
-            icon="chevronLeft"
+            icon={<ChevronLeftGlyph size="sm" />}
+            label="The month before"
             title="The month before"
             onClick={() => onMonth(shiftMonth(month, -1))}
           />
           <span className="work-cal-month">{monthLabel(month)}</span>
-          <Button
+          <IconButton
             size="sm"
             variant="ghost"
-            icon="chevronRight"
+            icon={<ChevronRightGlyph size="sm" />}
+            label="The month after"
             title="The month after"
             onClick={() => onMonth(shiftMonth(month, 1))}
           />
-          <Button size="sm" variant="ghost" onClick={onToday}>
+          <Button size="small" variant="tertiary" onClick={onToday}>
             Today
           </Button>
         </div>
@@ -1518,7 +1643,7 @@ export function CalendarView({
           {undated > 0 ? ` ${undated} of the items on this page carry no due date.` : ""}
         </div>
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -1538,14 +1663,17 @@ export function CalendarView({
 export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; now: number }) {
   if (records.length === 0) return null;
   return (
-    <Panel title="Recent activity" icon="activity" count={records.length} padding="none">
+    <Card padding="none">
+      <Card.Header icon={<TimelineGlyph size="sm" />} count={records.length}>
+        <Card.Title>Recent activity</Card.Title>
+      </Card.Header>
       {records.map((record) => (
         <div key={record.id} className="work-feed-row">
           <span className="work-feed-when" title={fmtDateTime(record.at)}>
             {relTime(record.at, now)}
           </span>
           <span className="work-feed-kind">
-            <Badge outline>{record.kind.replaceAll("_", " ")}</Badge>
+            <Tag appearance="outline">{record.kind.replaceAll("_", " ")}</Tag>
           </span>
           <span>
             {record.subject_key ? (
@@ -1560,7 +1688,7 @@ export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; 
           <span className="work-feed-who">{record.actor || "the engine"}</span>
         </div>
       ))}
-    </Panel>
+    </Card>
   );
 }
 

@@ -11,8 +11,15 @@
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Card, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import {
+  ChevronRightGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  ScheduleGlyph,
+  TimelineGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -105,17 +112,22 @@ export function TraceScreen({ traceId }: { traceId: string }) {
       <PageActions>
         {
           <>
-            <Badge outline>{events.length} events</Badge>
-            {truncated && <Badge tone="caution">oldest {events.length} shown</Badge>}
+            <Tag appearance="outline">{events.length} events</Tag>
+            {truncated && <Tag variant="warning">oldest {events.length} shown</Tag>}
           </>
         }
         {
-          <Button size="sm" icon="activity" onClick={() => nav.to(["activity"], { q: traceId })}>
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<TimelineGlyph size="xs" />}
+            onClick={() => nav.to(["activity"], { q: traceId })}
+          >
             In the log
           </Button>
         }
       </PageActions>
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the trace" />}
 
       {/* THE OBJECT'S OWN HEADER, and the trace id with it. The id used to be
           a lone `PageNote` under the page bar — the hand-rolled half of what
@@ -125,7 +137,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           numbers wherever they meet this trace again. */}
       <ObjectHeader
         kind="Trace"
-        icon="gitBranch"
+        icon="fork_right"
         identifier={traceId}
         title={opening?.summary || opening?.type || "Trace"}
         facts={facts}
@@ -148,34 +160,35 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             trace, the wall clock the elapsed time spans, and whether anything
             in it failed. That is the half a fact line has no room for, and it
             is what a reader chasing a number they distrust actually reads. */}
-        <Panel padding="none">
-          <StatRow cols={3}>
-            <Stat
-              icon="layers"
-              label="Spans"
-              value={events.length}
-              sub="events sharing this trace"
-            />
-            <Stat
-              icon="clock"
-              label="Elapsed"
-              value={to > from ? fmtDuration(to - from) : "—"}
-              sub={
-                from
-                  ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
-                  : ""
-              }
-            />
-            <Stat
-              icon="alert"
-              label="Failures"
-              value={failed}
-              sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
-            />
-          </StatRow>
-        </Panel>
+        <StatGroup columns={3}>
+          <StatCard
+            icon={<LayersGlyph size="xs" />}
+            label="Spans"
+            value={events.length}
+            sub="events sharing this trace"
+          />
+          <StatCard
+            icon={<ScheduleGlyph size="xs" />}
+            label="Elapsed"
+            value={to > from ? fmtDuration(to - from) : "—"}
+            sub={
+              from
+                ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
+                : ""
+            }
+          />
+          <StatCard
+            icon={<ErrorGlyph size="xs" />}
+            label="Failures"
+            value={failed}
+            sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
+          />
+        </StatGroup>
 
-        <Panel title="Spans" icon="gitBranch" padding="none">
+        <Card padding="none">
+          <Card.Header icon={<ForkRightGlyph size="sm" />}>
+            <Card.Title>Spans</Card.Title>
+          </Card.Header>
           <div className="list">
             {rows.map(({ event, depth }) => {
               // The bar's offset and width place the span inside the trace's
@@ -214,7 +227,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                   </span>
                   <span className="feed-tail">
                     <span className="faint">{humanize(event.category)}</span>
-                    <Icon name="chevronRight" size="xs" />
+                    <ChevronRightGlyph size="xs" />
                   </span>
                 </a>
               );
@@ -224,7 +237,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             Spans whose parent is not in this trace are shown as roots rather than dropped — a trace
             can legitimately begin mid-flight.
           </footer>
-        </Panel>
+        </Card>
 
         {events[0] && (
           <div className="row">

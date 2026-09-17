@@ -109,7 +109,7 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
     />,
   );
   expect(held.container.querySelector(".work-nobody")).toBeNull();
-  expect(held.container.querySelector(".avatar")?.textContent).toBe("AL");
+  expect(held.container.querySelector(".crewlet-avatar")?.textContent).toBe("AL");
 });
 
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
@@ -328,14 +328,19 @@ const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
 // A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS, and the bar carries
 // its own legend: an unlabelled stack of three colours is three colours.
 test("the census bar is drawn with its legend, and only where there is work", () => {
+  // THE CENSUS IS DRAWN OUT OF THE DESIGN SYSTEM'S OWN PARTS NOW, so the two
+  // selectors are theirs: `.stackbar`/`.legend` were our recipes' classes and
+  // no longer exist. What is asserted is unchanged — a bar, and a key beside
+  // it — and the legend is a real `role="list"` over there, which is what the
+  // second selector could have been written against instead.
   const { container } = render(<ProjectHead detail={project()} />);
-  expect(container.querySelector(".stackbar")).toBeTruthy();
-  expect(container.querySelector(".legend")).toBeTruthy();
+  expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy();
+  expect(container.querySelector(".crewlet-legend")).toBeTruthy();
   cleanup();
   const fresh = render(
     <ProjectHead detail={project({ task_counts: { open: 0, done: 0, closed: 0 } })} />,
   );
-  expect(fresh.container.querySelector(".stackbar")).toBeNull();
+  expect(fresh.container.querySelector(".crewlet-stacked-bar")).toBeNull();
 });
 
 // THE WORKSPACE RANKS ITS PROJECTS BY OPEN WORK, in ONE hue: a hue per project
@@ -363,9 +368,14 @@ test("the workspace chart ranks projects by open work in a single hue", () => {
   const { container } = render(<WorkspaceHead projects={projects} />);
   const labels = [...container.querySelectorAll(".key-mark")].map((el) => el.textContent);
   expect(labels).toEqual(["ENG", "OPS"]);
-  const fills = [...container.querySelectorAll(".meter-track > div")].map(
-    (el) => (el as HTMLElement).style.background,
+  // ONE HUE STILL, read where their `BarList` puts it: the bar's colour is a
+  // custom property on the fill rather than a `background` on a child div, so
+  // the selector and the read both move to theirs. `.meter-track > div` was
+  // our own chart's markup and is gone with it.
+  const fills = [...container.querySelectorAll(".crewlet-bar-list__bar")].map((el) =>
+    (el as HTMLElement).style.getPropertyValue("--crewlet-bar-list-bar-color"),
   );
+  expect(fills.length).toBe(2);
   expect(new Set(fills).size).toBe(1);
 });
 
@@ -386,7 +396,10 @@ test("a single project draws its facts and no comparison", () => {
       ]}
     />,
   );
-  expect(container.querySelector(".meter-track")).toBeNull();
+  // NO CHART AT ALL, asserted against their bar list rather than against our
+  // old track class — a company with one project gets the facts and nothing
+  // to compare them with.
+  expect(container.querySelector(".crewlet-bar-list")).toBeNull();
   expect(screen.getByText("Projects")).toBeTruthy();
 });
 
@@ -414,7 +427,7 @@ test("a list row carries the same facts a card does", () => {
   expect(screen.getByText("Blocked")).toBeTruthy();
   expect(container.querySelector('.work-prio[data-priority="urgent"]')).toBeTruthy();
   expect(container.querySelector(".work-due.overdue")).toBeTruthy();
-  expect(container.querySelector(".avatar")?.textContent).toBe("AL");
+  expect(container.querySelector(".crewlet-avatar")?.textContent).toBe("AL");
 });
 
 // A ROW IS A TABLE, so a row missing a value keeps the COLUMN. Every cell

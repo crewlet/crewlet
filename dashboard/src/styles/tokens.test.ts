@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -35,11 +36,32 @@ import { describe, expect, test } from "vitest";
  */
 
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
+const require_ = createRequire(import.meta.url);
 
+/**
+ * Where a custom property can be declared: our sheets, and uilet's.
+ *
+ * THE DESIGN SYSTEM IS A DECLARATION SOURCE, not a black box. `uilet.css`
+ * resolves our short names onto `--spacing-*`, `--color-*` and the rest, and
+ * those are declared in `@crewlethq/tokens` rather than here — so a gate
+ * reading only this directory would call every one of them undeclared, which
+ * is the opposite of what it is for.
+ *
+ * READ FROM THE INSTALLED PACKAGE, not from a copy or a list. That is what
+ * keeps the check honest across a bump: if 0.4.0 renames `--spacing-7`, the
+ * alias pointing at it fails here rather than resolving to nothing in a
+ * browser, where an unset custom property is simply an empty value and a
+ * padding silently becomes zero.
+ */
 function sheets(): { name: string; text: string }[] {
-  return readdirSync(STYLES)
+  const ours = readdirSync(STYLES)
     .filter((f) => f.endsWith(".css"))
     .map((name) => ({ name, text: readFileSync(join(STYLES, name), "utf8") }));
+  const theirs = ["", "/themes", "/density", "/base"].map((entry) => ({
+    name: `@crewlethq/tokens/css${entry}`,
+    text: readFileSync(require_.resolve(`@crewlethq/tokens/css${entry}`), "utf8"),
+  }));
+  return [...ours, ...theirs];
 }
 
 /**

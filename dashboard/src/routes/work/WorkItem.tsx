@@ -37,8 +37,22 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Badge, Button, Empty, Panel, Skeleton, Tabs } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Button, Card, EmptyState, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  CheckGlyph,
+  ChatGlyph,
+  HelpGlyph,
+  GroupGlyph,
+  LinkGlyph,
+  NotificationsGlyph,
+  Package2Glyph,
+  RemoveGlyph,
+  ScheduleGlyph,
+  TimelineGlyph,
+  TuneGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -120,11 +134,11 @@ function itemFlags(detail: WorkItemDetail): ReactNode {
   return (
     <span className="row gap-1">
       {detail.blocked && (
-        <Badge tone="critical" outline>
+        <Tag variant="danger" appearance="outline">
           Blocked
-        </Badge>
+        </Tag>
       )}
-      {item.archived && <Badge outline>Archived</Badge>}
+      {item.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
   );
 }
@@ -301,7 +315,9 @@ export function WorkItem({ id }: { id: string }) {
         ) : undefined}
       </PageActions>
 
-      {state.loading && !state.data && <Skeleton rows={8} />}
+      {state.loading && !state.data && (
+        <Skeleton variant="text" rows={8} label="Loading the item" />
+      )}
 
       <QueryState error={state.error} loading={state.loading}>
         {state.data && item && (
@@ -323,9 +339,12 @@ export function WorkItem({ id }: { id: string }) {
                 <ItemBody detail={state.data} chrome={chrome} now={now} />
               </div>
               <div className="work-item-side">
-                <Panel title="Properties" icon="sliders">
+                <Card>
+                  <Card.Header icon={<TuneGlyph size="sm" />}>
+                    <Card.Title>Properties</Card.Title>
+                  </Card.Header>
                   <ItemProps detail={state.data} chrome={chrome} project={project.data} />
-                </Panel>
+                </Card>
                 <ItemLinks detail={state.data} chrome={chrome} />
               </div>
             </div>
@@ -388,7 +407,9 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
 
   return (
     <>
-      {state.loading && !state.data && <Skeleton rows={6} />}
+      {state.loading && !state.data && (
+        <Skeleton variant="text" rows={6} label="Loading the item" />
+      )}
       <QueryState error={state.error} loading={state.loading}>
         {state.data &&
           (item ? (
@@ -421,11 +442,11 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
             // resolved to nothing rather than drawing a blank rail over the
             // list. A refusal — `not_found` for a key nobody minted — is
             // [QueryState]'s own sentence above.
-            <Empty
-              inline
-              icon="box"
+            <EmptyState
+              size="compact"
+              icon={<Package2Glyph size="xl" />}
               title={`Nothing answers to “${itemKey}”`}
-              hint="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
+              description="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
             />
           ))}
       </QueryState>
@@ -477,14 +498,20 @@ export function Subtasks({
 }) {
   if (error) {
     return (
-      <Panel title="Subtasks" padding="none">
+      <Card padding="none">
+        <Card.Header>
+          <Card.Title>Subtasks</Card.Title>
+        </Card.Header>
         <QueryState error={error} loading={false} />
-      </Panel>
+      </Card>
     );
   }
   if (rows.length === 0) return null;
   return (
-    <Panel title="Subtasks" count={rows.length} padding="none">
+    <Card padding="none">
+      <Card.Header count={rows.length}>
+        <Card.Title>Subtasks</Card.Title>
+      </Card.Header>
       <RowList
         rows={rows}
         now={now}
@@ -492,7 +519,7 @@ export function Subtasks({
         hrefOf={(row) => href(["work", row.key])}
         onOpen={peek}
       />
-    </Panel>
+    </Card>
   );
 }
 
@@ -527,7 +554,14 @@ function BodySection({
       </section>
     );
   }
-  return <Panel title={title}>{children}</Panel>;
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
+      {children}
+    </Card>
+  );
 }
 
 /** The description, the subtasks, the checklists and the thread. */
@@ -601,10 +635,13 @@ export function ItemBody({
       />
 
       {(item.checklists ?? []).map((list) => (
-        <Panel key={list.id} title={list.name} icon="check" count={list.items?.length ?? 0}>
+        <Card key={list.id}>
+          <Card.Header icon={<CheckGlyph size="sm" />} count={list.items?.length ?? 0}>
+            <Card.Title>{list.name}</Card.Title>
+          </Card.Header>
           {(list.items ?? []).map((entry) => (
             <div key={entry.id} className={`work-check${entry.done ? " done" : ""}`}>
-              <Icon name={entry.done ? "check" : "minus"} size="sm" />
+              {entry.done ? <CheckGlyph size="sm" /> : <RemoveGlyph size="sm" />}
               <span className="work-check-name">{entry.name}</span>
               {entry.promoted_to && (
                 <a className="t-link" href={href(["work", entry.promoted_to])}>
@@ -615,17 +652,32 @@ export function ItemBody({
               {entry.assignee && <Assignee handle={entry.assignee} seatName={chrome.seatName} />}
             </div>
           ))}
-        </Panel>
+        </Card>
       ))}
 
-      <Panel padding="tight">
+      <Card padding="tight">
+        {/* THEIR STRIP, AND THE PANEL STAYS A SIBLING. `Tabs` activates on
+            click rather than on arrow, exactly as ours did, so nothing about
+            the keyboard moves. `panelId`/`TabPanel` are deliberately not
+            wired: the three views are siblings here rather than one element,
+            which is the case our own `children` was already optional for. */}
         <Tabs
           ariaLabel="Thread or history"
           value={tab}
-          onChange={setTab}
-          options={[
-            { value: "comments", label: "Thread", icon: "message", count: comments.length },
-            { value: "history", label: "History", icon: "activity", count: history.length },
+          onValueChange={(next) => setTab(next as typeof tab)}
+          items={[
+            {
+              value: "comments",
+              label: "Thread",
+              icon: <ChatGlyph size="sm" />,
+              count: comments.length,
+            },
+            {
+              value: "history",
+              label: "History",
+              icon: <TimelineGlyph size="sm" />,
+              count: history.length,
+            },
             // THE FACT NO OTHER TRACKER RECORDS. Every tracker can say a
             // change notified somebody; this one records, per change and
             // per person, the ONE reason of twenty it reached them under
@@ -633,7 +685,7 @@ export function ItemBody({
             {
               value: "woke",
               label: "Woke",
-              icon: "bell",
+              icon: <NotificationsGlyph size="sm" />,
               count: history.filter((entry) => !entry.quiet).length,
             },
           ]}
@@ -645,7 +697,7 @@ export function ItemBody({
         ) : (
           <History detail={detail} chrome={chrome} now={now} />
         )}
-      </Panel>
+      </Card>
       {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
           it is what to do when somebody wants to change this, not what the
           screen is about. */}
@@ -693,16 +745,16 @@ function Thread({
             {/* AN ASK IS THE ONE STATE IN A THREAD THAT IS ABOUT THE READER:
                 somebody owes it an answer, and it does not block a close. */}
             {comment.ask && (
-              <Badge tone="caution" icon="help">
+              <Tag variant="warning" leadingIcon={<HelpGlyph size="xs" />}>
                 asked {chrome.seatName?.(comment.ask) ?? comment.ask}
-              </Badge>
+              </Tag>
             )}
             {comment.answers && (
-              <Badge tone="info" icon="arrowRight">
+              <Tag variant="info" leadingIcon={<ArrowForwardGlyph size="xs" />}>
                 answers a question
-              </Badge>
+              </Tag>
             )}
-            {comment.resolved && <Badge tone="positive">Resolved</Badge>}
+            {comment.resolved && <Tag variant="success">Resolved</Tag>}
           </div>
           {/* A REMOVED COMMENT KEEPS ITS ROW so replies still resolve against
               something — and says so, rather than rendering as an empty one. */}
@@ -736,7 +788,7 @@ function History({
     <div className="work-hist" style={{ paddingTop: "var(--space-2)" }}>
       {history.map((entry) => (
         <div key={entry.id} className="work-hist-row">
-          <Icon name="activity" size="xs" />
+          <TimelineGlyph size="xs" />
           <span className="truncate">
             <strong>
               {entry.actor ? (chrome.seatName?.(entry.actor) ?? entry.actor) : "the engine"}
@@ -807,11 +859,11 @@ function Woke({
 
   if (announced.length === 0) {
     return (
-      <Empty
-        inline
-        icon="bell"
+      <EmptyState
+        size="compact"
+        icon={<NotificationsGlyph size="xl" />}
         title="Nothing here announced anything"
-        hint="Every change to this item was quiet — a field edit, or part of a bulk call. A quiet commit still writes a history row, which is how you can tell it from nothing having happened."
+        description="Every change to this item was quiet — a field edit, or part of a bulk call. A quiet commit still writes a history row, which is how you can tell it from nothing having happened."
       />
     );
   }
@@ -827,7 +879,7 @@ function Woke({
             onClick={() => onPick(entry.id)}
           >
             <span className="row gap-1">
-              <Icon name="bell" size="xs" />
+              <NotificationsGlyph size="xs" />
               <span className="truncate t-cell" style={{ flex: 1 }}>
                 <strong>
                   {entry.actor ? (chrome.seatName?.(entry.actor) ?? entry.actor) : "the engine"}
@@ -867,18 +919,18 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
   return (
     <div className="col gap-2">
       <div className="row gap-1 wrap">
-        <Badge outline>
+        <Tag appearance="outline">
           {answer.recipients.length} {answer.recipients.length === 1 ? "person" : "people"}
-        </Badge>
+        </Tag>
         {answer.addressed > 0 && (
-          <Badge tone="accent" title="asked something, rather than merely informed">
+          <Tag variant="brand" title="asked something, rather than merely informed">
             {answer.addressed} asked
-          </Badge>
+          </Tag>
         )}
         {answer.fallback > 0 && (
-          <Badge outline title="reached only because nobody better was found">
+          <Tag appearance="outline" title="reached only because nobody better was found">
             {answer.fallback} by fallback
-          </Badge>
+          </Tag>
         )}
       </div>
       {shared && <p className="t-caption faint">{shared}</p>}
@@ -893,13 +945,16 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
                   IN THE THIRD PERSON — this list is about colleagues, and
                   `reasonPhrase`'s "assigned to you" beside somebody else's
                   name is a sentence about the wrong person. */}
-              <Badge tone={r.addressed ? "accent" : undefined} outline={!r.addressed}>
+              <Tag
+                variant={r.addressed ? "brand" : "neutral"}
+                appearance={r.addressed ? "soft" : "outline"}
+              >
                 {reasonAbout(r.reason)}
-              </Badge>
+              </Tag>
               {r.fallback && (
-                <Badge outline title="nobody better was found">
+                <Tag appearance="outline" title="nobody better was found">
                   substitute{r.fallback_rank ? ` #${r.fallback_rank}` : ""}
-                </Badge>
+                </Tag>
               )}
             </div>
             {!shared && r.excerpt && <p className="t-caption faint">{r.excerpt}</p>}
@@ -920,21 +975,21 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
 function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
   if (!answer.held) {
     return (
-      <Empty
-        inline
-        icon="help"
+      <EmptyState
+        size="compact"
+        icon={<HelpGlyph size="xl" />}
         title="No such change here"
-        hint="A record id this node holds no history row for — a link from before a purge, or a reanchor that has not replayed this far."
+        description="A record id this node holds no history row for — a link from before a purge, or a reanchor that has not replayed this far."
       />
     );
   }
   if (answer.delivery === "swept") {
     return (
-      <Empty
-        inline
-        icon="clock"
+      <EmptyState
+        size="compact"
+        icon={<ScheduleGlyph size="xl" />}
         title="Beyond the retention window"
-        hint={`This change announced something, and it is older than ${
+        description={`This change announced something, and it is older than ${
           answer.retained_from ? fmtDateTime(answer.retained_from) : "the inbox horizon"
         } — so whether anybody was reached is a fact this node no longer holds. The history it points at is untouched.`}
       />
@@ -942,20 +997,20 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
   }
   if (answer.delivery === "unknown") {
     return (
-      <Empty
-        inline
-        icon="help"
+      <EmptyState
+        size="compact"
+        icon={<HelpGlyph size="xl" />}
         title="Cannot say"
-        hint="This change announced something and no recipients remain, and this node was not told how long an inbox is kept — so an absent set cannot be dated."
+        description="This change announced something and no recipients remain, and this node was not told how long an inbox is kept — so an absent set cannot be dated."
       />
     );
   }
   return (
-    <Empty
-      inline
-      icon="users"
+    <EmptyState
+      size="compact"
+      icon={<GroupGlyph size="xl" />}
       title="It announced, and reached nobody"
-      hint="Every candidate was the person making the change, or has left the company. The notification was formed and had nowhere to go — which is a different fact from a quiet commit, and the only place it is visible."
+      description="Every candidate was the person making the change, or has left the company. The notification was formed and had nowhere to go — which is a different fact from a quiet commit, and the only place it is visible."
     />
   );
 }
@@ -1140,9 +1195,9 @@ export function ItemProps({
                 value: (
                   <span className="row wrap gap-1">
                     {(item.tags ?? []).map((slug) => (
-                      <Badge key={slug} outline>
+                      <Tag key={slug} appearance="outline">
                         {project?.tags?.find((t) => t.slug === slug)?.label ?? slug}
-                      </Badge>
+                      </Tag>
                     ))}
                   </span>
                 ),
@@ -1186,7 +1241,7 @@ export function ItemProps({
             value: (
               <span className="row gap-1">
                 {item.reassignments ?? 0}
-                {(item.reassignments ?? 0) >= 6 && <Icon name="alert" size="xs" />}
+                {(item.reassignments ?? 0) >= 6 && <WarningGlyph size="xs" />}
               </span>
             ),
           },
@@ -1294,14 +1349,14 @@ export function ItemLinks({
                   a commit the tracker duty writes 30 seconds later, the second
                   is an edge whose mirror was refused for good. */}
               {link.one_sided && !link.one_sided_final && (
-                <Badge tone="info" title="The duty writes the other half shortly">
+                <Tag variant="info" title="The duty writes the other half shortly">
                   mirror pending
-                </Badge>
+                </Tag>
               )}
               {link.one_sided_final && (
-                <Badge tone="caution" title="The other end is gone, removed, or full">
+                <Tag variant="warning" title="The other end is gone, removed, or full">
                   one-sided
-                </Badge>
+                </Tag>
               )}
             </div>
           ))}
@@ -1319,9 +1374,12 @@ export function ItemLinks({
     );
   }
   return (
-    <Panel title="Links" icon="link" count={links.length}>
+    <Card>
+      <Card.Header icon={<LinkGlyph size="sm" />} count={links.length}>
+        <Card.Title>Links</Card.Title>
+      </Card.Header>
       {body}
-    </Panel>
+    </Card>
   );
 }
 

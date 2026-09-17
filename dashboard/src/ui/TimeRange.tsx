@@ -19,12 +19,18 @@
  * still read left to right the same way.
  */
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { RANGES, RANGE_LABEL, isRange, windowLabel } from "~/lib/range.ts";
 import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Button, Segmented } from "~/ui/primitives.tsx";
+import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
+import { ScheduleGlyph } from "@crewlethq/icons/glyphs";
+// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics` — the arrows commit the option they land on — and this strip
+// drives a `useParam` that re-runs the screen's series query. Arrowing across
+// the offered windows under that control is a query per keypress. Ours
+// activates on Enter or Space and says so. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
 
 /** The custom option's value in the segmented group — not a [Range]. */
 const CUSTOM = "custom";
@@ -117,17 +123,31 @@ function CustomWindow({
           : "";
 
   return (
-    <Dialog
+    <Modal
+      open
       title="Custom window"
-      icon="clock"
-      width={420}
+      icon={<ScheduleGlyph size="md" />}
+      // 420 IS NOT A STEP AND DOES NOT WANT TO BE. `sm` is 480 and `md` is
+      // 560; two date boxes read in one glance are neither, and there is
+      // nothing else in the product at this width to make a step out of.
+      // `--crewlet-modal-width` is what the package publishes for exactly
+      // this case, and the cast is only because React types no custom
+      // property.
+      style={{ "--crewlet-modal-width": "420px" } as CSSProperties}
+      // WHAT `.dialog-body col gap-3` USED TO BE, as a prop rather than as
+      // two classes on a body this file no longer owns.
+      stackBody
       onClose={onClose}
       onSubmit={() => {
         if (!problem && at !== null && till !== null) onPick({ from: at, to: till });
       }}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          {/* TERTIARY, NOT THE DEFAULT. uilet's Button defaults to `primary`
+              — ours defaulted to the quiet recipe — so a footer that named no
+              variant would put two primary buttons side by side and say
+              nothing about which one commits. */}
+          <Button variant="tertiary" onClick={onClose}>
             Cancel
           </Button>
           <Button
@@ -142,34 +162,45 @@ function CustomWindow({
         </>
       }
     >
-      <div className="col gap-3">
-        <div className="field">
-          <label htmlFor="window-from">From</label>
-          <input
-            id="window-from"
-            className="input"
+      {/* ON uilet's [FormField]. The zone sentence belongs to BOTH boxes and
+            is said once, under the first: it is what "From" and "To" are
+            measured in, not a note about one of them. The component hands each
+            control the id its own label points at, so a second field added
+            here cannot quietly inherit the first one's. */}
+      <FormField label="From" helper="In your own time zone, as every time on this screen is.">
+        {(field) => (
+          <Input
+            id={field.id}
             type="datetime-local"
+            width="full"
             value={start}
+            aria-describedby={field.describedBy}
             onChange={(e) => setStart(e.target.value)}
           />
-          <span className="hint">In your own time zone, as every time on this screen is.</span>
-        </div>
-        <div className="field">
-          <label htmlFor="window-to">To</label>
-          <input
-            id="window-to"
-            className="input"
+        )}
+      </FormField>
+      <FormField label="To">
+        {(field) => (
+          <Input
+            id={field.id}
             type="datetime-local"
+            width="full"
             value={end}
+            aria-describedby={field.describedBy}
             onChange={(e) => setEnd(e.target.value)}
           />
-        </div>
-        {problem && (
-          <div className="banner critical" role="alert">
-            <span>{problem}</span>
-          </div>
         )}
-      </div>
-    </Dialog>
+      </FormField>
+      {problem && (
+        // `role="alert"` rather than `live`, which is what this has always
+        // carried and what uilet's own doc reserves for the one that must
+        // interrupt: it is the sentence standing between the reader and a
+        // disabled Apply, so it has to reach them where they are typing
+        // rather than wait for them to look.
+        <Callout variant="danger" role="alert">
+          {problem}
+        </Callout>
+      )}
+    </Modal>
   );
 }

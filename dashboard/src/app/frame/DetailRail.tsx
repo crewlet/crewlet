@@ -33,7 +33,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useNavigator, useRoute, parseHash, buildHash } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
 import { href } from "../router.tsx";
-import { Button } from "~/ui/primitives.tsx";
+import { ButtonLink, IconButton } from "@crewlethq/ui";
+import {
+  ArrowOutwardGlyph,
+  CloseGlyph,
+  KeyboardArrowDownGlyph,
+  KeyboardArrowUpGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useKeyChords } from "~/lib/keys.ts";
 
 const WIDTH_KEY = "crewlet.peek.width";
@@ -222,29 +228,51 @@ export function DetailRail({
           aria-label="Resize the detail panel"
         />
         <div className="peek-bar">
+          {/* `IconButton` RATHER THAN A LABELLED BUTTON WITH NO LABEL: each of
+              these is a glyph and a tooltip, which is the one thing it is for,
+              and it makes the name a required prop rather than something a
+              `title` happened to supply. */}
           {onStep && (
             <>
-              <Button
+              <IconButton
                 size="sm"
                 variant="ghost"
-                icon="chevronUp"
+                icon={<KeyboardArrowUpGlyph size="sm" />}
+                label="Previous"
                 title="Previous ([)"
                 onClick={() => onStep(-1)}
               />
-              <Button
+              <IconButton
                 size="sm"
                 variant="ghost"
-                icon="chevronDown"
+                icon={<KeyboardArrowDownGlyph size="sm" />}
+                label="Next"
                 title="Next (])"
                 onClick={() => onStep(1)}
               />
             </>
           )}
           <span className="spacer" />
-          <a className="btn sm" href={peekHref(object)}>
-            Open ↗
-          </a>
-          <Button size="sm" variant="ghost" icon="x" title="Close (esc)" onClick={close} />
+          {/* A REAL ANCHOR WEARING THE BUTTON, which is what `.btn` on an `<a>`
+              was spelling by hand — and the arrow is a glyph now rather than
+              the character `↗`. NOT `external`: that withholds the opener and
+              opens a tab, and this goes to the object's own page in this app. */}
+          <ButtonLink
+            size="small"
+            variant="secondary"
+            href={peekHref(object)}
+            trailingIcon={<ArrowOutwardGlyph size="sm" />}
+          >
+            Open
+          </ButtonLink>
+          <IconButton
+            size="sm"
+            variant="ghost"
+            icon={<CloseGlyph size="sm" />}
+            label="Close"
+            title="Close (esc)"
+            onClick={close}
+          />
         </div>
         <div className="peek-body">{children}</div>
       </aside>

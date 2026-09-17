@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, cleanup, act } from "@testing-library/react";
+import { LayerHost, Modal } from "@crewlethq/ui";
 import { PrefixWindow, isTyping, useKeyChords, type Chord, type Sequence } from "./keys.ts";
 
 afterEach(cleanup);
@@ -11,6 +12,22 @@ function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
     window.dispatchEvent(e);
   });
   return e;
+}
+
+/**
+ * Press a key the way the DOM delivers one: at an element, bubbling up.
+ *
+ * `press` above dispatches AT the window, which reaches our own listener and
+ * nothing else — an event dispatched at the window never travels down to a
+ * listener on the document. That is a faithful enough simulation while the
+ * only listener in play is ours, and it stops being one the moment a second
+ * party is listening: uilet's layer stack binds `keydown` on the document, so
+ * a press aimed at the window is invisible to every open surface.
+ */
+function pressFrom(target: Element, key: string): void {
+  act(() => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
 }
 
 function Bound({ chords }: { chords: (Chord | Sequence)[] }) {
@@ -97,6 +114,57 @@ describe("a bare chord", () => {
     field.focus();
     press("Escape");
     expect(escape).toHaveBeenCalledOnce();
+  });
+
+  // A DIALOG'S ESCAPE IS THE DIALOG'S, and this is the one case the event
+  // itself cannot report. uilet's layer stack calls `preventDefault()` on a
+  // press it handled and deliberately not `stopPropagation()`, so the press
+  // still reaches the window listener every chord in this product is bound to
+  // — and the page ran its own escape behind the open surface. In the product
+  // that was a peek rail closing under a dialog, from a press aimed at the
+  // dialog, with the dialog closing too so the gesture looked like it worked.
+  //
+  // Against the REAL stack rather than a mocked predicate: what is being
+  // claimed is that our guard and uilet's ordering agree, and a stub of
+  // `isModalLayerOpen` would assert only that our own `if` does what it says.
+  it("leaves the keyboard to a surface that is on the layer stack", () => {
+    const page = vi.fn();
+    const dismissed = vi.fn();
+    render(
+      <LayerHost>
+        <Bound chords={[{ key: "escape", run: page, whileTyping: true }]} />
+        <Modal open title="A dialog" onClose={dismissed}>
+          <p>Body</p>
+        </Modal>
+      </LayerHost>,
+    );
+    pressFrom(document.body, "Escape");
+    expect(dismissed).toHaveBeenCalledOnce();
+    expect(page).not.toHaveBeenCalled();
+  });
+
+  // AND HANDS IT BACK. A guard that never lifted would be the same bug with
+  // the surfaces swapped: every chord in the product dead for the rest of the
+  // session because one dialog was opened once.
+  it("takes the keyboard back once nothing is on the stack", () => {
+    const page = vi.fn();
+    const { rerender } = render(
+      <LayerHost>
+        <Bound chords={[{ key: "escape", run: page, whileTyping: true }]} />
+        <Modal open title="A dialog" onClose={() => {}}>
+          <p>Body</p>
+        </Modal>
+      </LayerHost>,
+    );
+    pressFrom(document.body, "Escape");
+    expect(page).not.toHaveBeenCalled();
+    rerender(
+      <LayerHost>
+        <Bound chords={[{ key: "escape", run: page, whileTyping: true }]} />
+      </LayerHost>,
+    );
+    pressFrom(document.body, "Escape");
+    expect(page).toHaveBeenCalledOnce();
   });
 
   it("matches the command modifier both ways round", () => {

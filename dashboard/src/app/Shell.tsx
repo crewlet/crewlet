@@ -44,8 +44,8 @@ import {
   useKeptSections,
   useWorkSidebar,
 } from "./workspaces/sidebars.tsx";
-import { Icon } from "~/ui/Icon.tsx";
-import { Badge, Segmented, cx } from "~/ui/primitives.tsx";
+import { SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
+import { ComputerGlyph, DarkModeGlyph, LightModeGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -377,19 +377,30 @@ function ViewerChip() {
   if (viewer.loading) return null;
   if (viewer.anonymous) {
     return (
-      <Badge outline title="No API token is presented; the guarded screens are locked">
+      // NEUTRAL, AND OUTLINED. "anonymous" and an operator id are both
+      // IDENTITY — who the frame thinks you are — and uilet's tone doc draws
+      // the same line this dashboard does: a tone says what a thing IS, never
+      // who it is. The boundary is what separates the chip from the page bar
+      // behind it; a tint would read as a state nobody is in.
+      <Tag appearance="outline" title="No API token is presented; the guarded screens are locked">
         anonymous
-      </Badge>
+      </Tag>
     );
   }
   if (viewer.unbound) {
     return (
-      <Badge
-        outline
+      <Tag
+        appearance="outline"
+        // A TOKEN ID IS A MACHINE VALUE, so it is set in the mono face: the
+        // operator compares it character by character against the one in their
+        // `crewlet.yaml`, which proportional digits make harder than it needs
+        // to be. Ours had `mono` for the same reason and this chip never asked
+        // for it.
+        monospace
         title={`Token ${viewer.operatorID} is not bound to a seat — give a human seat contact.crewlet_operator_id: ${viewer.operatorID}`}
       >
         {viewer.operatorID}
-      </Badge>
+      </Tag>
     );
   }
   return (
@@ -398,8 +409,13 @@ function ViewerChip() {
       href={`#/company/people/${viewer.handle}`}
       title={`@${viewer.handle}`}
     >
+      {/* THE SEAT MARK STAYS OURS. It is the one mark in the product that says
+          human seat rather than agent seat, it is drawn identically in the
+          people list, the peek and the org chart, and uilet's Avatar is a
+          picture of a person rather than a kind-of-seat mark. What changed is
+          what is inside it. */}
       <span className="seat-mark human" aria-hidden="true">
-        <Icon name="user" size="xs" />
+        <PersonGlyph size="xs" />
       </span>
       <span className="truncate">{viewer.name || viewer.handle}</span>
     </a>
@@ -428,7 +444,9 @@ function EngineFooter({
   setDensity: (d: Density) => void;
   collapsed: boolean;
 }) {
-  const tone = connected ? (configured === false ? "caution" : "positive") : "critical";
+  // uilet's tone vocabulary, which is ours renamed: positive → success,
+  // caution → warning, critical → danger.
+  const tone = connected ? (configured === false ? "warning" : "success") : "danger";
   const word = connected
     ? configured === false
       ? "no config"
@@ -442,34 +460,62 @@ function EngineFooter({
           object with a page like every other, and a panel that could only be
           reached from here was the one surface with no address. */}
       <a className="rail-engine" href="#/admin/fleet" title={`Engine ${word}`}>
-        <i className={cx("dot", tone)} />
+        {/* The dot is the shape half and the word beside it is the state —
+            which is exactly StatusDot's contract, so it is `aria-hidden` and
+            a screen reader reads the word once rather than twice. */}
+        <StatusDot tone={tone} />
         {!collapsed && <span className="truncate">{word}</span>}
         {inFlight > 0 && <span className="t-num">{inFlight}</span>}
       </a>
       {!collapsed && (
         <>
-          <Segmented<ThemeChoice>
+          {/* BOTH ROWS ARE SETTINGS, which is what `semantics="radio"` says:
+              announced as a radio group, and the arrows select as they move.
+              That is our `activate="automatic"` under uilet's name, and it is
+              right here for the reason uilet gives — a choice that is not in
+              the URL and pushes no history entry costs nothing to change on
+              every keypress.
+
+              NOT uilet's own ThemeSwitcher / DensitySwitcher, which draw
+              exactly these two rows: they own the value themselves behind a
+              `storageKey` and expose no controlled `value` / `onChange`. This
+              dashboard's theme is also set from the command palette's `>`
+              scope and read by `lib/prefs.ts`, so a control holding a second
+              copy of it would sit unmoved while the page around it changed. */}
+          <SegmentedControl<ThemeChoice>
+            semantics="radio"
             size="sm"
-            ariaLabel="Theme"
-            activate="automatic"
+            label="Theme"
             value={theme}
-            onChange={setTheme}
+            onValueChange={setTheme}
             options={[
-              { value: "light", label: "", icon: "sun", title: "Light" },
-              { value: "system", label: "", icon: "monitor", title: "Follow the system" },
-              { value: "dark", label: "", icon: "moon", title: "Dark" },
+              { value: "light", icon: <LightModeGlyph size="xs" />, title: "Light" },
+              {
+                value: "system",
+                icon: <ComputerGlyph size="xs" />,
+                title: "Follow the system",
+              },
+              { value: "dark", icon: <DarkModeGlyph size="xs" />, title: "Dark" },
             ]}
           />
-          <Segmented<Density>
+          <SegmentedControl<Density>
+            semantics="radio"
             size="sm"
-            ariaLabel="Density"
-            activate="automatic"
+            label="Density"
             value={density}
-            onChange={setDensity}
+            onValueChange={setDensity}
             options={[
-              { value: "compact", label: "S", title: "Compact" },
-              { value: "normal", label: "M", title: "Normal" },
-              { value: "comfortable", label: "L", title: "Comfortable" },
+              // THE LETTER IS A PICTURE AND THE WORD IS THE NAME. S, M and L
+              // name nothing out loud, so each option carries the word too —
+              // `srLabel`, which ours had no place for at all.
+              { value: "compact", label: "S", srLabel: "Compact", title: "Compact" },
+              { value: "normal", label: "M", srLabel: "Normal", title: "Normal" },
+              {
+                value: "comfortable",
+                label: "L",
+                srLabel: "Comfortable",
+                title: "Comfortable",
+              },
             ]}
           />
         </>

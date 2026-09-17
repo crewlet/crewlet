@@ -118,7 +118,10 @@ test("an applied gate renders as the confirmation", () => {
       evict
     />,
   );
-  expect(screen.getByRole("status").className).toContain("positive");
+  // THE TONE CLASS IS UILET'S NOW — `crewlet-callout--success` where our own
+  // banner spelled it `positive`. The invariant is unchanged: this outcome and
+  // the pending one must not draw the same colour.
+  expect(screen.getByRole("status").className).toContain("success");
 });
 
 // `pending` IS DURABLE AND UNRESOLVED, and it must be visually distinct from
@@ -131,8 +134,8 @@ test("a pending gate is not rendered as success and not as a failure", () => {
     />,
   );
   const banner = screen.getByRole("status");
-  expect(banner.className).not.toContain("positive");
-  expect(banner.className).toContain("caution");
+  expect(banner.className).not.toContain("success");
+  expect(banner.className).toContain("warning");
   // AND IT SAYS NOT TO RETRY, because the record is already on the log and a
   // second gesture appends a second one.
   expect(screen.getByText(/Retrying would append a second record/)).toBeTruthy();
@@ -149,7 +152,7 @@ test("an unknown gate renders as the failure and names the op id", () => {
       evict
     />,
   );
-  expect(screen.getByRole("alert").className).toContain("critical");
+  expect(screen.getByRole("alert").className).toContain("danger");
   expect(screen.getByText("op-7")).toBeTruthy();
 });
 
@@ -175,7 +178,7 @@ test("an open capacity operation is rendered as an outage in progress", () => {
       now={Date.now()}
     />,
   );
-  expect(screen.getByRole("alert").className).toContain("critical");
+  expect(screen.getByRole("alert").className).toContain("danger");
   expect(screen.getByText(/Waiting on node-b, node-c/)).toBeTruthy();
 });
 

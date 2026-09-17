@@ -7,7 +7,22 @@
 
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, Disclosure, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  DatabaseGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  TagGlyph,
+} from "@crewlethq/icons/glyphs";
+// OURS, AND THERE IS NO PEER. `Copyable` renders the value it copies and is
+// named by it; this is a bare ACTION over text derived at press time — a
+// payload that is not on the screen as a string — with its own copied /
+// refused feedback. See the report.
+import { CopyButton } from "~/ui/primitives.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -106,9 +121,9 @@ function envelopeProperties(event: EventRecord): Property[] {
 function eventStatus(event: EventRecord) {
   if (!event.failed) return undefined;
   return (
-    <Badge tone="critical" icon="alert">
+    <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
       failed
-    </Badge>
+    </Tag>
   );
 }
 
@@ -128,8 +143,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
           <>
             {data?.trace_id && (
               <Button
-                size="sm"
-                icon="gitBranch"
+                size="small"
+                variant="secondary"
+                leadingIcon={<ForkRightGlyph size="xs" />}
                 onClick={() => nav.to(["activity", "traces", data.trace_id])}
               >
                 Trace
@@ -137,8 +153,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
             )}
             {data?.payload?.turn_id != null && (
               <Button
-                size="sm"
-                icon="layers"
+                size="small"
+                variant="secondary"
+                leadingIcon={<LayersGlyph size="xs" />}
                 onClick={() => nav.to(["activity", "turns", String(data.payload!.turn_id)])}
               >
                 Turn
@@ -146,8 +163,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
             )}
             {data?.actor && (
               <Button
-                size="sm"
-                icon="user"
+                size="small"
+                variant="secondary"
+                leadingIcon={<PersonGlyph size="xs" />}
                 onClick={() => nav.to(["company", "people", data.actor])}
               >
                 {data.actor}
@@ -161,7 +179,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
           that is not about identity, and now the header's first fact. */}
       <PageNote>One stored event, exactly as the engine wrote it.</PageNote>
 
-      {loading && <Skeleton rows={5} />}
+      {loading && <Skeleton variant="text" rows={5} label="Loading the event" />}
 
       {/* THE CATEGORY AND THE SOURCE WERE TWO BADGES IN THE PAGE BAR, which
           is where a screen's CONTROLS live — so the record's identity was
@@ -172,7 +190,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
       {data && (
         <ObjectHeader
           kind="Event"
-          icon="activity"
+          icon="timeline"
           identifier={data.id}
           title={data.summary || data.type}
           status={eventStatus(data)}
@@ -189,37 +207,59 @@ export function EventScreen({ eventId }: { eventId: string }) {
       >
         {data && (
           <>
-            <Panel title="Envelope" icon="file">
+            <Card>
+              <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                <Card.Title>Envelope</Card.Title>
+              </Card.Header>
               <PropertiesRail groups={[{ properties: envelopeProperties(data) }]} />
-            </Panel>
+            </Card>
 
             {phase && (
-              <Panel title="The phase this event records" icon="brain" padding="tight">
+              // `sm` IS OUR `tight`, and for the reason their own type gives:
+              // a panel has one left edge and its header sets it, so the
+              // vertical-only step is the one that keeps a card's body on the
+              // same line as its title.
+              <Card padding="sm">
+                <Card.Header icon={<NeurologyGlyph size="sm" />}>
+                  <Card.Title>The phase this event records</Card.Title>
+                </Card.Header>
                 <PhaseCard record={phase} defaultOpen showRole />
-              </Panel>
+              </Card>
             )}
 
-            <Panel
-              title="Payload"
-              icon="database"
-              subtitle="verbatim, as the engine stored it"
-              actions={
-                data.payload ? (
-                  <CopyButton
-                    text={() => JSON.stringify(data.payload, null, 2)}
-                    title="this event's payload, as JSON"
-                  />
-                ) : undefined
-              }
-            >
+            <Card>
+              <Card.Header
+                icon={<DatabaseGlyph size="sm" />}
+                subtitle="verbatim, as the engine stored it"
+                actions={
+                  data.payload ? (
+                    <CopyButton
+                      text={() => JSON.stringify(data.payload, null, 2)}
+                      title="this event's payload, as JSON"
+                    />
+                  ) : undefined
+                }
+              >
+                <Card.Title>Payload</Card.Title>
+              </Card.Header>
               {data.payload ? (
                 // Same treatment as the Turn record: this screen's whole
                 // point is one JSON record, so the record owns select-all
                 // rather than the page taking it.
                 <div className="col gap-1">
-                  <Code plain selectable label="The event payload, as JSON">
-                    {JSON.stringify(data.payload, null, 2)}
-                  </Code>
+                  {/* `plain` is THEIR word for no header; ours was "no wrap",
+                      which is `wrap={false}`. The copy control is the panel's
+                      own, so the block's is off — two of them over one record
+                      is a reader choosing between identical buttons. */}
+                  <CodeBlock
+                    plain
+                    wrap={false}
+                    copyable={false}
+                    maxHeight={460}
+                    selectable
+                    label="The event payload, as JSON"
+                    code={JSON.stringify(data.payload, null, 2)}
+                  />
                   <span className="t-caption">
                     Click into the payload, and ⌘A / Ctrl+A selects it alone rather than the page.
                   </span>
@@ -229,10 +269,13 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   This event carries no payload — its type and summary are the whole record.
                 </span>
               )}
-            </Panel>
+            </Card>
 
             {data.tags && Object.keys(data.tags).length > 0 && (
-              <Panel title="Tags" icon="hash">
+              <Card>
+                <Card.Header icon={<TagGlyph size="sm" />}>
+                  <Card.Title>Tags</Card.Title>
+                </Card.Header>
                 <PropertiesRail
                   groups={[
                     {
@@ -244,7 +287,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
             )}
           </>
         )}
@@ -288,7 +331,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
         <ObjectHeader
           size="peek"
           kind="Event"
-          icon="activity"
+          icon="timeline"
           identifier={data.id}
           title={data.summary || data.type}
           status={eventStatus(data)}
@@ -296,7 +339,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
         />
       )}
       <div className="col gap-3">
-        {loading && !data && <Skeleton rows={6} />}
+        {loading && !data && <Skeleton variant="text" rows={6} label="Loading the event" />}
         <QueryState
           // `not_found` is an ANSWER here rather than a refusal: the store was
           // reached and has no such row, which the empty state below states
@@ -307,7 +350,10 @@ export function EventPeek({ eventId }: { eventId: string }) {
         >
           {data && (
             <>
-              <Panel title="Record" icon="file">
+              <Card>
+                <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                  <Card.Title>Record</Card.Title>
+                </Card.Header>
                 <PropertiesRail
                   groups={[
                     { properties: envelopeProperties(data) },
@@ -325,11 +371,11 @@ export function EventPeek({ eventId }: { eventId: string }) {
                       : []),
                   ]}
                 />
-              </Panel>
+              </Card>
 
               {payload ? (
                 <Disclosure
-                  label="Payload"
+                  title="Payload"
                   // WHAT IS INSIDE, on the closed head. A fold with no count
                   // is a fold nobody opens: the reader cannot tell a record
                   // with two fields from one with forty without clicking.
@@ -341,9 +387,15 @@ export function EventPeek({ eventId }: { eventId: string }) {
                     />
                   }
                 >
-                  <Code plain selectable label="The event payload, as JSON">
-                    {JSON.stringify(payload, null, 2)}
-                  </Code>
+                  <CodeBlock
+                    plain
+                    wrap={false}
+                    copyable={false}
+                    maxHeight={460}
+                    selectable
+                    label="The event payload, as JSON"
+                    code={JSON.stringify(payload, null, 2)}
+                  />
                 </Disclosure>
               ) : (
                 <p className="t-caption faint">

@@ -11,93 +11,6 @@
    or a control. On dark the top hairline is the elevation; on light the shadow
    is — one recipe, two grounds, no second component. */
 
-.panel {
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-1), var(--inset-hairline);
-  min-width: 0;
-}
-.panel-flush {
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  overflow: hidden;
-  min-width: 0;
-}
-.panel-quiet {
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  min-width: 0;
-}
-.inset {
-  background: var(--surface-inset);
-  border-radius: var(--r-sm);
-}
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
-  min-height: var(--row-h-lg);
-}
-/* THE TITLE NEVER GIVES WAY FIRST. Both children carry `truncate`, and with
-   the default `flex: 0 1 auto` on each they shrank together — so a panel with
-   a long subtitle in the peek rail rendered its heading as "S…" beside a
-   readable sentence explaining a panel nobody could name. A subtitle is the
-   expendable one by construction: it restates in prose what the title says in
-   a word.
-
-   IT STILL HAS TO FIT THE PANEL, which is what `max-width` is for. "Never
-   gives way" is about the competition with the subtitle, not about the head's
-   own width: a panel title is free text — a checklist's name, a unit's, a
-   sprint's — and a long one alone on its line is wider than a 420px peek
-   rail. Flexbox clamps an item to its max main size even at `flex: 0 0 auto`,
-   so the cap changes nothing about who shrinks first and everything about
-   what happens when there is nobody to shrink against: the inner `truncate`
-   span ellipses instead of being cut mid-word by `.panel-flush`'s clip. */
-.panel-head > .panel-title {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  color: var(--heading);
-  letter-spacing: var(--track-tight);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  max-width: 100%;
-  flex: 0 0 auto;
-}
-/* The basis is what makes the head WRAP rather than crush: at `auto` a long
-   subtitle claims its full text width and pushes the title out, and at 0 it
-   would never wrap at all. See `.int-row-identity`, which is the same rule. */
-.panel-head .panel-sub {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  flex: 1 1 12rem;
-  min-width: 0;
-}
-.panel-body {
-  padding: var(--space-4);
-}
-/* TIGHT IS VERTICAL ONLY. A panel has ONE left edge, and its head sets it:
-   `--space-4`, the same inset the title sits on. Reducing the horizontal
-   padding too put the body's content on a different vertical line from the
-   heading above it — content noticeably closer to the border than its own
-   title — and pushed a code block hard against the panel's right edge with
-   nowhere for its scrollbar to sit. What `tight` is actually for is a panel
-   whose rows carry their own vertical rhythm (a stack of cards, a footer
-   strip), and that is a claim about height, not about the edge. */
-.panel-body.tight {
-  padding: var(--space-2) var(--space-4);
-}
-.panel-body.none {
-  padding: 0;
-}
 .panel-foot {
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border-subtle);
@@ -151,171 +64,11 @@
   text-align: center;
 }
 
-/* ---- Button -------------------------------------------------------------
-   Four variants and they are a hierarchy, not a palette: primary (the one
-   action), default (everything else), ghost (in a dense toolbar), danger
-   (destructive, and the only one that spends the critical hue). */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  height: var(--control-h);
-  padding: 0 var(--space-3);
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  color: var(--text);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-/* A BUTTON IS NOT A LINK, WHATEVER ELEMENT IT IS.
-
-   Several of these controls are anchors — a step that leaves for a vendor's
-   own site has to be a real href, so it opens in a tab and offers a context
-   menu — and base.css underlines `a:hover`, which is right for a link inside
-   a sentence and wrong for something drawn as a filled button. "Install on
-   GitHub" grew an underline the Create button beside it never had, so two
-   controls that are the same act looked like two different kinds of thing.
-
-   Stated on the class rather than at the one call site, because the next
-   anchor-as-button would arrive with the same defect and no reason to
-   suspect it. */
-.btn,
-.btn:hover {
-  text-decoration: none;
-}
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: var(--border-strong);
-}
-.btn:active:not(:disabled) {
-  background: var(--surface-active);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn.primary {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--text-on-fill);
-}
-.btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: transparent;
-}
-.btn.ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-secondary);
-}
-.btn.ghost:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: transparent;
-  color: var(--text);
-}
-.btn.danger {
-  color: var(--critical-ink);
-  border-color: var(--border);
-}
-.btn.danger:hover:not(:disabled) {
-  background: var(--critical-soft);
-  border-color: var(--critical);
-}
-.btn.sm {
-  height: var(--control-h-sm);
-  padding: 0 var(--space-2);
-  font-size: var(--fs-2xs);
-}
-.btn.icon {
-  width: var(--control-h);
-  padding: 0;
-}
-.btn.icon.sm {
-  width: var(--control-h-sm);
-}
-.btn.block {
-  width: 100%;
-}
-
-/* ---- Badge --------------------------------------------------------------
-   A soft tint plus its ink step, NEVER a solid block with a label on it. That
-   is what lets the status hues be light enough to read as marks on a dark
-   ground without dragging their own label under 4.5:1 with them. */
-
-/* A badge that ACTS. Same shape as the inert ones so the row still reads as
-   one set, plus a hover and a pressed state so it is discoverable as a
-   control rather than looking like a label that happens to respond. */
-.badge.actionable {
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.badge.actionable:hover {
-  border-color: currentColor;
-}
-.badge.actionable.pressed {
-  background: currentColor;
-}
-.badge.actionable.pressed > * {
-  mix-blend-mode: luminosity;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 1px var(--space-2);
-  border-radius: var(--r-xs);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  background: var(--surface-inset);
-  color: var(--text-secondary);
-  border: 1px solid transparent;
-}
-.badge.positive {
-  background: var(--positive-soft);
-  color: var(--positive-ink);
-}
-.badge.caution {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
-}
-.badge.critical {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
-}
-.badge.info {
-  background: var(--info-soft);
-  color: var(--info-ink);
-}
-.badge.accent {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-.badge.outline {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--text-muted);
-}
-.badge.mono {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-}
-
-/* The dot is the shape half of a status. Colour is never the only carrier:
-   every dot sits beside its own word. */
+/* ---- Status dot ---------------------------------------------------------
+   The shape half of a status, and the last of this file's status recipes:
+   the pill and the button that used to head this section are uilet's Tag and
+   Button now. Colour is never the only carrier — every dot sits beside its
+   own word. */
 .dot {
   width: 6px;
   height: 6px;
@@ -352,90 +105,6 @@
   }
 }
 
-/* Phase is the one categorical identity outside a chart, because it is what a
-   reader tracks across the Model, Seat, Activity and Trace screens. */
-.phase-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  padding: 1px var(--space-2);
-  border-radius: var(--r-xs);
-}
-.phase-tag[data-phase="onboarding"] {
-  color: var(--phase-onboarding-ink);
-  background: color-mix(in srgb, var(--phase-onboarding) 14%, transparent);
-}
-.phase-tag[data-phase="execute"] {
-  color: var(--phase-execute-ink);
-  background: color-mix(in srgb, var(--phase-execute) 14%, transparent);
-}
-.phase-tag[data-phase="review"] {
-  color: var(--phase-review-ink);
-  background: color-mix(in srgb, var(--phase-review) 14%, transparent);
-}
-/* The NESTED calls, muted: a sub-agent, the round-cap judge and a learning
-   worker all run UNDER one of the three phases above, and giving them a hue
-   of their own would put four or five categorical colours on one turn card
-   and make the phase a reader is tracking harder, not easier to find. They
-   were previously unstyled rather than muted, which left them transparent —
-   the same tag rendered as a badge beside `execute` and as bare text beside
-   `auxiliary`. */
-.phase-tag[data-phase="subagent"],
-.phase-tag[data-phase="judge"],
-.phase-tag[data-phase="auxiliary"],
-.phase-tag[data-phase="turn"] {
-  color: var(--text-muted);
-  background: var(--surface-inset);
-}
-
-/* ---- Avatar -------------------------------------------------------------
-   A monogram, and it is NEUTRAL. The system this replaces coloured a seat by
-   `PALETTE[hash(name) % 8]`, over the same eight families it also used for
-   phases and event categories — so one amber meant "the execute phase", "the
-   decision category" and "the Analyst" at once. A hash of a name carries no
-   information: rename the seat and its colour changes, which is the proof it
-   never meant anything. Identity is the monogram and the name. */
-
-.avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r-sm);
-  background: var(--surface-3);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-semibold);
-  letter-spacing: 0.02em;
-  flex: none;
-  text-transform: uppercase;
-}
-.avatar.lg {
-  width: 40px;
-  height: 40px;
-  font-size: var(--fs-sm);
-  border-radius: var(--r-md);
-}
-.avatar.sm {
-  width: 20px;
-  height: 20px;
-  font-size: 9px;
-  border-radius: var(--r-xs);
-}
-/* A human seat is drawn, not tinted: the engine does not run it, and that is a
-   structural fact rather than a status. */
-.avatar.human {
-  border-style: dashed;
-  border-color: var(--border);
-  background: transparent;
-}
-
 /* A link that IS a row takes the page's text colour, not the link colour.
    Otherwise every seat name in every list renders in the accent — which is
    identity-colouring by accident, and the accent is reserved for saying where
@@ -444,8 +113,6 @@ a.seat-card,
 a.list-row,
 a.feed-row,
 a.org-node,
-a.nav-item,
-a.brand,
 a.seat-chip {
   color: inherit;
   text-decoration: none;
@@ -456,8 +123,7 @@ a.seat-chip:hover {
 a.seat-card:hover,
 a.list-row:hover,
 a.feed-row:hover,
-a.org-node:hover,
-a.brand:hover {
+a.org-node:hover {
   text-decoration: none;
 }
 
@@ -524,67 +190,14 @@ a.brand:hover {
 
 /* ---- Controls ----------------------------------------------------------- */
 
-.input,
-.select,
-.textarea {
-  width: 100%;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 0 var(--space-3);
-  height: var(--control-h);
-  font-size: var(--fs-xs);
-  color: var(--text);
-  transition:
-    border-color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
-}
-.textarea {
-  height: auto;
-  padding: var(--space-2) var(--space-3);
-  font-family: var(--font-mono);
-  line-height: var(--lh-normal);
-  resize: vertical;
-}
-/* A url field wears the scheme it would otherwise be refused without. The
-   affix sits INSIDE the control's border rather than beside it, so the box
-   reads as one value: a separate chip in front of the input reads as two
-   fields, and the second of them looks optional. */
-.input-affixed {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding-left: var(--space-3);
-  transition:
-    border-color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
-}
-.input-affixed:focus-within {
-  border-color: var(--accent);
-  background: var(--surface-1);
-}
-.input-affix {
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  user-select: none;
-}
-/* The input keeps its own height and type styling and gives up the chrome
-   the wrapper now draws. */
-.input-affixed > .input {
-  border: none;
-  background: none;
-  padding-left: 0;
-}
-.input-affixed > .input:focus {
-  background: none;
-}
+/* THE TEXT FIELD IS uilet's `Input`, the picker is its `Select` and the
+   labelled row around them is its `FormField`, so `.input`, `.input-affixed`,
+   `.input-affix`, `.input.is-reference`, `.field` and `.hint` are gone from
+   here: the scheme affix is `InputAffix` in the control's leading slot, and a
+   field holding a `${VAR}` asks for `appearance="reference"` rather than
+   carrying our own face for it. What is left below is the one part of that
+   field the package has no register for — the sealed-entry completion list. */
 
-/* A `${VAR}` is a NAME, and it wears the face a name wears everywhere else
-   in this product: the Secrets screen renders a stored entry's name as inline
-   code, and a field pointing at one is naming exactly that. */
 /* THE SECRET COMPLETION LIST, over the field that opened it.
  *
  * ABSOLUTE, so a list of eight names does not push the rest of a form down
@@ -635,105 +248,6 @@ a.brand:hover {
   color: var(--text);
 }
 
-.input.is-reference {
-  font-family: var(--font-mono);
-  font-variant-ligatures: none;
-  font-size: 0.92em;
-  color: var(--text-secondary);
-}
-
-.input:focus,
-.select:focus,
-.textarea:focus {
-  border-color: var(--accent);
-  background: var(--surface-1);
-  outline: none;
-}
-.input::placeholder,
-.textarea::placeholder {
-  color: var(--text-faint);
-}
-.select {
-  appearance: none;
-  padding-right: var(--space-6);
-  background-image:
-    linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position:
-    calc(100% - 15px) calc(50% + 1px),
-    calc(100% - 11px) calc(50% + 1px);
-  background-size: 4px 4px;
-  background-repeat: no-repeat;
-  cursor: pointer;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.field > label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.field > .hint {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-}
-
-.search-input {
-  position: relative;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-.search-input > svg {
-  position: absolute;
-  left: var(--space-2);
-  color: var(--text-faint);
-  pointer-events: none;
-}
-.search-input > .input {
-  padding-left: calc(var(--space-2) * 2 + 14px);
-}
-
-/* Select — a picker over a bounded set. Native <select> on purpose: it gets
-   keyboard nav, type-ahead and the platform's own overlay for free, and a
-   hand-built listbox would have to earn all three back. */
-/* `.picker`, NOT `.select` — that class is already the bare-element control
-   above, and reusing it put its width:100% and its own border on this
-   wrapper, so the picker stretched the whole toolbar and drew two boxes. */
-.picker {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  width: auto;
-  flex: 0 1 auto;
-}
-.picker > svg {
-  position: absolute;
-  right: var(--space-2);
-  color: var(--text-faint);
-  pointer-events: none;
-}
-.picker > .input {
-  appearance: none;
-  width: auto;
-  min-width: 132px;
-  max-width: 220px;
-  padding-right: calc(var(--space-2) * 2 + 8px);
-  cursor: pointer;
-}
-/* An active filter is stated by the control itself, so a reader scanning the
-   bar can see WHICH dimensions are narrowing the list without reading values. */
-.picker.on > .input {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* Segmented control — lenses, tabs, ranges. One implementation; the system
    this replaces had lens tabs, room tabs and filter pills as three. */
 .segmented {
@@ -778,45 +292,10 @@ a.brand:hover {
   font-size: var(--fs-3xs);
 }
 
-/* Filter chips. Neutral until ON, when they take the accent — the one thing
-   that is currently narrowing the list is exactly the "current selection" the
-   accent is reserved for. */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: var(--control-h-sm);
-  padding: 0 var(--space-2);
-  border-radius: var(--r-full);
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
-  white-space: nowrap;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-.chip:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-.chip[aria-pressed="true"] {
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
-  color: var(--accent-ink);
-}
-.chip .chip-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-}
-.chip[aria-pressed="true"] .chip-count {
-  color: inherit;
-}
+/* Tabs — the in-page navigation a section owns. The STRIP is uilet's
+   SegmentedControl now; what is left here is the panel it switches.
 
-/* Tabs — the in-page navigation a section owns. */
-/* THE PANEL CARRIES THE COLUMN THE SCREEN WOULD HAVE GIVEN ITS CHILDREN.
+   THE PANEL CARRIES THE COLUMN THE SCREEN WOULD HAVE GIVEN ITS CHILDREN.
    Before the tab relationship existed, a screen's switched sections were
    direct children of `.screen-inner` — a flex column with a gap — and they
    took their vertical rhythm from it. Wrapping them in one panel element puts
@@ -837,46 +316,6 @@ a.brand:hover {
 
 .tabpanel:focus {
   outline: none;
-}
-
-.tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.tabs::-webkit-scrollbar {
-  display: none;
-}
-.tabs > button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-muted);
-  white-space: nowrap;
-  transition: color var(--dur-fast) var(--ease);
-}
-.tabs > button:hover {
-  color: var(--text);
-}
-.tabs > button[aria-selected="true"] {
-  color: var(--text);
-}
-.tabs > button[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--accent);
-  border-radius: var(--r-full) var(--r-full) 0 0;
 }
 
 /* ---- Meter --------------------------------------------------------------
@@ -901,13 +340,7 @@ a.brand:hover {
   background: var(--accent);
   transition: width var(--dur-slow) var(--ease-out);
 }
-/* A ranked list's own bar. Its colour and width are the datum's, set
-   inline, so the class carries only the identity a test and a reader need
-   — the fill is the one part of a bar that MEANS something, and it has to
-   be addressable to be asserted about. */
-.bar-fill {
-  transition: width var(--dur-slow) var(--ease-out);
-}
+
 .meter-fill[data-tone="caution"] {
   background: var(--caution);
 }
@@ -928,193 +361,6 @@ a.brand:hover {
   font-size: var(--fs-2xs);
   color: var(--text-muted);
 }
-
-/* A proportional bar broken into segments — spend by phase, tools by origin.
-   Always beside its own legend; a stacked bar with no legend is decoration.
-
-   NAMED FOR ITS COMPONENT rather than `.stack`, which is what it was called.
-   `stack` is the most generic layout word CSS has, and this is a 6px flex ROW
-   with `overflow: hidden` — so the work item screen, the page screen and their
-   two comment lists all reached for it as a vertical section container and
-   rendered their entire body, panels and all, inside a six-pixel strip. The
-   vertical container those four wanted is `.col`; nothing else here may claim
-   a bare layout noun. */
-.stackbar {
-  display: flex;
-  height: 6px;
-  border-radius: var(--r-full);
-  overflow: hidden;
-  background: var(--surface-inset);
-}
-.stackbar > span {
-  height: 100%;
-  min-width: 2px;
-}
-
-/* ---- Stat --------------------------------------------------------------- */
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-4);
-  min-width: 0;
-}
-.stat-label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-.stat-value {
-  font-size: var(--fs-2xl);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-  line-height: 1.1;
-  color: var(--heading);
-  font-variant-numeric: tabular-nums;
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-/* A stat's value takes a status ink when the number IS an outcome — a turn's
-   decision, a probe's verdict. Ink only, never a fill: the fill/ink split is
-   what the palette test measures, and a tinted block behind a --fs-2xl number
-   would read as a button. Most stats carry no tone at all; see Stat's prop. */
-.stat-value.tone-positive {
-  color: var(--positive-ink);
-}
-.stat-value.tone-caution {
-  color: var(--caution-ink);
-}
-.stat-value.tone-critical {
-  color: var(--critical-ink);
-}
-.stat-value.tone-info {
-  color: var(--info-ink);
-}
-.stat-value .unit {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-normal);
-  color: var(--text-muted);
-  letter-spacing: 0;
-}
-.stat-sub {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  min-height: 1.2em;
-}
-/* A row of stats keeps its column count whatever it holds. The board this
-   replaces reflowed 1→3 columns as tiles appeared and vanished, which moved
-   every number on the page for a reason that had nothing to do with the
-   numbers. */
-.stat-row {
-  display: grid;
-  grid-template-columns: repeat(var(--stat-cols, 4), minmax(0, 1fr));
-}
-.stat-row > .stat + .stat {
-  border-left: 1px solid var(--border-subtle);
-}
-@media (max-width: 900px) {
-  .stat-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .stat-row > .stat:nth-child(odd) {
-    border-left: none;
-  }
-  .stat-row > .stat:nth-child(n + 3) {
-    border-top: 1px solid var(--border-subtle);
-  }
-}
-
-/* ---- Empty, error, loading ---------------------------------------------- */
-
-.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-10) var(--space-4);
-  text-align: center;
-  color: var(--text-muted);
-}
-.empty > svg {
-  color: var(--text-faint);
-  margin-bottom: var(--space-1);
-}
-.empty-title {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--text-secondary);
-}
-.empty-sub {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  max-width: 48ch;
-}
-.empty.inline {
-  padding: var(--space-6) var(--space-4);
-}
-
-.banner {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-xs);
-  border: 1px solid transparent;
-}
-.banner > svg {
-  margin-top: 2px;
-}
-.banner.info {
-  background: var(--info-soft);
-  color: var(--info-ink);
-}
-.banner.caution {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
-}
-.banner.critical {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
-}
-.banner.neutral {
-  background: var(--surface-inset);
-  color: var(--text-secondary);
-}
-
-/* A skeleton is only ever shown where content of KNOWN shape is coming. A
-   spinner in place of a screen tells a reader nothing about what to expect. */
-.skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--surface-inset) 25%,
-    var(--surface-hover) 37%,
-    var(--surface-inset) 63%
-  );
-  background-size: 400% 100%;
-  animation: shimmer 1.4s ease infinite;
-  border-radius: var(--r-xs);
-  height: 1em;
-}
-@keyframes shimmer {
-  0% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0 50%;
-  }
-}
-
-/* ---- Key/value ---------------------------------------------------------- */
 
 /* ---- Code --------------------------------------------------------------- */
 
@@ -1177,22 +423,14 @@ code.inline {
   flex-direction: column;
   gap: var(--space-1);
 }
-/* INHERITED, not restated. These sit inside a banner or a field error that
-   has already set the colour for what it is saying, and a code face that
-   brought its own would read as a quotation from somewhere else. */
-.banner code.inline,
-.field-error code.inline {
-  color: inherit;
-  background: var(--surface-inset);
-}
-/* A `${VAR}` wears the face it wears in a field and on the Secrets screen:
-   these are names of sealed entries, and one drawn as ordinary code reads as
-   a path in the document rather than an entry in the store. */
-.banner code.inline.is-reference,
-.field-error code.inline.is-reference {
-  font-family: var(--font-mono);
-  font-variant-ligatures: none;
-}
+/* INHERITED, not restated — and that is uilet's `InlineCode` now, which the
+   problems are drawn with: `tone="inherit"` is the chip inside a message that
+   carries that message's ink, and `variant="reference"` is the `${VAR}` face
+   that says a name of a sealed entry rather than a path in the document. The
+   two recipes that used to follow this one, `.field-error code.inline` and
+   `.field-error code.inline.is-reference`, only ever reached a chip inside a
+   FIELD's error: the same chip inside the setup dialog's danger banner kept
+   its own quiet grey, which is the half nobody noticed. */
 
 kbd {
   font-family: var(--font-mono);
@@ -1207,6 +445,15 @@ kbd {
 
 /* ---- Overlay ------------------------------------------------------------ */
 
+/* WHAT IS LEFT HERE IS THE VEIL, and only because the command palette still
+   draws one: every dialog in the product is `@crewlethq/ui`'s Modal now, which
+   brings its own overlay, frame and head/body/foot bands. The four recipes
+   that used to follow this one — .dialog, .dialog-head, .dialog-body and
+   .dialog-foot — went with the component that wrote them.
+
+   The palette keeps ours because it is a modal whose header IS its input: it
+   takes uilet's layer WITHOUT uilet's frame (see app/CommandPalette.tsx), so
+   the ground it sits on has to be declared somewhere, and this is where. */
 .veil {
   position: fixed;
   inset: 0;
@@ -1224,111 +471,12 @@ kbd {
     opacity: 0;
   }
 }
-.dialog {
-  width: min(560px, 100%);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-3);
-  max-height: calc(100dvh - var(--space-16) - var(--space-4));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: rise var(--dur-slow) var(--ease-out);
-}
+/* The palette is its one caller now — `.palette`, in shell.css. */
 @keyframes rise {
   from {
     opacity: 0;
     transform: translateY(8px);
   }
-}
-.dialog.wide {
-  width: min(880px, 100%);
-}
-.dialog-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.dialog-body {
-  padding: var(--space-4);
-  overflow: auto;
-}
-.dialog-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-2);
-}
-
-.popover {
-  position: absolute;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-3);
-  z-index: var(--z-popover);
-  min-width: 260px;
-  animation: rise var(--dur) var(--ease-out);
-}
-
-.toast-host {
-  position: fixed;
-  bottom: var(--space-4);
-  right: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  z-index: var(--z-toast);
-  pointer-events: none;
-}
-.toast {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-2);
-  font-size: var(--fs-xs);
-  max-width: 420px;
-  pointer-events: auto;
-  animation: rise var(--dur) var(--ease-out);
-}
-/* The dismiss affordance, and deliberately not a `.btn`: a toast is already a
-   toned surface, and a button with its own ground and border sitting on one
-   reads as a second control rather than as the toast's own X. It inherits the
-   toast's colour so the critical and positive tones need no variant each. */
-.toast-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-1);
-  margin: calc(var(--space-1) * -1);
-  border: 0;
-  border-radius: var(--r-sm);
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.7;
-}
-.toast-close:hover {
-  opacity: 1;
-  background: var(--surface-hover);
-}
-
-.toast.critical {
-  border-color: var(--critical);
-  color: var(--critical-ink);
-}
-.toast.positive svg {
-  color: var(--positive);
 }
 
 /* ---- Chart -------------------------------------------------------------- */
@@ -1345,44 +493,6 @@ kbd {
   stroke: var(--border-subtle);
   stroke-width: 1;
   stroke-dasharray: 2 4;
-}
-.chart .axis-text {
-  fill: var(--text-muted);
-  font-size: 10px;
-  font-family: var(--font-mono);
-}
-.chart .series-label {
-  fill: var(--text-secondary);
-  font-size: 11px;
-}
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1) var(--space-3);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-}
-.legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.legend .swatch {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  flex: none;
-}
-
-/* A sparkline is a shape, not a chart: no axes, no labels, and it is always
-   captioned by the number beside it. */
-.spark {
-  display: block;
-  width: 100%;
-  height: 28px;
-  overflow: visible;
 }
 
 /* A stacked column per time bucket — see StackedTimeSeries.

@@ -4,11 +4,28 @@
  * The invariant worth breaking a build over is the second one: no route the
  * engine serves returns a credential, so any value on this page would have to
  * have come from somewhere it should not have.
+ *
+ * # `baseElement`, not `container`
+ *
+ * The dialog is `@crewlethq/ui`'s Modal, which PORTALS its surface to the
+ * layer container — `document.body` with no `LayerHost` above it, which is
+ * every test here. So the markup is no longer inside the div `render` returns
+ * and `container` sees an empty box: `container.querySelectorAll('input[type=
+ * "password"]').length` would have gone on reporting zero for ever, which is
+ * this file's headline invariant passing by seeing nothing at all.
+ *
+ * `baseElement` is `document.body`, so it holds the portal and the container
+ * both. It is the same query against the place the markup actually is, which
+ * is the only thing that moved.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 
-import { ToastProvider } from "~/ui/Toast";
+// uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
+// context is no longer supplied anywhere, so a dialog tested under it would
+// pass while writing its confirmation into a hook nothing is listening to.
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   HELD,
@@ -116,6 +133,59 @@ afterEach(() => {
 
 // EVERY WORD COMES FROM THE ENGINE. Nothing about any third-party app is in the
 // component, which is what makes adding one a Go change and no screen work.
+
+/**
+ * Render inside a layer host, the way `App.tsx` mounts one.
+ *
+ * NOT A TEST CONVENIENCE. A picker's option list, like a dialog, is a LAYER:
+ * it renders into the host's container rather than beside its trigger, so
+ * without one the list opens — `aria-expanded` really does turn true — and
+ * its options are nowhere in the document. A suite that mounted no host would
+ * assert against a control whose every choice is unreachable, which is a state
+ * the product cannot be in and a test can sit in indefinitely.
+ */
+function render(ui: ReactElement): ReturnType<typeof rtlRender> {
+  return rtlRender(ui, { wrapper: LayerHost });
+}
+
+/**
+ * What a picker is showing, as the reader reads it.
+ *
+ * THE LABEL RATHER THAN THE VALUE, because there is no longer a value to
+ * read: a choice field draws uilet's LISTBOX, whose trigger is a button
+ * carrying the chosen option's own words. That is not a weaker assertion than
+ * the `(… as HTMLSelectElement).value` these replaced — it is the stronger
+ * one, since a value the control holds and never shows is a value the
+ * operator cannot act on. It is also what caught the reason for the change:
+ * the listbox is the only mode that can draw a choice's second line, and a
+ * native `<option>` was silently dropping the sentence the engine sends to
+ * tell two choices apart.
+ */
+function showing(label: RegExp | string): string {
+  return (screen.getByLabelText(label) as HTMLElement).textContent ?? "";
+}
+
+/**
+ * Open a picker and press one of its options, by the words on it.
+ *
+ * MOUSEDOWN, NOT CLICK, and this is measured rather than assumed: uilet's
+ * listbox commits on `mousedown`, which is the only choice that works — a
+ * popup that waited for `click` would have the trigger's own blur close the
+ * list out from under the press. `fireEvent.click` on an option fires and
+ * changes nothing, which is the shape that would have left these tests
+ * asserting against a form nobody had touched.
+ */
+function choose(trigger: HTMLElement, option: RegExp | string): void {
+  fireEvent.click(trigger);
+  const wants =
+    typeof option === "string"
+      ? (text: string) => text.startsWith(option)
+      : (text: string) => option.test(text);
+  const found = screen.getAllByRole("option").find((o) => wants(o.textContent ?? ""));
+  if (!found) throw new Error(`no option matching ${String(option)}`);
+  fireEvent.mouseDown(found);
+}
+
 test("the form is rendered from the requirement list", () => {
   render(
     <SetupDialog
@@ -133,7 +203,7 @@ test("the form is rendered from the requirement list", () => {
 // A MINTABLE SECRET HAS NO INPUT. Asking a person to invent a shared token is
 // asking them to invent a password.
 test("a mintable secret is not on the form at all", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
@@ -146,7 +216,7 @@ test("a mintable secret is not on the form at all", () => {
   // plumbing in the middle of a form somebody is filling in.
   expect(screen.queryByText("Shared token")).toBeNull();
   expect(screen.queryByText(/generates this/)).toBeNull();
-  expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
+  expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
 });
 
 // A HELD CREDENTIAL SHOWS THAT IT IS HELD, and never what it is.
@@ -684,8 +754,17 @@ test("connecting and managing render one identical form", () => {
     // its PLACEHOLDER — the field, its label, its help and its required
     // mark are all the same, and what it SHOWS is the state the form is
     // reporting.
+    //
+    // A PICKER SHOWS ITS ANSWER AS TEXT, which is the same allowance in a
+    // different place. Stripping `value=` used to cover every control here,
+    // because a `<select>` carried its answer in an attribute; a listbox
+    // carries it in the trigger's own words, so a form holding a stored seat
+    // reads "SRE Lead (sre-lead)" where one connecting reads the placeholder.
+    // That IS the state the form is reporting, and the claim is about the
+    // fields rather than about the answers in them.
     const html = (form?.innerHTML ?? "")
       .replace(/\b(id|for|aria-describedby|value|placeholder)="[^"]*"/g, "")
+      .replace(/(<span class="crewlet-select__label"[^>]*>)[^<]*/g, "$1")
       // The removals leave the gaps their attributes sat in.
       .replace(/\s+/g, " ");
     view.unmount();
@@ -809,7 +888,10 @@ test("a stored setting is what the form opens on", () => {
       onDone={() => {}}
     />,
   );
-  expect((screen.getByLabelText(/Fallback seat/) as HTMLInputElement).value).toBe("sre-lead");
+  // THE SEAT AS THE OPERATOR READS IT. The handle is still what gets sent;
+  // what a picker shows is the name beside it, which is the whole reason the
+  // field offers a roster rather than a text box.
+  expect(showing(/Fallback seat/)).toContain("sre-lead");
 });
 
 // AND A CREDENTIAL LEFT ALONE IS NOT SENT.
@@ -880,15 +962,15 @@ test("the toggle opens on what the app is set to", () => {
         onDone={() => {}}
       />,
     );
-    const got = (screen.getByLabelText(/Accept deliveries/) as HTMLSelectElement).value;
+    const got = showing(/Accept deliveries/);
     view.unmount();
     return got;
   };
   // Nothing configured: on, whatever an unset block reports.
-  expect(open(false, "false")).toBe("true");
+  expect(open(false, "false")).toBe("On");
   // Configured and paused: paused.
-  expect(open(true, "false")).toBe("false");
-  expect(open(true, "true")).toBe("true");
+  expect(open(true, "false")).toBe("Off");
+  expect(open(true, "true")).toBe("On");
 });
 
 // NOTHING TO JUDGE IS NOT "UNCONFIGURED".
@@ -1015,7 +1097,7 @@ test("a field with a default opens holding it", () => {
       onDone={() => {}}
     />,
   );
-  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("datadoghq.com");
+  expect(screen.getByRole("combobox").textContent).toBe("datadoghq.com");
 });
 
 // AND NOT OVER AN ANSWER THIS COMPANY ALREADY GAVE. Offering the common value
@@ -1053,7 +1135,9 @@ test("a field this company has answered keeps its answer", () => {
   );
   // Empty: the form sends only what was touched, so an untouched field
   // carrying a stored value must not arrive pre-filled with the default.
-  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("");
+  // NOT the first option, and not a value: an untouched field shows the
+  // placeholder, which is the one state that says "nobody has answered this".
+  expect(screen.getByRole("combobox").textContent).not.toBe("datadoghq.com");
 });
 
 // The description quotes the value, so it has to follow the value. A tag key
@@ -1538,10 +1622,10 @@ function perSeatSections() {
 // to see how many were left. Folded, the dialog opens as the roster it is:
 // every agent named, each saying whether it is done.
 test("a per-seat app gives every agent its own collapsible block", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks.length).toBe(2);
   expect(screen.getByText("SRE Lead")).toBeDefined();
   expect(screen.getByText("Builder")).toBeDefined();
@@ -1582,10 +1666,10 @@ test("an app the engine cannot provision says so before the blocks", () => {
 // hand is a second instruction for a step the first one already did, and two
 // instructions for one step is how one of them goes stale.
 test("an agent's block does not ask for its delivery address twice", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).not.toContain("Paste that address");
   expect(blocks[0]!.textContent).not.toContain("/webhooks/slack/sre-lead");
 });
@@ -1596,10 +1680,10 @@ test("an agent's block does not ask for its delivery address twice", () => {
 // fields lost the one thing that said whose they were: a three-agent company
 // showed three identical "Default channel" boxes in one list.
 test("an agent's optional field is inside that agent's block", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).toContain("Default channel");
   // ONCE, AND ONLY THERE. Gathered at the foot of the dialog it appeared per
   // agent with nothing saying whose each one was.
@@ -1650,17 +1734,17 @@ test("a vendor link inside an agent's block names the app", () => {
 
 // A CLOSED BLOCK IS STILL A BLOCK SOMEBODY CAN OPEN.
 test("an agent's block opens when its summary is clicked", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   const closed = blocks[1] as HTMLDetailsElement;
   expect(closed.open).toBe(false);
   closed.open = true;
   fireEvent(closed, new Event("toggle"));
-  expect((container.querySelectorAll("details.int-seat-form")[1] as HTMLDetailsElement).open).toBe(
-    true,
-  );
+  expect(
+    (baseElement.querySelectorAll("details.int-seat-form")[1] as HTMLDetailsElement).open,
+  ).toBe(true);
 });
 
 // THE APP AN AGENT IS BUILT FROM, offered rather than described.
@@ -1675,7 +1759,7 @@ test("an agent's block offers the manifest its app is built from", () => {
     ...perSeatTool,
     seats: [{ ...perSeatTool.seats![0]!, manifest: '{\n  "display_information": {}\n}' }],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
@@ -1683,13 +1767,13 @@ test("an agent's block offers the manifest its app is built from", () => {
       onDone={() => {}}
     />,
   );
-  const block = container.querySelector("details.int-seat-form");
+  const block = baseElement.querySelector("details.int-seat-form");
   // NOT "for SRE Lead": the block this sits in is that agent's and carries
   // their name two lines above, so repeating it says nothing and pushes the
   // words that do off the end of a narrow dialog.
   expect(block?.textContent).toContain("App manifest");
   expect(block?.textContent).not.toContain("App manifest for");
-  expect(container.querySelector(".int-manifest-text")?.textContent).toContain(
+  expect(baseElement.querySelector(".int-manifest-text")?.textContent).toContain(
     "display_information",
   );
   // INSIDE THE AGENT'S OWN BLOCK, because a per-seat app has one manifest
@@ -1702,7 +1786,7 @@ test("an agent's block offers the manifest its app is built from", () => {
 // The request URL is built from the company's public address, so without one
 // there is no app definition worth pasting.
 test("an agent with no manifest is offered no manifest", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: perSeatTool, seat: "sre-lead" }]}
       title="Slack"
@@ -1710,7 +1794,7 @@ test("an agent with no manifest is offered no manifest", () => {
       onDone={() => {}}
     />,
   );
-  expect(container.querySelector(".int-manifest")).toBeNull();
+  expect(baseElement.querySelector(".int-manifest")).toBeNull();
   expect(screen.queryByText(/App manifest/)).toBeNull();
 });
 
@@ -1754,7 +1838,7 @@ test("an agent with no manifest is told why not", () => {
       },
     ],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: noted, seat: "sre-lead" }]}
       title="Slack"
@@ -1765,7 +1849,7 @@ test("an agent with no manifest is told why not", () => {
   expect(screen.getByText(/No app manifest for SRE Lead yet/)).toBeDefined();
   expect(screen.getByText(/integrations.public_base_url/)).toBeDefined();
   // AND NO EMPTY BOX to copy nothing out of.
-  expect(container.querySelector(".int-manifest")).toBeNull();
+  expect(baseElement.querySelector(".int-manifest")).toBeNull();
 });
 
 // A MANIFEST OUTRANKS ITS OWN ABSENCE. Both rendered would be a block saying
@@ -1810,7 +1894,7 @@ test("copying the manifest does not toggle its disclosure", () => {
     ...perSeatTool,
     seats: [{ ...perSeatTool.seats![0]!, manifest }],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
@@ -1818,7 +1902,7 @@ test("copying the manifest does not toggle its disclosure", () => {
       onDone={() => {}}
     />,
   );
-  const fold = container.querySelector("details.int-manifest") as HTMLDetailsElement;
+  const fold = baseElement.querySelector("details.int-manifest") as HTMLDetailsElement;
   expect(fold.open).toBe(false);
   // THE DEFAULT IS CANCELLED, which is the actual mechanism: fireEvent
   // reports what dispatchEvent did, and jsdom does not implement a
@@ -1946,7 +2030,18 @@ test("saving a connected app does not say it connected", async () => {
               ...tool,
               configured: true,
               requirements: [
-                req({ field: "route_to", label: "Fallback seat", kind: "handle", present: true }),
+                // WITH A ROSTER, which this fixture did not have. The
+                // gesture below used to be `fireEvent.change` on a picker
+                // holding no options at all: it dirtied the form, which was
+                // all the test needed, while reading as "the operator chose a
+                // seat". Now it is that.
+                req({
+                  field: "route_to",
+                  label: "Fallback seat",
+                  kind: "handle",
+                  present: true,
+                  choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
+                }),
               ],
             },
           },
@@ -1957,12 +2052,17 @@ test("saving a connected app does not say it connected", async () => {
       />
     </ToastProvider>,
   );
-  fireEvent.change(screen.getByLabelText("Fallback seat"), { target: { value: "sre-lead" } });
+  choose(screen.getByLabelText("Fallback seat"), /sre-lead/);
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
-  await vi.waitFor(() => expect(screen.getByText(/Datadog settings saved/)).toBeTruthy());
-  expect(screen.queryByText(/Datadog connected/)).toBeNull();
+  // `getAllByText`, because uilet's toaster says it TWICE on purpose: once in
+  // the visible message and once in the live region a screen reader hears. The
+  // invariant is which sentence it is, not how many nodes carry it.
+  await vi.waitFor(() =>
+    expect(screen.getAllByText(/Datadog settings saved/).length).toBeGreaterThan(0),
+  );
+  expect(screen.queryAllByText(/Datadog connected/)).toHaveLength(0);
 });
 
 // A REFUSAL NEVER HIDES BEHIND THE FOLD.
@@ -2146,6 +2246,57 @@ test("an ungated field ignores the answers", () => {
   expect(shownField(plain, () => "")).toBe(true);
 });
 
+// A CHOICE'S SECOND LINE REACHES THE OPERATOR.
+//
+// The engine sends one per choice and it is routinely the ONLY thing telling
+// two of them apart: `internal/atlassian` offers Cloud and Data Center and
+// distinguishes them as "Crewlet reads your sites and creates each agent's
+// account" against "Self-hosted. Give each product's address and its own
+// token." The form accepted that sentence and drew it nowhere, because a
+// native `<option>` holds one line — so an operator chose between two
+// deployments of the same vendor by their names alone.
+test("a choice's hint is drawn beside it, not dropped", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Atlassian",
+          tool: {
+            ...tool,
+            key: "atlassian",
+            requirements: [
+              req({
+                field: "deployment",
+                label: "Which Atlassian",
+                kind: "choice",
+                choices: [
+                  {
+                    value: "cloud",
+                    label: "Cloud",
+                    hint: "Crewlet reads your sites and creates each agent's account.",
+                  },
+                  {
+                    value: "dc",
+                    label: "Data Center",
+                    hint: "Self-hosted. Give each product's address and its own token.",
+                  },
+                ],
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByLabelText(/Which Atlassian/));
+  const said = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+  expect(said.some((t) => t.includes("creates each agent's account"))).toBe(true);
+  expect(said.some((t) => t.includes("Self-hosted"))).toBe(true);
+});
+
 // SELECTING THE ANSWER REVEALS THE FIELD THAT ANSWER NEEDS.
 //
 // The whole point of the gate, and the thing a unit test of the predicate
@@ -2182,8 +2333,7 @@ test("choosing the gated answer reveals its field", () => {
   );
   expect(screen.queryByText("Organization token")).toBeNull();
 
-  const choice = screen.getByLabelText(/Which GitHub activity/);
-  fireEvent.change(choice, { target: { value: "true" } });
+  choose(screen.getByLabelText(/Which GitHub activity/), /Every repository in acme/);
 
   // VISIBLE, not merely present in the requirement list: a field revealed
   // into a collapsed fold is a field somebody still cannot see.
@@ -2199,7 +2349,7 @@ test("choosing the gated answer reveals its field", () => {
 // showing. Every choice this product declares carries a default, so the empty
 // option is never the truth on a form somebody has opened.
 test("a dropdown holding an answer offers no placeholder", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
@@ -2207,7 +2357,7 @@ test("a dropdown holding an answer offers no placeholder", () => {
       onDone={() => {}}
     />,
   );
-  for (const select of container.querySelectorAll("select")) {
+  for (const select of baseElement.querySelectorAll("select")) {
     expect(select.value).not.toBe("");
     const empty = [...select.options].filter((o) => o.value === "");
     expect(empty).toHaveLength(0);
@@ -2242,7 +2392,7 @@ test("a value the choices do not contain is shown as itself", () => {
       },
     ],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "GitHub", tool: narrowed }]}
       title="GitHub"
@@ -2250,8 +2400,8 @@ test("a value the choices do not contain is shown as itself", () => {
       onDone={() => {}}
     />,
   );
-  const select = container.querySelector("select");
-  expect(select?.value).toBe("auto");
+  const picker = baseElement.querySelector(".crewlet-select__trigger");
+  expect(picker?.textContent).toBe("auto");
 });
 
 // A GATED FIELD SAYS IT IS REQUIRED, AND SITS UNDER THE ANSWER THAT REVEALED
@@ -2283,7 +2433,7 @@ test("a revealed field is marked required and follows its question", () => {
       { ...gated },
     ],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "GitHub", tool: coverage }]}
       title="GitHub"
@@ -2291,13 +2441,76 @@ test("a revealed field is marked required and follows its question", () => {
       onDone={() => {}}
     />,
   );
-  fireEvent.change(container.querySelector("select")!, { target: { value: "true" } });
+  choose(baseElement.querySelector(".crewlet-select__trigger") as HTMLElement, /Every repository/);
 
-  const labels = [...container.querySelectorAll("label")].map((l) => l.textContent ?? "");
+  const labels = [...baseElement.querySelectorAll("label")].map((l) => l.textContent ?? "");
   const token = labels.findIndex((t) => t.startsWith("Organization token"));
   const choice = labels.findIndex((t) => t.startsWith("Which GitHub activity"));
   expect(token).toBeGreaterThan(-1);
   expect(token).toBeGreaterThan(choice);
   expect(labels[token]).toContain("(required)");
   expect(labels[token]).not.toContain("(optional)");
+});
+
+/*
+ * A WRITE IN FLIGHT CANNOT BE DISMISSED BY A STRAY PRESS.
+ *
+ * `ui/Dialog.tsx` used to assert this over a bare shell, and the mechanism
+ * behind it is uilet's now: `Modal` feeds its `dismissable` prop to the layer
+ * stack, whose Escape path and veil path are both guarded by
+ * `entry.dismissable()`. What is NOT uilet's, and what this file is the right
+ * place for, is that this dialog passes `dismissable={!busy}` at all.
+ *
+ * It is the sharp case on this screen. A connect is several writes in order —
+ * the credential sealed, the `${VAR}` pointer merged into the company
+ * configuration, the epoch advanced — so a surface dismissed part-way leaves a
+ * company in a state nobody chose and, worse, nobody saw: pointer-first
+ * refuses every delivery, value-only reaches no running seat.
+ *
+ * TWO-SIDED, because the assertion is worthless on its own: a surface that
+ * never closed would pass the busy half. So the same press is made before the
+ * write starts, where it must close.
+ */
+test("a dialog mid-write refuses Escape and a press on the veil, and otherwise takes both", async () => {
+  // A WRITE THAT NEVER SETTLES, so `busy` is still true when the presses land.
+  // A resolved one races the assertion against the component's own cleanup.
+  let writing = false;
+  const spy = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(init?.method ?? "GET").toUpperCase() === "GET") {
+      return Promise.resolve(new Response("[]", { status: 200 }));
+    }
+    writing = true;
+    return new Promise<Response>(() => {});
+  });
+  Object.defineProperty(globalThis, "fetch", { writable: true, value: spy });
+
+  const closed = vi.fn();
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={closed}
+      onDone={() => {}}
+    />,
+  );
+  const veil = () => baseElement.querySelector(".crewlet-modal-overlay") as Element;
+
+  // THE CONTROL. Nothing is in flight, so both gestures close.
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(closed).toHaveBeenCalledTimes(1);
+  // ON THE CLICK, NOT THE POINTERDOWN — the stack arms on the press and fires
+  // on the click, so that a tap's compatibility click cannot land on whatever
+  // the veil was covering.
+  fireEvent.pointerDown(veil());
+  fireEvent.click(veil());
+  expect(closed).toHaveBeenCalledTimes(2);
+
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  await vi.waitFor(() => expect(writing).toBe(true));
+
+  // AND NOW NEITHER OF THEM DOES.
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  fireEvent.pointerDown(veil());
+  fireEvent.click(veil());
+  expect(closed).toHaveBeenCalledTimes(2);
 });

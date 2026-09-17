@@ -358,27 +358,6 @@
   flex: 0 0 auto;
 }
 
-.side-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  background: var(--text-faint);
-}
-
-.side-dot.positive {
-  background: var(--positive);
-}
-.side-dot.caution {
-  background: var(--caution);
-}
-.side-dot.critical {
-  background: var(--critical);
-}
-.side-dot.info {
-  background: var(--info);
-}
-
 .side-empty {
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-2xs);
@@ -1141,99 +1120,8 @@ button.histogram-bar[data-empty]:hover {
   margin-bottom: var(--space-2);
 }
 
-.facet {
-  all: unset;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  font-size: var(--fs-2xs);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.facet:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-
-.facet:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
-.facet .t-num {
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---- The search button in the page bar ----------------------------------- */
-
-.omni {
-  all: unset;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 160px;
-  height: var(--control-h-sm);
-  padding: 0 var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-
-.omni:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-
-.omni:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
-.omni-label {
-  flex: 1;
-}
-
-.omni kbd {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  padding: 1px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-xs);
-  color: var(--text-faint);
-}
-
-/* Below this the page bar has no room for a labelled search button. */
-@media (max-width: 860px) {
-  .omni {
-    min-width: 0;
-  }
-
-  .omni .omni-label,
-  .omni kbd {
-    display: none;
-  }
-}
-
-/* The peek's own title: one step under the page's, because the rail is a
-   condensed view of the object rather than a second page of it. */
-.peek-title {
-  font-size: var(--fs-md);
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-snug);
-}
-
-/* A mono key mark, wherever a project or item key stands beside prose. */
+/* ---- Key mark -----------------------------------------------------------
+   A mono key mark, wherever a project or item key stands beside prose. */
 .key-mark {
   font-family: var(--font-mono);
   font-size: var(--fs-3xs);

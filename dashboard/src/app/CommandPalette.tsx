@@ -11,7 +11,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useModal } from "~/ui/Dialog.tsx";
+import { createPortal } from "react-dom";
+import { Input, Kbd, useBodyScrollLock, useLayerContainer, useModalLayer } from "@crewlethq/ui";
 import { DESTINATIONS } from "./nav.ts";
 import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -21,12 +22,12 @@ import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { QueryState } from "~/components/common.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
+import { markByName, type MarkName } from "~/ui/glyph.tsx";
 
 interface Hit {
   id: string;
   group: string;
-  icon: IconName;
+  icon: MarkName;
   label: string;
   hint: string;
   go: () => void;
@@ -82,14 +83,14 @@ function score(text: string, q: string): number {
  */
 function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
   const out: Hit[] = [];
-  const add = (id: string, icon: IconName, label: string, hint: string, go: () => void) =>
+  const add = (id: string, icon: MarkName, label: string, hint: string, go: () => void) =>
     out.push({ id: `cmd-${id}`, group: "Commands", icon, label, hint, go });
 
   for (const choice of THEMES) {
     if (choice === prefs.theme) continue;
     add(
       `theme-${choice}`,
-      choice === "dark" ? "moon" : choice === "light" ? "sun" : "monitor",
+      choice === "dark" ? "dark_mode" : choice === "light" ? "light_mode" : "computer",
       `Theme: ${choice}`,
       choice === "system" ? "follow this machine's setting" : `always ${choice}`,
       () => prefs.setTheme(choice),
@@ -107,7 +108,7 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
     void navigator.clipboard?.writeText(window.location.href);
   });
   add("token", "key", "Set the API token", "for the operator-only screens", requestToken);
-  add("clear-recents", "clock", "Clear recents", "this browser only", forgetAll);
+  add("clear-recents", "schedule", "Clear recents", "this browser only", forgetAll);
   return out;
 }
 
@@ -124,13 +125,22 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // THE SHELL EVERY OTHER MODAL USES. This one hand-rolled its veil because
-  // `Dialog`'s chrome is a title bar and the palette's header IS its input —
-  // and so it had none of the behaviour: focus was moved in but never
-  // returned, so closing left a keyboard reader at the top of the page rather
-  // than on the row they opened it from, and Escape was bound to the input
-  // alone, which does nothing once focus is in the result list beside it.
-  const { veil, shell } = useModal({ label: "Search", onClose });
+  // THE LAYER, NOT A SHELL. uilet publishes the two halves of a modal
+  // separately — [Modal] is the frame, [useModalLayer] is what a frame does —
+  // and this surface wants only the second: Escape going to the TOPMOST layer
+  // rather than to whichever handler bound `document` first, Tab trapped
+  // inside the panel, focus moved in on open and handed back on close to the
+  // row that opened it, one z-index band, and a press that closes on the
+  // veil's own `click` rather than on its `pointerdown`.
+  //
+  // WHY NOT [Modal] ITSELF, which is what `ui/Dialog.tsx` ports onto. Its body
+  // is one scrolling block, so the field would ride up out of view as the
+  // arrows walked the list. uilet's own CommandPalette fixes that with a
+  // stylesheet rule on `.crewlet-palette .crewlet-modal__body` — a band layout
+  // a consumer cannot ask for through the component's props.
+  const container = useLayerContainer();
+  const layer = useModalLayer({ onClose, initialFocus: () => inputRef.current });
+  useBodyScrollLock(true);
 
   const index = useMemo(() => indexOrg(org), [org]);
 
@@ -192,7 +202,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           {
             id: `recent-${r.path.join("/")}`,
             group: "Recent",
-            icon: "clock",
+            icon: "schedule",
             label: r.label,
             hint: r.workspace || r.path.join(" / "),
             go: () => nav.to(r.path),
@@ -261,7 +271,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `event-${query}`,
           group: "Open by id",
-          icon: "file",
+          icon: "description",
           label: query,
           hint: "as an event",
           go: () => nav.to(["activity", "events", query]),
@@ -272,7 +282,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `trace-${query}`,
           group: "Open by id",
-          icon: "gitBranch",
+          icon: "fork_right",
           label: query,
           hint: "as a trace — every event that carries it",
           // THE TRACE PAGE, which is the only screen that assembles one: it
@@ -329,7 +339,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `seat-${seat.handle}`,
           group: "Seats",
-          icon: seat.kind === "human" ? "user" : "users",
+          icon: seat.kind === "human" ? "person" : "group",
           label: seat.name,
           hint:
             seat.kind === "human"
@@ -354,7 +364,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `unit-${unit.name}`,
           group: "Units",
-          icon: "sitemap",
+          icon: "account_tree",
           label: unit.name,
           hint: `${unit.type ?? "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
           go: () => nav.to(["company", "units", unit.id || unit.name]),
@@ -371,7 +381,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           {
             id: `tool-${tool.name}`,
             group: "Tools",
-            icon: "wrench",
+            icon: "build",
             label: tool.name,
             hint: tool.source,
             go: () => nav.to(["admin", "tools"], { q: tool.name }),
@@ -383,7 +393,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: "search-events",
           group: "Search",
-          icon: "activity",
+          icon: "timeline",
           label: `Events mentioning “${q.trim()}”`,
           hint: "the event log, filtered",
           go: () => nav.to(["activity", "events"], { q: q.trim() }),
@@ -394,7 +404,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: "search-knowledge",
           group: "Search",
-          icon: "book",
+          icon: "book_2",
           label: `Knowledge base for “${q.trim()}”`,
           hint: "live search, run as the company",
           go: () => nav.to(["knowledge"], { q: q.trim() }),
@@ -432,17 +442,33 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       hits[cursor]?.go();
       onClose();
     }
-    // ESCAPE IS THE SHELL'S, on `document`, so it closes from the result list
-    // and from the footer too.
+    // ESCAPE IS THE LAYER STACK'S, and it goes to the TOPMOST surface rather
+    // than to whichever handler bound `document` first — so it closes from
+    // the result list and the footer too, and a dialog raised over this one
+    // closes itself and leaves the palette standing.
   }
 
   let flat = -1;
-  return (
-    <div {...veil}>
-      <div {...shell} className="palette">
-        <input
+  if (!container) return null;
+  return createPortal(
+    <div className="veil" ref={layer.veilRef} style={{ zIndex: layer.zIndex }}>
+      <div
+        className="palette"
+        ref={layer.panelRef}
+        role="dialog"
+        aria-modal
+        aria-label="Search"
+        tabIndex={-1}
+      >
+        {/* THE FIELD IS THE SURFACE, which is exactly what uilet's `command`
+            appearance is for: no box of its own, set at the reading size, and
+            a placeholder on an ink measured to 4.5:1 rather than on the
+            decoration step a hint is usually drawn in. The band geometry
+            around it stays `.palette-input`, which is ours. */}
+        <Input
           ref={inputRef}
-          className="palette-input"
+          appearance="command"
+          containerClassName="palette-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKeyDown}
@@ -496,7 +522,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                       onClose();
                     }}
                   >
-                    <Icon name={hit.icon} size="sm" />
+                    <HitGlyph name={hit.icon} />
                     <span className="truncate">{hit.label}</span>
                     <span className="palette-hint truncate">{hit.hint}</span>
                   </button>
@@ -511,21 +537,37 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               marked, so the reader can see which scope they typed into. */}
           {SCOPES.map((s) => (
             <span key={s.sigil} className={sigil === s.sigil ? "is-on" : undefined}>
-              <kbd>{s.sigil}</kbd> {s.label}
+              <Kbd>{s.sigil}</Kbd> {s.label}
             </span>
           ))}
           <span className="spacer" />
           <span>
-            <kbd>↑</kbd> <kbd>↓</kbd> move
+            <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
           </span>
           <span>
-            <kbd>↵</kbd> open
+            <Kbd>↵</Kbd> open
           </span>
           <span>
-            <kbd>esc</kbd> close
+            <Kbd>esc</Kbd> close
           </span>
         </div>
       </div>
-    </div>
+    </div>,
+    container,
   );
+}
+
+/**
+ * One hit's glyph, looked up from the name the hit carries.
+ *
+ * BY NAME, because a hit's icon IS data here: it comes from `nav.ts`'s
+ * destination table, from a seat's kind, or from which of three ways a pasted
+ * id could be read. `~/ui/glyph.tsx` is the one lookup over a name, and the
+ * registry it wraps is published for exactly this case and says so; every
+ * other call site in this tree imports the one glyph it draws and never
+ * reaches a lookup at all.
+ */
+function HitGlyph({ name }: { name: MarkName }) {
+  const Glyph = markByName(name);
+  return <Glyph size="sm" />;
 }

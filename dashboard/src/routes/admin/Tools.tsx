@@ -9,19 +9,29 @@
 import { useCallback, useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
-import { QueryState, Section, SeatChip } from "~/components/common.tsx";
 import {
-  Badge,
-  Chip,
-  Code,
+  Callout,
+  Card,
+  CodeBlock,
   Disclosure,
-  Empty,
-  Panel,
-  SearchInput,
+  EmptyState,
+  FilterChip,
+  InlineCode,
+  Input,
   Skeleton,
-  Stat,
-  StatRow,
-} from "~/ui/primitives.tsx";
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+import {
+  BuildGlyph,
+  CableGlyph,
+  Package2Glyph,
+  SearchGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+import { QueryState, Section, SeatChip } from "~/components/common.tsx";
+import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -42,6 +52,19 @@ import {
 import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+
+/**
+ * What a capability is drawn as.
+ *
+ * `capabilityTone` in `~/lib/tools.ts` answers in OUR tone vocabulary, and
+ * that module is not this port's to change, so the spelling is translated at
+ * the one seam that renders it. An unadvertised capability has no tone at all
+ * and takes the neutral pill, which is the same nothing our badge drew.
+ */
+function capabilityVariant(c: Capability) {
+  const tone = capabilityTone(c);
+  return tone ? uiletTone(tone) : "neutral";
+}
 
 /** Worst first: what an operator auditing a new server reads down. */
 const CAPABILITY_ORDER: Record<Capability, number> = {
@@ -291,15 +314,15 @@ function ToolBody({ name }: { name: string }) {
   // catalogue in a connected browser is a snapshot still in flight — and an
   // empty state here would tell a reader their tool is gone every time they
   // open one on a cold tab.
-  if (cold) return <Skeleton rows={6} />;
+  if (cold) return <Skeleton variant="text" rows={6} label="Loading" />;
 
   if (!tool) {
     return (
-      <Empty
-        inline
-        icon="wrench"
+      <EmptyState
+        size="compact"
+        icon={<BuildGlyph size="xl" />}
         title={`No tool called “${name}”`}
-        hint="Builtins register at boot and MCP tools are discovered from the servers in mcp_servers. A tool whose server failed to start, or whose name has changed, is not in this node's registry."
+        description="Builtins register at boot and MCP tools are discovered from the servers in mcp_servers. A tool whose server failed to start, or whose name has changed, is not in this node's registry."
       />
     );
   }
@@ -357,10 +380,13 @@ function ToolBody({ name }: { name: string }) {
                 },
               ]}
             />
-            <Disclosure label="The schema as JSON" mono>
-              <Code plain selectable label={`${tool.name}'s input schema, as JSON`}>
-                {JSON.stringify(tool.input_schema, null, 2)}
-              </Code>
+            <Disclosure title="The schema as JSON" mono>
+              <CodeBlock
+                plain
+                selectable
+                label={`${tool.name}'s input schema, as JSON`}
+                code={JSON.stringify(tool.input_schema, null, 2)}
+              />
             </Disclosure>
           </>
         )}
@@ -368,7 +394,7 @@ function ToolBody({ name }: { name: string }) {
 
       <section className="col gap-2">
         <div className="t-label">Which seats hold it</div>
-        {entity.loading && <Skeleton rows={2} />}
+        {entity.loading && <Skeleton variant="text" rows={2} label="Loading" />}
         {/* THE REFUSAL GOES WHERE THE ANSWER WOULD HAVE BEEN, and nowhere
             else: the tool's own facts came off a push and are still true, so
             a configuration read that failed must not blank them. */}
@@ -428,10 +454,10 @@ function ToolHeader({ name }: { name: string }) {
   return (
     <ObjectHeader
       kind="Tool"
-      icon="wrench"
+      icon="build"
       identifier={tool.title ? tool.name : undefined}
       title={tool.title || tool.name}
-      status={<Badge tone={capabilityTone(capability)}>{capability}</Badge>}
+      status={<Tag variant={capabilityVariant(capability)}>{capability}</Tag>}
       facts={toolFacts(tool)}
     />
   );
@@ -456,7 +482,7 @@ function ToolHeader({ name }: { name: string }) {
  */
 export function ToolPeek({ name }: { name: string }) {
   const { tool, cold } = useTool(name);
-  if (cold) return <Skeleton rows={6} />;
+  if (cold) return <Skeleton variant="text" rows={6} label="Loading" />;
   if (!tool) return <ToolBody name={name} />;
   const capability = capabilityOf(tool.annotations);
   return (
@@ -464,14 +490,14 @@ export function ToolPeek({ name }: { name: string }) {
       <ObjectHeader
         size="peek"
         kind="Tool"
-        icon="wrench"
+        icon="build"
         // THE NAME IN ONE PLACE. A server that advertised a human title gets
         // both — the identifier a config names and the words a person reads —
         // and one that did not gets the name as the title alone, rather than
         // the same string printed twice a line apart.
         identifier={tool.title ? tool.name : undefined}
         title={tool.title || tool.name}
-        status={<Badge tone={capabilityTone(capability)}>{capability}</Badge>}
+        status={<Tag variant={capabilityVariant(capability)}>{capability}</Tag>}
         facts={toolFacts(tool)}
       />
       <ToolBody name={name} />
@@ -574,7 +600,9 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
 
   return (
     <>
-      <PageActions>{<Badge outline>{plural(tools.length, "tool")} registered</Badge>}</PageActions>
+      <PageActions>
+        {<Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>}
+      </PageActions>
       <PageNote>
         What the models can actually call. A planner sees only the server names; the tool names
         below are discovered and activated during a turn.
@@ -597,18 +625,28 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         </>
       )}
 
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat icon="wrench" label="Total" value={tools.length} sub="across every origin" />
-          <Stat icon="box" label="Built in" value={builtins} sub="shipped by the engine itself" />
-          <Stat
-            icon="plug"
+      <Card padding="none">
+        <StatGroup columns={4}>
+          <StatCard
+            icon={<BuildGlyph size="xs" />}
+            label="Total"
+            value={tools.length}
+            sub="across every origin"
+          />
+          <StatCard
+            icon={<Package2Glyph size="xs" />}
+            label="Built in"
+            value={builtins}
+            sub="shipped by the engine itself"
+          />
+          <StatCard
+            icon={<CableGlyph size="xs" />}
             label="From MCP servers"
             value={mcp}
             sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
           />
-          <Stat
-            icon="alert"
+          <StatCard
+            icon={<WarningGlyph size="xs" />}
             label="Can write"
             value={writes}
             sub={
@@ -617,42 +655,49 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 : "every tool advertises what it does"
             }
           />
-        </StatRow>
-      </Panel>
+        </StatGroup>
+      </Card>
 
       <div className="toolbar">
         <div style={{ maxWidth: 340, flex: 1 }}>
-          <SearchInput
+          <Input
+            type="search"
             value={q}
-            onChange={setQ}
-            ariaLabel="Search tools"
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="Search tools"
             placeholder="Search by name or description"
+            leading={<SearchGlyph size="sm" />}
+            width="full"
           />
         </div>
         <span className="spacer" />
-        <Chip on={!origin} onClick={() => pick("")}>
+        {/* A CHIP HERE TOGGLES A FILTER, which is what `FilterChip` is: it
+            carries `aria-pressed` and the count in one control. `All` is the
+            absence of a filter rather than one of them, so it is pressed
+            exactly when nothing else is. */}
+        <FilterChip pressed={!origin} onPressedChange={() => pick("")}>
           All
-        </Chip>
+        </FilterChip>
         {origins.map(([source, count]) => (
-          <Chip
+          <FilterChip
             key={source}
-            on={origin === source}
+            pressed={origin === source}
             count={count}
-            onClick={() => pick(origin === source ? "" : source)}
+            onPressedChange={() => pick(origin === source ? "" : source)}
           >
             {source}
-          </Chip>
+          </FilterChip>
         ))}
       </div>
 
       {!tools.length ? (
-        <Empty
-          icon="wrench"
+        <EmptyState
+          icon={<BuildGlyph size="xl" />}
           title="No tools are registered"
-          hint="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
+          description="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
         />
       ) : (
-        <Panel padding="none">
+        <Card padding="none">
           <DataGrid<ToolRow>
             rows={rows}
             rowKey={(t) => `${t.source}:${t.name}`}
@@ -687,7 +732,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                   const { kind, detail } = originOf(t.source);
                   return (
                     <span className="row gap-1">
-                      <Badge outline>{kind}</Badge>
+                      <Tag appearance="outline">{kind}</Tag>
                       {detail && <span className="t-caption mono">{detail}</span>}
                     </span>
                   );
@@ -717,8 +762,10 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                   const c = capabilityOf(t.annotations);
                   return (
                     <span className="row gap-1">
-                      <Badge tone={capabilityTone(c)}>{c}</Badge>
-                      {t.annotations?.open_world === "yes" && <Badge outline>outside</Badge>}
+                      <Tag variant={capabilityVariant(c)}>{c}</Tag>
+                      {t.annotations?.open_world === "yes" && (
+                        <Tag appearance="outline">outside</Tag>
+                      )}
                     </span>
                   );
                 },
@@ -730,7 +777,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 sortValue: (t) => t.delivers ?? "",
                 cell: (t) =>
                   t.delivers ? (
-                    <Badge outline>{t.delivers}</Badge>
+                    <Tag appearance="outline">{t.delivers}</Tag>
                   ) : (
                     <span className="faint t-caption">nobody</span>
                   ),
@@ -766,24 +813,24 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
               },
             ]}
           />
-        </Panel>
+        </Card>
       )}
 
       <Section title="How a model reaches these">
-        <div className="banner neutral">
+        <Callout variant="neutral">
           <span className="col" style={{ gap: 4 }}>
             <span>
               An executor prompt lists <strong>server names</strong>, not tool names — a role with
               50–150 MCP tools would push 15–25 KB of catalogue into every call.
             </span>
             <span className="t-caption">
-              The model calls <code className="inline">list_mcp_server_tools(server)</code> to see
-              what a server offers, then <code className="inline">activate_tool(name)</code> to
-              promote one into the schemas it can actually invoke. It activates what it needs the
-              moment it needs it — there is no separate planning pass to name a tool in advance.
+              The model calls <InlineCode>list_mcp_server_tools(server)</InlineCode> to see what a
+              server offers, then <InlineCode>activate_tool(name)</InlineCode> to promote one into
+              the schemas it can actually invoke. It activates what it needs the moment it needs it
+              — there is no separate planning pass to name a tool in advance.
             </span>
           </span>
-        </div>
+        </Callout>
       </Section>
     </>
   );

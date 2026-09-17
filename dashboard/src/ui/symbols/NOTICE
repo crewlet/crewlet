@@ -1,0 +1,17 @@
+Material Symbols by Google, licensed under the Apache License 2.0 and
+redistributed from google/material-design-icons at commit
+40a7a292a79d9394157e1ea24f83d52d5e17c556 — the same commit
+@crewlethq/icons pins, so these drawings and the vendored ones are from one
+upstream revision.
+
+The drawings in 20/ and 24/ are the Material Symbols Outlined style at weight
+400 and grade 0, in the 20 px and 24 px optical sizes.
+
+The files are unchanged; src/ui/glyph.tsx copies the path data across verbatim,
+so what a page draws is what upstream drew. SHA256SUMS records the checksum of
+every file, and src/ui/symbols.test.ts verifies both the checksums and that the
+inline path data still matches these files.
+
+The Apache License 2.0 text is in LICENSE beside this file, and it covers these
+drawings only. The rest of the Crewlet dashboard is under the MIT License in the
+repository's own LICENSE.

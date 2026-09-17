@@ -13,6 +13,80 @@ import { Field } from "./Field.tsx";
 
 afterEach(cleanup);
 
+/**
+ * WHAT THE CONTROL IS TIED TO.
+ *
+ * The label, the affix sentence, the help line and the error line are four
+ * separate things a reader has to hear, and pairing them with the control by
+ * hand is where a form gets one of them wrong. The field is built on uilet's
+ * `FormField` so that the pairing is the component's rather than this file's;
+ * these say what the reader actually gets, so a regression in the wiring is
+ * not a silent one.
+ */
+
+// EVERY SENTENCE ABOUT A FIELD REACHES THE CONTROL, in reading order: the
+// affix is part of the value, then what the value is for, then why the last
+// one was refused.
+test("the help and the error are both tied to the control, help first", () => {
+  render(
+    <Field
+      label="Jira site"
+      kind="url"
+      value=""
+      onChange={() => {}}
+      help="The workspace subdomain, not the whole address."
+      error="integrations.jira: required value missing"
+    />,
+  );
+
+  const input = screen.getByLabelText("Jira site");
+  const said = (input.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+  const text = said.map((id) => document.getElementById(id)?.textContent ?? "");
+
+  expect(text[0]).toContain("Begins with https://");
+  expect(text[1]).toContain("The workspace subdomain");
+  expect(text[2]).toContain("required value missing");
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+});
+
+// AND A REFUSED VALUE KEEPS THE LINE SAYING WHAT RIGHT LOOKS LIKE.
+//
+// The help line replaced by the error is the failure this shape exists to
+// stop: a reader is told they are wrong and, in the same instant, loses the
+// only sentence saying what would have been right.
+test("an error does not take the help line away", () => {
+  render(
+    <Field
+      label="Jira site"
+      kind="url"
+      value=""
+      onChange={() => {}}
+      help="The workspace subdomain, not the whole address."
+      error="integrations.jira: required value missing"
+    />,
+  );
+  expect(screen.getByText(/The workspace subdomain/)).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("required value missing");
+});
+
+// REQUIRED IS THE UNMARKED DEFAULT, and the exception is marked. Most fields
+// on this form are required, so marking them all is noise that teaches a
+// reader to skip the note — including the asterisk uilet's own Label draws
+// when it is told a field is required.
+test("only requiredness that is news is said out loud", () => {
+  const { rerender } = render(
+    <Field label="Organization token" value="" onChange={() => {}} required />,
+  );
+  const label = () => screen.getByText(/Organization token/);
+  expect(label().textContent).toBe("Organization token");
+
+  rerender(<Field label="Organization token" value="" onChange={() => {}} required markRequired />);
+  expect(label().textContent).toContain("(required)");
+
+  rerender(<Field label="Organization token" value="" onChange={() => {}} required={false} />);
+  expect(label().textContent).toContain("(optional)");
+});
+
 // Typed the way a person says it out loud, saved the way the config demands.
 test("a url field supplies the scheme the config requires", () => {
   const onChange = vi.fn();
@@ -134,10 +208,19 @@ test("no other kind of field wears a scheme", () => {
 // it. The field held `${JIRA_TOKEN}` and rendered sixteen dots, which is the
 // same thing an operator saw before the engine sent the reference at all.
 test("a secret holding a reference is readable", () => {
-  render(<Field label="API token" kind="secret" value="${JIRA_TOKEN}" onChange={() => {}} />);
-  const input = screen.getByLabelText("API token") as HTMLInputElement;
-  expect(input.type).toBe("text");
-  expect(input.value).toBe("${JIRA_TOKEN}");
+  const { rerender } = render(
+    <Field label="API token" kind="secret" value="${JIRA_TOKEN}" onChange={() => {}} />,
+  );
+  const input = () => screen.getByLabelText("API token") as HTMLInputElement;
+  expect(input().type).toBe("text");
+  expect(input().value).toBe("${JIRA_TOKEN}");
+  // AND IT READS AS A NAME rather than as the value it stands in for, which is
+  // what uilet's `reference` appearance is: the same monospace face a stored
+  // entry's name wears on the Secrets screen. A credential does not get it.
+  expect(input().closest(".crewlet-input")?.className).toContain("crewlet-input--reference");
+
+  rerender(<Field label="API token" kind="secret" value="ATATT-real" onChange={() => {}} />);
+  expect(input().closest(".crewlet-input")?.className).not.toContain("crewlet-input--reference");
 });
 
 // AND EVERYTHING ELSE IN THAT FIELD IS STILL A CREDENTIAL. The type is what

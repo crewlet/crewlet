@@ -16,7 +16,13 @@ import { useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Segmented, SearchInput, cx } from "~/ui/primitives.tsx";
+import { Card, EmptyState, Input, Tag, cx } from "@crewlethq/ui";
+import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
+// `semantics`: `radio` commits the option the arrows land on. Both strips here
+// drive a `useTab`, which pushes a history entry — and the view strip swaps the
+// screen for a table that fires `work_workload`. See the report.
+import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -66,7 +72,7 @@ function Workload({ seats }: { seats: Seat[] }) {
             }
       }
     >
-      <Panel padding="none">
+      <Card padding="none">
         <div className="wl">
           <div className="wl-head">
             <span>Seat</span>
@@ -79,7 +85,7 @@ function Workload({ seats }: { seats: Seat[] }) {
             <LoadRow key={load.handle} load={load} />
           ))}
         </div>
-      </Panel>
+      </Card>
       {answer.data?.truncated && (
         <PageNote>
           More people hold work than this answer names. It stops at a cap rather than scanning a
@@ -121,14 +127,14 @@ function LoadRow({ load }: { load: Load }) {
       <span className="wl-counts">
         <span className="wl-open">{load.open}</span>
         {load.blocked > 0 && (
-          <Badge tone="critical" outline>
+          <Tag variant="danger" appearance="outline">
             {load.blocked} blocked
-          </Badge>
+          </Tag>
         )}
         {load.overdue > 0 && (
-          <Badge tone="caution" outline>
+          <Tag variant="warning" appearance="outline">
             {load.overdue} overdue
-          </Badge>
+          </Tag>
         )}
         {load.unscheduled > 0 && <span className="wl-soft">{load.unscheduled} undated</span>}
       </span>
@@ -286,9 +292,9 @@ export function People() {
       <PageActions>
         {
           <>
-            <Badge outline>{plural(agentSeats, "agent seat")}</Badge>
+            <Tag appearance="outline">{plural(agentSeats, "agent seat")}</Tag>
             {index.seats.length - agentSeats > 0 && (
-              <Badge outline>{plural(index.seats.length - agentSeats, "human")}</Badge>
+              <Tag appearance="outline">{plural(index.seats.length - agentSeats, "human")}</Tag>
             )}
           </>
         }
@@ -301,10 +307,19 @@ export function People() {
       <div className="toolbar">
         {view === "seats" && (
           <div style={{ maxWidth: 320, flex: 1 }}>
-            <SearchInput
+            {/* `SearchTrigger` is the one that OPENS a palette; this box filters
+                the list under it, so the peer is `Input` with the glyph in its
+                leading slot. `onClear` is theirs and ours had none — the X only
+                appears once something is typed. */}
+            <Input
+              type="search"
+              width="full"
               value={q}
-              onChange={setQ}
-              ariaLabel="Filter seats"
+              onChange={(e) => setQ(e.target.value)}
+              onClear={() => setQ("")}
+              clearLabel="Clear the seat filter"
+              leading={<SearchGlyph size="sm" />}
+              aria-label="Filter seats"
               placeholder="Filter by name, handle, goal or unit"
             />
           </div>
@@ -339,10 +354,10 @@ export function People() {
       {view === "workload" && <Workload seats={index.seats} />}
 
       {view === "seats" && !groups.length && (
-        <Empty
-          icon="users"
+        <EmptyState
+          icon={<GroupGlyph size={32} />}
           title={q ? `No seat matches “${q}”` : "This company has no seats"}
-          hint={
+          description={
             q
               ? "The filter matches a seat's name, handle, goal or unit."
               : "Roles are defined in the company configuration. Import one to spawn seats."

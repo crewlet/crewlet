@@ -24,5 +24,15 @@ export default defineConfig({
     // non-zero offset all year and two transitions, and it is the zone
     // `internal/tracker`'s own date suite already resolves against.
     env: { TZ: "Europe/Berlin" },
+    // THE DESIGN SYSTEM IS TRANSFORMED RATHER THAN EXTERNALISED, because its
+    // components import their own stylesheets as a side effect and Node has no
+    // loader for a `.css` file. Vitest externalises `node_modules` by default,
+    // which hands `@crewlethq/ui/dist/...css` straight to Node's ESM loader:
+    // every suite whose module graph reaches ANY uilet component dies with
+    // `TypeError: Unknown file extension ".css"` before a single test runs —
+    // and a suite that fails to LOAD reports zero tests rather than a failure
+    // anyone can read. Inlining routes those imports back through Vite, which
+    // is what the browser build already does with them.
+    server: { deps: { inline: [/@crewlethq\//] } },
   },
 });

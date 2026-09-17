@@ -389,14 +389,14 @@ test("a refused series keeps its panel and says why", () => {
   expect(screen.getByText(/burndown/i)).toBeTruthy();
   // ...and it carries the refusal rather than an empty chart.
   expect(screen.queryByText("Remaining")).toBeNull();
-  expect(document.querySelector(".banner")).toBeTruthy();
+  expect(screen.getByText(/The engine refused this request/)).toBeTruthy();
 });
 
 // AND AN ERROR OUTRANKS A STALE SERIES, because the reading on screen would
 // otherwise be presented as current while the poll behind it is failing.
 test("a refused poll says so even when a series was drawn before", () => {
   render(<Burndown data={burndown()} error="query_failed" sprint={sprint()} />);
-  expect(document.querySelector(".banner")).toBeTruthy();
+  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------

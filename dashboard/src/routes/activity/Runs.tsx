@@ -24,23 +24,38 @@ import { useCallback, useMemo } from "react";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
-  Badge,
   Button,
-  Code,
+  Callout,
+  Card,
   Disclosure,
-  Empty,
-  Panel,
+  EmptyState,
+  IconButton,
   Skeleton,
-  Stat,
-  StatRow,
-} from "~/ui/primitives.tsx";
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
+// OURS, AND IT IS THE ONE THING `CodeBlock` CANNOT DO. Their block takes a
+// tab stop and an accessible name only when `selectable` is set — the type
+// forbids `label` without it — while ours MEASURES whether the rendered box
+// scrolls and names the ones that do. A bridged tool result is arbitrarily
+// long and is not the screen's select-all subject, so theirs would leave a
+// scroll container no keyboard can reach. See the report.
+import { Code } from "~/ui/primitives.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import {
+  CloseGlyph,
+  ErrorGlyph,
+  HelpGlyph,
+  Package2Glyph,
+  TerminalGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import {
@@ -67,19 +82,18 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
  * while five entries could never match anything. `internal/sandbox/pending.go`
  * is the list.
  */
-const STATUS_TONE: Record<SandboxStatus, "positive" | "caution" | "critical" | "info" | "neutral"> =
-  {
-    launching: "info",
-    running: "info",
-    resumed: "info",
-    // A person is being waited on. `reseed` is the same fact one step worse:
-    // the box was reaped past its pause TTL, so the work is gone and only the
-    // question survives.
-    awaiting_clarification: "caution",
-    reseed: "caution",
-    done: "positive",
-    failed: "critical",
-  };
+const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  launching: "info",
+  running: "info",
+  resumed: "info",
+  // A person is being waited on. `reseed` is the same fact one step worse:
+  // the box was reaped past its pause TTL, so the work is gone and only the
+  // question survives.
+  awaiting_clarification: "warning",
+  reseed: "warning",
+  done: "success",
+  failed: "danger",
+};
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
 const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
@@ -181,9 +195,9 @@ function runFacts(run: SandboxRun): Fact[] {
  */
 export function RunStatus({ status }: { status: SandboxStatus }) {
   return (
-    <Badge tone={STATUS_TONE[status] ?? "neutral"} dot>
+    <Tag variant={STATUS_TONE[status] ?? "neutral"} dot>
       {status.replace(/_/g, " ")}
-    </Badge>
+    </Tag>
   );
 }
 
@@ -213,8 +227,7 @@ function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
   const deadline = pauseDeadline(run);
   const expired = deadline !== null && tsKey(deadline) <= now;
   return (
-    <div className="banner caution">
-      <Icon name="help" size="sm" />
+    <Callout variant="warning" icon={<HelpGlyph size="md" />}>
       <span className="col" style={{ gap: 2 }}>
         <strong>{run.question || "The run asked a question."}</strong>
         <span className="t-caption">
@@ -233,7 +246,7 @@ function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
             : ""}
         </span>
       </span>
-    </div>
+    </Callout>
   );
 }
 
@@ -275,7 +288,7 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
       <div className="t-label">Tool calls</div>
       <div className="row gap-2 wrap">
         <span className="t-cell">{plural(calls.length, "call")} through the MCP bridge</span>
-        {failures > 0 && <Badge tone="critical">{plural(failures, "failure")}</Badge>}
+        {failures > 0 && <Tag variant="danger">{plural(failures, "failure")}</Tag>}
       </div>
       {last && (
         <span className="t-caption">
@@ -318,17 +331,17 @@ export function RunPeek({ turnId }: { turnId: string }) {
 
   return (
     <>
-      {loading && !data && <Skeleton rows={6} />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the run" />}
       <QueryState error={error} loading={loading}>
         {/* NOT AN EMPTY RAIL. A turn id that matches no run is a hand-edited
             URL or a run swept past the retention horizon, and naming which
             turn resolved to nothing is more use than a header over no run. */}
         {data && !run && (
-          <Empty
-            inline
-            icon="terminal"
+          <EmptyState
+            size="compact"
+            icon={<TerminalGlyph size={32} />}
             title="No coding run for this turn"
-            hint="A run is addressed by the turn that started it. This one is not in the durable record — it may have been swept, or the id may be wrong."
+            description="A run is addressed by the turn that started it. This one is not in the durable record — it may have been swept, or the id may be wrong."
           />
         )}
         {run && (
@@ -450,12 +463,12 @@ export function Runs({ runId }: { runId?: string }) {
         {
           <>
             {running > 0 && (
-              <Badge tone="info" dot>
+              <Tag variant="info" dot>
                 {running} running
-              </Badge>
+              </Tag>
             )}
             {waiting > 0 && (
-              <Badge tone="caution">{plural(waiting, "run")} waiting on a person</Badge>
+              <Tag variant="warning">{plural(waiting, "run")} waiting on a person</Tag>
             )}
           </>
         }
@@ -465,26 +478,35 @@ export function Runs({ runId }: { runId?: string }) {
         after a restart, or on another node.
       </PageNote>
 
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat icon="terminal" label="Running" value={running} sub="a box is up and working" />
-          <Stat
-            icon="help"
-            label="Waiting on an answer"
-            value={waiting}
-            sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
-          />
-          <Stat icon="box" label="In the record" value={rows.length} sub="live and finished" />
-          <Stat
-            icon="alert"
-            label="Failed"
-            value={rows.filter((r) => r.status === "failed").length}
-            sub="in the retained record"
-          />
-        </StatRow>
-      </Panel>
+      {/* The flush Panel is gone: StatGroup draws that surface itself. */}
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<TerminalGlyph size="xs" />}
+          label="Running"
+          value={running}
+          sub="a box is up and working"
+        />
+        <StatCard
+          icon={<HelpGlyph size="xs" />}
+          label="Waiting on an answer"
+          value={waiting}
+          sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
+        />
+        <StatCard
+          icon={<Package2Glyph size="xs" />}
+          label="In the record"
+          value={rows.length}
+          sub="live and finished"
+        />
+        <StatCard
+          icon={<ErrorGlyph size="xs" />}
+          label="Failed"
+          value={rows.filter((r) => r.status === "failed").length}
+          sub="in the retained record"
+        />
+      </StatGroup>
 
-      {loading && !rows.length && <Skeleton rows={4} />}
+      {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
       <QueryState
         error={error}
         loading={loading}
@@ -497,7 +519,7 @@ export function Runs({ runId }: { runId?: string }) {
               }
         }
       >
-        <Panel padding="none">
+        <Card padding="none">
           <DataGrid<SandboxRun>
             rows={rows}
             rowKey={(r) => r.turn_id}
@@ -528,7 +550,7 @@ export function Runs({ runId }: { runId?: string }) {
                 // run's own page, where it is a link again.
                 cell: (r) =>
                   r.role || r.agent_handle ? (
-                    <TextCell icon="cpu">{r.role || r.agent_handle}</TextCell>
+                    <TextCell icon="memory">{r.role || r.agent_handle}</TextCell>
                   ) : (
                     <Dash title="no seat" />
                   ),
@@ -550,9 +572,9 @@ export function Runs({ runId }: { runId?: string }) {
                 sortValue: (r) => r.coding_agent,
                 cell: (r) =>
                   r.coding_agent ? (
-                    <Badge outline mono>
+                    <Tag appearance="outline" monospace>
                       {r.coding_agent}
-                    </Badge>
+                    </Tag>
                   ) : (
                     <Dash title="not recorded" />
                   ),
@@ -564,9 +586,9 @@ export function Runs({ runId }: { runId?: string }) {
                 sortValue: (r) => r.placement,
                 cell: (r) =>
                   r.placement ? (
-                    <Badge outline mono>
+                    <Tag appearance="outline" monospace>
                       {r.placement}
-                    </Badge>
+                    </Tag>
                   ) : (
                     // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no
                     // placement, so this is genuinely "the store has not
@@ -602,7 +624,7 @@ export function Runs({ runId }: { runId?: string }) {
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
 
       {detail && (
@@ -617,24 +639,36 @@ export function Runs({ runId }: { runId?: string }) {
             actions={
               <>
                 {detail.trace_id && (
-                  <Button size="sm" onClick={() => nav.to(["activity", "traces", detail.trace_id])}>
+                  <Button
+                    size="small"
+                    variant="secondary"
+                    onClick={() => nav.to(["activity", "traces", detail.trace_id])}
+                  >
                     Trace
                   </Button>
                 )}
-                <Button size="sm" onClick={() => nav.to(["activity", "turns", detail.turn_id])}>
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={() => nav.to(["activity", "turns", detail.turn_id])}
+                >
                   Turn
                 </Button>
-                <Button
+                {/* An icon with no label is an IconButton over there, and the
+                    name is a required prop rather than a `title` a caller
+                    remembers. */}
+                <IconButton
                   size="sm"
                   variant="ghost"
-                  icon="x"
-                  onClick={() => setSelected("")}
+                  icon={<CloseGlyph size="sm" />}
+                  label="Close"
                   title="Close"
+                  onClick={() => setSelected("")}
                 />
               </>
             }
           />
-          <Panel>
+          <Card>
             {AWAITING.includes(detail.status) && (
               <div style={{ marginBottom: "var(--space-3)" }}>
                 <AwaitingBanner run={detail} now={now} />
@@ -660,7 +694,7 @@ export function Runs({ runId }: { runId?: string }) {
                 },
               ]}
             />
-          </Panel>
+          </Card>
         </>
       )}
 
@@ -695,37 +729,36 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
   if (calls.length === 0) return null;
   const failures = calls.filter((c) => c.failed).length;
   return (
-    <Panel
-      title="Tool calls"
-      icon="terminal"
-      count={calls.length}
-      subtitle="through the MCP bridge, in order"
-      actions={
-        failures > 0 ? <Badge tone="critical">{plural(failures, "failure")}</Badge> : undefined
-      }
-    >
+    <Card>
+      <Card.Header
+        icon={<TerminalGlyph size="sm" />}
+        count={calls.length}
+        subtitle="through the MCP bridge, in order"
+        actions={
+          failures > 0 ? <Tag variant="danger">{plural(failures, "failure")}</Tag> : undefined
+        }
+      >
+        <Card.Title>Tool calls</Card.Title>
+      </Card.Header>
       <div className="col gap-2">
         {elided > 0 && (
           // SAID OUT LOUD. The engine bounds the log at 200 and drops the
           // MIDDLE rather than the start, because how a run began and how it
           // ended are what explain it — and a log that silently skips is a
           // log that lies about what the run did.
-          <div className="banner caution">
-            <Icon name="alert" size="sm" />
-            <span>
-              {plural(elided, "call")} from the middle of this log were dropped — the engine keeps
-              the first and last hundred, so the run did more than is shown here.
-            </span>
-          </div>
+          <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+            {plural(elided, "call")} from the middle of this log were dropped — the engine keeps the
+            first and last hundred, so the run did more than is shown here.
+          </Callout>
         )}
         <div className="list">
           {calls.map((call, i) => (
             <Disclosure
               key={`${call.at}:${i}`}
-              label={
+              title={
                 <span className="row gap-2 baseline">
                   <code className="inline">{call.name}</code>
-                  {call.failed && <Badge tone="critical">failed</Badge>}
+                  {call.failed && <Tag variant="danger">failed</Tag>}
                   <span className="spacer" />
                   <span className="t-caption">{fmtTime(call.at)}</span>
                 </span>
@@ -753,6 +786,6 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
           ))}
         </div>
       </div>
-    </Panel>
+    </Card>
   );
 }
