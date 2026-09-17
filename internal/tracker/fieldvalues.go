@@ -99,7 +99,7 @@ const MaxFieldValueSeq = MaxOptions
 // see [Applier.explodeTask] — so a record that cleared a field leaves no row
 // behind.
 func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
-	task Task) (int, error) {
+	task Task, c applyContext) (int, error) {
 
 	if len(task.Fields) == 0 {
 		return 0, nil
@@ -134,7 +134,7 @@ func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 			continue
 		}
 		rows, err := writeFieldValue(ctx, tx, task.ID, field,
-			task.Fields[id], task.Type)
+			task.Fields[id], task.Type, c.maxVariables)
 		if err != nil {
 			return 0, err
 		}
@@ -219,7 +219,8 @@ func declaredFields(ctx context.Context, tx *sql.Tx, project string) (
 
 // writeFieldValue writes one field's value as the rows its type calls for.
 func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
-	field FieldDef, raw json.RawMessage, taskType string) (int, error) {
+	field FieldDef, raw json.RawMessage, taskType string,
+	maxVariables int) (int, error) {
 
 	values, err := fieldRows(field, raw)
 	if err != nil {
@@ -242,23 +243,31 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 	// left a `severity` filterable, groupable and totalled on a task the
 	// field does not apply to — a live value of a field that is not there.
 	hidden := field.Archived || !appliesTo(field, taskType)
-	written := 0
-	for seq, value := range values {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tracker_field_values
-				(task_id, field_id, seq, kind, hidden, num, text, at, ref)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
-			taskID, field.ID, seq, FieldValueNative, boolInt(hidden),
-			value.Num, value.Text, value.At, value.Ref)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write %s's value for field %s: %w",
-				taskID, field.Slug, err)
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
+	// ONE STATEMENT PER FIELD rather than per VALUE — and per FIELD rather
+	// than for the whole task, because `seq` is the member's index within
+	// this field's own set and the error below names the field whose value
+	// the engine could not write. A task carrying many single-valued
+	// fields is still a statement apiece; what this removes is the
+	// multi-valued case, where a labels or people field is up to
+	// [MaxFieldValueSeq] members and was up to that many statements.
+	//
+	// [store.InsertRows] DIRECTLY rather than through [insertMany],
+	// because `seq` IS the index: insertMany hands its builder the item so
+	// a call site reads as the collection it writes, and this is the one
+	// place that needs the position instead.
+	written, err := store.InsertRows(ctx, tx, maxVariables, `
+		INSERT INTO tracker_field_values
+			(task_id, field_id, seq, kind, hidden, num, text, at, ref)
+		VALUES`,
+		`(?,?,?,?,?,?,?,?,?)`, "",
+		len(values), func(seq int) []any {
+			value := values[seq]
+			return []any{taskID, field.ID, seq, FieldValueNative, boolInt(hidden),
+				value.Num, value.Text, value.At, value.Ref}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write %s's value for field %s: %w",
+			taskID, field.Slug, err)
 	}
 	return written, nil
 }

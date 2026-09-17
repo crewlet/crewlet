@@ -232,16 +232,17 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 	return box, runner, false, nil
 }
 
-// abandon closes out a launch that could not finish: the box is reclaimed, the
-// row stops naming it, and the run is marked failed.
+// abandon closes out a launch that could not finish: the box is reclaimed and
+// then the run is finished, which deletes its record.
 //
-// ALL THREE, EVERY TIME, and each attempted regardless of the ones before it —
-// they are separate calls that fail separately, and none of them failing is a
-// reason to leave the rest undone. Three of the four failure paths used to do
-// none of it and simply return, which left the row OPEN: a launching run is
-// polled by nothing and claimed by nothing, so it held its seat's busy count
-// and, on two of those paths, a box, until the seat happened to move to
-// another node and recovery reaped it.
+// BOTH, EVERY TIME, and the second attempted whether or not the first
+// succeeded: they are separate calls that fail separately, and neither failing
+// is a reason to leave the other undone. Three of the four failure paths used
+// to do none of it and simply return, which left the row OPEN: a launching run
+// is polled by nothing and claimed by nothing, so it held its seat's busy
+// count and, on two of those paths, a box, until the seat happened to move to
+// another node and recovery reaped it. The box goes first, so a record that
+// cannot be deleted names a box that is already gone rather than the reverse.
 //
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
@@ -259,13 +260,9 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 			log.WarnContext(ctx, "sandbox_launch_reclaim_failed",
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
-		if err := store.ReleaseBox(ctx, req.Turn.TurnID); err != nil {
-			log.WarnContext(ctx, "sandbox_launch_release_failed",
-				"turn_id", req.Turn.TurnID, "error", err.Error())
-		}
 	}
-	if err := store.SetStatus(ctx, req.Turn.TurnID, StatusFailed, req.Fence); err != nil {
-		log.WarnContext(ctx, "sandbox_launch_mark_failed",
+	if _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence); err != nil {
+		log.WarnContext(ctx, "sandbox_launch_finish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
 }

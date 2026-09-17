@@ -26,8 +26,19 @@ import (
 // only path a quickstart takes. So the assertion is the WALL CLOCK, which is
 // the symptom, rather than an internal flag that would go on being true while
 // the pause moved somewhere else.
+//
+// # And therefore NOT parallel
+//
+// A wall clock is only a measurement of this boot while nothing else on the
+// machine is booting. Run in parallel it measures the SUITE: this package boots
+// an engine in a few hundred tests, each with its own store, broker and apply
+// loops, and the detector multiplies what every one of them costs. That took a
+// boot whose own log spans about a second past the five-second bound, which
+// reports the join as broken on a machine where it is working and would end
+// with somebody raising the bound past the pause it exists to catch. The
+// sequential phase runs with every parallel test still paused, so the number
+// this reads is the boot's own. The bound is unchanged.
 func TestAFreshNodeDoesNotSpendTheOfferWindowAtBoot(t *testing.T) {
-	t.Parallel()
 	started := time.Now()
 	e := newEngine(t, engine.Options{})
 	took := time.Since(started)

@@ -1053,7 +1053,7 @@ test("configured integrations lead the list, each half alphabetical", () => {
 // the order is not arbitrary — the organization's credential is what removes
 // the accounts, so taking it first would strand what the products still hold.
 test("disconnect takes every configured surface, provisioner last", () => {
-  const rows = rowsOf(
+  rowsOf(
     { key: "atlassian", configured: true },
     { key: "jira", configured: true },
     { key: "confluence", configured: true },
@@ -1123,7 +1123,7 @@ test("disconnect puts the account-creating surface last however many provision",
 // CAN be made of; a delete against a surface with no block behind it is a
 // request with nothing behind it.
 test("disconnect skips the surfaces this company does not have", () => {
-  const rows = rowsOf({ key: "jira", configured: true });
+  rowsOf({ key: "jira", configured: true });
   const sections = [{ name: "Jira", tool: toolState({ key: "jira" }) }];
   expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira"]);
 });
@@ -1268,7 +1268,7 @@ test("every in-flight phase is amber, and the only amber phase that settles is d
 // reporting success. The service accounts stayed in the admin console.
 test("disconnect includes a configured surface that has no traffic row", () => {
   // Only the products have rows, which is what the engine reports.
-  const rows = rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true });
+  rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true });
   const sections = [
     { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
     { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
@@ -1284,7 +1284,7 @@ test("disconnect includes a configured surface that has no traffic row", () => {
 // AND A SURFACE NOBODY CONFIGURED IS STILL LEFT ALONE. A delete against one
 // is a request with nothing behind it.
 test("disconnect skips a surface this company never configured", () => {
-  const rows = rowsOf({ key: "jira", configured: true });
+  rowsOf({ key: "jira", configured: true });
   const sections = [
     { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
     // Declared by the catalogue, never configured by this company.

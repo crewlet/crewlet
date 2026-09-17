@@ -151,7 +151,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -498,6 +498,25 @@ metrics-doc: ## regenerate docs/reference/metrics.md from the instrument catalog
 # look it up.
 alarms-doc: ## regenerate docs/reference/alarms.md from the alarm table
 	$(GO) run ./internal/statelog/alarmgen > docs/reference/alarms.md
+
+# internal/config/testdata/derived/*.derived.json are generated and never
+# hand-edited, and they are the only place several org-model conclusions are
+# pinned at all — a seat's derived handle, its primary manager, a unit's
+# effective lead. internal/config regenerates them and compares, so a change
+# in internal/org that moves a manager is a failing test rather than a chart
+# that quietly redraws.
+#
+# A TARGET rather than the bare environment variable, because the variable is
+# how the goldens get rewritten and there was nothing to discover it from: the
+# name appeared once in the tree, in the test that reads it. `-count=1`
+# because a cached PASS never runs the body, so without it a regeneration can
+# report success and write nothing.
+#
+# Read the diff before committing it. Accepting one blind is the whole failure
+# mode of a golden, and this target makes the rewrite one word long.
+derived: ## regenerate internal/config/testdata/derived/*.derived.json from the config models
+	CREWLET_REGENERATE_DERIVED=1 $(GO) test ./internal/config -count=1 \
+	  -run TestTheDerivedHierarchyMatchesItsGoldenFiles
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

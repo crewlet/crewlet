@@ -35,7 +35,7 @@
  * Back means "off this list" rather than "untick one".
  */
 
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { buildHash, href, useParam, useRoute } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -65,6 +65,7 @@ import {
   DATA_COLOR_OTHER,
   dataColor,
   EmptyState,
+  EmptyValue,
   FilterChip,
   IconButton,
   Input,
@@ -915,7 +916,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                             <span className="count-chip">{line.count}</span>
                           </div>
                         ))}
-                        <span className="t-caption faint">
+                        <span className="t-caption">
                           Open work only — the {detail.task_counts.done} done and{" "}
                           {detail.task_counts.closed} closed are in the census above.
                         </span>
@@ -960,10 +961,10 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                                   {record.subject_key}
                                 </a>
                               ) : (
-                                <span className="faint">—</span>
+                                <EmptyValue label="No work item" />
                               )}
                               <span className="spacer" />
-                              <span className="t-caption faint" title={fmtDateTime(record.at)}>
+                              <span className="t-caption" title={fmtDateTime(record.at)}>
                                 {relTime(record.at, now)}
                               </span>
                             </div>
@@ -1681,7 +1682,7 @@ export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; 
                 {record.subject_key}
               </a>
             ) : (
-              <span className="faint">—</span>
+              <EmptyValue label="No work item" />
             )}
           </span>
           <span className="work-feed-what truncate">{describeChange(record)}</span>

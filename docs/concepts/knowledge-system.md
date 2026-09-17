@@ -259,7 +259,7 @@ The two reads are independent: the diary is read by hybrid candidate selection (
 
 ---
 
-## The KnowledgeSearcher seam
+## The knowledge.Searcher seam
 
 `internal/knowledge` defines the one seam between the agent runtime and the knowledge backend:
 
@@ -271,6 +271,14 @@ type Hit struct {
     PageID    string
     Snippet   string   // plain text, <= 200 chars; may be ""
     Ancestors []string // ancestor page titles, outermost first
+}
+
+type Query struct {
+    Text             string            // plain language, never a CQL fragment
+    Seat             *org.Role         // whose credential the search runs as
+    Org              *org.Organization // supplies the read scope, per call
+    Limit            int               // 0 takes DefaultLimit (8)
+    ExcludeAncestors []string          // nil takes the auto-draft default
 }
 
 type Searcher interface {
@@ -293,7 +301,7 @@ Contract semantics every backend honors:
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
 - **Best-effort**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty.
-- **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. The prefetch defaults it to `["Auto-Drafted Skills"]` (`AUTO_DRAFTED_PARENT` in `internal/knowledge/knowledge.go`) so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them.
+- **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 
 **Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
 
@@ -350,7 +358,7 @@ The tool-skills container is excluded from every result. A tool skill is machine
 
 ### Confluence backend — the Confluence searcher
 
-`internal/knowledge`. The query text is wrapped into a Confluence CQL `text ~ "..."` clause, optionally narrowed by `space IN (...)` from [accessible spaces](#accessible-containers), and run against the Confluence REST API (`/rest/api/content/search`) — Confluence's own search backend does the matching and the relevance ranking. Authentication is **as the agent's own Atlassian user**, using the per-agent token already configured for direct Confluence MCP calls in `role.mcp_env["atlassian"]` (Cloud: `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN`; Data Center: `CONFLUENCE_PERSONAL_TOKEN`). Confluence enforces its page permissions natively — a restricted page the agent's user cannot see simply doesn't come back; there is no engine-side restricted-page handling. Roles without a per-agent token fall back to the **org admin token** (`confluence.token`); an agent on the admin token sees whatever that account sees. Hits carry the full ancestor-title chain, so the auto-draft exclusion filters on any depth.
+`internal/confluence` (`confluence.Searcher`). The query text is wrapped into a Confluence CQL `text ~ "..."` clause (`confluence.BuildCQL`), optionally narrowed by `space IN (...)` from the [read scope](#accessible-containers), and run against the Confluence REST API (`/rest/api/content/search`), so Confluence's own search backend does the matching and the relevance ranking. Authentication is **as the agent's own Atlassian user**, using the seat's Confluence credential from its `mcp_env` (the `atlassian` or `confluence` server entry, read by `atlassian.CredentialOf`, which accepts `CONFLUENCE_API_TOKEN`, `CONFLUENCE_PERSONAL_TOKEN`, `CONFLUENCE_TOKEN` or `ATLASSIAN_API_TOKEN`, and a `JIRA_API_TOKEN` on the shared `atlassian` entry). Confluence enforces its page permissions natively: a restricted page the agent's user cannot see simply doesn't come back, and there is no engine-side restricted-page handling. Seats without their own credential fall back to the **org token** (`integrations.confluence.token`); an agent on the org token sees whatever that account sees, subject to the empty-scope rule below. Hits carry the full ancestor-title chain, so the auto-draft exclusion filters on any depth.
 
 ---
 
@@ -389,7 +397,7 @@ Shared knowledge **is** the backend — there is no separate engine-managed stor
 | `crewlet confluence import` ([below](#publishing-knowledge-docs)) | `knowledge.Searcher` (live query) | Same |
 | Agents via `reflect_and_persist` (in-flight) and `PersistDecider` (post-turn) | `agent_diary` (hybrid vector ∪ recency selection → aux-LLM filter) | The writing agent only |
 
-Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense — it renders straight into the executor's system prompt via the section builders in `internal/agent`. There is no startup seed step and no reconcile pass — the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
+Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense: it renders straight into the executor's system prompt via the section builders in `internal/agent/prompts`. There is no startup seed step and no reconcile pass, because the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
 
 ---
 
@@ -421,17 +429,17 @@ injected into a phase as an instruction rather than read as knowledge.
 ### On Confluence: the import CLI
 
 ```
-crewlet confluence import <company.yaml> [DIR]
+crewlet confluence import <company.yaml> <directory>
 ```
 
-The positional config is the **Tier B company YAML** (the importer reads the backend credentials from its `confluence:` block). The path defaults to `examples/` and is walked recursively. The importer routes each `.md` file by frontmatter: a file with a `trigger:` is a [Tool Skill](tool-skills.md) (published to the Tool Skills container); **every other file is a knowledge doc.**
+The first positional argument is the **Tier B company YAML** (the importer reads the backend credentials from its `integrations.confluence` block); the second is the directory to publish, walked recursively, with dot-directories skipped. The importer routes each `.md` file by frontmatter: a file with a `trigger:` is a [Tool Skill](tool-skills.md) (published to the Tool Skills container); **every other file is a knowledge doc.**
 
 Knowledge docs follow a **directory-based convention** — the files are pure prose, no frontmatter required:
 
 - **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to the container `ENG` — a native container, or a Confluence space of that key.
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
-`examples/nimbus-docs/` is a worked set of these — the pages the Nimbus
+`examples/nimbus-docs/` is a worked set of these: the pages the Nimbus
 example company publishes. Both bundled examples run the **native**
 knowledge base, so neither is an argument to this CLI: they publish
 through the assistant path above. A company that moves to Confluence adds
@@ -480,7 +488,7 @@ A doc with neither a frontmatter `title:` nor an `# H1` has no determinable titl
 Key properties:
 
 - **Clean prose.** Knowledge-doc pages render the markdown body straight to the backend's page format (Confluence storage XHTML) — no YAML metadata box on the page (unlike skill pages, which carry a binding-metadata code block the engine parses back out).
-- **Idempotent, and always a write.** A page that exists is updated in place — this is a publisher, and skipping existing pages would mean an edited file never reaching the backend. `-dry-run` previews without page writes. The match key is `(space, title)`. The importer never creates its container: a missing space fails before a single page is written, naming what the instance does have.
+- **Idempotent, and always a write.** A page that exists is updated in place. This is a publisher, and skipping existing pages would mean an edited file never reaching the backend. `-dry-run` previews without page writes. The match key is `(space, title)`. The importer never creates its container: a missing space fails before a single page is written, naming the space to create.
 - **Searched live, not registered.** Knowledge docs are read on demand through the query-time `## Relevant knowledge` search — they are **not** loaded into any in-memory registry, so there is nothing to resync (`crewlet confluence resync` is skills-only).
 
 ---
@@ -490,7 +498,7 @@ Key properties:
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
 - **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
-- **`learning.Diary`** is constructed when a real `Database` is available (reflection enabled) and takes an `EmbeddingProvider` so writes can be embedded for vector recall. In-memory mode (no DB) leaves it unwired; the `## Personal memory` block stays empty without error. Without an embeddings provider the diary degrades to a pure recency list — vector candidate selection becomes a no-op — but writes and recency reads still work.
+- **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.
 
@@ -508,9 +516,9 @@ See [Agent Learning § Relevant-knowledge prefetch](agent-learning.md#relevant-k
 
 ## Onboarding markers
 
-The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the onboarding hint stops re-rendering on every turn. Markers live in their own small table — `agent_onboarding_markers` — keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain; a chain change (role moved units, ancestor renamed, new unit inserted) silently invalidates the marker, and the hint re-fires until the agent re-reads and re-marks.
+The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the onboarding hint stops re-rendering on every turn. Markers live in their own small table, `agent_onboarding_markers`, keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain (`learning.ChainHash`); a chain change (role moved units, ancestor renamed, new unit inserted) silently invalidates the marker, and the dedicated onboarding pass runs again until the agent re-reads and re-marks. The same row holds the cross-process pass lease that stops two turns onboarding one seat at once.
 
-A dedicated table — `is_onboarded` answers with one indexed equality lookup instead of a per-agent metadata-filter scan.
+A dedicated table, because `learning.Onboarding.Onboarded` answers with one indexed equality lookup instead of a per-agent metadata-filter scan.
 
 ---
 

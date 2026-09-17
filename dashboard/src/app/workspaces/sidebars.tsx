@@ -142,7 +142,9 @@ export function useCompanySidebar(): SidebarSection[] {
     const index = indexOrg(org);
     function rowsFor(units: OrgUnit[] | undefined): SidebarRow[] {
       return (units ?? []).map((unit) => {
-        const key = unit.id || unit.name;
+        // BY NAME. A unit's stable `id:` is guarded and the anonymous org
+        // projection does not carry it, so every route to a unit is its name.
+        const key = unit.name;
         return {
           key,
           label: unit.name,

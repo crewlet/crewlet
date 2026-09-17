@@ -5,7 +5,7 @@
  * them — and the tab is in the URL so a colleague can be sent the exact view.
  */
 
-import { useId, useMemo, useRef } from "react";
+import { useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
@@ -17,6 +17,8 @@ import {
   Callout,
   Card,
   EmptyState,
+  EmptyValue,
+  InlineCode,
   Meter,
   Skeleton,
   StatCard,
@@ -63,13 +65,19 @@ import { useViewer } from "~/lib/viewer.ts";
 import {
   awaitingPerson,
   indexOrg,
+  llmChain,
+  mcpEnvOf,
+  schedulesOf,
+  seatPath,
+  seatSettings,
   statusLine,
   afkReason,
   runState,
   type OrgIndex,
   type Seat,
+  type SeatSettings,
 } from "~/lib/seats.ts";
-import { fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords } from "~/lib/range.ts";
 import {
@@ -82,6 +90,8 @@ import {
 } from "~/lib/phases.ts";
 import type {
   AgentRow,
+  CompanyDocument,
+  ConfigRole,
   ConversationEntry,
   CounterpartyProfile,
   EventRecord,
@@ -112,6 +122,95 @@ const HUMAN_TABS = ["overview", "access"] as const;
 type Tab = (typeof AGENT_TABS)[number];
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
+
+/**
+ * The operator-gated half of a seat, said precisely when it cannot be shown.
+ *
+ * `QueryState` covers a refused or failed read, which includes the guarded
+ * banner with its Set token button. The three states after it are this
+ * screen's own: no configuration is active, the document has no seat by this
+ * name (the projection and the document can disagree for a moment either side
+ * of an apply), and a name held by two seats in a revision stored before names
+ * had to be unique.
+ *
+ * NONE OF THEM IS AN EMPTY VALUE. "Not set" over a field nobody was allowed to
+ * read is a statement about the company, and it is the wrong one.
+ */
+function SettingsState({
+  error,
+  loading,
+  doc,
+  settings,
+  seat,
+  children,
+}: {
+  error: string | null;
+  loading: boolean;
+  doc: CompanyDocument | null;
+  settings: SeatSettings | null;
+  seat: Seat;
+  children: ReactNode;
+}) {
+  if (loading && !doc && !error) {
+    return <Skeleton variant="text" rows={3} label="Loading the company document" />;
+  }
+  if (error) return <QueryState error={error} loading={loading} />;
+  if (!doc) {
+    return (
+      <EmptyState
+        size="compact"
+        icon={<KeyGlyph size={32} />}
+        title="No company configuration is active"
+        description="This seat's settings live in the company document, and none is active on this engine."
+      />
+    );
+  }
+  if (settings?.state === "missing") {
+    return (
+      <EmptyState
+        size="compact"
+        icon={<KeyGlyph size={32} />}
+        title={`The active configuration has no seat named ${seat.name}`}
+        description="The org chart and the configuration can disagree for a moment while a new revision is applied."
+      />
+    );
+  }
+  if (settings?.state === "ambiguous") {
+    return (
+      <EmptyState
+        size="compact"
+        icon={<KeyGlyph size={32} />}
+        title={`More than one seat is named ${seat.name}`}
+        description="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+      />
+    );
+  }
+  return <>{children}</>;
+}
+
+/**
+ * A value from the redacted document, in the form it may be shown.
+ *
+ * NEVER A CREDENTIAL: a literal in a credential field arrives as the mask and
+ * says only that something is set, and a whole `${VAR}` names an entry in the
+ * secret store. `secret` marks a credential field, where anything that is not
+ * one whole reference is hidden here too, WHATEVER THE ENGINE SENT — see
+ * [configValueKind], which records the redaction bug that makes that
+ * necessary. A plain literal is shown only in a field that is not a
+ * credential, such as a contact identity.
+ */
+function ConfigValue({ value, secret = false }: { value: string | undefined; secret?: boolean }) {
+  switch (configValueKind(value, { secret })) {
+    case "hidden":
+      return <span className="t-caption">A literal value is set (hidden)</span>;
+    case "reference":
+      return <InlineCode>{value}</InlineCode>;
+    case "literal":
+      return <InlineCode>{value}</InlineCode>;
+    default:
+      return <span className="muted">not set</span>;
+  }
+}
 
 /** A provider chain, in the order the fallback walks it. */
 function ModelChain({ keys }: { keys: string[] }) {
@@ -178,26 +277,34 @@ function liveRow(agents: AgentRow[], handle: string, seat: Seat | null): AgentRo
 function seatFacts({
   seat,
   agent,
-  manager,
+  role,
+  hierarchy,
   human,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  manager: Seat | undefined;
+  /** The seat's entry in the company document, where a token allowed reading it. */
+  role: ConfigRole | null;
+  /** Whether the engine reported its derived hierarchy at all. */
+  hierarchy: boolean;
   human: boolean;
 }): Fact[] {
   const unit = seat.unit;
+  const manager = seat.manager;
   return [
     { label: "Kind", value: human ? "human teammate" : "agent seat" },
     {
       label: "Unit",
       value: seat.unitChain.length > 0 ? seat.unitChain.map((u) => u.name).join(" › ") : "org-wide",
-      path: unit ? ["company", "units", unit.id || unit.name] : undefined,
+      path: unit ? ["company", "units", unit.name] : undefined,
     },
     {
+      // NOBODY AND NOT REPORTED ARE DIFFERENT FACTS. An engine that sends no
+      // derived hierarchy has not said who manages this seat, and "nobody"
+      // there is a claim nothing on the wire supports.
       label: "Reports to",
-      value: manager ? manager.name : "nobody",
-      path: manager ? ["company", "people", manager.handle] : undefined,
+      value: manager ? manager.name : hierarchy ? "nobody" : "not reported by this engine",
+      path: manager ? seatPath(manager) : undefined,
     },
     {
       label: "Runtime",
@@ -210,10 +317,19 @@ function seatFacts({
       ),
     },
     {
-      // THE FLATTENED CHAIN, in the order the fallback walks it. An empty
+      // THE FLATTENED CHAIN, in the order the fallback walks it, from the
+      // GUARDED document: `llm:` is not on the anonymous org projection, so a
+      // reader without a token is told the chain is unreadable rather than
+      // shown the default provider as though that were the setting. An empty
       // array is truthy, which is why this is a length test rather than `||`.
       label: "Model",
-      value: human ? "" : seat.llm.length > 0 ? seat.llm.join(" → ") : "default provider",
+      value: human
+        ? ""
+        : !role
+          ? "needs an operator token"
+          : llmChain(role.llm).length > 0
+            ? llmChain(role.llm).join(" → ")
+            : "default provider",
     },
   ];
 }
@@ -297,6 +413,31 @@ export function SeatScreen({ handle }: { handle: string }) {
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
     { enabled: tab === "cost" && !!seat },
   );
+  // THE GUARDED HALF. A seat's email, model chain, token budget, contact
+  // identities, tool credentials, integrations and schedules are NOT on the
+  // anonymous org projection — `internal/api/orgprojection.go` spells out what
+  // is, field by field, and everything else stays behind the operator token —
+  // so this screen reads them from the company document.
+  const config = useQuery("config", undefined, {
+    enabled: !!seat && (tab === "overview" || tab === "cost" || tab === "access"),
+  });
+  // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL. `useQuery` keeps its last good
+  // answer through a failed ask, which suits a poll and is wrong for a guarded
+  // read: once a token is cleared or refused, the email, model, budget and
+  // schedules it had been allowed to read stayed on the overview and the cost
+  // tab, beside a banner saying the answer needs a token.
+  const settings = useMemo<SeatSettings | null>(
+    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
+    [seat, config.data, config.error],
+  );
+  const configured = settings?.state === "found" ? settings.role : null;
+  const credentials = useMemo(
+    () => (settings && seat ? mcpEnvOf(settings, seat.kind) : {}),
+    [settings, seat],
+  );
+  /** The seat's configured cap. 0 or absent is unlimited; no document at all is unknown. */
+  const budget = configured?.token_budget ?? 0;
+  const schedules = useMemo(() => (settings ? schedulesOf(settings) : []), [settings]);
 
   const phases = useMemo<PhaseRecord[]>(() => {
     const stored = (history.data?.llm_history ?? [])
@@ -352,8 +493,8 @@ export function SeatScreen({ handle }: { handle: string }) {
     );
   }
 
-  const manager = index.managerOf.get(seat.name);
-  const reports = index.reportsOf.get(seat.name) ?? [];
+  const manager = seat.manager;
+  const reports = seat.reports;
   const state = runState(agent, sandboxes);
   const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
 
@@ -381,7 +522,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       <ObjectHeader
         kind="Seat"
         icon={human ? "person" : "memory"}
-        identifier={`@${seat.handle}`}
+        identifier={seat.handle ? `@${seat.handle}` : undefined}
         title={seat.name}
         status={
           human ? (
@@ -390,7 +531,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             <StateBadge agent={agent} sandboxes={sandboxes} />
           )
         }
-        facts={seatFacts({ seat, agent, manager, human })}
+        facts={seatFacts({ seat, agent, role: configured, hierarchy: index.hierarchy, human })}
       />
       <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
 
@@ -572,7 +713,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                 // states the window on the answer for exactly this reason,
                 // and refuses to relabel a rollup it did not take.
                 label={tokens ? `Tokens · ${spanWords(tokens.since, tokens.until)}` : "Tokens"}
-                value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
+                value={
+                  seatSpend ? (
+                    fmtCount(seatSpend.total_tokens)
+                  ) : (
+                    <EmptyValue label="Nothing recorded" />
+                  )
+                }
                 sub={
                   seatSpend ? `${seatSpend.calls.toLocaleString()} model calls` : "nothing recorded"
                 }
@@ -603,7 +750,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {
                       properties: [
                         { label: "Role", value: seat.name },
-                        { label: "Handle", value: <code className="inline">@{seat.handle}</code> },
+                        {
+                          label: "Handle",
+                          // NOT DERIVED HERE. An engine that reports no
+                          // hierarchy leaves the handle of a seat that
+                          // declares none unknown, and the rule that keys a
+                          // seat's memory is the engine's alone.
+                          value: seat.handle ? (
+                            <code className="inline">@{seat.handle}</code>
+                          ) : (
+                            <EmptyValue label="Not reported by this engine" />
+                          ),
+                        },
                         {
                           label: "Kind",
                           value: human
@@ -612,18 +770,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                         },
                         {
                           label: "Goal",
-                          value: seat.goal || <span className="faint">not set</span>,
-                        },
-                        {
-                          label: "Email",
-                          value: seat.email || <span className="faint">not set</span>,
+                          value: seat.goal || <span className="muted">not set</span>,
                         },
                         {
                           label: "Unit",
                           value: seat.unitChain.length ? (
                             seat.unitChain.map((u) => u.name).join(" › ")
                           ) : (
-                            <span className="faint">org-wide</span>
+                            <span className="muted">org-wide</span>
                           ),
                         },
                         {
@@ -633,43 +787,81 @@ export function SeatScreen({ handle }: { handle: string }) {
                               name={seat.unitLead}
                               handle={index.byName.get(seat.unitLead)?.handle}
                             />
+                          ) : index.hierarchy ? (
+                            <span className="muted">none</span>
                           ) : (
-                            <span className="faint">none</span>
+                            <EmptyValue label="Not reported by this engine" />
                           ),
                         },
                         {
                           label: "Reports to",
                           value: manager ? (
                             <SeatChip name={manager.name} handle={manager.handle} />
+                          ) : index.hierarchy ? (
+                            <span className="muted">nobody</span>
                           ) : (
-                            <span className="faint">nobody</span>
-                          ),
-                        },
-                        // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or
-                        // a per-phase mapping, so this is the flattened order the
-                        // provider chain actually walks — and an empty ARRAY is
-                        // truthy, which is why the fallback is an explicit length
-                        // test rather than `||`.
-                        {
-                          label: "Model",
-                          value: seat.llm.length ? (
-                            <ModelChain keys={seat.llm} />
-                          ) : (
-                            <span className="faint">default provider</span>
-                          ),
-                        },
-                        {
-                          label: "Auxiliary model",
-                          value: seat.llmAuxiliary.length ? (
-                            <ModelChain keys={seat.llmAuxiliary} />
-                          ) : (
-                            <span className="faint">none — reflection uses the default</span>
+                            <EmptyValue label="Not reported by this engine" />
                           ),
                         },
                       ],
                     },
                   ]}
                 />
+              </Card>
+
+              {/* THE DOCUMENT'S HALF, BEHIND THE TOKEN. Email, the model chain
+                  and the auxiliary chain are not on the anonymous projection,
+                  so they are read from the company document and the panel says
+                  so when it could not be read — rather than drawing "not set"
+                  over a setting nobody was allowed to see. */}
+              <Card>
+                <Card.Header
+                  icon={<NeurologyGlyph size="sm" />}
+                  subtitle="from the company document"
+                >
+                  <Card.Title>Configured</Card.Title>
+                </Card.Header>
+                <SettingsState
+                  error={config.error}
+                  loading={config.loading}
+                  doc={config.data ?? null}
+                  settings={settings}
+                  seat={seat}
+                >
+                  <PropertiesRail
+                    groups={[
+                      {
+                        properties: [
+                          {
+                            label: "Email",
+                            value: <ConfigValue value={configured?.email} />,
+                          },
+                          // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list
+                          // or a per-phase mapping, so this is the flattened
+                          // order the provider chain actually walks — and an
+                          // empty ARRAY is truthy, which is why the fallback is
+                          // an explicit length test rather than `||`.
+                          {
+                            label: "Model",
+                            value: llmChain(configured?.llm).length ? (
+                              <ModelChain keys={llmChain(configured?.llm)} />
+                            ) : (
+                              <span className="muted">default provider</span>
+                            ),
+                          },
+                          {
+                            label: "Auxiliary model",
+                            value: llmChain(configured?.llm_auxiliary).length ? (
+                              <ModelChain keys={llmChain(configured?.llm_auxiliary)} />
+                            ) : (
+                              <span className="muted">none, reflection uses the default</span>
+                            ),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                </SettingsState>
               </Card>
 
               <Card>
@@ -714,7 +906,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     </div>
                   )}
                   {!seat.backstory && !seat.responsibilities.length && !seat.guidelines.length && (
-                    <span className="t-caption faint">
+                    <span className="t-caption">
                       No profile is set. Backstory, responsibilities and guidelines render straight
                       into this seat's executor prompt.
                     </span>
@@ -763,13 +955,13 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Section>
             )}
 
-            {seat.schedules.length > 0 && (
+            {schedules.length > 0 && (
               <Card padding="none">
-                <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={seat.schedules.length}>
+                <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={schedules.length}>
                   <Card.Title>Recurring work</Card.Title>
                 </Card.Header>
                 <DataGrid
-                  rows={seat.schedules}
+                  rows={schedules}
                   rowKey={(s) => s.name}
                   columns={[
                     {
@@ -831,7 +1023,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <section className="col gap-1 live-region">
                 <div className="t-label">
                   Running now
-                  <span className="faint"> · updates as each round is written</span>
+                  <span className="muted"> · updates as each round is written</span>
                 </div>
                 <div className="col gap-2">
                   {liveTurns.map((g) => (
@@ -908,7 +1100,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                             <Tag appearance="outline">
                               {row.turns} {row.turns === 1 ? "turn" : "turns"}
                             </Tag>
-                            <span className="t-caption faint">{fmtDateTime(row.last_at)}</span>
+                            <span className="t-caption">{fmtDateTime(row.last_at)}</span>
                           </span>
                         </button>
                       ))}
@@ -1113,7 +1305,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                         // THE CUT, SAID. The count above is the seat's whole
                         // set and this list is a page of it, so without a line
                         // here the two silently disagree.
-                        <div className="thread-entry t-caption faint">
+                        <div className="thread-entry t-caption">
                           {memory.data.skills.length} of {memory.data.skills_total} shown
                         </div>
                       )}
@@ -1162,27 +1354,41 @@ export function SeatScreen({ handle }: { handle: string }) {
               <StatCard
                 icon={<TokenGlyph size="xs" />}
                 label="Tokens · 7d"
-                value={spend.data ? fmtCount(spend.data.totals.total_tokens) : "—"}
+                value={
+                  spend.data ? (
+                    fmtCount(spend.data.totals.total_tokens)
+                  ) : (
+                    <EmptyValue label="Nothing recorded" />
+                  )
+                }
                 sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
               />
               <StatCard
                 icon={<ArrowForwardGlyph size="xs" />}
                 label="Input / output"
                 value={
-                  spend.data
-                    ? `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
-                    : "—"
+                  spend.data ? (
+                    `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
+                  ) : (
+                    <EmptyValue label="Nothing recorded" />
+                  )
                 }
                 sub="input includes any cached prefix, as the provider reports it"
               />
               <StatCard
                 icon={<TargetGlyph size="xs" />}
                 label="Configured budget"
-                value={seat.tokenBudget ? fmtCount(seat.tokenBudget) : "unlimited"}
+                // UNKNOWN IS NOT UNLIMITED. `token_budget` is on the guarded
+                // document, so a reader without a token is told the cap could
+                // not be read rather than shown "unlimited" — which is a
+                // statement about the company nothing on the wire supports.
+                value={!configured ? "Unknown" : budget ? fmtCount(budget) : "unlimited"}
                 sub={
-                  seat.tokenBudget
-                    ? "token_budget on this role in the company config"
-                    : "token_budget is 0 or unset on this role"
+                  !configured
+                    ? "token_budget needs an operator token to read"
+                    : budget
+                      ? "token_budget on this role in the company config"
+                      : "token_budget is 0 or unset on this role"
                 }
               />
             </StatGroup>
@@ -1222,9 +1428,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Card>
             ) : (
               <Callout variant="neutral">
-                {seat.tokenBudget
-                  ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it — so there is nothing measured to draw."
-                  : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
+                {!configured
+                  ? "No engine is reporting a meter for this seat, and its configured cap needs an operator token to read."
+                  : budget
+                    ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
+                    : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
               </Callout>
             )}
 
@@ -1317,74 +1525,95 @@ export function SeatScreen({ handle }: { handle: string }) {
         {tab === "access" && (
           <div className="col gap-4">
             <Card>
-              <Card.Header icon={<LinkGlyph size="sm" />}>
+              <Card.Header icon={<LinkGlyph size="sm" />} subtitle="from the company document">
                 <Card.Title>Identity on other surfaces</Card.Title>
               </Card.Header>
-              {Object.keys(seat.contact).length ? (
-                <PropertiesRail
-                  groups={[
-                    {
-                      properties: Object.entries(seat.contact).map(([k, v]) => ({
-                        label: k.replace(/_/g, " "),
-                        value: <code className="inline">{v}</code>,
-                      })),
-                    },
-                  ]}
-                />
-              ) : (
-                <EmptyState
-                  size="compact"
-                  icon={<LinkGlyph size={32} />}
-                  title="No contact identities"
-                  description="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
-                />
-              )}
+              <SettingsState
+                error={config.error}
+                loading={config.loading}
+                doc={config.data ?? null}
+                settings={settings}
+                seat={seat}
+              >
+                {Object.keys(configured?.contact ?? {}).length ? (
+                  <PropertiesRail
+                    groups={[
+                      {
+                        properties: Object.entries(configured?.contact ?? {}).map(([k, v]) => ({
+                          label: k.replace(/_/g, " "),
+                          // NOT A CREDENTIAL. A contact identity is a public
+                          // handle at a vendor — a Slack member id, a GitHub
+                          // login — so a literal is the value and is shown.
+                          value: <ConfigValue value={v} />,
+                        })),
+                      },
+                    ]}
+                  />
+                ) : (
+                  <EmptyState
+                    size="compact"
+                    icon={<LinkGlyph size={32} />}
+                    title="No contact identities"
+                    description="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
+                  />
+                )}
+              </SettingsState>
             </Card>
 
             <Card>
               <Card.Header
                 icon={<KeyGlyph size="sm" />}
                 subtitle="merged down the unit chain, this seat's own entries winning"
-                count={Object.keys(seat.mcpEnv).length}
+                count={Object.keys(credentials).length}
               >
                 <Card.Title>Tool credentials</Card.Title>
               </Card.Header>
-              {Object.keys(seat.mcpEnv).length ? (
-                <div className="col gap-3">
-                  {Object.entries(seat.mcpEnv).map(([server, vars]) => (
-                    <div key={server} className="col gap-1">
-                      <div className="t-label">{server}</div>
-                      <PropertiesRail
-                        groups={[
-                          {
-                            properties: Object.entries(vars).map(([k, v]) => ({
-                              label: k,
-                              code: true,
-                              // Values are `${VAR}` POINTERS in the config and are
-                              // stored verbatim; the engine resolves them only where
-                              // a transport is constructed. A literal here would be a
-                              // secret in a config, which the API redacts server-side.
-                              value: <code className="inline">{v}</code>,
-                            })),
-                          },
-                        ]}
-                      />
-                    </div>
-                  ))}
-                  <p className="t-caption">
-                    These are the <code className="inline">${"{VAR}"}</code> references the config
-                    carries, not resolved values — the engine resolves them when it builds this
-                    seat's MCP children, and the API redacts anything literal.
-                  </p>
-                </div>
-              ) : (
-                <EmptyState
-                  size="compact"
-                  icon={<KeyGlyph size={32} />}
-                  title="No per-seat tool credentials"
-                  description="This seat uses whatever the shared MCP servers were configured with."
-                />
-              )}
+              <SettingsState
+                error={config.error}
+                loading={config.loading}
+                doc={config.data ?? null}
+                settings={settings}
+                seat={seat}
+              >
+                {Object.keys(credentials).length ? (
+                  <div className="col gap-3">
+                    {Object.entries(credentials).map(([server, vars]) => (
+                      <div key={server} className="col gap-1">
+                        <div className="t-label">{server}</div>
+                        <PropertiesRail
+                          groups={[
+                            {
+                              properties: Object.entries(vars).map(([k, v]) => ({
+                                label: k,
+                                code: true,
+                                // A CREDENTIAL FIELD, so anything that is not
+                                // one whole `${VAR}` is hidden whatever the
+                                // engine sent. Values are pointers in the
+                                // config and stored verbatim; the engine
+                                // resolves them only where a transport is
+                                // constructed.
+                                value: <ConfigValue secret value={v} />,
+                              })),
+                            },
+                          ]}
+                        />
+                      </div>
+                    ))}
+                    <p className="t-caption">
+                      These are the <code className="inline">${"{VAR}"}</code> references the config
+                      carries, not resolved values: the engine resolves them when it builds this
+                      seat&rsquo;s MCP children, and the API redacts anything literal.
+                    </p>
+                  </div>
+                ) : (
+                  <EmptyState
+                    size="compact"
+                    icon={<KeyGlyph size={32} />}
+                    title="No per-seat tool credentials"
+                    description="This seat uses whatever the shared MCP servers were configured with."
+                  />
+                )}
+              </SettingsState>
             </Card>
           </div>
         )}
@@ -1458,8 +1687,7 @@ export function SeatPeek({ handle }: { handle: string }) {
   }
 
   const human = seat.kind === "human";
-  const manager = index.managerOf.get(seat.name);
-  const reports = index.reportsOf.get(seat.name) ?? [];
+  const reports = seat.reports;
   const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
 
   return (
@@ -1477,7 +1705,11 @@ export function SeatPeek({ handle }: { handle: string }) {
             <StateBadge agent={agent} sandboxes={sandboxes} />
           )
         }
-        facts={seatFacts({ seat, agent, manager, human })}
+        // THE RAIL READS NOTHING GUARDED. It is opened from a row in a list,
+        // and a per-peek read of the whole company document would be an
+        // operator-gated fetch on every `[`/`]` step through one — so the
+        // model line says it is unread rather than fetching it here.
+        facts={seatFacts({ seat, agent, role: null, hierarchy: index.hierarchy, human })}
       />
 
       <div className="col gap-3">
@@ -1492,7 +1724,7 @@ export function SeatPeek({ handle }: { handle: string }) {
             // WHY THERE IS NOTHING BELOW, rather than a second sentence about
             // what this seat is. The status line above already says that; what
             // a reader cannot see is the reason the runtime panels are missing.
-            <p className="t-caption faint">
+            <p className="t-caption">
               No runtime here: the engine never spawns a human seat, so there are no turns, no model
               and no spend for it to report.
             </p>
@@ -1547,7 +1779,7 @@ export function SeatPeek({ handle }: { handle: string }) {
                 </div>
               </div>
             ) : (
-              <p className="t-caption faint">
+              <p className="t-caption">
                 Nothing has streamed to this tab yet. What the engine has RECORDED for this seat is
                 on its own Model activity tab — this panel only ever shows what completed while the
                 tab was open.
@@ -1561,11 +1793,7 @@ export function SeatPeek({ handle }: { handle: string }) {
           {reports.length > 0 ? (
             <div className="list">
               {reports.map((r) => (
-                <a
-                  key={r.handle}
-                  className="thread-entry"
-                  href={href(["company", "people", r.handle])}
-                >
+                <a key={r.key} className="thread-entry" href={href(seatPath(r))}>
                   <div className="row gap-2">
                     <Avatar
                       name={r.name}
@@ -1591,7 +1819,7 @@ export function SeatPeek({ handle }: { handle: string }) {
               ))}
             </div>
           ) : (
-            <p className="t-caption faint">
+            <p className="t-caption">
               Nobody reports to this seat. Delegation follows the chart, so work it cannot do itself
               goes sideways or nowhere.
             </p>
@@ -1657,7 +1885,7 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
         <span className="t-caption">
           {profile.interactions} {profile.interactions === 1 ? "interaction" : "interactions"}
         </span>
-        <span className="t-caption faint">{fmtDateTime(profile.last_updated_at)}</span>
+        <span className="t-caption">{fmtDateTime(profile.last_updated_at)}</span>
       </div>
       {traits.length > 0 ? (
         <div className="row gap-1 wrap">
@@ -1668,10 +1896,10 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
           ))}
         </div>
       ) : (
-        <p className="t-caption faint">Seen, and nothing believed about them yet.</p>
+        <p className="t-caption">Seen, and nothing believed about them yet.</p>
       )}
       {stale && (
-        <p className="t-caption faint">
+        <p className="t-caption">
           Last corroborated {fmtDateTime(profile.last_corroborated_at)} — this seat is still working
           with them and has stopped learning about them.
         </p>
@@ -1714,7 +1942,7 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
             turn
           </a>
         )}
-        <span className="t-caption faint">{entry.at ? fmtDateTime(entry.at) : ""}</span>
+        <span className="t-caption">{entry.at ? fmtDateTime(entry.at) : ""}</span>
       </div>
       {entry.intent && <p className="t-body">{entry.intent}</p>}
       {entry.reply && <p className="t-caption">{entry.reply}</p>}
@@ -1724,7 +1952,7 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
           <strong>Nothing was delivered.</strong> {entry.unsent}
         </Callout>
       )}
-      {entry.completed_work && <p className="t-caption faint">{entry.completed_work}</p>}
+      {entry.completed_work && <p className="t-caption">{entry.completed_work}</p>}
       {entry.tool_calls && <pre className="code">{entry.tool_calls}</pre>}
     </div>
   );

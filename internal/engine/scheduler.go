@@ -28,12 +28,13 @@ import (
 
 // schedulerRuns reports whether this company should have a tick loop.
 //
-// The three conditions the config block has always documented: the operator
-// has not switched it off, this node can reach the FLEET's claim store, and
-// the company actually declares a schedule. The last one is what keeps a
-// company with no schedules from claiming a fleet duty every ten seconds
-// forever, and it is re-evaluated on every config apply so a founder's FIRST
-// schedule starts the loop without a restart.
+// The conditions the config block documents: the operator has not switched it
+// off, this node can reach the FLEET's claim store, the company actually
+// declares a schedule, and it configures a model to run the fires on. The
+// schedule condition is what keeps a company with no schedules from claiming a
+// fleet duty every ten seconds forever, and every condition is re-evaluated on
+// each config apply, so a founder's FIRST schedule, or the first provider of a
+// company that had none, starts the loop without a restart.
 //
 // The claim is the fleet's, not this node's: the scheduler is a singleton duty
 // and therefore MOVES, so a node whose local database held the ledger handed
@@ -47,7 +48,35 @@ func (e *Engine) schedulerRuns(c *Company) bool {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return false
 	}
+	// A COMPANY WITH NO MODEL FIRES NOTHING. Every fire is a TaskAssigned
+	// on a seat's inbox, and while the company configures no providers.llm
+	// each of those inboxes holds its work until a provider exists (see
+	// nomodels.go). A loop armed here would stack every standup of that
+	// wait behind the hold and run the whole backlog the moment a provider
+	// arrived: the replay of stale fires the catchup clamp exists to
+	// refuse. Disarmed instead, the apply that adds the provider arms a
+	// fresh loop, whose first tick catches up at most the most recent
+	// missed fire, exactly as a restart does.
+	if c.Models == nil {
+		return false
+	}
 	return schedule.HasSchedules(c.Org)
+}
+
+// noteSchedulesWaiting says so when a company's schedules are idle for want of
+// a model, which is the one reason for an idle loop an operator could not
+// otherwise see: every other condition is a field they wrote or a store the
+// node reports on.
+func (e *Engine) noteSchedulesWaiting(ctx context.Context, c *Company) {
+	if c == nil || c.Models != nil || !c.Config.Scheduling.Runs() || !schedule.HasSchedules(c.Org) {
+		return
+	}
+	log.WarnContext(ctx, "schedules_waiting_for_a_model",
+		"schedules", schedule.CountSchedules(c.Org),
+		"detail", "the company configures no model provider, so its schedules "+
+			"do not fire; the apply that adds one under providers.llm arms them, "+
+			"and a fire missed in the meantime is caught up only within the "+
+			"catchup window, as after a restart")
 }
 
 // scheduleClaimer joins the fleet's at-most-once claim to this node's ledger.
@@ -66,7 +95,9 @@ func (e *Engine) scheduleClaimer() (schedule.Claimer, error) {
 func (e *Engine) startScheduler(ctx context.Context) {
 	e.scheduler.mu.Lock()
 	defer e.scheduler.mu.Unlock()
-	e.armSchedulerLocked(ctx, e.Company())
+	company := e.Company()
+	e.noteSchedulesWaiting(ctx, company)
+	e.armSchedulerLocked(ctx, company)
 }
 
 // armSchedulerLocked starts the loop, or logs why it did not.
@@ -137,6 +168,7 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 func (e *Engine) reconcileScheduler(ctx context.Context, next *Company) {
 	e.scheduler.mu.Lock()
 	defer e.scheduler.mu.Unlock()
+	e.noteSchedulesWaiting(ctx, next)
 	if e.schedulerRuns(next) {
 		// The apply's own context, which armSchedulerLocked strips the
 		// cancellation from: the loop must outlive the request that armed

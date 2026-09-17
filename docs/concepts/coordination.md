@@ -83,7 +83,8 @@ then returned by no listing at all, which every node reads as a free seat.
 ```mermaid
 flowchart LR
     subgraph COORD["coordination store — shared by the fleet"]
-        L[("leases<br/>seats · duties · presence")]
+        L[("leases<br/>seats · presence")]
+        D[("duties<br/>fleet singletons")]
         E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
         S[("status<br/>one key per node")]
@@ -96,6 +97,9 @@ flowchart LR
         F[("fires<br/>scheduled dispatch claims")]
         SR[("sandbox runs<br/>detached coding jobs")]
         SEC[("secrets<br/>the company's sealed credentials")]
+        INT[("integrations<br/>reconcile status per surface")]
+        MB[("mailboxes<br/>seat mailboxes that may exist")]
+        POS[("positions<br/>what the state log may delete")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -107,8 +111,9 @@ flowchart LR
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, which node holds which duty, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
-| `epochs` | The monotonic fencing counter each resource's tokens are minted from. Its own bucket because it is the one thing here that must never expire — see the retention table below | [Seat Ownership](seat-ownership.md#the-lease) |
+| `leases` | Which node runs which seat, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
+| `duties` | Which node holds which [singleton duty](seat-ownership.md#singleton-duties). Its own bucket because a duty and a seat want opposite TTLs: see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own) | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
+| `epochs` | The monotonic fencing counter each seat's, duty's and node's tokens are minted from. Its own bucket because it is the one thing here that must never expire (see the retention table below) | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
 | `status` | What each node managed to apply, and when it last said so | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
@@ -121,6 +126,7 @@ flowchart LR
 | `sandbox runs` | Every detached coding run: its box, its suspended conversation, its owner and fencing epoch. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next* | [Code Sandbox](code-sandbox.md) |
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name. Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
+| `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records a handle before it creates the seat's durable subscription, because a removed seat's handle is gone from the org every node derives names from and the retirement's absence stamp and mark have nowhere else to live. A mailbox that escaped the record is found by listing the broker's subscriptions. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 | `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none | [Retention](../guides/retention.md) |
 | `kb vectors` | Page and item embeddings, keyed on the source's version. **Its own slot because it is DERIVED** and its lifecycle says so: it can be dropped and rebuilt wholesale when the embedding provider or its width changes, which is a thing you must never do to the pages themselves. Absent entirely for a company that configured no embeddings | [Knowledge System](knowledge-system.md) |
 
@@ -153,7 +159,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets` and `integrations` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL — which is exactly what makes a dead node's seat reclaimable with nobody around to release it.
+Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `kb vectors` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -164,7 +170,8 @@ That is a constraint rather than a preference. On the default embedded backend a
 | Bucket | Age | Sized from |
 |---|---|---|
 | `leases` | the lease TTL (45 s by default) | The expiry **is** the mechanism: a renew rewrites the key and restarts the clock, so a node that stops renewing stops holding, and its seats become claimable without anything having to notice it died |
-| `epochs` | none | The fencing counter, and a fence that restarts is not a fence — a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` for exactly this: the two want opposite retentions |
+| `duties` | 3 hours, the longest duty's TTL, and never lowered | Each record carries the TTL its duty asked for and is judged by that deadline against the broker's clock, so the scheduler's 30-second duty moves within 30 seconds. The age only has to outlive the longest duty, and it is only ever raised, because a lowered age would have the broker reap a long duty a peer still holds |
+| `epochs` | none | The fencing counter, and a fence that restarts is not a fence: a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` and `duties` for exactly this: they want opposite retentions |
 | `rate` | a few multiples of the window | A closed window must age out, and must never outlive its successor |
 | `claims` | 5 minutes | A third-party app's redelivery and an operator's replay, not the third-party app's full retry schedule |
 | `ledger` | 7 days | Must outlast the queue's redelivery horizon **and** the scheduler's catchup ceiling — expiring a completion a tick could still evaluate lets that fire run twice |
@@ -173,16 +180,41 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
 | `budgets` | none | A cap is a ceiling for the life of a deployment. A counter that rolled itself over would silently re-arm a company somebody had stopped on purpose, on a horizon nobody chose — so clearing one is an operator action (`crewlet budgets reset`) |
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
-| `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and terminal delete are what end it |
+| `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and its terminal delete are what end it: a run's record is deleted the moment the run settles, done or failed, once its box is reclaimed, and a removed seat's runs are ended when its mailbox is retired. No settled run is left for the completion poll and every seat recovery to read again |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 | `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 | `integrations` | none | A status is standing state, not a recent event: it says what the last pass found, and it is true until the next one. One that expired would make a converged surface read as never-reconciled and send the loop to re-provision what is already there. It is bounded by the number of surfaces a company has rather than by a horizon, and a row leaves when its block leaves the company document |
+| `mailboxes` | none | A record's age cannot tell a seat that is still in the company from one that left, so an age would forget a mailbox that still exists and leave it retaining mail for a seat nobody runs. It is bounded by the handles a company has ever used, and a record leaves when the [maintenance duty](seat-ownership.md#singleton-duties) retires its mailbox |
 | `kb vectors` | none | An embedding is keyed on its source's version, so a bucket age would reap a vector while the page it describes was still current — and search would silently stop finding that page by meaning. It leaves when its source does |
 | `positions` | none | The sharpest case in the table. A node's position is what the trim reads to decide what every other node may delete, so a key that expired would read as a node that has applied **nothing** — which either pins the trim for ever or, read the other way round, lets it delete records that node still needs. A row leaves by an operator's audited eviction, never by a clock |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` is the maintenance duty's own decision; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` and `positions` wait for an operator, one by an unset and the other by an audited eviction; and `sandbox runs` end at their own pause reaper or a terminal delete.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` and `positions` wait for an operator, one by an unset and the other by an audited eviction; `kb vectors` leave when their source does; and `sandbox runs` end at their own pause reaper or a terminal delete.
+
+---
+
+## Duties have a bucket of their own
+
+A seat lease and a duty lease want opposite TTLs. A seat is renewed on a heartbeat, so its TTL is a few heartbeats and a dead node's seats move within a minute. A [duty](seat-ownership.md#singleton-duties) is claimed once per **tick** of the work it guards, and a tick runs from ten seconds (the scheduler) to an hour (the learning passes), so a duty's TTL has to outlive several of its own ticks: the scheduler's is 30 seconds, the integration reconcile's four and a half minutes, the retention sweep's 45 minutes and the skill curator's three hours.
+
+A bucket's age is the longest TTL it can keep, so one bucket cannot serve both. While duties shared `leases`, every duty longer than the seat lease TTL was refused, and on a fleet running `coordination.type: embedded-kv` the retention sweep, the mailbox retirement, the integration reconcile, the skill curator and every integration setup pass never ran, with one warning per attempt (`maintenance_duty_claim_failed`, `integration_duty_unknown`) as the only sign. A single node running `local` coordination was unaffected.
+
+So `duties` holds every `worker:` lease, and the rules are these:
+
+- **A duty may ask for any TTL up to three hours** (`coord.MaxDutyTTL`), on every backend, whatever the seat lease TTL is. One that asks for more is refused with an error naming the ceiling, on the in-memory backend as well, so a duty too long for a fleet fails in a single-node test rather than only in production.
+- **The ceiling is the longest duty's TTL**, and an engine test holds the two equal, so neither can move without the other.
+- **Changing `coordination.lease_ttl_seconds` changes seats and presence only.** A duty's TTL comes from its own cadence.
+
+### The rolling upgrade across the duty bucket
+
+A build that predates `duties` locks a duty in `leases`, and it cannot be taught to look anywhere else. A newer node claiming the same duty in `duties` beside it would give the fleet two holders of one duty. So:
+
+> **While any node of a build that predates the duty bucket is live, newer nodes run no duties.**
+
+Every lease record a newer build writes carries its storage layout, and a record of an older build carries none. An older node renews its presence in `leases` for as long as it runs, so a newer node that sees such a record refuses every duty claim, and a newer node already holding a duty is refused its next per-tick claim and stops. A newer node logs `coord_kv_duties_wait_for_older_build` (a warning) when it starts waiting and `coord_kv_duties_resumed` when it stops, once each, since a refused duty otherwise looks exactly like a duty a peer is running. The older nodes keep running the duties they can (those whose TTL fits the seat lease TTL, which is all they could ever run); once the last of them stops and its records lapse, the newer nodes take every duty in `duties`. The older build's own duty record lapses in `leases` in that same interval, so the two holdings never overlap. Seats are not held back by any of this.
+
+A KV cannot put "no older record exists" inside a compare-and-set, so the check is made before a claim and again after it, and a new claim the second check refuses is given back at once. What that cannot close is an older node that had no live record at all when a newer node claimed (a node the fleet already counts as gone) coming back and claiming the duty in its own bucket: the newer holder's next per-tick claim is refused and it stops, so the overlap lasts at most one tick of that duty. The fleet view shows a duty an older node holds in `leases` as held by that node, so an operator sees who is actually running it during the upgrade. A downgrade across this change needs every newer node stopped first.
 
 ---
 

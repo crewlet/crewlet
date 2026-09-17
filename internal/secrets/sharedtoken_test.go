@@ -2,6 +2,7 @@ package secrets_test
 
 import (
 	"crypto/rand"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -63,15 +64,27 @@ func TestASharedTokenCannotHoldWhitespace(t *testing.T) {
 	}
 }
 
-// The refusal says HOW SHORT, because "too short" without the number sends an
-// operator to the source to find the floor.
-func TestTheRefusalNamesBothLengths(t *testing.T) {
+// The refusal names THE FLOOR, because "too short" without the number sends an
+// operator to the source to find it, and it never names the length of the
+// token it refused. The message is answered to API callers and written to
+// logs, and a credential's length is a fact about the credential.
+func TestTheRefusalNamesTheFloorAndNotTheTokensLength(t *testing.T) {
 	t.Parallel()
-	err := secrets.CheckSharedToken("letmein")
-	if err == nil {
-		t.Fatal("a seven-character token was accepted")
-	}
-	if !strings.Contains(err.Error(), "26") || !strings.Contains(err.Error(), " 7") {
-		t.Errorf("the refusal %q names neither the floor nor the length given", err)
+	for _, token := range []string{"letmein", "crewlet-datadog-token", strings.Repeat("a", 25)} {
+		err := secrets.CheckSharedToken(token)
+		if err == nil {
+			t.Fatalf("%q was accepted", token)
+		}
+		if !strings.Contains(err.Error(), "at least 26 characters") {
+			t.Errorf("the refusal %q does not name the floor", err)
+		}
+		length := strconv.Itoa(len([]rune(token)))
+		for _, word := range strings.FieldsFunc(err.Error(), func(r rune) bool {
+			return r < '0' || r > '9'
+		}) {
+			if word == length {
+				t.Errorf("the refusal %q names %s, the length of the token it refused", err, length)
+			}
+		}
 	}
 }

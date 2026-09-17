@@ -23,13 +23,16 @@ const KeyDomain = "crewlet.mcp.v1"
 // laptop all answer this differently with the same company running.
 const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 
-// Build is THE construction path, called by the engine and by a standalone API
-// alike.
+// Build is THE construction path, called by the engine.
 //
-// Both need one and for different halves: the engine OPENS a run's session and
-// mints its endpoint, and whichever process is externally reachable VERIFIES
-// the token. That is why the token is signed from shared key material rather
-// than stored — see [runtoken.KeyFrom].
+// The engine OPENS a run's session and mints its endpoint, and the same process
+// serves it: a session is a live tool surface, so no other process can (see
+// [Bridge.session]). The token is still signed from the fleet's key material
+// rather than a per-process key, and the reason is diagnosis rather than
+// verification: a peer that a misrouted call reaches (a load balancer in front
+// of several nodes) can then tell a token the fleet signed from a forged one,
+// and log that the bridge URL addresses the wrong node rather than that the
+// route is under attack. See [runtoken.KeyFrom] and [Bridge.resolve].
 //
 // An unset base URL builds NOTHING, and that is a real configuration rather
 // than an error: most deployments run no agent mode. The route is then absent,
@@ -45,14 +48,16 @@ func Build(env func(string) string, keyMaterial []string) *Bridge {
 	}
 	key := runtoken.KeyFrom(KeyDomain, keyMaterial)
 	if len(key) == 0 {
-		// A PER-PROCESS KEY CANNOT WORK ACROSS TWO. Logged rather than
-		// refused, because a merged deployment — the default — is
-		// perfectly correct with one, and refusing would take agent mode
-		// away from the topology it works on.
-		log.Warn("mcp_bridge_signing_key_ephemeral",
+		// INFO, NOT A WARNING: a per-process key serves every session this
+		// node opens, on one node or a fleet, because only the opening node
+		// ever verifies a token. What it loses is the peer's diagnosis
+		// above, which is worth a line an operator can find and not an
+		// alarm on a configuration that works.
+		log.Info("mcp_bridge_signing_key_ephemeral",
 			"detail", "no Tier A secrets.keys, so bridge tokens are signed with "+
-				"a per-process key — a split API cannot verify tokens the "+
-				"engine minted. `crewlet secrets keygen` fixes it")
+				"a per-process key: a peer that a misrouted bridge call reaches "+
+				"cannot tell it from a forged token. `crewlet secrets keygen` "+
+				"gives every node the same key")
 	}
 	return New(Options{Key: key, BaseURL: base})
 }

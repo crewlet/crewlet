@@ -123,10 +123,30 @@ img {
 :focus {
   outline: none;
 }
+/* THE RING ONLY. The radius belongs to `@crewlethq/tokens/css/base`, which
+   declares this exact rule — same outline, same offset, same radius — and
+   `styles/uilet.css` aliases our names onto the tokens it reads, so the copy
+   that used to live here was the same declaration twice.
+
+   AND THE DUPLICATE WAS NOT FREE, which is the part worth writing down. Two
+   identical rules for one selector are redundant, so the minifier kept ONE —
+   the later one, which is this sheet's, emitted after all 139 KB of the
+   design system's component CSS. The baseline that was meant to be overridden
+   by a component thereby became the rule that overrode it: `:focus-visible`
+   and `.crewlet-avatar--circle` are each a single class, so the later won
+   every tie, and 119 components that shape themselves from one class changed
+   shape the instant a reader tabbed in — a circle became a rounded rectangle,
+   a pill went near-square, every `.crewlet-btn` dropped to `--radius-xs`.
+   Visible to somebody using the keyboard and to nobody else, which is how it
+   survived the port. `internal/api`'s TestTheDesignSystemCascadesInOrder is
+   the gate, and it reads the built artifact because only the bundle knows
+   which import the bundler evaluated first.
+
+   So this rule keeps the parts the baseline does not state and states nothing
+   the baseline already does. */
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-  border-radius: var(--r-xs);
 }
 
 ::selection {

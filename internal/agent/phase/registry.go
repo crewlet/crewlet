@@ -1,6 +1,7 @@
 package phase
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
@@ -21,6 +22,16 @@ var log = logging.Get("agent.phase")
 // map-backed registry would hand two seats booted from one config two
 // different models, and hand the same seat a different one on restart. So the
 // order is a field rather than something the map is trusted to remember.
+//
+// A NIL *Registry IS THE COMPANY WITH NO MODELS, and every method answers for
+// it: no keys, no providers, and a Chain or Head that refuses with
+// [ErrNoProviders]. An empty providers.llm is a valid company (an org chart
+// written before its credentials exist), and the epoch spells it as no
+// registry at all rather than an empty one. Nil-safe rather than merely
+// documented, because several consumers hold the registry behind an
+// interface, where a nil pointer is not a nil interface: a guard written as
+// `models == nil` passes it through, and the first method call would have
+// been a panic deep inside a turn.
 type Registry struct {
 	order []string
 	byKey map[string]llm.Provider
@@ -32,15 +43,25 @@ type Entry struct {
 	Provider llm.Provider
 }
 
+// ErrNoProviders reports a model resolution against a company that configures
+// no providers.llm at all.
+//
+// Worded for the operator who reads it at the end of a failed call, because
+// the fix is always the same edit: the company is valid, it is running, and
+// what it lacks is one entry under providers.llm.
+var ErrNoProviders = errors.New("phase: the company configures no model provider; " +
+	"add one under providers.llm")
+
 // NewRegistry builds the registry from config-ordered entries.
 //
-// An empty registry is refused here rather than at the first turn: a company
-// with no models is a config error, and discovering it when a seat tries to
-// think reports it as a nil provider deep in a phase, naming neither the seat
-// nor the config that produced it.
+// An empty list is refused: a registry answers which model a seat runs on,
+// and one holding nothing has no answer to give. The company that configures
+// no model is not built through here at all; it has no registry (see the
+// nil-receiver rule on [Registry]), which is the one spelling of that state
+// every consumer reads.
 func NewRegistry(entries []Entry) (*Registry, error) {
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("phase: no LLM providers configured")
+		return nil, ErrNoProviders
 	}
 	r := &Registry{
 		order: make([]string, 0, len(entries)),
@@ -61,8 +82,14 @@ func NewRegistry(entries []Entry) (*Registry, error) {
 	return r, nil
 }
 
-// Keys returns the configured keys in config order.
-func (r *Registry) Keys() []string { return slices.Clone(r.order) }
+// Keys returns the configured keys in config order, and none for a nil
+// registry.
+func (r *Registry) Keys() []string {
+	if r == nil {
+		return nil
+	}
+	return slices.Clone(r.order)
+}
 
 // All yields every configured provider, in config order.
 //
@@ -72,6 +99,9 @@ func (r *Registry) Keys() []string { return slices.Clone(r.order) }
 // nobody can diff against the config that produced it.
 func (r *Registry) All() iter.Seq2[string, llm.Provider] {
 	return func(yield func(string, llm.Provider) bool) {
+		if r == nil {
+			return
+		}
 		for _, key := range r.order {
 			if !yield(key, r.byKey[key]) {
 				return
@@ -87,6 +117,9 @@ func (r *Registry) All() iter.Seq2[string, llm.Provider] {
 // key that misses is (nil, false) rather than a substitution, so the caller
 // can refuse and say which keys exist.
 func (r *Registry) Provider(key string) (llm.Provider, bool) {
+	if r == nil {
+		return nil, false
+	}
 	p, ok := r.byKey[key]
 	return p, ok
 }
@@ -94,7 +127,13 @@ func (r *Registry) Provider(key string) (llm.Provider, bool) {
 // Has reports whether a key is configured. The config validator uses it to
 // reject a role naming a provider that does not exist — which is where that
 // typo should die, rather than here where it can only be survived.
-func (r *Registry) Has(key string) bool { _, ok := r.byKey[key]; return ok }
+func (r *Registry) Has(key string) bool {
+	if r == nil {
+		return false
+	}
+	_, ok := r.byKey[key]
+	return ok
+}
 
 // Chain resolves the ordered fallback chain a phase runs on.
 //
@@ -112,13 +151,15 @@ func (r *Registry) Has(key string) bool { _, ok := r.byKey[key]; return ok }
 // rejected outright by config validation, which is the only place it can be
 // caught before a turn spends tokens on the wrong model.
 //
-// The returned slice is always non-empty; a nil error guarantees it.
+// The returned slice is always non-empty; a nil error guarantees it. A
+// registry with nothing to resolve (nil, or a zero value built without
+// [NewRegistry]) refuses with [ErrNoProviders].
 func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {
 	if role == nil {
 		return nil, fmt.Errorf("phase: no role")
 	}
-	if len(r.order) == 0 {
-		return nil, fmt.Errorf("phase: no LLM providers configured")
+	if r == nil || len(r.order) == 0 {
+		return nil, ErrNoProviders
 	}
 
 	candidates := roleKeys(role, ph)

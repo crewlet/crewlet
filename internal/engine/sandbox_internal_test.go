@@ -6,11 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -373,66 +377,131 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 }
 
 // A suspension with nowhere to go leaves a job running in a box nobody is
-// coming back for. Whichever of the three ways it happens — the runner never
-// recorded the conversation, it would not serialize, or the row was no longer
-// launching — the run has to be marked unresumable while the seat's owner is
-// still this process, so recovery reaps the box instead of stranding it.
-func TestAnUnrecordableSuspensionFailsTheRun(t *testing.T) {
+// coming back for. Whichever way it happens (the runner never recorded the
+// conversation, it would not serialize, the record could not be written, or the
+// run was no longer launching), the run is settled while the seat's owner is
+// still this process: its box reclaimed and its record deleted.
+//
+// Marking the record failed is what this used to do, and it stranded the box:
+// a record that is not active is read by no recovery pass and polled by no
+// waiter, so the job ran on in a box billed to its provider's TTL.
+func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	store := sandbox.NewCoordStore(memory.NewFleet())
+	provider := sandbox.NewFakeProvider()
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	queue := &publishRecorder{}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: queue, Pending: store, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
-	e := &Engine{sandboxPending: store}
+	if err := store.AttachSandbox(t.Context(), "t1",
+		sandbox.BoxRef{SandboxID: box.ID(), CommandID: "1"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	e := &Engine{sandboxPending: store, sandboxCoordinator: coordinator}
 
 	e.failSuspension(t.Context(), "t1", "sandbox_suspension_missing",
 		"the turn suspended but recorded no conversation", nil)
 
-	got, found, err := store.Get(t.Context(), "t1")
-	if err != nil || !found {
-		t.Fatalf("Get = %v, %v", found, err)
+	if got, found, err := store.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("Get = %+v, found %v, %v; want the run ended and its record gone", got, found, err)
 	}
-	if got.Status != sandbox.StatusFailed {
-		t.Fatalf("status = %q, want %q — a launching row holds a box nothing polls",
-			got.Status, sandbox.StatusFailed)
+	if killed := provider.KilledIDs(); len(killed) != 1 || killed[0] != box.ID() {
+		t.Fatalf("killed %v, want the running job's box %q reclaimed", killed, box.ID())
+	}
+	if !queue.published(types.SandboxRunFailed{}.EventType()) {
+		t.Fatal("the lost run was not announced")
 	}
 }
 
-// The waiter duty must survive three of its OWN ticks and must never outlive
-// the lease bucket it is written into.
+// publishRecorder is the slice of the queue a coordinator publishes through.
+type publishRecorder struct {
+	mu     sync.Mutex
+	events []*events.Event
+}
+
+func (r *publishRecorder) Publish(_ context.Context, _ string, ev *events.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+	return nil
+}
+
+func (r *publishRecorder) published(eventType string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.events {
+		if ev.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// The waiter duty must survive three of its OWN ticks, whatever the seat lease
+// TTL is.
 //
-// It was `3 * sandbox.DefaultPollInterval` — a constant that ignored the
-// configured interval, so its own "three poll intervals" was true of exactly
-// one deployment. That constant was 45s, which is also the default lease TTL,
-// and the KV refuses a lease STRICTLY longer than its bucket's age: the two
-// agreed by one comparison. Lower coordination.lease_ttl_seconds below 45 and
-// every claim errors — and mayTick fails closed, so the waiter stops ticking
-// altogether and every detached run hangs forever.
-func TestTheWaiterDutyTTLFollowsItsCadenceAndItsBucket(t *testing.T) {
+// It was `3 * sandbox.DefaultPollInterval`, a constant that ignored the
+// configured interval, and then it was capped at the seat lease TTL because
+// duties shared the seat lease bucket. That cap handed a 60 s poll a 45 s duty,
+// which lapsed between two of its own ticks. Duties have their own bucket now,
+// so the only ceiling is coord.MaxDutyTTL, and an interval that would need more
+// is refused when the waiter starts rather than on every tick.
+func TestTheWaiterDutyTTLFollowsItsCadence(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		interval time.Duration
-		lease    time.Duration
 		want     time.Duration
 	}{
-		{"the default cadence", sandbox.DefaultPollInterval, 45 * time.Second, 45 * time.Second},
-		{"a slower cadence scales with it", 60 * time.Second, 10 * time.Minute, 3 * time.Minute},
-		{"a fast cadence takes the floor", 100 * time.Millisecond, 45 * time.Second, 30 * time.Second},
-		{"an unset cadence takes the default", 0, 45 * time.Second, 45 * time.Second},
-		{"a short bucket is the ceiling", sandbox.DefaultPollInterval, 20 * time.Second, 20 * time.Second},
-		{"no bucket leaves the derived value", 60 * time.Second, 0, 3 * time.Minute},
+		{"the default cadence", sandbox.DefaultPollInterval, 45 * time.Second},
+		{"a cadence slower than the seat lease TTL still gets three ticks", 60 * time.Second, 3 * time.Minute},
+		{"a fast cadence takes the floor", 100 * time.Millisecond, 30 * time.Second},
+		{"an unset cadence takes the default", 0, 45 * time.Second},
+		{"the slowest cadence the duty ceiling admits", coord.MaxDutyTTL / dutyTTLTicks, coord.MaxDutyTTL},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Engine{leaseTTL: tc.lease}
-			if got := e.waiterDutyTTL(tc.interval); got != tc.want {
-				t.Fatalf("waiterDutyTTL(%s) with a %s bucket = %s, want %s",
-					tc.interval, tc.lease, got, tc.want)
+			if got := waiterDutyTTL(tc.interval); got != tc.want {
+				t.Fatalf("waiterDutyTTL(%s) = %s, want %s", tc.interval, got, tc.want)
 			}
-			if tc.lease > 0 && e.waiterDutyTTL(tc.interval) > tc.lease {
-				t.Fatal("the duty asks to outlive its bucket; the KV refuses that on every claim")
+			if got := waiterDutyTTL(tc.interval); got < dutyTTLTicks*tc.interval {
+				t.Fatalf("waiterDutyTTL(%s) = %s lapses inside three of its own ticks", tc.interval, got)
+			}
+			if _, err := (&Engine{}).waiterDuty(tc.interval); err != nil {
+				t.Fatalf("waiterDuty(%s) refused an interval the duty ceiling admits: %v", tc.interval, err)
 			}
 		})
+	}
+}
+
+// A poll interval whose duty no backend grants is refused at start, naming the
+// option, rather than failing every claim for the life of the process.
+func TestAWaiterIntervalBeyondTheDutyCeilingIsRefusedAtStart(t *testing.T) {
+	t.Parallel()
+	interval := coord.MaxDutyTTL/dutyTTLTicks + time.Second
+	duty, err := (&Engine{}).waiterDuty(interval)
+	if !errors.Is(err, coord.ErrTTLTooLong) {
+		t.Fatalf("waiterDuty(%s) = (%v, %v), want an error wrapping coord.ErrTTLTooLong", interval, duty != nil, err)
+	}
+	if !strings.Contains(err.Error(), "SandboxPollInterval") {
+		t.Fatalf("the refusal %q does not name the option to change", err)
 	}
 }
 
@@ -482,5 +551,50 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 	}
 	if err := sandboxHeadroom(ctx, leftover{left: 0}, 0); err != nil {
 		t.Errorf("an unset floor refused a run: %v", err)
+	}
+}
+
+// A RETIRED SEAT'S RUNS ARE ENDED BY THE NODE THAT RETIRES IT. Through the
+// coordinator where this node has one, which reclaims each box; and where it
+// has none, the retirement is refused while the fleet still records a run for
+// the seat, because a node that cannot reach a box must not delete the
+// subscriptions that run's completion and answer travel on.
+func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+
+	bare := &Engine{backends: &Backends{Fleet: fleet}}
+	if err := bare.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err == nil {
+		t.Fatal("a node with no coordinator let the retirement proceed over a recorded run")
+	}
+	if err := bare.retireSeatRuns(t.Context(), "pm", "retirement:1", 3); err != nil {
+		t.Fatalf("a seat with no runs was refused: %v", err)
+	}
+
+	provider := sandbox.NewFakeProvider()
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: &publishRecorder{}, Pending: store, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	equipped := &Engine{backends: &Backends{Fleet: fleet}, sandboxCoordinator: coordinator}
+	if err := equipped.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err != nil {
+		t.Fatalf("retireSeatRuns: %v", err)
+	}
+	if _, found, err := store.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("the retired seat's run survived (found %v, %v)", found, err)
 	}
 }

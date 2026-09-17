@@ -6,7 +6,7 @@
  */
 
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
@@ -27,16 +27,25 @@ import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
+import { eventHistoryLabel, fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type { EventRecord } from "~/protocol/index.ts";
 
-/** What an id that resolves to nothing means, on the page and in the rail. */
-const NO_EVENT_HINT =
-  "The event store keeps 30 days. An id older than that, or from a different node's store, will not resolve.";
+/**
+ * What an id that resolves to nothing means, on the page and in the rail.
+ *
+ * THE FLOOR IS THE ENGINE'S. This sentence said "the store keeps 30 days" of
+ * its own accord while `store.EventHistory` was the only thing that decided
+ * it, so a deployment that changed its retention was told the wrong number by
+ * a screen with nothing to catch it — and a reader told the wrong floor stops
+ * paging early.
+ */
+const noEventHint = (seconds: number | null | undefined) =>
+  `An id older than the retained record, or from a different node's store, will not resolve: ${eventHistoryLabel(seconds)}.`;
 
 /**
  * What an event IS — the five facts, in one order, for the page and the rail.
@@ -57,7 +66,7 @@ function eventFacts(event: EventRecord, now: number): Fact[] {
       // the engine rather than by anybody, which is a fact rather than a
       // blank — and only a real actor carries a link out to its seat.
       label: "Actor",
-      value: event.actor || <span className="faint">the engine itself</span>,
+      value: event.actor || <span className="muted">the engine itself</span>,
       path: event.actor ? ["company", "people", event.actor] : undefined,
     },
     {
@@ -72,7 +81,7 @@ function eventFacts(event: EventRecord, now: number): Fact[] {
       value: event.trace_id ? (
         <code className="inline">{event.trace_id}</code>
       ) : (
-        <span className="faint">not traced</span>
+        <span className="muted">not traced</span>
       ),
       path: event.trace_id ? ["activity", "traces", event.trace_id] : undefined,
     },
@@ -131,6 +140,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId });
+  const { data: engine } = useEngineHealth();
 
   // A phase event has a first-class rendering; everything else gets its
   // payload shown honestly rather than being squeezed into a shape it is not.
@@ -202,7 +212,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
         error={error === "not_found" ? null : error}
         loading={loading}
         empty={
-          !loading && !data ? { title: "No event with that id", hint: NO_EVENT_HINT } : undefined
+          !loading && !data
+            ? { title: "No event with that id", hint: noEventHint(engine?.event_history_seconds) }
+            : undefined
         }
       >
         {data && (
@@ -255,7 +267,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     plain
                     wrap={false}
                     copyable={false}
-                    maxHeight={460}
+                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="The event payload, as JSON"
                     code={JSON.stringify(data.payload, null, 2)}
@@ -265,7 +277,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   </span>
                 </div>
               ) : (
-                <span className="t-caption faint">
+                <span className="t-caption">
                   This event carries no payload — its type and summary are the whole record.
                 </span>
               )}
@@ -318,6 +330,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
 export function EventPeek({ eventId }: { eventId: string }) {
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
+  const { data: engine } = useEngineHealth();
 
   // NOT AN EMPTY RAIL. `peek=event:` is reached from a pasted id as often as
   // from a row — the search box takes one — so an id that resolves to nothing
@@ -346,7 +359,14 @@ export function EventPeek({ eventId }: { eventId: string }) {
           // precisely. Every other code is the engine failing to answer.
           error={error === "not_found" ? null : error}
           loading={loading}
-          empty={missing ? { title: "No event with that id", hint: NO_EVENT_HINT } : undefined}
+          empty={
+            missing
+              ? {
+                  title: "No event with that id",
+                  hint: noEventHint(engine?.event_history_seconds),
+                }
+              : undefined
+          }
         >
           {data && (
             <>
@@ -391,14 +411,14 @@ export function EventPeek({ eventId }: { eventId: string }) {
                     plain
                     wrap={false}
                     copyable={false}
-                    maxHeight={460}
+                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="The event payload, as JSON"
                     code={JSON.stringify(payload, null, 2)}
                   />
                 </Disclosure>
               ) : (
-                <p className="t-caption faint">
+                <p className="t-caption">
                   This event carries no payload — its type and summary are the whole record.
                 </p>
               )}

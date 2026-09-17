@@ -212,7 +212,7 @@ export function WorkSearch() {
                     {/* THE INDEX'S OWN EXCERPT — the half a board row cannot
                         have, because a board row does not know what you
                         asked. */}
-                    {r.snippet && <span className="t-caption faint">{r.snippet}</span>}
+                    {r.snippet && <span className="t-caption">{r.snippet}</span>}
                   </div>
                 ),
               },

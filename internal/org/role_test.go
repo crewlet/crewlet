@@ -109,8 +109,8 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		{"schedules", func(r *Role) {
 			r.Schedules = []Schedule{{Name: "standup", Cron: "0 9 * * *", Task: "post"}}
 		}},
-		{"slack", func(r *Role) { r.Slack = SlackIdentity{BotToken: "xoxb-1"} }},
-		{"mattermost", func(r *Role) { r.Mattermost = MattermostIdentity{BotToken: "mm-1"} }},
+		{"integrations.slack", func(r *Role) { r.Slack = SlackIdentity{BotToken: "xoxb-1"} }},
+		{"integrations.mattermost", func(r *Role) { r.Mattermost = MattermostIdentity{BotToken: "mm-1"} }},
 		{"integrations.jira", func(r *Role) { r.Project = "ENG" }},
 		{"integrations.confluence", func(r *Role) { r.Space = "ENG" }},
 		{"mcp_env", func(r *Role) { r.MCPEnv = MCPEnv{"atlassian": {"JIRA_USERNAME": "s"}} }},
@@ -123,9 +123,12 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 				t.Fatalf("Validate() = %v, want ErrHumanSeatField", err)
 			}
 			// The message names the field an operator wrote, not a Go one:
-			// its whole job is pointing at a line in their config.
-			if !strings.Contains(err.Error(), tc.field) {
-				t.Errorf("error does not name %q: %v", tc.field, err)
+			// its whole job is pointing at a line in their config. The WHOLE
+			// key, and nothing else: a message ending in "slack" contains
+			// "slack" and still names a key no seat has, because a seat's
+			// chat apps are written under integrations.
+			if !strings.HasSuffix(err.Error(), ": "+tc.field) {
+				t.Errorf("error does not name exactly %q: %v", tc.field, err)
 			}
 		})
 	}

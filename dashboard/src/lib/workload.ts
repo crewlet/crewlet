@@ -125,14 +125,19 @@ export function loadTone(load: Load): LoadTone {
 /**
  * What the capacity column says.
  *
- * AN EM DASH FOR AN ABSENCE, never a zero. The two unknown states get
- * different words because they are different problems: nobody set a capacity,
- * or two projects set one in units that do not add.
+ * A SENTENCE FOR AN ABSENCE, never a zero and never a punctuation mark. The
+ * two unknown states get different words because they are different problems:
+ * nobody set a capacity, or two projects set one in units that do not add.
+ *
+ * It was an em dash, which a screen reader reads as "dash" or skips entirely —
+ * so the cell with the least to say said nothing at all, and a reader could
+ * not tell it from a capacity of zero. The WORDS are the value here; the
+ * [EmptyValue] mark beside them is the column that holds a number.
  */
 export function capacityText(load: Load): string {
   switch (load.state) {
     case "unknown":
-      return "—";
+      return "not set";
     case "unsummable":
       return "mixed units";
     default:

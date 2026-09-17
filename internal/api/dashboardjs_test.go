@@ -39,6 +39,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -117,9 +118,41 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		}
 	}
 	// The licence travels with the files it covers, and both are inside what
-	// the binary embeds.
-	if _, err := os.Stat(filepath.Join(servedTree, "OFL.txt")); err != nil {
+	// the binary embeds. `fonts/OFL.txt` rather than a copy at the root: the
+	// build emits it from `@crewlethq/tokens`' own `fonts/OFL.txt`, beside the
+	// faces that package ships, so a font bump cannot leave the notice and the
+	// files it covers describing different things.
+	if _, err := os.Stat(filepath.Join(servedTree, "fonts", "OFL.txt")); err != nil {
 		t.Errorf("the built tree carries embedded typefaces and no OFL notice: %v", err)
+	}
+
+	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
+	// the design system's three packages, the fonts and the Material Symbols
+	// drawings, all under licenses that require their text alongside, and the
+	// release archives and image copy this file from here. Written by the build
+	// (vite.config.ts), so a build that lost `build.license` or the step
+	// appending the fonts and the symbols leaves a tree that serves perfectly
+	// and owes notices it no longer carries.
+	notices, err := os.ReadFile(filepath.Join(servedTree, "THIRD_PARTY_NOTICES.txt"))
+	if err != nil {
+		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
+			"dashboard/ writes it through build.license: %v", err)
+	}
+	for _, want := range []string{
+		"## react - ",               // a bundled package, from build.license
+		"## react-dom - ",           // and its renderer
+		"## @crewlethq/ui",          // the design system's components
+		"## @crewlethq/tokens",      // its palette, type and faces
+		"## @crewlethq/icons",       // its glyphs and marks
+		"SIL OPEN FONT LICENSE",     // the font license, appended by sourceNotices
+		"The Inter Project Authors", // naming both faces
+		"The JetBrains Mono Project Authors",
+		"Apache License", // the Material Symbols drawings, appended too
+		"Material Symbols",
+	} {
+		if err == nil && !bytes.Contains(notices, []byte(want)) {
+			t.Errorf("THIRD_PARTY_NOTICES.txt does not carry %q", want)
+		}
 	}
 
 	// NOTHING external at runtime. The tree this replaces pulled three font
@@ -208,6 +241,149 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	// fails silently in a browser — the text simply renders in the fallback.
 	if fonts < 4 {
 		t.Errorf("only %d font faces reached from the stylesheet, want 4", fonts)
+	}
+}
+
+// TestTheShellFitsTheDashboardPolicy checks the committed shell and its
+// stylesheets use nothing the dashboard's Content-Security-Policy refuses.
+//
+// The policy allows scripts, styles, fonts and images from this origin only,
+// and no inline script, inline style or event-handler attribute. A browser
+// enforces that with nothing on screen but a console violation, so a build that
+// started inlining a theme bootstrap script, a critical-CSS block or a font
+// from a CDN would serve a blank or unstyled page while every other test here
+// passed. This reads what the binary serves and fails on the first of those.
+func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+
+	res := fetch(t, a, "/dashboard", nil)
+	if got := res.Header.Get("Content-Security-Policy"); got != pagepolicy.Dashboard {
+		t.Errorf("the shell is served under %q, want the dashboard policy", got)
+	}
+	shell := mustFetch(t, a, "/dashboard", "text/html")
+
+	styles, scripts := pagepolicy.InlineBlocks(shell)
+	if len(styles) > 0 {
+		t.Errorf("the shell has %d inline <style> blocks, which style-src 'self' refuses; "+
+			"keep styles in the bundled stylesheet", len(styles))
+	}
+	for _, body := range scripts {
+		if strings.TrimSpace(body) != "" {
+			t.Errorf("the shell has an inline script, which script-src 'self' refuses; "+
+				"move it into the bundle:\n%s", body)
+		}
+	}
+	if m := inlineAttribute.Find(shell); m != nil {
+		t.Errorf("the shell carries %q, an inline style or event handler the policy refuses", m)
+	}
+	for _, m := range shellReference.FindAllSubmatch(shell, -1) {
+		if url := string(m[1]); !sameOrigin(url) {
+			t.Errorf("the shell loads %s from another origin, which the policy refuses", url)
+		}
+	}
+
+	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
+		if !strings.HasSuffix(string(m[1]), ".css") {
+			continue
+		}
+		sheet := mustFetch(t, a, string(m[1]), "text/css")
+		for _, u := range cssURL.FindAllSubmatch(sheet, -1) {
+			url := strings.Trim(string(u[1]), `"' `)
+			if !sameOrigin(url) && !strings.HasPrefix(url, "data:") {
+				t.Errorf("%s loads %s from another origin, which font-src and img-src refuse",
+					m[1], url)
+			}
+		}
+	}
+}
+
+var (
+	// inlineAttribute matches a style attribute or an on* event handler.
+	inlineAttribute = regexp.MustCompile(`(?i)\s(style|on[a-z]+)\s*=`)
+	// shellReference matches every src and href the shell names.
+	shellReference = regexp.MustCompile(`(?i)\s(?:src|href)\s*=\s*["']([^"']+)["']`)
+	// cssURL matches a url() in a stylesheet.
+	cssURL = regexp.MustCompile(`url\(([^)]*)\)`)
+)
+
+// sameOrigin reports whether a URL resolves against the page's own origin:
+// a path, never a scheme or a protocol-relative host.
+func sameOrigin(url string) bool {
+	return strings.HasPrefix(url, "/") && !strings.HasPrefix(url, "//")
+}
+
+// TestTheDesignSystemCascadesInOrder checks the served stylesheet carries the
+// design system's baseline BEFORE the components that sit on it.
+//
+// Order is what decides a tie, and there is one. The baseline's `:focus-visible`
+// rule and a component's `.crewlet-btn` rule each count as a single class, so
+// whichever is written later wins every property they share. The baseline sets
+// `border-radius`, which means a baseline written last squares off every
+// button, input and dialog the moment a reader tabs to it, which is visible to
+// somebody using the keyboard and to nothing else in this suite.
+//
+// It is an ORDERING of two files, so nothing but the built artifact can show
+// it: the source says `import` and the cascade says which import was evaluated
+// first, which is the bundler's answer rather than the author's. This reads
+// what the browser is handed.
+func TestTheDesignSystemCascadesInOrder(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	shell := mustFetch(t, a, "/dashboard", "text/html")
+
+	sheets := 0
+	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
+		if !strings.HasSuffix(string(m[1]), ".css") {
+			continue
+		}
+		sheets++
+		sheet := mustFetch(t, a, string(m[1]), "text/css")
+
+		// The baseline's own rule: `:focus-visible` as a whole selector, not a
+		// component's `.crewlet-x:focus-visible`.
+		base := baselineFocus.FindIndex(sheet)
+		first := componentRule.FindIndex(sheet)
+		if base == nil {
+			t.Fatalf("%s carries no bare :focus-visible rule, so the design system's "+
+				"baseline is not in the bundle at all; main.tsx imports "+
+				"@crewlethq/tokens/css/base", m[1])
+		}
+		if first == nil {
+			t.Fatalf("%s carries no component rule, so this scan proves nothing "+
+				"about an order it cannot see", m[1])
+		}
+		if base[0] > first[0] {
+			t.Errorf("%s writes the design system's baseline after the component "+
+				"stylesheets (%d > %d), so the baseline wins every tie: a focused "+
+				"control takes the baseline's radius. Import the five "+
+				"@crewlethq/tokens stylesheets above every module import in main.tsx",
+				m[1], base[0], first[0])
+		}
+	}
+	if sheets == 0 {
+		t.Error("the shell named no stylesheet, so nothing was measured")
+	}
+}
+
+var (
+	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
+	// a complete selector, which is how it is told from a component's.
+	baselineFocus = regexp.MustCompile(`(?:^|[{}])\s*:focus-visible\s*\{`)
+	// componentRule matches the first rule of any design system component.
+	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
+)
+
+// TestTheNoticesAreServedAsText checks a running engine answers its notices,
+// from the binary, as text a browser shows.
+func TestTheNoticesAreServedAsText(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	for _, url := range []string{
+		"/static/dashboard/THIRD_PARTY_NOTICES.txt",
+		"/static/dashboard/fonts/OFL.txt",
+	} {
+		mustFetch(t, a, url, "text/plain; charset=utf-8")
 	}
 }
 

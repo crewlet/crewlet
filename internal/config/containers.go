@@ -40,7 +40,7 @@ func ValidContainerKey(s string) bool { return containerKeyPattern.MatchString(s
 // ContainerKeyRule is the grammar, phrased for a person, so every message
 // that refuses a key says the same thing.
 const ContainerKeyRule = "an upper-case letter followed by 1-9 upper-case " +
-	"letters or digits (ENG, PROD, TS2) — the shape every backend accepts, " +
+	"letters or digits (ENG, PROD, TS2), the shape every backend accepts, " +
 	"so the org chart survives a backend switch"
 
 // validateContainerKeys checks every project and space key in the document:
@@ -68,7 +68,7 @@ func (c *Company) validateContainerKeys() error {
 	reserved := map[string]string{}
 	if skills != "" {
 		reserved[skills] = "holds this company's tool-skill pages, which are " +
-			"excluded from knowledge search and from routing — a unit writing " +
+			"excluded from knowledge search and from routing, so a unit writing " +
 			"there would have its pages silently unreadable. Pick another key, " +
 			"or move the skills container with knowledge.skills_container"
 	}
@@ -78,7 +78,7 @@ func (c *Company) validateContainerKeys() error {
 			"move it with knowledge.root_space"
 	}
 
-	shape := func(path, kind, key string) {
+	shape := func(path Path, kind, key string) {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			return
@@ -88,7 +88,7 @@ func (c *Company) validateContainerKeys() error {
 				key, kind, ContainerKeyRule)
 		}
 	}
-	space := func(path, key string) {
+	space := func(path Path, key string) {
 		key = strings.TrimSpace(key)
 		shape(path, "container", key)
 		if why, taken := reserved[key]; taken {
@@ -97,25 +97,25 @@ func (c *Company) validateContainerKeys() error {
 	}
 
 	if c.Knowledge.SkillsContainer != nil && skills != "" {
-		shape("knowledge.skills_container", "container", skills)
+		shape(field("knowledge.skills_container"), "container", skills)
 	}
 	if c.Knowledge.RootSpace != nil && root != "" {
-		shape("knowledge.root_space", "container", root)
+		shape(field("knowledge.root_space"), "container", root)
 	}
 	for i, s := range c.Knowledge.KnowledgeScope {
 		// A scope entry is NOT checked against the reserved set: naming the
 		// skills container in a read scope is refused by the exclusion
 		// itself, and naming the root space there is an ordinary narrowing.
-		shape(idx("knowledge.scope", i), "container", s)
+		shape(idx(field("knowledge.scope"), i), "container", s)
 	}
 
 	for i := range c.Roles {
-		rp := idx("roles", i)
+		rp := idx(field("roles"), i)
 		shape(at(rp, "project"), "project", c.Roles[i].Project)
 		space(at(rp, "space"), c.Roles[i].Space)
 	}
-	var walk func(path string, u *Unit)
-	walk = func(path string, u *Unit) {
+	var walk func(path Path, u *Unit)
+	walk = func(path Path, u *Unit) {
 		shape(at(path, "project"), "project", u.Project)
 		space(at(path, "space"), u.Space)
 		for i := range u.Roles {
@@ -128,7 +128,7 @@ func (c *Company) validateContainerKeys() error {
 		}
 	}
 	for i := range c.Units {
-		walk(idx("units", i), &c.Units[i])
+		walk(idx(field("units"), i), &c.Units[i])
 	}
 	return p.err()
 }

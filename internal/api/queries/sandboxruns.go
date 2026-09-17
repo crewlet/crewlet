@@ -2,8 +2,6 @@ package queries
 
 import (
 	"context"
-	"maps"
-	"slices"
 
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -35,41 +33,20 @@ import (
 // Declared here rather than imported as a concrete store so this package
 // depends on the shape, and so the memory twin answers it too.
 //
-// ONE METHOD, TAKING THE STATUSES. It was `ListActive`, which is the recovery
-// path's question — "what still owns engine state" — and the wrong one here: a
-// run's record OUTLIVES its run so a reviewer can read what it did, and a
-// board that only ever showed the active set never served the retained record
-// to anybody. A run that failed vanished from the screen at the moment
-// somebody would go looking for it.
+// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter:
+// a run's record is deleted the moment the run settles, so [sandbox.Active] is
+// every status a record can hold and "every run this store holds" and "the
+// active ones" name one set. A `status=` parameter selecting `done` or
+// `failed` would be a question whose answer is structurally empty — worse than
+// absent, because an empty board reads as "nothing failed" rather than "this
+// is not where that is recorded". How a run ENDED is on the event stream: the
+// resumed turn's own events, or a `sandbox_run_failed` naming the reason.
 type PendingRuns interface {
-	ListWithStatus(ctx context.Context, want []string) ([]sandbox.PendingRun, error)
+	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 }
 
-// runStatusSets are what `status=` selects, by name.
-//
-// NAMES RATHER THAN A CSV OF STATUSES, because the three a reader wants are
-// not three status values: "active" is five of them and "done" is the two
-// terminal ones. A caller spelling out `launching,running,awaiting_...` would
-// be restating a set the engine already defines and would drift from it on the
-// day a sixth status lands.
-var runStatusSets = map[string][]string{
-	"active": sandbox.Active,
-	"done":   {sandbox.StatusDone},
-	"failed": {sandbox.StatusFailed},
-	// EMPTY IS EVERY RUN this store still holds — not a sixth set to keep
-	// in step.
-	"all": nil,
-}
-
-func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
-	// ACTIVE BY DEFAULT, because that is what a board watching a working
-	// company is for; the finished runs are a history somebody asks for.
-	name := firstOf(p.String("status"), "active")
-	want, known := runStatusSets[name]
-	if !known {
-		return nil, badParams("status", name, slices.Sorted(maps.Keys(runStatusSets)))
-	}
-	runs, err := s.Sandbox.ListWithStatus(ctx, want)
+func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
+	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +54,7 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	for _, run := range runs {
 		out = append(out, serialiseRun(run))
 	}
-	return map[string]any{"runs": out, "status": name}, nil
+	return map[string]any{"runs": out}, nil
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {

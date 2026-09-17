@@ -417,6 +417,11 @@ func validate(resource, owner string) error {
 // validateTTL adds the deadline check for the calls that set one. A
 // non-positive TTL would mint a lease that is already lapsed, which reads
 // downstream as a seat nobody can hold.
+//
+// The twin could honour a duty TTL of any length, and refuses one above
+// coord.MaxDutyTTL anyway: a twin that accepted what the KV store refuses is
+// exactly how every long duty claim passed every single-node test while no
+// fleet ever ran those duties.
 func validateTTL(resource, owner string, ttl time.Duration) error {
 	if err := validate(resource, owner); err != nil {
 		return err
@@ -424,7 +429,7 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 	if ttl <= 0 {
 		return errBadTTL
 	}
-	return nil
+	return coord.CheckDutyTTL(resource, ttl)
 }
 
 // wireCopy puts meta through the encoding a real backend puts it through.

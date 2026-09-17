@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -127,19 +126,20 @@ func TestAnExternalStreamRefusesTheEmbeddedClusterBlock(t *testing.T) {
 			if err == nil {
 				t.Fatalf("accepted %+v against an external stream, where nothing reads it", c)
 			}
-			// THE FAULT ITSELF, not the rendered text: `stream.cluster.name`
-			// contains `stream.cluster`, so a substring match is satisfied
-			// by the rule that tells an operator to NAME the block — the
-			// opposite advice from the one under test.
-			faults := config.Faults(err)
-			if len(faults) != 1 {
-				t.Fatalf("faults = %v, want exactly the one about the block", faults)
+			// THE PROBLEM ITSELF, not the rendered text:
+			// `stream.cluster.name` contains `stream.cluster`, so a
+			// substring match is satisfied by the rule that tells an
+			// operator to NAME the block, which is the opposite advice
+			// from the one under test.
+			problems := config.Problems(err)
+			if len(problems) != 1 {
+				t.Fatalf("problems = %v, want exactly the one about the block", problems)
 			}
-			if got := faults[0].Path; got != "stream.cluster" {
+			if got := problems[0].Path; got != "stream.cluster" {
 				t.Errorf("path = %q, want %q", got, "stream.cluster")
 			}
-			if !errors.Is(faults[0].Kind, config.ErrConflict) {
-				t.Errorf("kind = %v, want ErrConflict", faults[0].Kind)
+			if got := problems[0].Kind; got != "conflict" {
+				t.Errorf("kind = %q, want conflict", got)
 			}
 		})
 	}

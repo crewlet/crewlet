@@ -2,11 +2,12 @@ package mcp
 
 import (
 	"context"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
 // TestALeftoverTreeIsReaped is the process-group half of child supervision.
@@ -188,46 +189,19 @@ func waitForGrandchildPID(t *testing.T, c *client) int {
 	return 0
 }
 
-// assertProcessGone checks /proc where it exists.
+// assertProcessGone fails the test unless pid stops running shortly after the
+// group was reaped.
 //
-// It deliberately does NOT use kill(pid, 0): a ZOMBIE answers that as alive,
-// and a reparented grandchild is exactly the kind of process that can be one.
-// Where /proc is absent the pipe-EOF evidence in the caller stands alone, and
-// this says nothing rather than guessing.
+// It reads the kernel's process record through procgrouptest rather than
+// probing with kill(pid, 0), which answers a ZOMBIE as alive: a reparented
+// grandchild is exactly the kind of process that can be one for a moment. The
+// record is read on every platform the suite runs on, so the pipe-EOF evidence
+// in the caller is never the only proof that the grandchild died.
 func assertProcessGone(t *testing.T, pid int) {
 	t.Helper()
-	if _, err := os.Stat("/proc/self"); err != nil {
-		t.Logf("no /proc: relying on the stderr-EOF evidence alone for pid %d", pid)
-		return
+	if !procgrouptest.AwaitGone(t, pid, 5*time.Second) {
+		t.Fatalf("grandchild %d is still running after the group was reaped", pid)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		state, alive := procState(pid)
-		if !alive || state == "Z" {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	state, _ := procState(pid)
-	t.Fatalf("grandchild %d is still running (state %q) after the group was reaped", pid, state)
-}
-
-func procState(pid int) (state string, exists bool) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return "", false
-	}
-	// The comm field is parenthesised and may contain spaces; the state is
-	// the first field after the closing paren.
-	idx := strings.LastIndex(string(raw), ") ")
-	if idx < 0 {
-		return "", true
-	}
-	fields := strings.Fields(string(raw)[idx+2:])
-	if len(fields) == 0 {
-		return "", true
-	}
-	return fields[0], true
 }
 
 // AND A TREE LEFT BY A SERVER THAT NEVER CAME UP IS REAPED TOO.

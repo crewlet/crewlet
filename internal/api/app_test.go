@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
@@ -71,6 +72,22 @@ func TestHealthAnswersWhileTheProcessIsAlive(t *testing.T) {
 	}
 	if body["queue"] != "jetstream" {
 		t.Errorf("queue = %v", body["queue"])
+	}
+}
+
+// THE PAGING FLOOR IS ON THE WIRE, because a reader who has paged to the
+// bottom of the log has to be told they reached the floor rather than that the
+// company went quiet. Three dashboard screens restated the number as literal
+// copy while nothing carried it, so a change to the store's retention would
+// have left all three lying with nothing to catch it.
+func TestHealthCarriesTheEventPagingFloor(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	_, body := get(t, a, "/health")
+
+	want := store.EventHistory.Seconds()
+	if body["event_history_seconds"] != want {
+		t.Errorf("event_history_seconds = %v, want %v", body["event_history_seconds"], want)
 	}
 }
 

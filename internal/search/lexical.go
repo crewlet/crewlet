@@ -153,9 +153,15 @@ func (x *Indexer) Upsert(ctx context.Context, docs []Doc) error {
 		return nil
 	}
 	now := store.EncodeTime(time.Now().UTC())
+	// THE PARAMETER LIMIT IS READ ONCE PER BATCH, not once per posting: it
+	// is a property of the estate this indexer writes to, established when
+	// the store opened, and the posting write below is the hottest loop in
+	// the tree. Threading it in also keeps [Indexer.upsertOne] free of the
+	// handle, so what it writes depends only on its arguments.
+	maxVariables := x.db.Caps().MaxVariables
 	return x.db.Tx(ctx, func(tx *sql.Tx) error {
 		for _, doc := range docs {
-			if err := x.upsertOne(ctx, tx, doc, now); err != nil {
+			if err := x.upsertOne(ctx, tx, doc, now, maxVariables); err != nil {
 				return err
 			}
 		}
@@ -163,7 +169,9 @@ func (x *Indexer) Upsert(ctx context.Context, docs []Doc) error {
 	})
 }
 
-func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64) error {
+func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
+	maxVariables int) error {
+
 	id := docKey(doc.Source, doc.ID)
 
 	// THE TITLE IS INDEXED WITH THE BODY, and weighted by repetition rather
@@ -176,8 +184,19 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64)
 	text := doc.Title + "\n" + doc.Title + "\n" + doc.Title + "\n" + doc.Body
 	terms := textindex.Analyze(text)
 
+	// THE POSTINGS ARE COLLECTED INTO A SLICE rather than written straight
+	// out of the map, because the multi-row insert below binds them by
+	// index and a map has no indexes. The ORDER within that slice is
+	// whatever the map yielded and is deliberately not sorted: the rows are
+	// a set, the key is (term, doc_id) and the terms of one document are
+	// unique by construction, so no two rows of one statement can collide
+	// and there is no conflict clause whose last-write-wins would make the
+	// order observable. See the insert for what that would cost if a
+	// conflict clause were ever added.
+	postings := make([]posting, 0, len(terms))
 	length := 0
-	for _, n := range terms {
+	for term, n := range terms {
+		postings = append(postings, posting{term: term, freq: n})
 		length += n
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -209,14 +228,38 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64)
 		`DELETE FROM kb_postings WHERE doc_id = ?`, id); err != nil {
 		return fmt.Errorf("search: clear postings for %s: %w", id, err)
 	}
-	for term, freq := range terms {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO kb_postings (term, doc_id, freq) VALUES (?, ?, ?)`,
-			term, id, freq); err != nil {
-			return fmt.Errorf("search: write posting %q for %s: %w", term, id, err)
-		}
+	// ONE STATEMENT PER CHUNK, not one per term. This was the hottest
+	// per-row loop in the tree: the inverted list takes a row per UNIQUE
+	// TERM per document, so a 600-word page was several hundred round trips
+	// and several hundred plans inside the index transaction, which is the
+	// shape BenchmarkLogApplyDrain names "unprepared" and measures as the
+	// slowest of the three.
+	//
+	// NO CONFLICT CLAUSE, exactly as before: the DELETE above cleared this
+	// document's list, and (term, doc_id) is unique within it because
+	// `terms` is keyed on the term. A duplicate here would be the index
+	// contradicting itself rather than something to absorb, and the primary
+	// key says so.
+	if _, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO kb_postings (term, doc_id, freq) VALUES`, `(?, ?, ?)`, "",
+		len(postings), func(i int) []any {
+			return []any{postings[i].term, id, postings[i].freq}
+		}); err != nil {
+		// THE DOCUMENT RATHER THAN THE TERM. A chunk carries hundreds of
+		// terms and the engine names the offending one in its own error,
+		// which %w carries; naming the first term of the chunk here would
+		// be a guess that reads as a fact.
+		return fmt.Errorf("search: write %d postings for %s: %w",
+			len(postings), id, err)
 	}
 	return nil
+}
+
+// posting is one row of the inverted list, held while a document's terms are
+// turned from a map into something a multi-row insert can index into.
+type posting struct {
+	term string
+	freq int
 }
 
 // excerptLimit bounds the stored excerpt, in bytes.

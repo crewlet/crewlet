@@ -381,7 +381,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
                 ) : (
                   // NOT a dash: a turn with no seat is not a turn whose seat
                   // went unrecorded, it is the engine's own work.
-                  <span className="faint">the engine</span>
+                  <span className="muted">the engine</span>
                 ),
             },
             {
@@ -391,7 +391,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               cell: (t) => (
                 <span className="row gap-1">
                   <span className="truncate">
-                    {t.summary || <span className="faint">no summary recorded</span>}
+                    {t.summary || <span className="muted">no summary recorded</span>}
                   </span>
                   {t.task_id && (
                     // THE KEY, not a link to it — see the row's own comment.

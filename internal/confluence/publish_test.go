@@ -795,3 +795,29 @@ func TestALabelThatWillNotAttachIsANote(t *testing.T) {
 		t.Errorf("notes = %v", res.Notes)
 	}
 }
+
+// The skill walk hands the registry the page's own version. Confluence numbers
+// every edit, and a zero here is the value reserved for a backend that has no
+// version concept, so a walk that dropped it recorded every skill as never
+// edited.
+func TestTheSkillWalkCarriesEachPageVersion(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "TS")
+	id := w.seed("TS", "Deploying", confluence.EncodeSkillPage(
+		"key: deploy\ntitle: Deploying\ntrigger:\n  tool: deploy\nphases: [execute]\nsummary: How to deploy.",
+		"Deploy carefully."))
+	w.mu.Lock()
+	w.pages[id].Version = 7
+	w.mu.Unlock()
+
+	pages, err := confluence.SkillPages(context.Background(), wikiClient(t, w), "TS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("walked %d pages, want 1", len(pages))
+	}
+	if pages[0].ID != id || pages[0].Version != 7 {
+		t.Errorf("page = id %q version %d, want id %q version 7", pages[0].ID, pages[0].Version, id)
+	}
+}

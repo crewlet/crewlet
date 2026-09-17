@@ -38,6 +38,7 @@ import {
   Button,
   Card,
   EmptyState,
+  EmptyValue,
   Legend,
   Meter,
   StatCard,
@@ -151,8 +152,11 @@ export function LiveNow() {
 
   /**
    * WHAT IS IN A BOX RIGHT NOW — the durable rows and the live projection
-   * folded by the Runs screen's own function, then cut to the runs that have
-   * not finished.
+   * folded by the Runs screen's own function.
+   *
+   * NOTHING IS CUT TO "NOT FINISHED" ANY MORE, because nothing finished can
+   * arrive: a settled run's record is deleted, and the projection drops its
+   * entry on completion, so both sources carry only live runs.
    *
    * Both sources, because neither alone is "right now": the projection sweeps
    * a parked run after twelve hours and has no row for one whose box was
@@ -160,13 +164,7 @@ export function LiveNow() {
    * ago. Counting only the projection is what made the tile below disagree
    * with the Inbox about whether anything was waiting.
    */
-  const inFlight = useMemo(
-    () =>
-      mergeRuns(runs?.runs ?? [], sandboxes).filter(
-        (r) => r.status !== "done" && r.status !== "failed",
-      ),
-    [runs, sandboxes],
-  );
+  const inFlight = useMemo(() => mergeRuns(runs?.runs ?? [], sandboxes), [runs, sandboxes]);
   const parked = inFlight.filter((r) => awaitingPerson(r.status)).length;
 
   const { open: openPeek } = usePeekControls();
@@ -298,7 +296,9 @@ export function LiveNow() {
         <StatCard
           icon={<TokenGlyph size="xs" />}
           label="Tokens"
-          value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
+          value={
+            tokens ? fmtCount(tokens.totals.total_tokens) : <EmptyValue label="Not counted yet" />
+          }
           sub={
             tokens
               ? `${tokens.totals.calls.toLocaleString()} model calls`

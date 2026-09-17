@@ -3,6 +3,8 @@ package configapi
 import (
 	"context"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // Writing ONE entity from inside this process.
@@ -15,6 +17,7 @@ import (
 // rather than coercing it, restore the masks a redacted read handed back, and
 // validate the WHOLE document rather than the entity, because a seat naming a
 // provider that no longer exists is valid on its own and breaks the company.
+// The route itself is a caller of the same draft, so the two cannot differ.
 //
 // A MERGE PATCH CANNOT DO THIS. RFC 7396 replaces an array wholesale, so a
 // patch addressing `roles[2]` would delete every other seat, which is why the
@@ -51,43 +54,53 @@ func (e *EntityError) Unwrap() error { return e.Err }
 
 // ApplyEntity splices one entity into the active revision and activates it.
 func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Applied, error) {
-	if s == nil {
-		return Applied{}, fmt.Errorf("configapi: no store on this node")
+	d, err := entityDraft(req.Kind, req.ID, asText(req.Body), req.Expect)
+	if err != nil {
+		return Applied{}, err
 	}
-	access, ok := entityKinds[req.Kind]
+	prepared, err := s.prepare(ctx, d)
+	if err != nil {
+		return Applied{}, err
+	}
+	return s.commit(ctx, prepared, req.Summary, req.Operator)
+}
+
+// entityDraft replaces the entity of one kind under one id.
+//
+// Nothing to splice into is refused rather than treated as an empty company:
+// building the first revision out of one seat is not what this write is for.
+func entityDraft(kind, id string, body submitted, expect string) (draft, error) {
+	access, ok := entityKinds[kind]
 	if !ok {
-		return Applied{}, &EntityError{Err: ErrUnknownEntityKind}
+		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
+			ErrUnknownEntityKind, kind, EntityKinds())}
 	}
-	active, found, err := s.configs.Active(ctx)
-	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: read the active revision: %w", err)
-	}
-	if !found {
-		// Nothing to splice into. Refused rather than treated as an empty
-		// company: building the first revision out of one seat is not what
-		// this route is for.
-		return Applied{}, ErrNoActiveRevision
-	}
-	if req.Expect != "" && req.Expect != active.ID {
-		return Applied{}, &RacedError{Base: req.Expect, Current: active.ID}
-	}
-	prior, err := s.open(active)
-	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: open the active revision: %w", err)
-	}
-	// A SECOND COPY, so the splice lands on a document that still has
-	// everything the caller did not send, and `prior` stays the unmodified
-	// side the mask restore reads from.
-	spliced, err := s.open(active)
-	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: open the active revision: %w", err)
-	}
-	if err := access.replace(spliced, req.ID, req.Body); err != nil {
-		return Applied{}, &EntityError{Err: err}
-	}
-	spliced.RestoreRedacted(prior)
-	if err := spliced.Validate(); err != nil {
-		return Applied{}, &ValidationError{Err: err}
-	}
-	return s.activate(ctx, spliced, active.ID, req.Summary, req.Operator)
+	return draft{
+		expect: expect, requireActive: true,
+		// VALIDATED WHOLE, not just the entity. A seat naming a provider
+		// that no longer exists is valid on its own and breaks the company,
+		// and a per-entity surface is exactly where that gets introduced.
+		rules: (*config.Company).Validate,
+		build: func(b base) (*config.Company, []byte, error) {
+			// A SECOND COPY, so the splice lands on a document that still
+			// has everything the caller did not send, and the prior stays
+			// the unmodified side the mask restore reads from.
+			spliced, err := config.DecodeCompany(b.document)
+			if err != nil {
+				return nil, nil, fmt.Errorf("configapi: decode the active revision: %w", err)
+			}
+			if refused := access.replace(spliced, id, body); refused != nil {
+				return nil, nil, &EntityError{Err: refused}
+			}
+			// The masks the caller was shown come back as the values they
+			// hide, against the revision they were shown FROM.
+			spliced.RestoreRedacted(b.prior)
+			entity, _ := access.find(spliced, id)
+			document, err := spliceStored(b.document, access, id, entity)
+			if err != nil {
+				return nil, nil, err
+			}
+			return spliced, document, nil
+		},
+	}, nil
 }

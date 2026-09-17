@@ -41,6 +41,7 @@ type Fleet struct {
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
+	mailboxes    map[string]coord.MailboxRecord
 	positions    map[string]coord.NodePositions
 	holds        map[string]coord.TrimHold
 	floors       map[string]coord.TrimFloor
@@ -49,6 +50,14 @@ type Fleet struct {
 	admissions   map[string]coord.Admission
 	maintAcks    map[string]coord.MaintenanceAck
 	maintRev     uint64
+
+	// version is the one counter every versioned write draws from, sandbox
+	// runs and mailbox records alike. Store-wide rather than per record, as
+	// a KV revision is, so a record deleted and created again never hands
+	// back a version an older incarnation of it already used: a caller still
+	// holding that version must lose, not win against a record it never
+	// read. A per-record counter restarting at 1 was exactly that bug.
+	version uint64
 
 	epoch   int64
 	target  coord.Activation
@@ -82,6 +91,7 @@ func NewFleet() *Fleet {
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
+		mailboxes:    map[string]coord.MailboxRecord{},
 	}
 }
 
@@ -229,10 +239,21 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	// passes against it proves nothing about the real store.
 	// An unset pointer is NOT a race — see the KV's own note and
 	// [coord.ActivationRequest.Expect].
+	if req.Expect != "" && req.ExpectAbsent {
+		return coord.Activation{}, errors.New("coord/memory: an activation cannot " +
+			"expect a revision and no revision at once")
+	}
 	if req.Expect != "" && f.set && f.target.RevisionID != req.Expect {
 		return coord.Activation{}, fmt.Errorf(
 			"%w: expected %s, the fleet is on %s",
 			coord.ErrActivationRaced, req.Expect, f.target.RevisionID)
+	}
+	// CREATE-ONLY, and the comparison an expectation cannot make: this
+	// write was built on nothing, so any pointer at all is a race with it.
+	if req.ExpectAbsent && f.set {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected no activation, the fleet is on %s",
+			coord.ErrActivationRaced, f.target.RevisionID)
 	}
 
 	// The payload lands before the pointer, matching the KV's two writes.
@@ -573,7 +594,8 @@ func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte)
 	}
 	// Versions start at 1 so a zero version is always a lost race, which
 	// is what a caller that forgot to read one deserves.
-	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: 1}
+	f.version++
+	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
 	return true, nil
 }
 
@@ -585,7 +607,8 @@ func (f *Fleet) UpdateSandboxRun(_ context.Context, turnID string, value []byte,
 	if !ok || record.Version != version {
 		return false, nil
 	}
-	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: version + 1}
+	f.version++
+	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
 	return true, nil
 }
 

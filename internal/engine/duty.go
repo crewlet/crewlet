@@ -2,10 +2,13 @@ package engine
 
 import (
 	"context"
-
+	"slices"
+	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // THE FLEET SINGLETONS, and the one gate they all pass through.
@@ -44,6 +47,7 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 	if e.backends == nil || e.node == nil {
 		return nil
 	}
+	e.duties.add(name)
 	return schedule.ClaimNamedDuty(e.backends.Coord, name,
 		e.node.Owner(), e.node.ID(), ttl)
 }
@@ -94,3 +98,85 @@ func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 // healthy node — and the pass's own "skipped this tick" path is already the
 // right behaviour.
 func refuseDuty(context.Context) (bool, error) { return false, nil }
+
+// claimedDuties is the set of duty names an engine claims through
+// [Engine.workerDuty], recorded there so the list [Engine.releaseDuties] walks
+// cannot drift from the duties that actually run.
+type claimedDuties struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func (d *claimedDuties) add(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !slices.Contains(d.names, name) {
+		d.names = append(d.names, name)
+	}
+}
+
+func (d *claimedDuties) list() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.names)
+}
+
+// dutyReleaseBudget bounds the give-back of every duty at the end of a stop.
+//
+// ONE SEAT HEARTBEAT INTERVAL (15 s at the shipped 45 s lease TTL), the budget
+// the node gives its seats' release for the same reason: giving a lease back is
+// a handful of coordination writes, so this guards against a store that has
+// stopped answering rather than allowing for real work, and past it a duty
+// lapses on its TTL, which is the outcome of not trying.
+const dutyReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
+
+// releaseDuties gives back every fleet duty this incarnation still holds.
+//
+// # Why a duty is released on a graceful stop
+//
+// A duty is claimed per tick and never released by its loop, so a node that
+// stops holds it until the lease lapses, and the lease is sized to outlive
+// several ticks: 45 minutes for the retention sweep, three hours for the skill
+// curator. A restart takes a new incarnation, which cannot re-claim what the
+// old one held, so every deploy that restarted the holder left the duty dark
+// for its whole TTL, and a fleet deployed more often than every three hours
+// could starve the curator altogether. A seat is given back on a drain for the
+// same reason; a duty is cheaper still to give back, because nothing is
+// attached to it.
+//
+// ONLY WHAT [Engine.workerDuty] CLAIMED. A hold ([Engine.workerHold]) wraps one
+// piece of work that is released when the work ends, and may belong to a pass
+// the API is still running on the merged topology, where the API outlives the
+// engine: releasing it here would let a second writer at a third-party app in
+// mid-pass, which is the collision the hold exists to prevent.
+//
+// Called after every duty loop has stopped, and each loop's Stop waits for a
+// tick in flight, so no tick of this node runs once a peer can take the duty.
+// Released at the epoch the store reports for this owner, so a lease a peer
+// has since taken is never touched.
+func (e *Engine) releaseDuties(ctx context.Context) {
+	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dutyReleaseBudget)
+	defer cancel()
+	owner := e.node.Owner()
+	for _, name := range e.duties.list() {
+		resource := coord.WorkerResource(name)
+		lease, err := e.backends.Coord.Get(ctx, resource)
+		if err != nil {
+			log.WarnContext(ctx, "duty_not_released", "duty", name, "error", err,
+				"detail", "the duty could not be read, so a peer takes it over once its lease lapses")
+			continue
+		}
+		if lease == nil || lease.Owner != owner {
+			continue
+		}
+		if _, err := e.backends.Coord.Release(ctx, resource, owner, lease.Epoch); err != nil {
+			log.WarnContext(ctx, "duty_not_released", "duty", name, "error", err,
+				"detail", "a peer takes the duty over once its lease lapses")
+			continue
+		}
+		log.InfoContext(ctx, "duty_released", "duty", name)
+	}
+}

@@ -53,6 +53,14 @@ cosign verify-blob checksums.txt \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
+Each archive holds the `crewlet` binary, `LICENSE`, `README.md` and the
+third-party notices it redistributes: `THIRD_PARTY_NOTICES.txt` for the Go
+toolchain and every Go module the binary links, and
+`dashboard/THIRD_PARTY_NOTICES.txt` for the packages, fonts and icon paths of
+the embedded dashboard. The container image carries the same files under
+`/usr/share/doc/crewlet/`, and a running engine serves the dashboard's at
+`/static/dashboard/THIRD_PARTY_NOTICES.txt`.
+
 Or run the container image, `ghcr.io/crewlet/crewlet` — a Debian userland
 rather than a distroless one, because the engine spawns process trees (stdio
 MCP servers, and the local sandbox's coding agent).

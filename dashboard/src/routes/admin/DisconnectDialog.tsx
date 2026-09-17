@@ -17,7 +17,7 @@
  */
 
 import { useState } from "react";
-import { Avatar, Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
+import { Avatar, Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { CableGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -303,21 +303,27 @@ export function DisconnectDialog({
         integration from your company configuration.
       </p>
 
-      <label className="int-choice">
-        <input
-          type="checkbox"
-          checked={removeSeats}
-          disabled={busy}
-          onChange={(e) => setRemoveSeats(e.target.checked)}
-        />
-        <span className="col" style={{ gap: 2 }}>
-          <span className="t-body">Also remove the accounts Crewlet created</span>
-          <span className="t-caption faint">
-            Each agent&apos;s account at the vendor is deleted. What those accounts wrote stays, but
-            they can do nothing more. Leave this off to keep them.
-          </span>
-        </span>
-      </label>
+      {/* THE DESIGN SYSTEM'S, and it fixes two things this row had of its own.
+          The whole row is ONE target — a 16px square is under every
+          pointer-target floor there is — and the box is named by its LABEL
+          alone, where a hand-rolled `<label>` wrapping both spans made the
+          accessible name the run-on paragraph with the consequence buried
+          inside it. The consequence is `description`, which is read after the
+          name and on request.
+
+          It is also the ink: that sentence was set in `faint`, the
+          decoration-only step measured between 2.8:1 and 4.5:1, and the words
+          saying what gets DELETED are the last words on this dialog that
+          should be under the text contrast floor. */}
+      <Checkbox
+        framed
+        tone="danger"
+        checked={removeSeats}
+        disabled={busy}
+        onCheckedChange={setRemoveSeats}
+        label="Also remove the accounts Crewlet created"
+        description="Each agent's account at the vendor is deleted. What those accounts wrote stays, but they can do nothing more. Leave this off to keep them."
+      />
 
       {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
           which stops it acting at once, and cannot delete the app itself:
@@ -331,7 +337,7 @@ export function DisconnectDialog({
           people rather than a list of URLs. */}
       {removeSeats && apps && apps.length > 0 && (
         <div className="col gap-2">
-          <span className="t-caption faint">
+          <span className="t-caption">
             Each agent&apos;s app is uninstalled, which stops it acting immediately. Deleting the
             app itself is yours to do{appPath ? <>: {marked(appPath)}</> : null}.
           </span>
@@ -391,7 +397,7 @@ export function DisconnectDialog({
                   revoked credential, an instance that is gone. Offered
                   only after one has actually failed, because it leaves
                   the vendor holding things nobody will remove. */}
-            <span className="t-caption faint">
+            <span className="t-caption">
               Forcing drops the integration without waiting for {name}. Whatever it still holds
               becomes yours to remove there.
             </span>

@@ -25,8 +25,8 @@ import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
 import { CloseGlyph, SearchGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
-import { useClient, useEvents } from "~/lib/store-hooks.ts";
-import { newestFirst, plural, tsKey } from "~/lib/format.ts";
+import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
+import { eventHistoryLabel, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -75,9 +75,11 @@ const PAGE = 100;
  * log is asked "what just happened" and "what happened last Tuesday" in the
  * same breath, and both are questions about the store rather than about what
  * this tab is holding. `1h` is the short end because that is where the minute
- * bucket stops being drawable — sixty bars — and the store's own retention is
- * thirty days, so `90d` would offer a window two thirds of which can never
- * have rows in it.
+ * bucket stops being drawable — sixty bars — and the long end is `30d` because
+ * that is `store.EventHistory`'s own default: a `90d` offer would be a window
+ * two thirds of which can never have rows in it. The engine reports its actual
+ * floor (`event_history_seconds`) and the footer says what it reported; this
+ * offer is a fixed vocabulary of windows rather than a claim about retention.
  */
 const LOG_OFFER: Offer = {
   ranges: ["1h", "6h", "1d", "7d", "30d"],
@@ -103,6 +105,7 @@ function sameDay(a: string, b: string): boolean {
 export function Activity() {
   const { socket } = useClient();
   const liveEvents = useEvents();
+  const { data: engine } = useEngineHealth();
   const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
@@ -293,7 +296,8 @@ export function Activity() {
       </PageActions>
       <PageNote>
         Everything the engine published, live and then paged out of the store. This tab holds the
-        last 400 in memory; older rows are fetched. The store keeps 30 days.
+        last 400 in memory; older rows are fetched.{" "}
+        {eventHistoryLabel(engine?.event_history_seconds)}.
       </PageNote>
 
       <Card>
@@ -451,7 +455,7 @@ export function Activity() {
               <span className="spacer" />
               <span>
                 {older.length > 0 && `${older.length} older rows fetched · `}
-                the store keeps 30 days
+                {eventHistoryLabel(engine?.event_history_seconds)}
               </span>
             </>
           )}

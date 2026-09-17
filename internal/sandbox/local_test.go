@@ -3,17 +3,18 @@
 package sandbox
 
 import (
-	"github.com/crewlet/crewlet/internal/procgroup"
-
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
 // newDirect mints a direct-mode provider rooted in a temp dir.
@@ -253,9 +254,8 @@ func TestABackgroundJobOutlivesTheCallAndRecordsItsPid(t *testing.T) {
 	if _, err := strconv.Atoi(pid); err != nil {
 		t.Fatalf("StartBackground returned %q, want a pid", pid)
 	}
-	recorded, err := os.ReadFile(filepath.Join(box.Home(), ".crewlet", "box.pid"))
-	if err != nil || strings.TrimSpace(string(recorded)) != pid {
-		t.Fatalf("pid file = %q, %v; want %q — without it no later process can reach the job", recorded, err, pid)
+	if leader := recordedLeader(t, box); strconv.Itoa(leader.PID) != pid {
+		t.Fatalf("recorded group %d, want %s: without it no later process can reach the job", leader.PID, pid)
 	}
 	waitFor(t, 5*time.Second, func() bool {
 		_, err := os.Stat(marker)
@@ -304,9 +304,9 @@ func TestClosingABoxKillsTheWholeProcessTree(t *testing.T) {
 	if err := box.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	waitFor(t, 10*time.Second, func() bool {
-		return syscall.Kill(child, 0) != nil
-	}, "the coding agent's own child survived teardown")
+	if !procgrouptest.AwaitGone(t, child, 10*time.Second) {
+		t.Fatal("the coding agent's own child survived teardown")
+	}
 }
 
 func TestClosingABoxRemovesItsDirectory(t *testing.T) {
@@ -370,10 +370,7 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	if _, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
-	pid := readPID(boxLayout{id: box.ID(), root: box.Home()})
-	if pid <= 0 {
-		t.Fatal("no pid recorded")
-	}
+	pid := recordedLeader(t, box).PID
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
@@ -407,7 +404,7 @@ func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool { return fileSize(counter) > 0 }, "the job never started")
-	pid := readPID(boxLayout{id: box.ID(), root: box.Home()})
+	pid := recordedLeader(t, box).PID
 
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
@@ -619,8 +616,62 @@ func TestTheKeepaliveStampIsWhatSparesABoxTheReaper(t *testing.T) {
 	}
 }
 
+// startStranger starts a live process group that no box started: what a
+// recycled pid names from a box's point of view. It is killed when the test
+// ends, so a failure leaks nothing.
+func startStranger(t *testing.T) procgroup.Leader {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300")
+	procgroup.Set(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the stranger: %v", err)
+	}
+	leader, err := procgroup.Identify(cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("Identify: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = procgroup.Kill(leader.PID)
+		_ = cmd.Wait()
+	})
+	return leader
+}
+
+// recordAsJob writes leader into a box's job record, as StartBackground does.
+func recordAsJob(t *testing.T, home string, leader procgroup.Leader) {
+	t.Helper()
+	if err := recordLeader(boxLayout{id: filepath.Base(home), root: home}, leader); err != nil {
+		t.Fatalf("recording the job: %v", err)
+	}
+}
+
+// recycled is the stranger's pid under a start time that is not its own: the
+// record a box would hold if its job had ended and the kernel had handed the
+// pid to the stranger.
+func recycled(stranger procgroup.Leader) procgroup.Leader {
+	return procgroup.Leader{PID: stranger.PID, Start: stranger.Start + "0"}
+}
+
+// recordedLeader is the job record StartBackground wrote into a box.
+func recordedLeader(t *testing.T, box Sandbox) procgroup.Leader {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(box.Home(), ".crewlet", "box.pid"))
+	if err != nil {
+		t.Fatalf("no job record: %v", err)
+	}
+	leader, err := procgroup.ParseLeader(string(raw))
+	if err != nil {
+		t.Fatalf("the job record %q is not a process group identity: %v", raw, err)
+	}
+	return leader
+}
+
 // A recycled pid pointing at some unrelated long-lived process would otherwise
 // keep a dead box's directory alive forever.
+//
+// The stranger is a real, live process group, because that is the whole case:
+// a pid that answers a liveness probe and is not the job. It is probed and
+// never signalled, and the reaper's decision rests on the start time alone.
 func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{})
@@ -628,23 +679,171 @@ func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	home := box.Home()
-	// Pid 1 is a process that certainly predates the box.
-	if err := os.MkdirAll(filepath.Join(home, ".crewlet"), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".crewlet", "box.pid"), []byte("1"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	// The two questions read two different stamps on purpose. Age the
-	// keepalive so the box is a reap CANDIDATE, and leave the directory's
-	// own mtime — the box's birth time — where it is, so pid 1, which
-	// started before this box existed, reads as the recycled pid it is.
-	ageKeepalive(t, home, 2*time.Hour)
+	stranger := startStranger(t)
+	recordAsJob(t, home, recycled(stranger))
+	ageBox(t, home, 2*time.Hour)
 
 	local.reapOrphans(t.Context(), time.Minute)
 
 	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a recycled pid kept a dead box's directory alive forever")
+	}
+	assertUntouched(t, stranger, "after the reap")
+}
+
+// The same record must not steer a signal either. A teardown, a kill and a
+// pause all act on the group a box recorded, and a group that is no longer the
+// job belongs to somebody else: SIGKILL there takes down a stranger's tree,
+// and SIGSTOP freezes it for as long as the pause lasts.
+func TestARecycledPidIsNeverSignalled(t *testing.T) {
+	stranger := startStranger(t)
+	local := newDirect(t)
+	for name, act := range map[string]func(Sandbox) error{
+		"pause": func(box Sandbox) error { return box.Pause(t.Context()) },
+		"close": func(box Sandbox) error { return box.Close(t.Context()) },
+		"kill":  func(box Sandbox) error { return local.Kill(t.Context(), box.ID()) },
+		"connect": func(box Sandbox) error {
+			_, err := local.Connect(t.Context(), box.ID())
+			return err
+		},
+	} {
+		box, err := local.Create(t.Context(), Spec{})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		recordAsJob(t, box.Home(), recycled(stranger))
+		if err := act(box); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		assertUntouched(t, stranger, "after "+name)
+	}
+}
+
+// assertUntouched fails the test unless the stranger's group is still there
+// and still running across a short window.
+//
+// A window rather than one reading, because a signal is delivered rather than
+// applied: a SIGSTOP or SIGKILL that did reach the group can take a moment to
+// show. Neither shows through [procgroup.Leader.Current]: the stranger is this
+// test's own unreaped child, so a killed one lingers as a zombie that is still
+// current, and a stopped one is current by definition. So the zombie is read
+// off the kernel's record, and a stop through ps, which reports T for a
+// stopped process on both release platforms.
+func assertUntouched(t *testing.T, stranger procgroup.Leader, when string) {
+	t.Helper()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for {
+		proc, found, err := procgroup.Inspect(stranger.PID)
+		if err != nil || !found || proc.Zombie || proc.Start != stranger.Start {
+			t.Fatalf("%s the stranger is gone (record %+v, found %v, %v): a recycled pid was signalled",
+				when, proc, found, err)
+		}
+		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(stranger.PID)).Output()
+		if err != nil {
+			t.Fatalf("reading the stranger's state through ps: %v", err)
+		}
+		if strings.HasPrefix(strings.TrimSpace(string(out)), "T") {
+			t.Fatalf("%s the stranger's group is stopped: a recycled pid was signalled", when)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// THE COMPLETION POLL'S LIVENESS QUESTION, answered by the job's identity
+// rather than by its pid. The handle a direct box hands out is a host pid, and
+// once the wrapper is gone the kernel may give that pid to anything: a probe
+// that took the pid on trust read the stranger as the job, and a wrapper that
+// died without writing its marker held its run open until the stranger exited.
+func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+
+	handle, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	if running, err := box.JobRunning(t.Context(), handle); err != nil || !running {
+		t.Fatalf("JobRunning of a live job = %v, %v; want true", running, err)
+	}
+
+	// The job's pid now names a stranger: a live process that is not the job.
+	stranger := startStranger(t)
+	recordAsJob(t, box.Home(), recycled(stranger))
+	if running, err := box.JobRunning(t.Context(), strconv.Itoa(stranger.PID)); err != nil || running {
+		t.Fatalf("JobRunning of a recycled pid = %v, %v; want false: a stranger held the run open", running, err)
+	}
+	// And a handle the record does not name is a job this box has replaced.
+	if running, err := box.JobRunning(t.Context(), handle); err != nil || running {
+		t.Fatalf("JobRunning of a handle the record no longer names = %v, %v; want false", running, err)
+	}
+	if _, err := box.JobRunning(t.Context(), "not-a-pid"); err == nil {
+		t.Fatal("a handle that is not a pid was answered rather than refused")
+	}
+}
+
+// An exited wrapper is not running, and the answer does not wait for the reap.
+func TestAFinishedJobIsNotRunning(t *testing.T) {
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+	handle, err := box.StartBackground(t.Context(), "exit 0", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		running, err := box.JobRunning(t.Context(), handle)
+		return err == nil && !running
+	}, "a finished job still reads as running")
+}
+
+// A job record that exists and cannot be read is the unknown answer, not an
+// absent one. Deleting a live box's checkout is unrecoverable and a lingering
+// directory is not, so the reaper keeps a box whose record it cannot read.
+func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	home := box.Home()
+	// A directory where the record belongs reads as an error for any user,
+	// root included, which a permission bit would not.
+	if err := os.MkdirAll(filepath.Join(home, ".crewlet", "box.pid"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	ageBox(t, home, 2*time.Hour)
+
+	local.reapOrphans(t.Context(), time.Minute)
+
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("the reaper deleted a box whose job record it could not read: %v", err)
+	}
+}
+
+// A record that is not a process group identity names no job. The file lives
+// inside the box, where the job can write, and a bare pid is exactly the
+// identity with no start time: acting on it would reach whatever holds that pid
+// now, so it is neither signalled nor allowed to keep the box.
+func TestAJobRecordWithoutAStartTimeNamesNoJob(t *testing.T) {
+	stranger := startStranger(t)
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	home := box.Home()
+	if err := os.WriteFile(filepath.Join(home, ".crewlet", "box.pid"),
+		[]byte(strconv.Itoa(stranger.PID)), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := local.Kill(t.Context(), box.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	assertUntouched(t, stranger, "after a kill steered by a bare pid")
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("Kill left the box directory behind")
 	}
 }
 
@@ -925,8 +1124,9 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("runHost: %v", err)
 	}
-	waitFor(t, 5*time.Second, func() bool { return syscall.Kill(child, 0) != nil },
-		"a cancelled control command left its grandchild running")
+	if !procgrouptest.AwaitGone(t, child, 5*time.Second) {
+		t.Fatal("a cancelled control command left its grandchild running")
+	}
 }
 
 func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
@@ -976,23 +1176,6 @@ func fileSize(path string) int64 {
 		return 0
 	}
 	return info.Size()
-}
-
-// ageKeepalive backdates only the "has it been abandoned?" stamp, leaving the
-// box's birth time alone.
-func ageKeepalive(t *testing.T, home string, by time.Duration) {
-	t.Helper()
-	when := time.Now().Add(-by)
-	alive := filepath.Join(home, ".crewlet", "alive")
-	if err := os.MkdirAll(filepath.Dir(alive), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if f, err := os.OpenFile(alive, os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-		f.Close()
-	}
-	if err := os.Chtimes(alive, when, when); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
 }
 
 // ageBox backdates a box's creation and keepalive stamps, standing in for time

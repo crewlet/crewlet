@@ -35,7 +35,9 @@ describe("a capacity nobody declared", () => {
     expect(load.state).toBe("unknown");
     expect(load.capacity).toBeNull();
     expect(load.fraction).toBeNull();
-    expect(capacityText(load)).toBe("—");
+    // NOT A DASH. "Nobody set a capacity" is a sentence a reader can act on;
+    // a punctuation mark is read as "dash" or skipped.
+    expect(capacityText(load)).toBe("not set");
   });
 
   it("wears no tone, because nothing is known either way", () => {

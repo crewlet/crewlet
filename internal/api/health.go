@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -57,6 +58,15 @@ type Health struct {
 	Queue   string `json:"queue"`
 	Clients int    `json:"clients"`
 
+	// EventHistorySeconds is how far back the event log can be read, which
+	// is the hard bottom of paging: once a cursor crosses it every page is
+	// empty forever. The dashboard has to be able to SAY that floor, and
+	// three of its screens restated it as literal copy ("the store keeps 30
+	// days") because nothing on the wire carried it. Seconds rather than
+	// days, because the retention is a duration and a client that has to
+	// re-derive the unit is a second place the number can be wrong.
+	EventHistorySeconds int `json:"event_history_seconds"`
+
 	InFlight        *int     `json:"in_flight,omitempty"`
 	ShuttingDown    *bool    `json:"shutting_down,omitempty"`
 	Posture         string   `json:"posture,omitempty"`
@@ -102,6 +112,9 @@ func (a *App) health(ctx context.Context) Health {
 		StartedAt:  a.startedAt,
 		Queue:      a.queueBackend,
 		Clients:    a.stream.Hub().Clients(),
+		// The floor is the store's own, not a number this package picked:
+		// it is what every read is bounded by.
+		EventHistorySeconds: int(store.EventHistory.Seconds()),
 	}
 	if !configured {
 		body.Status = StatusUnconfigured

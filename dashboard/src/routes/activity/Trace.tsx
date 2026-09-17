@@ -11,7 +11,7 @@
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Card, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   ErrorGlyph,
@@ -170,7 +170,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           <StatCard
             icon={<ScheduleGlyph size="xs" />}
             label="Elapsed"
-            value={to > from ? fmtDuration(to - from) : "—"}
+            value={to > from ? fmtDuration(to - from) : <EmptyValue label="Not measured" />}
             sub={
               from
                 ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
@@ -226,7 +226,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                     />
                   </span>
                   <span className="feed-tail">
-                    <span className="faint">{humanize(event.category)}</span>
+                    <span className="muted">{humanize(event.category)}</span>
                     <ChevronRightGlyph size="xs" />
                   </span>
                 </a>

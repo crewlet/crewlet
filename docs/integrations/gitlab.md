@@ -62,6 +62,8 @@ integrations:
       token_scopes: [api]        # scopes minted on each service-account PAT
 ```
 
+`access_levels` is keyed by seat **handle**, and a key no seat holds is not refused: the engine logs it on every node, once per applied epoch, as an `org_dangling_reference` warning with `ref=gitlab_access_level` (see [Dangling references](../concepts/organization-model.md#dangling-references)). Remove the key when you remove the seat. Left in place, it grants its level to the next seat whose handle matches, which is typically the same role added again.
+
 Four fields differ from the [hosted code host's](github.md) block beside it:
 
 - **`url` is required** when GitLab is enabled — the instance address is needed for webhook links, boot-time identity resolution (`GET {url}/api/v4/user`), and provisioning. GitHub's is optional, because github.com serves its API from a different host and needs no address at all.

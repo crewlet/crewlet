@@ -23,6 +23,19 @@
 // the same shape the sandbox waiter uses: a node that dies mid-sweep
 // releases it by lapsing, and a peer picks it up on its next tick with no
 // handoff protocol.
+//
+// # The one job that is not a range delete
+//
+// A removed seat's MAILBOX is retired here too, once the seat has been absent
+// from the active revision for [MailboxRetirementGrace]. It is the odd one out
+// in three ways, each written down in mailboxes.go: what it deletes is broker
+// state (the seat's durable subscriptions and the mail they hold) rather than
+// rows; it cannot be judged from a table, so every node records each seat's
+// mailbox in the coordination store before creating it, through
+// [Mailboxes.Register], which is why this package also serves the node; and a
+// delete that cannot be undone is not idempotent in the way a range delete is,
+// so it does not lean on the duty at all. Every write is a compare-and-set,
+// and the retirement claims the seat's own lease while it deletes.
 package maintenance
 
 import (
@@ -76,6 +89,11 @@ type Job struct {
 	Horizon time.Duration
 
 	// Run does the work for the tick, reporting rows touched.
+	//
+	// A job that did part of its work and then failed reports BOTH: the rows
+	// it touched and the error. A job that walks records one at a time (the
+	// mailbox retirement) can retire three seats and fail on a fourth, and
+	// the three are as real as a clean tick's.
 	//
 	// It takes BOTH times because the two kinds of job need different
 	// ones: a range delete needs the cutoff, while closing an abandoned
@@ -286,7 +304,9 @@ func (w *Worker) loop(ctx context.Context) {
 // letting the first failure skip the rest means one unreachable store stops
 // the housekeeping for all of them — the failure mode this package exists to
 // fix, arrived at from the other direction. The errors are joined and
-// returned together.
+// returned together, and a job that failed part-way still has the rows it did
+// touch counted: dropping them made a tick that retired a mailbox and then hit
+// one unreadable record report that it had retired nothing.
 //
 // Returns a nil map and no error when this node does not hold the duty:
 // "somebody else swept" and "nothing needed sweeping" are different facts,
@@ -326,7 +346,6 @@ func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 		n, err := j.Run(ctx, now, now.Add(-j.Horizon))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", j.Name, err))
-			continue
 		}
 		if n > 0 {
 			swept[j.Name] = n

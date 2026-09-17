@@ -524,4 +524,20 @@ type ApplyOptions struct {
 	// briefly on different epochs must still produce rows a reader can
 	// account for — which is exactly what the Divergent class names.
 	Epoch map[string]any
+
+	// MaxVariables is the engine's probed bind-parameter limit, which is
+	// what [store.InsertRows] divides by a row's width to size a chunk.
+	//
+	// CARRIED HERE for the reason ArbitratedKinds is: an applier holds a
+	// transaction and nothing else, so without this every one of them
+	// would need a store handle plumbed through its constructor to write
+	// its child rows as anything but one statement per row — which is
+	// precisely what they all did, and what made the chunker a function
+	// with no callers while three doc comments described it as shipped.
+	//
+	// A ZERO IS NOT A LIMIT, it is an unset field: [store.RowsPerInsert]
+	// reads 0 as "no room for even one row" and falls to a single row per
+	// statement, so a caller that forgets to set this gets the old
+	// per-row behaviour rather than a statement the engine refuses.
+	MaxVariables int
 }

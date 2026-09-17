@@ -274,7 +274,14 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		return fmt.Errorf("%w: run %s has no suspended conversation",
 			sandbox.ErrResumeUnavailable, req.Run.TurnID)
 	}
-	seat := r.engine.Company().Org.AgentSeatByHandle(req.Run.AgentHandle)
+	// ONE EPOCH for the whole resume: the seat checked here, the organization
+	// it belongs to, and the company the resumed turn then runs in (see
+	// [resumeInput.Company]). A second read of the engine's company is a
+	// different epoch once an apply lands in between, and a seat this check
+	// found could be gone from it, which fails the run with "not an agent seat"
+	// instead of routing the completion to a node that has the seat.
+	company := r.engine.Company()
+	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
 		// The seat is gone from this epoch — decommissioned, or this node
 		// is on a revision that never had it. Either way the resume belongs
@@ -283,10 +290,11 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Run:   req.Run,
-		State: state,
+		Company: company,
+		Run:     req.Run,
+		State:   state,
 		Turn: &turnctx.Turn{
-			ID: req.Run.TurnID, Seat: seat, Org: r.engine.Company().Org,
+			ID: req.Run.TurnID, Seat: seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
 		Answer:        req.Answer,
@@ -299,6 +307,12 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 
 // resumeInput is one re-entry, assembled.
 type resumeInput struct {
+	// Company is the epoch the resume was admitted under: the one whose
+	// organization holds Turn's seat. The resumed turn runs in it rather than
+	// reading the engine's company again, because that read is the NEXT epoch
+	// once an apply lands between the two, and the seat the admission found
+	// may not be in it.
+	Company *Company
 	Run     sandbox.PendingRun
 	State   execstate.State
 	Turn    *turnctx.Turn
@@ -346,9 +360,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.turn_id", in.Run.TurnID))
 	defer span.End()
 
-	company := e.Company()
+	company := in.Company
+	resumedReply, err := resumeReply(in.Run)
+	if err != nil {
+		return err
+	}
 	tel := e.describeResume(ctx, company, in)
-	resumedReply := turn.ParseReply(in.Run.Reply)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	r, err := company.RunnerFor(in.Turn.Handle(),
@@ -481,6 +498,39 @@ func resumeTask(in resumeInput) string {
 	return in.Run.TaskDescription
 }
 
+// resumeReply is the delivery obligation a parked run comes back with.
+//
+// OFF THE ROW, and it cannot come from anywhere else. The resumed turn never
+// sees the trigger that raised the obligation, and the event that carries the
+// completion here is the run FINISHING rather than the ask, so [ReplyFor] over
+// it would answer "nobody is waiting" for every turn somebody is waiting on.
+//
+// AN ABSENT VALUE IS [turn.NoReply], which is the reading [sandbox.PendingRun]
+// states for it: the column is `reply,omitempty`, nothing ever rewrites a
+// parked row, and a run launched before the field existed therefore carries
+// none. Read as [turn.ReplyUnset] instead, those rows were refused by
+// [Company.RunnerFor] and could never be resumed at all, so a box that had
+// already done the work was collected and its answer dropped.
+//
+// A value that is PRESENT and unrecognised is refused rather than defaulted: it
+// was written by a build that knows a kind this one does not, and guessing at
+// who is waiting is the half of the delivery question this engine exists to get
+// right. The refusal is a ROUTING failure, like a state this build cannot
+// decode, so the completion goes back for a peer that can read it.
+func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
+	if run.Reply == "" {
+		return turn.NoReply(), nil
+	}
+	reply := turn.ParseReply(run.Reply)
+	if !reply.Valid() {
+		return turn.Reply{}, fmt.Errorf(
+			"%w: run %s carries reply %q, which is not one of %q, %q or %q",
+			sandbox.ErrResumeUnavailable, run.TurnID, run.Reply,
+			turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
+	}
+	return reply, nil
+}
+
 // persistSuspension writes a turn's suspended conversation to its row, which
 // is also what OPENS the run to the completion poll.
 //
@@ -491,12 +541,12 @@ func resumeTask(in resumeInput) string {
 // collected against a row with nothing to resume into.
 //
 // EVERY WAY THIS CAN FAIL FAILS THE RUN rather than dropping the suspension: a
-// row with no state is one nothing can resume, and failing here — while the
+// row with no state is one nothing can resume, and failing here, while the
 // box is still in the engine's hands and the seat's owner is still this
-// process — is far better than leaving a launching row to hold a box until its
+// process, is far better than leaving a launching row to hold a box until its
 // seat happens to move.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) {
-	if e.sandboxPending == nil {
+	if e.sandboxPending == nil || e.sandboxCoordinator == nil {
 		return
 	}
 	suspension, ok := r.Suspended()
@@ -527,20 +577,30 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	}
 }
 
-// failSuspension marks a run unresumable and says why, in the one voice all
-// three failure paths share.
+// failSuspension settles a run whose suspension has nowhere to go, and says
+// why, in the one voice all four failure paths share.
+//
+// SETTLED, NOT MARKED. The job is already executing in its box, and writing a
+// failed status onto the record stranded that box: a record that is not
+// active is read by no recovery pass and polled by no waiter, so the box ran
+// to its provider's TTL, billed, with nothing left to reclaim it. The
+// coordinator settles it like every other lost turn, while this node still
+// owns the seat, and the loss is announced rather than left as silence. It
+// settles only a run still launching (see [sandbox.Coordinator.FailRun]): a
+// write reported as failed can have landed, and a run it moved to running is
+// one the completion poll resumes.
 func (e *Engine) failSuspension(ctx context.Context, turnID, event, detail string, cause error) {
 	args := []any{"turn_id", turnID,
-		"detail", detail + "; the run cannot be resumed and is failed"}
+		"detail", detail + "; a run still launching cannot be resumed, so its box is reclaimed and the run ended"}
 	if cause != nil {
 		args = append(args, "error", cause)
 	}
 	log.ErrorContext(ctx, event, args...)
-	// Unfenced: this node is the seat's owner by construction — it just ran
-	// the turn — and a fence read back from a row this write may not be able
-	// to read is a second failure mode for no gain.
-	if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
-		log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
+	if err := e.sandboxCoordinator.FailRun(ctx, turnID,
+		types.SandboxFailureSuspensionUnrecorded, detail); err != nil {
+		log.WarnContext(ctx, "sandbox_suspension_settle_failed", "turn_id", turnID, "error", err,
+			"detail", "the run's record could not be read, so its box was not reclaimed; the "+
+				"seat's next recovery pass reaps a run left launching")
 	}
 }
 
@@ -919,6 +979,10 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 	if e.sandboxCoordinator == nil {
 		return nil
 	}
+	duty, err := e.waiterDuty(interval)
+	if err != nil {
+		return err
+	}
 	waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
 		Queue: e.backends.Queue, Pending: e.sandboxPending,
 		Manager:  e.sandboxCoordinator.Manager(),
@@ -927,7 +991,7 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 		// in the company, not just this node's seats, so N nodes running it
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
-		ClaimDuty: sandbox.DutyFunc(e.waiterDuty(interval)),
+		ClaimDuty: sandbox.DutyFunc(duty),
 	})
 	if err != nil {
 		return err
@@ -975,11 +1039,22 @@ const waiterDutyName = "sandbox-waiter"
 // Nil where there is no coordination backend, which is the single-node case:
 // that node always holds it, and a wrapper that always said yes would make a
 // single node report itself as a fleet singleton.
-func (e *Engine) waiterDuty(interval time.Duration) schedule.DutyFunc {
-	if e.backends == nil || e.backends.Coord == nil {
-		return nil
+//
+// An interval whose duty no backend will grant is refused HERE, at start,
+// rather than on every tick: the waiter fails closed on a claim error, so a
+// refused TTL would leave it never ticking, every detached run hanging and
+// every box losing its keepalive, with one warning per tick as the only sign.
+func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
+	if err := coord.CheckDutyTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
+		return nil, fmt.Errorf("engine: a sandbox poll interval of %v needs a %v waiter duty; "+
+			"lower Options.SandboxPollInterval: %w", interval, waiterDutyTTL(interval), err)
 	}
-	return e.workerDuty(waiterDutyName, e.waiterDutyTTL(interval))
+	if e.backends == nil || e.backends.Coord == nil {
+		return nil, nil
+	}
+	// The TTL expression is spelled as the duty-TTL guard test expects it;
+	// see TestEveryDutyTTLFitsTheDutyCeiling.
+	return e.workerDuty(waiterDutyName, waiterDutyTTL(interval)), nil
 }
 
 // dutyTTLTicks is how many poll intervals the waiter duty survives without a
@@ -1001,29 +1076,21 @@ const (
 
 // waiterDutyTTL is how long the waiter duty survives without a re-claim.
 //
-// DERIVED FROM THE INTERVAL IT GUARDS, and capped by the lease bucket's own
-// age. It used to be `3 * sandbox.DefaultPollInterval` — a compile-time
-// constant that ignored the configured interval entirely, so its own comment
-// ("three poll intervals") was true of exactly one deployment. That constant
-// was 45 s, which is also precisely the default lease TTL, and the KV refuses
-// a lease STRICTLY longer than its bucket's age: the two agreed by one
-// comparison. An operator lowering coordination.lease_ttl_seconds below 45
-// therefore made every waiter duty claim fail — and mayTick fails closed, so
-// the waiter would never tick again. Every detached run would hang forever and
-// every box lose its keepalive, with one warning per tick as the only symptom.
-//
-// Capping rather than erroring, because a duty that is re-claimed every tick
-// loses nothing by expiring sooner: the holder renews long before either
-// deadline, and a shorter TTL only means a dead holder is replaced faster.
-func (e *Engine) waiterDutyTTL(interval time.Duration) time.Duration {
+// DERIVED FROM THE INTERVAL IT GUARDS, and from nothing else. It used to be
+// `3 * sandbox.DefaultPollInterval`, a compile-time constant that ignored the
+// configured interval entirely, and then it was capped at the seat lease TTL,
+// because duties shared the seat lease bucket and the KV refused a lease
+// longer than that bucket's age. The cap was wrong in its own right: a poll
+// interval longer than the seat lease TTL got a duty that lapsed between two
+// of its own ticks, so the waiter moved to whichever peer ticked first on
+// every tick. Duties now have a bucket of their own whose ceiling is
+// [coord.MaxDutyTTL], so the ratio holds for every interval that ceiling
+// admits, and [Engine.waiterDuty] refuses the ones it does not.
+func waiterDutyTTL(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		interval = sandbox.DefaultPollInterval
 	}
-	ttl := max(dutyTTLTicks*interval, dutyTTLFloor)
-	if e.leaseTTL > 0 && ttl > e.leaseTTL {
-		return e.leaseTTL
-	}
-	return ttl
+	return max(dutyTTLTicks*interval, dutyTTLFloor)
 }
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
@@ -1219,9 +1286,9 @@ func (e *Engine) AwaitingSandbox(handle string) bool {
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
 //
-// A seat with no resolvable sandbox model is not an error here: the phase
-// registry already refuses a company with no models at build, and a run whose
-// agent reads its credential from the environment needs none of this.
+// A seat with no resolvable sandbox model is not an error here: a company with
+// no models takes no turn, so launches no run (see nomodels.go), and a run
+// whose agent reads its credential from the environment needs none of this.
 func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
 	return runLLM(c, seat, phase.Sandbox)
 }
@@ -1320,11 +1387,11 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	member, err := c.Models.Head(seat, ph)
 	if err != nil {
 		//nolint:nilerr // Deliberate: a seat with no resolvable model for
-		// this phase is the phase registry's problem — it refuses a
-		// company with no models at build — and [runLLM], which resolved
-		// the same seat and phase to pick the run's model moments ago,
-		// has already logged it. Returning the error here would refuse a
-		// run over a question this guard does not ask.
+		// this phase is not this guard's question. A company with no
+		// models takes no turn and so launches no run, and [runLLM],
+		// which resolved the same seat and phase to pick the run's model
+		// moments ago, has already logged it. Returning the error here
+		// would refuse a run over a question this guard does not ask.
 		return nil
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)

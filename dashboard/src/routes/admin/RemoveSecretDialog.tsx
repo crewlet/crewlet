@@ -22,7 +22,7 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { CheckGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { rest, RestError } from "~/protocol/index.ts";
 
@@ -112,7 +112,7 @@ export function RemoveSecretDialog({
                 <InlineCode key={path}>{path}</InlineCode>
               ))}
             </span>
-            <span className="t-caption faint">
+            <span className="t-caption">
               Point those fields somewhere else, or remove them, before removing this.
             </span>
           </span>
@@ -126,7 +126,7 @@ export function RemoveSecretDialog({
               The active configuration could not be read, so it is not known whether anything points
               at this name.
             </span>
-            {unknown && <span className="t-caption faint">{unknown}</span>}
+            {unknown && <span className="t-caption">{unknown}</span>}
           </span>
         </Callout>
       )}
@@ -145,19 +145,18 @@ export function RemoveSecretDialog({
       )}
 
       {needsAcknowledgement && (
-        <label className="int-choice">
-          <input
-            type="checkbox"
-            checked={acknowledged}
-            disabled={busy}
-            onChange={(e) => setAcknowledged(e.target.checked)}
-          />
-          <span className="t-body">
-            {referenced
+        <Checkbox
+          framed
+          tone="danger"
+          checked={acknowledged}
+          disabled={busy}
+          onCheckedChange={setAcknowledged}
+          label={
+            referenced
               ? "Remove it anyway, and leave those fields pointing at nothing"
-              : "Remove it without knowing what points at it"}
-          </span>
-        </label>
+              : "Remove it without knowing what points at it"
+          }
+        />
       )}
 
       {error && (

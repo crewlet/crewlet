@@ -58,6 +58,21 @@ func rosterApp(t *testing.T, runtime api.NodeRuntime) *api.App {
 	})
 }
 
+// object re-decodes a snapshot value through JSON into an object, which is how
+// a client sees it.
+func object(t *testing.T, v any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+	return out
+}
+
 // rows re-decodes a snapshot slice through JSON, which is how a client sees it.
 func rows(t *testing.T, v any) []map[string]any {
 	t.Helper()
@@ -139,22 +154,32 @@ func TestOnlyHeldSeatsCarryAState(t *testing.T) {
 	}
 }
 
-// THE ORG TREE IS THE CONFIG'S OWN SHAPE. static/dashboard/js/org.js walks
-// `roles` and `units` recursively and reads the config's field names off them,
-// so anything reshaped here is a second definition of the wire form — and the
-// one the client parses would be the one nobody edited.
-func TestTheSnapshotCarriesTheOrgTreeVerbatim(t *testing.T) {
+// THE ORG TREE IS ON THE SNAPSHOT, nested the way the company is.
+//
+// The client walks `roles` and `units` recursively, so a seat nested in a unit
+// has to arrive nested, and a human seat has to arrive at all: /agents leaves
+// humans out, and the org tree is the one surface that names them.
+func TestTheSnapshotCarriesTheOrgTree(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, nil)
 
-	org, _ := a.Stream().Snapshot()["org"].(map[string]any)
-	if org == nil {
-		t.Fatal("the snapshot carries no org tree")
+	org := object(t, a.Stream().Snapshot()["org"])
+	if org["name"] != "Acme" {
+		t.Errorf("org name = %v, want the company's own", org["name"])
 	}
 	roles, _ := org["roles"].([]any)
 	units, _ := org["units"].([]any)
 	if len(roles) != 2 {
 		t.Errorf("org roles = %d, want both top-level seats including the human", len(roles))
+	}
+	humans := 0
+	for _, raw := range roles {
+		if seat, _ := raw.(map[string]any); seat["kind"] == "human" {
+			humans++
+		}
+	}
+	if humans != 1 {
+		t.Errorf("org roles carry %d human seats, want the founder: %v", humans, roles)
 	}
 	if len(units) != 1 {
 		t.Fatalf("org units = %d, want the one unit", len(units))
@@ -283,6 +308,11 @@ func TestANodeWithNoCompanyAnswersEmptySurfaces(t *testing.T) {
 	}
 	if got := rows(t, snap["agents"]); len(got) != 0 {
 		t.Errorf("agents = %v with no company", got)
+	}
+	// An empty OBJECT, not null and not an object of empty strings: the
+	// client reads `{}` as "nothing loaded" and indexes into it freely.
+	if got := object(t, snap["org"]); len(got) != 0 {
+		t.Errorf("org = %v with no company, want {}", got)
 	}
 }
 

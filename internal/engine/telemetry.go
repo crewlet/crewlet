@@ -190,7 +190,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		summary.ErrorKind = "error"
 	case res.Breach != nil:
 		// A guard breach is not an error — the turn ran and was stopped by
-		// a rule. Naming the RULE is the whole value: "depth" and "stall"
+		// a rule. Naming the RULE is the whole value: "depth_cap" and "stall"
 		// send an operator to different places, and a bare "failed" sends
 		// them to neither.
 		summary.Error = events.ClipDiagnostic(res.Breach.Detail)

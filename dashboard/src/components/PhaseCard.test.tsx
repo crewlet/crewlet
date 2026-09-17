@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
@@ -222,5 +222,51 @@ describe("a round is one block", () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0]!.textContent).toContain("read_file");
     expect(blocks[0]!.textContent).not.toContain("Done.");
+  });
+});
+
+// A FAILED CALL SAYS SO IN WORDS. Its mark was a red glyph carrying no
+// accessible name at all, so the row a reader most needs to find was announced
+// exactly like the one above it, and the hue was the only signal anybody got.
+describe("a failed tool call", () => {
+  const withFailure = phase({
+    roundsUsed: 1,
+    narration: [{ round: 1, reasoning: "", content: "Trying." }],
+    tools: [
+      {
+        name: "read_file",
+        round: 1,
+        args: "{}",
+        result: "no such file",
+        failed: true,
+        durationMs: 0,
+        origin: "builtin",
+        server: "",
+      },
+      {
+        name: "submit_work",
+        round: 1,
+        args: "{}",
+        result: "ok",
+        failed: false,
+        durationMs: 0,
+        origin: "builtin",
+        server: "",
+      },
+    ],
+  });
+
+  test("is named as failed rather than only coloured as failed", () => {
+    render(<PhaseCard record={withFailure} defaultOpen />);
+    expect(screen.getByRole("button", { name: /read_file.*failed/i })).toBeDefined();
+  });
+
+  // THE CONTROL. Without it the rule could be "every tool row says failed"
+  // and still pass, which would be the same defect the other way round.
+  test("leaves a call that succeeded unmarked", () => {
+    render(<PhaseCard record={withFailure} defaultOpen />);
+    expect(screen.getByRole("button", { name: /^submit_work/ }).textContent).not.toContain(
+      "failed",
+    );
   });
 });

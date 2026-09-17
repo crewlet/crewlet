@@ -16,6 +16,7 @@ import {
   Disclosure,
   EmptyState,
   FilterChip,
+  FilterChipGroup,
   InlineCode,
   Input,
   Skeleton,
@@ -49,7 +50,7 @@ import {
   hintsAdvertised,
   schemaFields,
 } from "~/lib/tools.ts";
-import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
+import type { ConfigUnit, ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -177,7 +178,14 @@ interface Holders {
   why: string;
 }
 
-function holdersOf(tool: ToolRow, seats: Seat[], shared: boolean | null): Holders | null {
+function holdersOf(
+  tool: ToolRow,
+  seats: Seat[],
+  shared: boolean | null,
+  /** Which seats declare credentials for a per-seat server, or null when the
+   *  company document could not be read. */
+  holdersByServer: Map<string, Set<string>> | null,
+): Holders | null {
   const agents = seats.filter((s) => s.kind === "agent");
   const server = mcpServerOf(tool.source);
   if (!server) {
@@ -201,8 +209,16 @@ function holdersOf(tool: ToolRow, seats: Seat[], shared: boolean | null): Holder
       why: `${server} is a shared server: one instance serves the company, so every agent seat can call its tools.`,
     };
   }
+  // AND THE CREDENTIALS ARE GUARDED TOO. `mcp_env` is not on the anonymous org
+  // projection — the classification in `internal/api/orgprojection_test.go`
+  // calls it "tool credentials inherited by members" — so which seats declare
+  // one is a question the company document answers and an anonymous reader
+  // cannot. Unanswered is null, exactly as an unread `shared` is, rather than
+  // an empty list somebody would act on.
+  if (!holdersByServer) return null;
+  const declared = holdersByServer.get(server) ?? new Set<string>();
   return {
-    seats: agents.filter((s) => Boolean(s.mcpEnv[server])),
+    seats: agents.filter((s) => declared.has(s.name)),
     everyone: false,
     why: `${server} is a per-seat template, so an instance is launched only for a seat that declares credentials for it under mcp_env.`,
   };
@@ -293,6 +309,48 @@ function useServerSharing(server: string): {
 }
 
 /**
+ * Which seats declare credentials for a per-seat MCP server, by SEAT NAME.
+ *
+ * THE COMPANY DOCUMENT ANSWERS THIS AND THE PROJECTION CANNOT. `mcp_env` is
+ * guarded — it holds tool credentials — so the anonymous org projection
+ * carries none of it, and a reader without an operator token simply does not
+ * know which seats a per-seat server is launched for. Null says exactly that,
+ * for the same reason an unread `shared` is null: an empty list here reads as
+ * "nobody holds this tool", which is a claim about somebody's company.
+ *
+ * A unit's own `mcp_env` counts, because its direct AGENT members inherit it —
+ * that is `org.MCPEnv`'s rule and the merge `lib/seats.ts` performs for the
+ * seat screen. A human member inherits none: it runs no tools.
+ *
+ * Read only for a server, because a builtin and an A2A tool have none to ask
+ * about — the same reason [useServerSharing] is gated the same way.
+ */
+function useServerHolders(server: string): Map<string, Set<string>> | null {
+  const doc = useQuery("config", undefined, { enabled: server !== "" });
+  return useMemo(() => {
+    if (server === "" || doc.error || !doc.data) return null;
+    const out = new Map<string, Set<string>>();
+    const add = (seat: string, env: Record<string, Record<string, string>> | undefined) => {
+      for (const name of Object.keys(env ?? {})) {
+        const held = out.get(name) ?? new Set<string>();
+        held.add(seat);
+        out.set(name, held);
+      }
+    };
+    const visit = (unit: ConfigUnit): void => {
+      for (const role of unit.roles ?? []) {
+        add(role.name, role.mcp_env);
+        if (role.kind !== "human") add(role.name, unit.mcp_env);
+      }
+      for (const child of unit.children ?? []) visit(child);
+    };
+    for (const role of doc.data.roles ?? []) add(role.name, role.mcp_env);
+    for (const unit of doc.data.units ?? []) visit(unit);
+    return out;
+  }, [server, doc.data, doc.error]);
+}
+
+/**
  * What a tool IS, under whichever header named it.
  *
  * ONE BODY FOR THE PAGE AND THE RAIL. `#/admin/tools/{name}` is a tool's
@@ -308,6 +366,7 @@ function ToolBody({ name }: { name: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const { matches, tool, server, cold } = useTool(name);
   const { shared, entity } = useServerSharing(server);
+  const holdersByServer = useServerHolders(server);
 
   // THE CATALOGUE HAS NOT ARRIVED YET, which is not the same screen as a tool
   // that does not exist. An engine registers its builtins at boot, so an empty
@@ -328,7 +387,7 @@ function ToolBody({ name }: { name: string }) {
   }
 
   const fields = schemaFields(tool);
-  const holders = holdersOf(tool, index.seats, shared);
+  const holders = holdersOf(tool, index.seats, shared, holdersByServer);
 
   return (
     <div className="col gap-3">
@@ -337,7 +396,7 @@ function ToolBody({ name }: { name: string }) {
         {tool.description ? (
           <p className="t-body">{tool.description}</p>
         ) : (
-          <p className="t-body faint">
+          <p className="t-body muted">
             The server advertised no description, so a model is offered this tool by name alone.
           </p>
         )}
@@ -361,7 +420,7 @@ function ToolBody({ name }: { name: string }) {
       <section className="col gap-2">
         <div className="t-label">Arguments</div>
         {!tool.input_schema ? (
-          <p className="t-body faint">
+          <p className="t-body muted">
             This build sent no schema for this tool, which is not the same as a tool that takes no
             arguments.
           </p>
@@ -375,7 +434,13 @@ function ToolBody({ name }: { name: string }) {
                   properties: fields.map((f) => ({
                     label: f.name,
                     code: true,
-                    value: f.required ? `${f.type || "—"} · required` : f.type || "—",
+                    // A WORD FOR AN ABSENCE. "type not stated" is what the
+                    // server failing to advertise a type actually means; a
+                    // dash is read as "dash" or skipped, and here it sat in
+                    // the column with the least to say.
+                    value: f.required
+                      ? `${f.type || "type not stated"} · required`
+                      : f.type || "type not stated",
                   })),
                 },
               ]}
@@ -400,7 +465,7 @@ function ToolBody({ name }: { name: string }) {
             a configuration read that failed must not blank them. */}
         <QueryState error={entity.error} loading={entity.loading}>
           {holders === null ? (
-            <p className="t-body faint">
+            <p className="t-body muted">
               Who holds this depends on whether <span className="mono">{server}</span> is shared,
               and the active configuration did not answer.
             </p>
@@ -671,23 +736,31 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
           />
         </div>
         <span className="spacer" />
-        {/* A CHIP HERE TOGGLES A FILTER, which is what `FilterChip` is: it
-            carries `aria-pressed` and the count in one control. `All` is the
-            absence of a filter rather than one of them, so it is pressed
-            exactly when nothing else is. */}
-        <FilterChip pressed={!origin} onPressedChange={() => pick("")}>
-          All
-        </FilterChip>
-        {origins.map(([source, count]) => (
-          <FilterChip
-            key={source}
-            pressed={origin === source}
-            count={count}
-            onPressedChange={() => pick(origin === source ? "" : source)}
-          >
-            {source}
-          </FilterChip>
-        ))}
+        {/* A NAMED ROW, because a set of chips with nothing to hang them on
+            is what a screen reader was handed: six words in a row, none of
+            them saying what they filter. The group carries the name. These
+            chips were also always mutually exclusive — pressing one replaced
+            the other — and announced themselves as independent pressed buttons
+            across one tab stop each, so `semantics="radio"` says what they
+            are and the arrows move inside one stop.
+
+            `All` is the ABSENCE of a filter rather than one of them, so it is
+            a chip with the empty value: the group then always has a chosen
+            member and needs no `allowNone`. */}
+        <FilterChipGroup
+          label="Tool origin"
+          hideLabel
+          semantics="radio"
+          value={origin}
+          onValueChange={(next) => pick(next ?? "")}
+        >
+          <FilterChip value="">All</FilterChip>
+          {origins.map(([source, count]) => (
+            <FilterChip key={source} value={source} count={count}>
+              {source}
+            </FilterChip>
+          ))}
+        </FilterChipGroup>
       </div>
 
       {!tools.length ? (
@@ -744,9 +817,9 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 cell: (t) => (
                   <span className="col" style={{ gap: 2 }}>
                     <span className="t-caption">
-                      {t.description || <span className="faint">no description</span>}
+                      {t.description || <span className="muted">no description</span>}
                     </span>
-                    <span className="t-caption faint">{hintSentence(t.annotations)}</span>
+                    <span className="t-caption">{hintSentence(t.annotations)}</span>
                   </span>
                 ),
               },
@@ -779,7 +852,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                   t.delivers ? (
                     <Tag appearance="outline">{t.delivers}</Tag>
                   ) : (
-                    <span className="faint t-caption">nobody</span>
+                    <span className="t-caption">nobody</span>
                   ),
               },
               {
@@ -801,12 +874,15 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                         title={
                           fields.length
                             ? fields
-                                .map((f) => `${f.name}${f.required ? "*" : ""}: ${f.type || "—"}`)
+                                .map(
+                                  (f) =>
+                                    `${f.name}${f.required ? "*" : ""}: ${f.type || "type not stated"}`,
+                                )
                                 .join("\n")
                             : undefined
                         }
                       />
-                      {required > 0 && <span className="faint t-caption">{required} required</span>}
+                      {required > 0 && <span className="t-caption">{required} required</span>}
                     </span>
                   );
                 },
@@ -826,8 +902,8 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
             <span className="t-caption">
               The model calls <InlineCode>list_mcp_server_tools(server)</InlineCode> to see what a
               server offers, then <InlineCode>activate_tool(name)</InlineCode> to promote one into
-              the schemas it can actually invoke. It activates what it needs the moment it needs it
-              — there is no separate planning pass to name a tool in advance.
+              the schemas it can actually invoke. It activates what it needs the moment it needs it:
+              there is no separate planning pass to name a tool in advance.
             </span>
           </span>
         </Callout>

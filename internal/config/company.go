@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"iter"
 	"maps"
 	"regexp"
@@ -169,36 +170,186 @@ func DefaultCompany() Company {
 // rather than an error at load.
 var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Validate reports every Tier B rule this config breaks, joined.
+// Validate reports every Tier B rule this config breaks, joined: the runnable
+// rules and the admission rules both.
+//
+// It is the check for a document somebody SUBMITS: a PUT, a PATCH, a
+// per-entity write, a setup write, `crewlet config import` and `crewlet
+// validate`. A stored revision is not held to it, because the admission rules
+// were added after companies existed; see [Company.ValidateRunnable].
 //
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
 // a config that parses into a company nobody can run has not been validated.
 func (c *Company) Validate() error {
+	o, index := c.organization()
+	return index.locate(errors.Join(c.validateRunnable(o), c.validateAdmission(o)))
+}
+
+// ValidateRunnable reports only the RUNNABLE rules: everything a running
+// company depends on, which is every rule except the admission ones.
+//
+// It is the check for a revision about to be APPLIED (a node's reconcile
+// tick, a boot from the store, a reload and a revert) and for building an
+// epoch. A stored revision was admitted under the rules of the build that
+// wrote it, and one that breaks an admission rule added since still runs
+// exactly as it did before that rule existed. Refusing to apply it would take
+// a working company down on upgrade, or on the older half of a rolling one,
+// over a rule its author never saw. Its admission violations are reported by
+// [Company.ValidateAdmission] as warnings instead, and the next write that
+// keeps them is refused.
+func (c *Company) ValidateRunnable() error {
+	o, index := c.organization()
+	return index.locate(c.validateRunnable(o))
+}
+
+// ValidateAdmission reports only the ADMISSION rules: the rules a submitted
+// document is refused for and a stored revision is merely warned about.
+// Today they are the org's duplicate seat names, duplicate unit names and a
+// unit reference on a seat declared inside another unit (see
+// [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
+// within one list, and a GitHub App on a human seat.
+func (c *Company) ValidateAdmission() error {
+	o, index := c.organization()
+	return index.locate(c.validateAdmission(o))
+}
+
+// validateAdmission is [Company.ValidateAdmission] over an organization the
+// caller already built.
+func (c *Company) validateAdmission(o *org.Organization) error {
+	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
+		c.validateHumanSeatApps())
+}
+
+// validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
+//
+// A seat's `integrations.github` is the seat's OWN app: the bot identity an
+// agent acts as on GitHub. A person acts as their own login, which is
+// `contact.github_login`, and every engine path that creates, installs or
+// reconciles an app skips a human seat. The block therefore reads as a
+// working setting and does nothing, which is the silence the org model's
+// human-seat rule exists to end for every other agent-only field.
+//
+// CHECKED HERE rather than beside that rule in [org.Role.Validate], because
+// the org model carries no code-host identity for a seat and so cannot see
+// the block. And an ADMISSION rule rather than a runnable one: nothing
+// refused the block before, a stored company may carry it, and that company
+// runs exactly as it did.
+func (c *Company) validateHumanSeatApps() error {
+	var p problems
+	for role, path := range c.EachRole() {
+		if role.Kind != org.KindHuman || role.Integrations.GitHub == nil {
+			continue
+		}
+		p.add(at(path, "integrations.github"), ErrConflict,
+			"a human seat has no GitHub App of its own: an app is the identity "+
+				"an agent acts as, and a person acts as their own login, "+
+				"contact.github_login. Remove this block, or make the seat an "+
+				"agent seat")
+	}
+	return p.err()
+}
+
+// validateSetupStepNames refuses two sandbox setup steps of one name in the
+// same list: `providers.sandbox.setup`, or one seat's `sandbox.setup`.
+//
+// A step's name is its IDENTITY. Its env and files are credentials, and a
+// config read masks them, so sending the read back restores each step's
+// masks from the stored step of the same name. Two steps sharing a name
+// give the restore nothing to tell them apart by, and it refuses to guess:
+// every write carrying that list would then be refused with a standing mask
+// on credentials nobody edited. A name is also what a setup failure and its
+// log line point at, and a duplicate points at two steps.
+//
+// An ADMISSION rule rather than a runnable one, because a stored company can
+// hold duplicate names from before the rule and its steps still apply exactly
+// as they did. Compared as the exact string the restore matches on, and a
+// blank name is skipped: the step's own rule already refuses it.
+func (c *Company) validateSetupStepNames() error {
+	var p problems
+	if c.Providers.Sandbox != nil {
+		p.wrap(uniqueSetupStepNames(at(at(field("providers"), "sandbox"), "setup"), c.Providers.Sandbox.Setup))
+	}
+	for role, path := range c.EachRole() {
+		if role.Sandbox != nil {
+			p.wrap(uniqueSetupStepNames(at(at(path, "sandbox"), "setup"), role.Sandbox.Setup))
+		}
+	}
+	return p.err()
+}
+
+// uniqueSetupStepNames reports each name more than one step in this list
+// carries, once per name, naming every step that carries it.
+func uniqueSetupStepNames(path Path, steps []SandboxSetupStep) error {
+	var p problems
+	positions := map[string][]int{}
+	var order []string
+	for i := range steps {
+		name := steps[i].IdentityKey()
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, seen := positions[name]; !seen {
+			order = append(order, name)
+		}
+		positions[name] = append(positions[name], i)
+	}
+	for _, name := range order {
+		found := positions[name]
+		if len(found) < 2 {
+			continue
+		}
+		places := make([]string, len(found))
+		for i, position := range found {
+			places[i] = idx(path, position).String()
+		}
+		p.add(path, ErrConflict,
+			"duplicate setup step name %q: %d steps carry it (%s). A step's "+
+				"credentials are restored by its name when a config read is "+
+				"sent back, and a failure names the step, so give each of "+
+				"these steps its own name",
+			name, len(found), strings.Join(places, "; "))
+	}
+	return p.err()
+}
+
+// validateRunnable is [Company.ValidateRunnable] over an organization the
+// caller already built, so [Company.Validate] normalizes the tree once for
+// both classes.
+func (c *Company) validateRunnable(o *org.Organization) error {
 	var p problems
 
 	// An UNRESOLVED REDACTION MASK, first, because it is the one fault here
 	// that comes from this process rather than from the document's author.
 	// A credential still holding the marker means a config read was edited
 	// and sent back, and the mask could not be matched to what it hid: a
-	// member that is NEW or RENAMED has no prior value of its own, and a
-	// list of bare credentials that changed length no longer says by
+	// member that is NEW or RENAMED has no prior value of its own, a member
+	// whose identity the stored revision does not give to exactly one member
+	// (a duplicate, or an empty one) cannot be matched without guessing, and
+	// a list of bare credentials that changed length no longer says by
 	// position which one is which. Storing it silently would hand a
 	// provider the literal "__redacted__" as an API key, and the failure
 	// would surface hours later as an authentication error naming nothing
 	// about where it came from.
+	//
+	// The message names every cause, because the restore does not record
+	// which one applied and an operator reading only "new or renamed" about
+	// a unit they did neither to has nothing to act on.
 	for _, path := range c.UnresolvedMasks() {
 		p.add(path, ErrUnknownValue,
 			"still holds the redaction marker %q: a masked credential could "+
-				"not be matched to the value it hid. Either this member is new "+
-				"or was renamed, so there is no prior value to restore, or a "+
+				"not be matched to the value it hid. A seat is matched by its "+
+				"handle, and a unit, an MCP server and a sandbox setup step by "+
+				"its name, so this happens when the member is new or was "+
+				"renamed, when the stored revision gives that handle or name "+
+				"to more than one member or the member has none, or when a "+
 				"list of bare credentials changed length. Write the real value "+
-				"here",
+				"or a ${VAR} reference here",
 			Redacted)
 	}
 
 	if strings.TrimSpace(c.Name) == "" {
-		p.add("name", ErrMissing, "the company needs a name: it is half of every seat's derived id")
+		p.add(field("name"), ErrMissing, "the company needs a name: it is half of every seat's derived id")
 	}
 
 	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
@@ -247,17 +398,17 @@ func (c *Company) Validate() error {
 	if fallback != "" && fallback != DatadogIgnore && !routed {
 		switch {
 		case !org.ValidHandle(fallback):
-			p.add("integrations.datadog.route_to", ErrUnknownValue,
+			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not a seat handle: a handle is lowercase letters, "+
 					"digits and hyphens starting with a letter or digit, so "+
 					"this names no seat and every untagged alert is verified, "+
 					"counted and delivered to nobody", fallback)
 		case agents == 0:
-			p.add("integrations.datadog.route_to", ErrUnknownValue,
+			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q names no seat: this company declares no agent seat at all, "+
 					"so there is nobody an untagged alert can wake", fallback)
 		default:
-			p.add("integrations.datadog.route_to", ErrUnknownValue,
+			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not an agent seat in this company. An alert naming no "+
 					"owner wakes this handle, and one that resolves to nothing "+
 					"— or to a human seat, which is dropped as a self-action — "+
@@ -268,13 +419,13 @@ func (c *Company) Validate() error {
 
 	for key := range c.SkillVariables {
 		if !skillVariableKey.MatchString(key) {
-			p.add(at("skill_variables", key), ErrUnknownValue,
+			p.add(entry(field("skill_variables"), key), ErrUnknownValue,
 				"keys must be substitution identifiers matching "+
 					"[A-Za-z_][A-Za-z0-9_]*: a key like %q would never be "+
 					"substituted into a skill's ${name} reference", key)
 		}
 		if key == ReservedBaseURLVariable {
-			p.add(at("skill_variables", key), ErrConflict,
+			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
 					"integrations.public_base_url, which is where this "+
 					"deployment's address belongs — write a whole ${VAR} "+
@@ -286,29 +437,29 @@ func (c *Company) Validate() error {
 	}
 
 	if c.TokenBudget < 0 {
-		p.add("token_budget", ErrOutOfRange, "must not be negative, got %d", c.TokenBudget)
+		p.add(field("token_budget"), ErrOutOfRange, "must not be negative, got %d", c.TokenBudget)
 	}
 	if c.NotificationRateLimit < 0 {
-		p.add("notification_rate_limit", ErrOutOfRange,
+		p.add(field("notification_rate_limit"), ErrOutOfRange,
 			"must not be negative, got %d", c.NotificationRateLimit)
 	}
 	if w := c.NotificationCoalesceWindowSeconds; w < 0 || w > coalesceWindowMax {
-		p.add("notification_coalesce_window_seconds", ErrOutOfRange,
+		p.add(field("notification_coalesce_window_seconds"), ErrOutOfRange,
 			"must be 0..%v seconds, got %v: the window is spent out of the "+
 				"broker's ack-timeout budget, which also has to fit a whole turn",
 			coalesceWindowMax, w)
 	}
 	if b := c.NotificationCoalesceMaxBatch; b < 1 || b > coalesceMaxBatchMax {
-		p.add("notification_coalesce_max_batch", ErrOutOfRange,
+		p.add(field("notification_coalesce_max_batch"), ErrOutOfRange,
 			"must be between 1 and %d, got %d", coalesceMaxBatchMax,
 			c.NotificationCoalesceMaxBatch)
 	}
 
-	p.wrap(c.Providers.validate("providers"))
-	p.wrap(c.TurnEngine.validate("turn_engine"))
-	p.wrap(c.Learning.validate("learning"))
-	p.wrap(c.Scheduling.validate("scheduling"))
-	p.wrap(c.Integrations.validate("integrations"))
+	p.wrap(c.Providers.validate(field("providers")))
+	p.wrap(c.TurnEngine.validate(field("turn_engine")))
+	p.wrap(c.Learning.validate(field("learning")))
+	p.wrap(c.Scheduling.validate(field("scheduling")))
+	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
@@ -317,7 +468,7 @@ func (c *Company) Validate() error {
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {
-		path := idx("mcp_servers", i)
+		path := idx(field("mcp_servers"), i)
 		p.wrap(c.MCPServers[i].validate(path))
 		name := c.MCPServers[i].Name
 		if name == "" {
@@ -345,12 +496,12 @@ func (c *Company) Validate() error {
 	}
 
 	for i := range c.Roles {
-		p.wrap(c.Roles[i].validate(idx("roles", i)))
+		p.wrap(c.Roles[i].validate(idx(field("roles"), i)))
 	}
 	for i := range c.Units {
-		p.wrap(c.Units[i].validate(idx("units", i)))
+		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
-	p.wrap(c.Tracker.Native.validate("tracker.native"))
+	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
 	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
 	// and the failure that produces is silence: an operator sets working
 	// days and a timezone, nothing reads either, and the calendar keeps
@@ -361,16 +512,16 @@ func (c *Company) Validate() error {
 	// native — refusing the default configuration would be the opposite of
 	// the intent.
 	if c.Tracker.Native != nil && c.TrackerBackendFor() != TrackerNative {
-		p.add("tracker.native", ErrConflict,
+		p.add(field("tracker.native"), ErrConflict,
 			"this company's tracker is %q, and `tracker.native` is the engine's "+
 				"own tracker's policy — nothing would read it. Remove the block, "+
 				"or run the native tracker", c.TrackerBackendFor())
 	}
 
-	// The hierarchy's own rules — duplicate handles, human seats carrying
-	// runtime fields, schedules with no runner — are the org model's, and
+	// The hierarchy's own rules (duplicate handles, human seats carrying
+	// runtime fields, schedules with no runner) are the org model's, and
 	// they only exist once the tree is built.
-	p.wrap(c.organization().Validate())
+	p.wrap(o.Validate())
 	return p.err()
 }
 
@@ -398,11 +549,11 @@ func (c *Company) validateKnowledgeBackend() error {
 	var p problems
 
 	if b := c.Knowledge.Backend; b != "" && !b.Valid() {
-		p.add("knowledge.backend", ErrShape,
+		p.add(field("knowledge.backend"), ErrShape,
 			"knowledge.backend must be native, confluence or none")
 	}
 	if b := c.Tracker.Backend; b != "" && !b.Valid() {
-		p.add("tracker.backend", ErrShape,
+		p.add(field("tracker.backend"), ErrShape,
 			"tracker.backend must be native, jira or none")
 	}
 
@@ -413,23 +564,23 @@ func (c *Company) validateKnowledgeBackend() error {
 	// no-task-engine decision was written against. Refused at the authored
 	// path so the message names what to delete.
 	if c.Knowledge.Backend == KnowledgeNative && c.Integrations.Confluence != nil {
-		p.add("knowledge.backend", ErrConflict,
+		p.add(field("knowledge.backend"), ErrConflict,
 			"a native knowledge base and integrations.confluence cannot both run: "+
 				"pages would live in two places and nothing would keep them in "+
 				"step. Remove one")
 	}
 	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
-		p.add("knowledge.backend", ErrConflict,
+		p.add(field("knowledge.backend"), ErrConflict,
 			"knowledge.backend: confluence needs integrations.confluence")
 	}
 	if c.Tracker.Backend == TrackerNative && c.Integrations.Jira != nil {
-		p.add("tracker.backend", ErrConflict,
+		p.add(field("tracker.backend"), ErrConflict,
 			"a native tracker and integrations.jira cannot both run: work would "+
 				"be filed in two places and a unit's project key would name two "+
 				"trackers. Remove one")
 	}
 	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
-		p.add("tracker.backend", ErrConflict,
+		p.add(field("tracker.backend"), ErrConflict,
 			"tracker.backend: jira needs integrations.jira")
 	}
 
@@ -437,7 +588,7 @@ func (c *Company) validateKnowledgeBackend() error {
 	// and configures nothing — the silence this whole rule exists to end.
 	if c.KnowledgeBackendFor() == KnowledgeNone {
 		if len(c.Knowledge.KnowledgeScope) > 0 {
-			p.add("knowledge.scope", ErrConflict,
+			p.add(field("knowledge.scope"), ErrConflict,
 				"a read scope needs a knowledge backend")
 		}
 		// VECTORS NEED SOMETHING TO SEARCH, and a knowledge base is not
@@ -447,13 +598,13 @@ func (c *Company) validateKnowledgeBackend() error {
 		// recall over the work.
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
 			c.TrackerBackendFor() != TrackerNative {
-			p.add("knowledge.vectors", ErrConflict,
+			p.add(field("knowledge.vectors"), ErrConflict,
 				"vectors need a knowledge backend or a native tracker — with "+
 					"neither there is no corpus to embed")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
-		p.add("knowledge.vectors", ErrConflict,
+		p.add(field("knowledge.vectors"), ErrConflict,
 			"vector recall needs providers.embeddings — there is nothing to "+
 				"compute an embedding with")
 	}
@@ -663,7 +814,7 @@ func weekdayNamed(name string) (time.Weekday, bool) {
 	return 0, false
 }
 
-func (t *TrackerNativeConfig) validate(path string) error {
+func (t *TrackerNativeConfig) validate(path Path) error {
 	var p problems
 	if t == nil {
 		return nil
@@ -835,10 +986,12 @@ func (c *Company) VectorsEnabled() bool {
 // a loop here, so the next whole-document rule about seats inherits it.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a
-// documented authoring state — an org chart written before the credentials
-// exist — and it fails at the first turn, where the failure is actionable.
-// Rejecting every role's key against an empty map would turn that supported
-// flow into a wall of errors about models the author has not added yet.
+// documented authoring state (an org chart written before the credentials
+// exist, and what a company created from the dashboard is until one is added),
+// and it runs: every node applies it and places its seats, and each seat holds
+// its work until a revision adds a provider. Rejecting every role's key
+// against an empty map would turn that supported flow into a wall of errors
+// about models the author has not added yet.
 func (c *Company) validateProviderKeys() error {
 	var p problems
 	if len(c.Providers.LLM) == 0 {
@@ -855,7 +1008,7 @@ func (c *Company) validateProviderKeys() error {
 		// is still a typo, still in the file, and still what the operator
 		// will edit next.
 		for _, field := range []struct {
-			path string
+			path Path
 			keys ProviderKeys
 		}{
 			{at(path, "llm"), role.LLM.Default},
@@ -978,15 +1131,15 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 // answered nil for every seat in a unit — so run_sandbox refused each of them
 // with "this seat's sandbox is not enabled" on a seat whose block said
 // otherwise. One walker, so the two can never disagree about which seats exist.
-func (c *Company) EachRole() iter.Seq2[*Role, string] {
-	return func(yield func(*Role, string) bool) {
+func (c *Company) EachRole() iter.Seq2[*Role, Path] {
+	return func(yield func(*Role, Path) bool) {
 		for i := range c.Roles {
-			if !yield(&c.Roles[i], idx("roles", i)) {
+			if !yield(&c.Roles[i], idx(field("roles"), i)) {
 				return
 			}
 		}
-		var walk func(units []Unit, path string) bool
-		walk = func(units []Unit, path string) bool {
+		var walk func(units []Unit, path Path) bool
+		walk = func(units []Unit, path Path) bool {
 			for i := range units {
 				unit := &units[i]
 				here := idx(path, i)
@@ -1001,7 +1154,7 @@ func (c *Company) EachRole() iter.Seq2[*Role, string] {
 			}
 			return true
 		}
-		walk(c.Units, "units")
+		walk(c.Units, field("units"))
 	}
 }
 
@@ -1041,7 +1194,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 			continue
 		}
 		if _, seen := reached[gate.RunIn]; !seen {
-			reached[gate.RunIn] = at(at(path, "sandbox"), "run_in")
+			reached[gate.RunIn] = at(path, "sandbox.run_in").String()
 		}
 	}
 	// AN AGENT-MODE EXECUTOR IS A RUN TOO, placed by its entry's own
@@ -1056,7 +1209,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 			continue
 		}
 		if _, seen := reached[run]; !seen {
-			reached[run] = at(agentModeEntryPath(key), "run_in")
+			reached[run] = at(agentModeEntryPath(key), "run_in").String()
 		}
 	}
 	return reached
@@ -1091,8 +1244,8 @@ func (c *Company) agentModeExecutorKeys() []string {
 
 // agentModeEntryPath is where an agent-mode entry's placement is written, for
 // the messages that point at it.
-func agentModeEntryPath(key string) string {
-	return at(at(at("providers", "llm"), key), "cli")
+func agentModeEntryPath(name string) Path {
+	return at(entry(field("providers.llm"), name), "cli")
 }
 
 // ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
@@ -1109,8 +1262,8 @@ func agentModeEntryPath(key string) string {
 // growing a rule the registry does not have.
 //
 // The second return is false when there is no executor to resolve: a company
-// that configures no provider at all (which the registry refuses at
-// construction and this must not crash on), or a HUMAN SEAT. A human seat is
+// that configures no provider at all (a valid company, which the engine runs
+// with no model registry and this must not crash on), or a HUMAN SEAT. A human seat is
 // addressable and never spawned — it runs no phase, and `llm` is one of the
 // fields [org.Role.Validate] refuses on one — so resolving it would answer
 // with whatever entry happens to be declared first and call that entry
@@ -1275,7 +1428,7 @@ func (c *Company) validateSandboxPlacement() error {
 		// that resolves a default reaches that default, precisely so a seat
 		// added later has somewhere to go. So the remedy is the default —
 		// or a seat, which is the other thing that would reach a cell.
-		p.add(at("providers.sandbox", "default_run_in"), ErrMissing,
+		p.add(at(field("providers.sandbox"), "default_run_in"), ErrMissing,
 			"this catalogue configures more than one place to run code (%s) and "+
 				"nothing names one, so no backend is built and no seat can ever "+
 				"run code here. Name the default, give a seat `run_in`, or remove "+
@@ -1288,7 +1441,7 @@ func (c *Company) validateSandboxPlacement() error {
 		// refuse a perfectly good direct-only company; unchecked, a seat's
 		// first coding run fails at container create, minutes into a turn.
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
-			p.add("providers.sandbox.local.image", ErrMissing,
+			p.add(field("providers.sandbox.local.image"), ErrMissing,
 				"%s runs in a container, so the local backend needs an image "+
 					"with the coding-agent CLI installed", named)
 		}
@@ -1297,7 +1450,7 @@ func (c *Company) validateSandboxPlacement() error {
 				if strings.TrimSpace(unread.value) == "" {
 					continue
 				}
-				p.add(at("providers.sandbox.local", unread.field), ErrConflict,
+				p.add(at(field("providers.sandbox.local"), unread.field), ErrConflict,
 					"only a container box reads this, and no seat runs in one. "+
 						"Give a seat `run_in: container`, or remove the field")
 			}

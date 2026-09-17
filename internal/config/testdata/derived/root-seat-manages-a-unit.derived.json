@@ -1,0 +1,73 @@
+{
+  "seats": [
+    {
+      "path": "roles[0]",
+      "handle": "chief-executive",
+      "name": "Chief Executive",
+      "kind": "agent",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": [
+        "backend-lead",
+        "developer"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": null
+    },
+    {
+      "path": "units[0].roles[0]",
+      "handle": "backend-lead",
+      "name": "Backend Lead",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "chief-executive",
+      "managers": [
+        "chief-executive"
+      ],
+      "reports": [
+        "developer"
+      ],
+      "auto_reports": [
+        "developer"
+      ],
+      "onboarding_chain": [
+        "Backend"
+      ]
+    },
+    {
+      "path": "units[0].roles[1]",
+      "handle": "developer",
+      "name": "Developer",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "chief-executive",
+      "managers": [
+        "chief-executive",
+        "backend-lead"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Backend"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "path": "units[0]",
+      "name": "Backend",
+      "type": "team",
+      "lead": "backend-lead",
+      "lead_inherited": false,
+      "channel": "",
+      "channel_inherited": false,
+      "seats": [
+        "backend-lead",
+        "developer"
+      ]
+    }
+  ]
+}

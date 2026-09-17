@@ -16,7 +16,7 @@ import { useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, EmptyState, Input, Tag, cx } from "@crewlethq/ui";
+import { Card, cx, EmptyState, EmptyValue, Input, Tag } from "@crewlethq/ui";
 import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` commits the option the arrows land on. Both strips here
@@ -152,7 +152,9 @@ function LoadRow({ load }: { load: Load }) {
           </>
         )}
       </span>
-      <span className="wl-num">{load.state === "unknown" ? "—" : load.held}</span>
+      <span className="wl-num">
+        {load.state === "unknown" ? <EmptyValue label="Not counted" /> : load.held}
+      </span>
       <span className={cx("wl-num", load.state === "unknown" && "wl-soft")}>
         {capacityText(load)}
         {load.from > 1 && <span className="wl-from"> ×{load.from}</span>}
@@ -260,7 +262,7 @@ export function People() {
       () =>
         view === "seats"
           ? groups.flatMap((g) =>
-              g.rows.map(({ seat }) => ({ kind: "seat" as const, id: seat.handle })),
+              g.rows.map(({ seat }) => ({ kind: "seat" as const, id: seat.handle || seat.name })),
             )
           : [],
       [groups, view],
@@ -279,9 +281,12 @@ export function People() {
    */
   const card = ({ seat, agent }: (typeof rows)[number]) => (
     <div
-      key={seat.handle}
+      key={seat.key}
       style={{ display: "contents" }}
-      onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
+      // BY HANDLE, OR BY NAME WHERE THE ENGINE REPORTED NONE. The seat screen
+      // resolves both, which is what keeps a seat this engine derived no
+      // handle for reachable at all; `seatPath` is the same rule for a link.
+      onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle || seat.name }))}
     >
       <SeatCard seat={seat} agent={agent} sandboxes={sandboxes} />
     </div>
@@ -300,8 +305,8 @@ export function People() {
         }
       </PageActions>
       <PageNote>
-        Every seat in the company — the ones this node runs and the ones its peers do. A seat that
-        is not held anywhere reads as “not running here”.
+        Every seat in the company, the ones this node runs and the ones its peers do. A seat that is
+        not held anywhere reads as “not running here”.
       </PageNote>
 
       <div className="toolbar">

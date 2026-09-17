@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // Skip is one test that reported itself skipped.
 type Skip struct {
 	// Package is the import path with the module prefix removed, so an
@@ -226,4 +228,82 @@ var allowed = []Allowance{
 			"of it; the table cases check the bytes written, which is what a wrong quoting " +
 			"rule would agree with.",
 	},
+}
+
+// Measurement is one test whose OUTPUT reaches the log even when it PASSES.
+//
+// # Why this table has to exist
+//
+// [read] renders the stream back as plain `go test` output, which means a
+// passing test's own output is dropped — that is what `go test` without -v
+// does, and echoing everything would make a CI log tens of times longer and
+// get the gate taken back out.
+//
+// But a handful of tests exist to PRINT A NUMBER that somebody is meant to
+// watch: a drain rate, a throughput, a measured ratio. Dropping their output on
+// a pass means the number reaches a log only on the run where the test FAILED —
+// which is the one run where it is least useful and most likely to be blamed on
+// the change under test. internal/store's drain measurement spent its whole
+// life in exactly that state: it logged the applier's rows/s on every green
+// run, and not one of those lines survived to a CI log, so when the wall-clock
+// assertion it carried finally failed there was no history to compare against
+// and n = 1.
+//
+// An entry here is therefore a declaration that this test's output is DATA, not
+// noise, and that somebody reads it.
+type Measurement struct {
+	Package string
+	Test    string
+
+	// Why says what number the test prints and who reads it — the same bar
+	// [Allowance.Why] sets. "It logs some timings" is not a reason; "the
+	// drain rate docs/guides/replication.md publishes a floor against" is.
+	Why string
+}
+
+// measured is every test whose output survives a pass.
+//
+// TWO-SIDED, exactly like the Always half of [allowed]: an entry whose package
+// ran but whose test never reported is STALE and fails the build. A renamed or
+// deleted measurement would otherwise stop reaching the log silently, which is
+// the failure this table was added to fix — so the table cannot be allowed to
+// rot into describing a test that no longer exists.
+var measured = []Measurement{
+	{
+		Package: "internal/store",
+		Test:    "TestTheMultiRowApplyIssuesOneStatementPerChunk",
+		Why: "the applier's drain rate in rows/s across the three statement " +
+			"shapes, and the statement counts behind it. Every read-latency " +
+			"bound in the design is derived from this number and " +
+			"docs/guides/replication.md publishes a floor against it, so it " +
+			"belongs in the log of the runs that PASS — the ones that " +
+			"establish what normal is.",
+	},
+}
+
+// measurement finds the entry covering one test, matching a parent's subtests
+// too so a table-driven measurement declares itself once.
+func measurement(pkg, test string) *Measurement {
+	for i := range measured {
+		if measured[i].Package != pkg {
+			continue
+		}
+		if measured[i].Test == test || strings.HasPrefix(test, measured[i].Test+"/") {
+			return &measured[i]
+		}
+	}
+	return nil
+}
+
+// JudgeMeasured reports declared measurements whose package ran but which never
+// reported a result — a renamed or deleted test, printing nothing, for ever.
+func JudgeMeasured(seen map[string]bool, ran map[string]bool) []Skip {
+	var stale []Skip
+	for _, m := range measured {
+		if !ran[m.Package] || seen[m.Package+"\x00"+m.Test] {
+			continue
+		}
+		stale = append(stale, Skip{Package: m.Package, Test: m.Test})
+	}
+	return stale
 }

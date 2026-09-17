@@ -61,7 +61,7 @@ func Schema(tier Tier) ([]byte, error) {
 		id = "https://docs.crewlet.ai/schema/company.schema.json"
 		rules = companyRules()
 	default:
-		return nil, fault("", ErrUnknownValue, "unknown schema tier %q (want %s or %s)",
+		return nil, fault(nil, ErrUnknownValue, "unknown schema tier %q (want %s or %s)",
 			tier, TierBootstrap, TierCompany)
 	}
 

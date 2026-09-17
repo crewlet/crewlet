@@ -175,7 +175,7 @@ export function Budgets() {
                     s.max_tokens > 0 ? (
                       <TokenCell value={s.max_tokens} />
                     ) : (
-                      <span className="faint">unlimited</span>
+                      <span className="muted">unlimited</span>
                     ),
                 },
                 {

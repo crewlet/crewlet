@@ -33,6 +33,26 @@
   --sticky-top: var(--toolbar-h);
 }
 
+/* THE SCREEN ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL. `data-fill` is set
+   by the shell from a screen's own request (`app/fill.tsx`), never by a
+   selector reaching into a screen for a class neither of them owns — which is
+   what the rule this replaces did, and why it stopped matching the day the
+   markup under it moved.
+
+   A CANVAS FILLS THE BOX ITS SCREEN GIVES IT rather than growing the page: a
+   wheel turned over a page that scrolls lands in a canvas half off screen. So
+   while the request holds, this scroller stops being one and the column takes
+   what is left of the window. The bottom padding goes with it — it is landing
+   room under a page that ends, and there is no end to scroll to here. */
+.screen[data-fill] {
+  overflow-y: hidden;
+}
+.screen[data-fill] > .screen-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: var(--space-5);
+}
+
 .screen-inner {
   /* NO MAX WIDTH. The page column is already bounded by the rail and the
      workspace sidebar, and a cap inside it throws away exactly the width the

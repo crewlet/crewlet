@@ -38,6 +38,7 @@ import { QueryState } from "~/components/common.tsx";
 import {
   Card,
   EmptyState,
+  EmptyValue,
   FilterChip,
   Select,
   Skeleton,
@@ -383,7 +384,7 @@ export function GoalPanel({
           </FilterChip>
         ))}
         {goal.due_at && (
-          <span className="t-caption faint" title={fmtDate(goal.due_at)}>
+          <span className="t-caption" title={fmtDate(goal.due_at)}>
             due {relTime(goal.due_at, now)}
           </span>
         )}
@@ -412,7 +413,7 @@ export function GoalTargets({ goal }: { goal: WorkGoal }) {
   const targets = goal.targets ?? [];
   if (goal.progress === undefined) {
     return (
-      <p className="t-caption faint">
+      <p className="t-caption">
         No targets, so there is nothing to measure — which is not the same as nothing having
         happened.
       </p>
@@ -444,7 +445,9 @@ export function TargetMeter({ target }: { target: WorkGoalTarget }) {
         max={100}
         ariaLabel={`${target.name} — progress`}
         label={target.name}
-        right="—"
+        // NOT A DASH. A target nothing has measured yet is an absence with a
+        // reading, and the mark alone is announced as "dash" or skipped.
+        right={<EmptyValue label="No progress measured yet" />}
         tone="neutral"
       />
     );
@@ -676,13 +679,13 @@ export function GoalCheckIns({
               about the rest reads as a goal checked in on once, which is a
               different goal from one checked in on weekly. */}
           {behind > 0 && (
-            <div className="thread-entry t-caption faint">
+            <div className="thread-entry t-caption">
               {plural(behind, "earlier check-in")} — the goal&rsquo;s own page has the history.
             </div>
           )}
         </div>
       ) : (
-        <div className="thread-entry t-caption faint">
+        <div className="thread-entry t-caption">
           Nobody has checked in on this goal. A check-in is a person declaring its health and saying
           why — the engine never infers one from progress.
         </div>

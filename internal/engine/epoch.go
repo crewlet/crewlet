@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -69,20 +70,56 @@ func (e *Engine) RecheckGitHub() {
 // because state set in one and forgotten in the other fails silently and only
 // on the path nobody exercised.
 //
-// Today that is one thing: a store opened with NO width, which is a node that
-// booted with no active revision. It holds no rows, and its first epoch is
-// what tells it how wide its vectors will be. A store that already has a width
-// keeps it — [store.DB.LearnEmbeddingDim] only ever raises from 0 — because
-// the width belongs to the rows in the file rather than to the current
-// config, and [Engine.buildEmbedder] has already refused any revision that
-// would change it.
+// Today that is two things.
+//
+// THE PARTY REGISTRY, indexed BEFORE the epoch is stored, so no reader can
+// find a company through [Engine.Company] whose parties are not in
+// [Engine.Registry]. An apply indexes earlier still, before it rebuilds the
+// vendor wiring that registers into the new registry, and that index is kept
+// rather than rebuilt here. Boot has nothing to rebuild in between, and indexed
+// only at the end of construction, after every fleet duty was already armed;
+// see [Engine.Registry] for what that window did.
+//
+// And a store opened with NO width, which is a node that booted with no active
+// revision. It holds no rows, and its first epoch is what tells it how wide
+// its vectors will be. A store that already has a width keeps it
+// ([store.DB.LearnEmbeddingDim] only ever raises from 0), because the width
+// belongs to the rows in the file rather than to the current config, and
+// [Engine.buildEmbedder] has already refused any revision that would change
+// it.
+//
+// It also tells the OPERATOR one thing: that an epoch with no model is now
+// current. See nomodels.go.
 func (e *Engine) installEpoch(c *Company) {
+	if c != nil && !e.indexes(c) {
+		e.refreshParties(c)
+	}
 	e.epoch.current.Store(c)
+	if c != nil && c.Models == nil {
+		// Said here, once per epoch, because it is the only line that
+		// reaches the operator of a company nobody has messaged yet: with
+		// no traffic there is no held delivery to log about.
+		log.Warn("company_has_no_models", "company", c.Config.Name,
+			"seats", len(c.Seats()),
+			"detail", "the company configures no model provider: its seats are "+
+				"placed and keep what arrives on their inboxes, but none takes a "+
+				"turn until a revision adds one under providers.llm")
+	}
 	// Backends are always present on a running engine; a `crewlet validate`
 	// engine applies to nothing and has no store to tell.
 	if e.backends != nil && e.backends.Store != nil {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
+}
+
+// indexes reports whether the live party registry was built from exactly this
+// company. By identity, because an epoch is published rather than mutated: a
+// revision equal in every field is still a different epoch, with a registry of
+// its own.
+func (e *Engine) indexes(c *Company) bool {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return e.notify.registry != nil && e.notify.registryFor == c
 }
 
 // embeddingWidth is the vector width an epoch's embeddings provider produces,
@@ -123,11 +160,15 @@ func embeddingWidth(c *Company) int {
 // the previous epoch, so the window in which degraded is reachable is as small
 // as the ordering can make it.
 // ONE CALLER: the reconciler's tick, which is synchronous. The API's write
-// path does NOT reach here — it activates a revision and lets the tick apply
+// path does NOT reach here: it activates a revision and lets the tick apply
 // it, because activation also has to move the pointer, record the outcome and
-// reset the attempt budget, none of which this function does. A lock here
-// would guard a path that has never had a second writer, and would imply a
-// concurrency story that does not exist.
+// reset the attempt budget, none of which this function does. So there is no
+// second apply to exclude, and the lock taken below is not for one. It is for
+// [Engine.Stop], the one other writer of what an apply builds: an apply that
+// overlapped the teardown restarted the scheduler, the background passes and
+// a first company's inbound edge after Stop had ended them. Stop waits for an
+// apply in flight, and an apply that starts after it is refused with
+// [errStopped].
 //
 // The second return is the subsystems this apply GOT THROUGH, in the order it
 // went through them. On a failure it is what was already mutated when the
@@ -135,6 +176,11 @@ func embeddingWidth(c *Company) int {
 // diagnosable after the fact — it travels on ConfigRevisionApplied into the
 // audit event log, where it outlives the fleet view's one-minute bucket.
 func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, []string, error) {
+	e.applying.Lock()
+	defer e.applying.Unlock()
+	if e.stopped {
+		return configplane.StatusError, nil, errStopped
+	}
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
 	// the documented rotation gesture: the payload has not moved, so the
@@ -166,8 +212,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// org and its model registry — while the dispatcher, its subscription
 	// and its redelivery ring stay put. A failure leaves the previous
 	// epoch's workers serving rather than failing the apply: reflecting
-	// against a stale org is a far smaller wrong than not reflecting.
-	e.reconfigureReflection(next)
+	// against a stale org is a far smaller wrong than not reflecting. The
+	// one refusal is a node's FIRST company, whose dispatcher is attached
+	// here and would otherwise not exist at all.
+	if err := e.reconfigureReflection(ctx, next); err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the reflect dispatcher could not be attached for this "+
+				"node's first company; the revision is not served here yet")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	applied = append(applied, "learning")
 	// The sandbox MANAGER is swapped, and only the manager: the coordinator
 	// and the waiter hold this process's busy set and poll loop, so
@@ -199,23 +252,37 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// adopted, so the window that favours it is the right one.
 	e.refreshParties(next)
 	applied = append(applied, "parties")
-	// The TRACKER is rebuilt on the same edge and for the same reason: its
-	// lead map is derived from the org, so a node that kept its boot-time
-	// parser would route the new revision's work items by the old
-	// company's org chart.
-	e.reconcileConfluence(next)
-	e.reconcileDatadog(ctx, next)
-	e.reconcileJira(ctx, next)
-	e.reconcileGitLab(ctx, next)
-	e.reconcileGitHub(ctx, next)
-	// AND THE TWO CHAT SURFACES, which had no reconciler at all: their
-	// parsers were assembled once at boot, so a company that connected
-	// either one after starting had every delivery verified at the edge and
-	// routed to nobody until the process was restarted. See
-	// [Engine.reconcileSlack] for why one rebuilds unconditionally and the
-	// other does not.
-	e.reconcileSlack(ctx, next)
-	e.reconcileMattermost(ctx, next)
+	if e.inboundStarted() {
+		// The TRACKER is rebuilt on the same edge and for the same
+		// reason: its lead map is derived from the org, so a node that
+		// kept its boot-time parser would route the new revision's work
+		// items by the old company's org chart.
+		e.reconcileConfluence(next)
+		e.reconcileDatadog(ctx, next)
+		e.reconcileJira(ctx, next)
+		e.reconcileGitLab(ctx, next)
+		e.reconcileGitHub(ctx, next)
+		// AND THE TWO CHAT SURFACES, which had no reconciler at all:
+		// their parsers were assembled once at boot, so a company that
+		// connected either one after starting had every delivery
+		// verified at the edge and routed to nobody until the process
+		// was restarted. See [Engine.reconcileSlack] for why one rebuilds
+		// unconditionally and the other does not.
+		e.reconcileSlack(ctx, next)
+		e.reconcileMattermost(ctx, next)
+	} else if err := e.startInbound(ctx, next); err != nil {
+		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
+		// the reconcilers above to rebuild, and each of them returns
+		// early without one. So its first company STARTS the edge, and
+		// a start that fails is refused like a build: a company served
+		// with no inbound edge looks healthy and hears nothing, and the
+		// retry the refusal earns starts it again. See
+		// [Engine.startInbound].
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the inbound edge could not be started for this node's "+
+				"first company; the revision is not served here yet")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	// AND WHAT THE LOOP LAST CONCLUDED IS NOW OLD NEWS. Its cadence is for
 	// asking a third-party app again, not for asking this document again,
 	// and the answer just changed here. See [integration.Worker.MarkStale].
@@ -248,8 +315,21 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// — `crewlet validate` applies to nothing.
 	if e.node != nil {
 		e.node.EnsureMailboxes(ctx)
+		// AND THE MAIL A COMPANY WITH NO MODEL HELD BACK is let through
+		// once this epoch has one. Here, after the seat tools are refiled,
+		// because the first thing a released inbox does is run a turn, and
+		// that turn must find everything it reads already current.
+		if next.Models != nil {
+			e.releaseModelHolds(ctx)
+		}
 		applied = append(applied, "mailboxes")
 	}
+	// THE BACKGROUND PASSES follow the revision too, and after the swap:
+	// their loops walk the CURRENT epoch's roster, and the passes handed to
+	// them hold this revision's models and knobs. The loops keep running
+	// and keep their clocks. See [Engine.reconfigureLearningPasses].
+	e.reconfigureLearningPasses(ctx, next)
+	applied = append(applied, "learning_passes")
 	// AFTER the epoch is published too, and for a sharper version of the
 	// same reason: the tick reads schedules off the CURRENT company, so
 	// arming from `next` before it is current would open a window in which
@@ -267,6 +347,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	e.notifyApplied(ctx)
 	return configplane.StatusOK, applied, nil
 }
+
+// errStopped refuses an apply that reaches a node after [Engine.Stop] began.
+// The node is leaving, and nothing it would build for the revision could run.
+var errStopped = errors.New("engine: apply: this node is stopping and applies no revision")
 
 // seatCount reports a possibly-absent epoch's seat count, for the log line
 // that says what changed. The first apply on a node has no previous epoch.

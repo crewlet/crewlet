@@ -51,9 +51,9 @@ type Reference struct {
 // so [ReferencedNames] is what those callers want.
 func References(payload any) []Reference {
 	var out []Reference
-	walkStrings(reflect.ValueOf(payload), "", func(path, s string) {
+	walkStrings(reflect.ValueOf(payload), nil, func(path Path, s string) {
 		for _, name := range envref.Names(s) {
-			out = append(out, Reference{Path: path, Name: name})
+			out = append(out, Reference{Path: path.String(), Name: name})
 		}
 	})
 	slices.SortFunc(out, func(a, b Reference) int {
@@ -70,7 +70,7 @@ func References(payload any) []Reference {
 // alike — the three shapes a payload actually arrives in.
 func ReferencedNames(payload any) []string {
 	seen := map[string]struct{}{}
-	walkStrings(reflect.ValueOf(payload), "", func(_, s string) {
+	walkStrings(reflect.ValueOf(payload), nil, func(_ Path, s string) {
 		for _, name := range envref.Names(s) {
 			seen[name] = struct{}{}
 		}
@@ -92,8 +92,8 @@ func ReferencedNames(payload any) []string {
 // normalization has to agree about reachability too: a string the trim
 // cannot see keeps the drift [Bootstrap.normalize] describes, exactly as a
 // string this cannot see is a ${VAR} nothing reports.
-func walkStrings(v reflect.Value, path string, visit func(path, s string)) {
-	mapStrings(v, path, func(path, s string) string {
+func walkStrings(v reflect.Value, path Path, visit func(path Path, s string)) {
+	mapStrings(v, path, func(path Path, s string) string {
 		visit(path, s)
 		return s // read-only: an unchanged string writes nothing back
 	})

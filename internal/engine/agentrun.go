@@ -24,7 +24,7 @@ import (
 // re-entry are the sandbox layer's, unchanged — an agent-mode executor is a
 // coding run whose brief happens to be a prompt rather than a code task. The
 // tool surface is the bridge's, unchanged. What this file adds is the wiring
-// and the two refusals that wiring makes possible.
+// and the refusals that wiring makes possible.
 
 // agentLauncher runs a seat's executor as its CLI's own agentic run.
 type agentLauncher struct {
@@ -55,6 +55,18 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return fmt.Errorf("this seat's executor is a coding CLI in agent mode, which "+
 			"runs in a box: configure providers.sandbox, or set `mode: text` on "+
 			"providers.llm.%s", l.codingAgent)
+	}
+	// A BRIDGE NOTHING SERVES IS REFUSED BY NAME, before Open, because the
+	// two settings it takes are different fixes: an unset base URL is one
+	// variable, and a base URL on a node that binds no listener (api.port
+	// 0) is a second one the first message would send an operator past.
+	// Open refuses the same case on its own; asking here is what lets the
+	// error say which.
+	if e.bridge != nil && !e.bridge.Mounted() {
+		return fmt.Errorf("agent mode needs this node to serve its tool bridge, and "+
+			"it serves none: %s is set but this node binds no HTTP listener; set "+
+			"api.port on this node and point %s at that listener as a sandbox "+
+			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
 	endpoint := e.bridge.Open(&mcpbridge.Session{
 		RunID:   l.turn.ID,
@@ -239,13 +251,13 @@ func maxTurnsFor(gate *config.RoleSandbox) *int {
 // the ACTIVE span so the run's own spans nest under the phase that started
 // them rather than appearing as unrelated work minutes later.
 func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
-	agentID := ""
-	if id, ok := l.engine.Company().Org.AgentIDFor(l.seat); ok {
-		agentID = id.String()
-	}
 	runTrace := tracing.TraceOf(ctx)
 	return sandbox.TurnRef{
-		TurnID: l.turn.ID, AgentHandle: l.turn.Handle(), AgentID: agentID,
+		// The id is derived from the turn's PINNED organization, like every
+		// other fact about the seat here. The engine's current company is
+		// the next epoch once an apply lands mid-turn, and a renamed company
+		// derives a different id for the same seat.
+		TurnID: l.turn.ID, AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
 		Role:            l.seat.Name,
 		ConversationKey: l.turn.ConversationKey,
 		Reply:           l.turn.Reply,

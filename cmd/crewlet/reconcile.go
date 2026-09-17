@@ -146,6 +146,19 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		parent = active.ID
 	}
 
+	// THE FILE IS BEING WRITTEN, so it meets every rule a written document
+	// meets. It was loaded against the runnable rules only, because the
+	// frames above return without writing it: unchanged from the active
+	// revision, or a bootstrap the store's own company outranks. Past them
+	// this is a new revision, the same act as `crewlet config import`, and
+	// admitting a duplicate here would store exactly what every other
+	// write refuses. Nothing has been stored or activated yet.
+	if invalid := seed.Company.ValidateAdmission(); invalid != nil {
+		return fmt.Errorf("company config %s cannot be imported into the store: "+
+			"a document written as a new revision must meet every rule, and "+
+			"this one breaks an admission rule. Correct the file and start "+
+			"again: %w", seed.Path, invalid)
+	}
 	payload, err := secrets.Seal(cipher, document)
 	if err != nil {
 		return err
@@ -301,6 +314,21 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	company, err := config.DecodeCompany(document)
 	if err != nil {
 		return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
+	}
+	// VALIDATED HERE, naming the revision, because booting is applying and
+	// the stored-form decode holds a revision to no rule. The engine checks
+	// the same rules again as it builds the epoch, but only this frame knows
+	// which revision it is and that an offline import is the way out: the
+	// node is not serving its API yet.
+	//
+	// The RUNNABLE rules only: a stored revision that breaks an admission
+	// rule added after it was written still runs, and the reconciler warns
+	// about it once it applies the epoch (see
+	// [config.Company.ValidateRunnable]).
+	if err := company.ValidateRunnable(); err != nil {
+		return nil, fmt.Errorf("the active revision %s cannot run on this build; "+
+			"import a corrected document with `crewlet config import` and start "+
+			"again: %w", active.ID, err)
 	}
 	return company, nil
 }

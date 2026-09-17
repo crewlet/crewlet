@@ -16,7 +16,7 @@
 import { useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section, SeatChip } from "~/components/common.tsx";
-import { Button, Callout, Card, EmptyState, Input, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Callout, Card, EmptyState, EmptyValue, Input, Skeleton, Tag } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   Book2Glyph,
@@ -33,7 +33,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { documentUnits, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useMemo } from "react";
@@ -285,7 +285,7 @@ export function Knowledge() {
 
       <Section
         title="What each seat has learned for itself"
-        hint="private to the seat — its diary, its past turns, the skills it drafted"
+        hint="private to the seat: its diary, its past turns, the skills it drafted"
       >
         {/* A HEADING OVER NOTHING. A company with no agent seats — which the
             quickstart's own example is — rendered this section's title and
@@ -380,11 +380,15 @@ function containerFacts({
   capped: boolean;
   /** The page list has not answered — it is still in flight, or it failed. */
   unread: boolean;
-  /** The units whose `space:` names this container. */
-  units: { name: string; key: string }[];
+  /**
+   * The units whose `space:` names this container, or NULL when the company
+   * document could not be read: `space` is guarded, so an anonymous reader
+   * does not know who files here, and an empty list would say nobody does.
+   */
+  units: { name: string }[] | null;
   now: number;
 }): Fact[] {
-  const lead = units[0];
+  const lead = units?.[0];
   return [
     // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
     // into it, so one whose pages have all been trashed is a state an operator
@@ -418,16 +422,17 @@ function containerFacts({
       // answers the question even for a container nobody has written in yet.
       // The panel below answers the other half — who actually has.
       label: "Filed by",
-      value:
-        units.length > 0 ? (
-          units.map((u) => u.name).join(", ")
-        ) : (
-          <Dash title="no unit names this container in its space:" />
-        ),
+      value: !units ? (
+        <EmptyValue label="Needs an operator token to read" />
+      ) : units.length > 0 ? (
+        units.map((u) => u.name).join(", ")
+      ) : (
+        <Dash title="no unit names this container in its space:" />
+      ),
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      path: units.length === 1 && lead ? ["company", "units", lead.key] : undefined,
+      path: units?.length === 1 && lead ? ["company", "units", lead.name] : undefined,
     },
     { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];
@@ -483,19 +488,24 @@ export function ContainerPeek({ id }: { id: string }) {
   // rather than a number written here — and false until there IS an answer,
   // since with no data `0 >= 0` would qualify a fact nothing has read yet.
   const capped = Boolean(list.data && recent.length >= list.data.limit);
+  // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
+  // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
+  // ("a knowledge container key: where this unit's pages are written"), so the
+  // anonymous org projection carries none of it and this is read from the
+  // company document. NULL rather than an empty list when it could not be:
+  // "no unit files here" is a fact about the company and an unread document is
+  // not evidence for it.
+  //
   // A UNIT'S `space:` IS CASE-INSENSITIVE against the key, because the engine
   // upper-cases a container key on the way in and a config file says whatever
   // its author typed.
-  const units = useMemo(
-    () =>
-      index.units
-        .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
-        // The unit's own key, which is its id where it declares one and its
-        // name where it does not — `org.Unit.Key`'s rule, and what
-        // `UnitScreen` resolves a route by.
-        .map((u) => ({ name: u.name, key: u.id || u.name })),
-    [index, id],
-  );
+  const doc = useQuery("config", undefined, { enabled: id !== "" });
+  const units = useMemo(() => {
+    if (doc.error || !doc.data) return null;
+    return documentUnits(doc.data)
+      .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
+      .map((u) => ({ name: u.name }));
+  }, [doc.data, doc.error, id]);
 
   return (
     <>
@@ -656,7 +666,7 @@ function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: Org
             />
           ))}
           {writers.length > PEEK_WRITERS && (
-            <span className="t-caption faint">+{writers.length - PEEK_WRITERS} more</span>
+            <span className="t-caption">+{writers.length - PEEK_WRITERS} more</span>
           )}
         </div>
       ) : (

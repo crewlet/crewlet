@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -59,16 +58,25 @@ const (
 	// a record is applied idempotently and a replay must not move a row
 	// backwards. It also has a plan to make, which is what the prepared
 	// arm is measuring.
-	itemInsert = `INSERT INTO bench_items
+	//
+	// IN THREE PARTS because that is what [store.InsertRows] takes, and the
+	// single-row form every per-row arm uses is composed back out of them —
+	// so the arms cannot drift into measuring two different statements.
+	itemPrefix = `INSERT INTO bench_items
 		(id, project, title, status, assignee, version, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+		VALUES`
+	itemRow    = `(?, ?, ?, ?, ?, ?, ?)`
+	itemSuffix = `ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project, title = excluded.title,
 			status = excluded.status, assignee = excluded.assignee,
 			version = excluded.version, updated_at = excluded.updated_at
 		WHERE excluded.version > bench_items.version`
-	edgeInsert = `INSERT INTO bench_edges (item_id, kind, other) VALUES (?, ?, ?)
-		ON CONFLICT(item_id, kind, other) DO NOTHING`
+	itemInsert = itemPrefix + " " + itemRow + " " + itemSuffix
+
+	edgePrefix = `INSERT INTO bench_edges (item_id, kind, other) VALUES`
+	edgeRow    = `(?, ?, ?)`
+	edgeSuffix = `ON CONFLICT(item_id, kind, other) DO NOTHING`
+	edgeInsert = edgePrefix + " " + edgeRow + " " + edgeSuffix
 )
 
 // BenchmarkLogApplyDrain measures the applier's drain in rows per second,
@@ -356,95 +364,113 @@ func settleForeign(t *testing.T, foreign *atomic.Int64) {
 		"contention and its answer would be about an idle store")
 }
 
-// THE SHIPPED SHAPE IS THE FASTEST OF THE THREE, and this is the assertion
-// rather than a number in a comment: the arms are compared against each other
-// in one run, on this machine, so the claim survives a faster laptop and a
-// slower CI box alike.
+// THE SHIPPED SHAPE COSTS ceil(rows/chunk) STATEMENTS AND NOT ONE PER ROW, and
+// the statement COUNT is the assertion.
 //
-// # What it does NOT assert, and why
+// # Why this is not a wall-clock comparison any more
 //
-// That preparing beats not preparing. Measured here, it does not: the two are
-// within noise of each other and the ordering flips between runs, because
-// this driver implements ExecerContext and an "unprepared" exec is already
-// one round trip carrying its arguments. Asserting a 1 % ordering would be a
-// test that fails on a busy machine and tells nobody anything. The delta is
-// LOGGED instead, so the day a driver bump makes the parse matter, the number
-// is in the output of a test that already runs.
+// It was one. It timed the three arms in sequence and required the multi-row
+// arm to come in at least 1.5× under the others — a margin calibrated against
+// a 4× figure measured unloaded and without the race detector. That assertion
+// failed in CI on 2026-09-15 by 3.7 %, having passed on the same branch
+// thirty-eight minutes earlier, and the run's own numbers say why: the two arms
+// this file documents as equivalent BY DESIGN differed by 19 % in that run, so
+// the measurement's noise floor was five times the margin it missed by.
 //
-// What IS asserted is the shape that pays fourfold and that every read-latency
-// bound in the design is derived from.
+// The reason is staging, not hardware. internal/store is in the SHARED
+// partition, this package has over a hundred parallel tests, and one of them —
+// [TestAForeignCommitDoesNotAbortAnApplierTransaction], in this very file —
+// deliberately saturates the same database with an unthrottled writer for as
+// long as its own apply takes. Three arms measured one after another therefore
+// see three different machines, and no fixed margin survives that: raising 1.5
+// to 2 only moves the threshold the next loaded runner crosses.
 //
-// It is a test rather than a benchmark because the ordering is the invariant.
-// The magnitudes belong to whoever runs the benchmark on the hardware they
-// are sizing.
-// benchArmRuns is how many times each arm is measured before the fastest is
-// taken. Three: enough that one unlucky scheduling window cannot decide the
-// answer, few enough that the case stays a few seconds rather than a minute.
-const benchArmRuns = 3
-
-func TestTheMultiRowApplyIsTheFastestShape(t *testing.T) {
+// So the invariant is asserted where it is exact. What the chunker controls is
+// how many statements a collection becomes, and that number is arithmetic —
+// identical on a laptop, on a loaded CI box, and under the detector. An 8 000-row
+// apply is 22 statements through [store.InsertRows] against 8 000 one per row:
+// a 364-fold difference that no amount of contention can blur into parity.
+// A test that goes red when the chunker stops chunking is what the old margin
+// was reaching for; this one cannot be fooled by a busy afternoon.
+//
+// # The magnitudes are still measured, just not asserted
+//
+// The three arms are still timed and the rates still LOGGED, because the drain
+// rate is the number every read-latency bound in the design is derived from and
+// [internal/skipgate] now lets that line reach a green CI log. What it must not
+// do is fail a build: a magnitude belongs to whoever runs BenchmarkLogApplyDrain
+// on the hardware they are sizing.
+func TestTheMultiRowApplyIssuesOneStatementPerChunk(t *testing.T) {
 	if testing.Short() {
-		t.Skip("times three apply transactions of 4 000 rows each, three times over")
+		t.Skip("times three apply transactions of 4 000 rows each")
 	}
 	t.Parallel()
 	db, w := benchWriterT(t)
 	items := benchItems(benchRows)
 	ctx := t.Context()
 
-	// THE BEST OF THREE, not one run.
-	//
-	// This is a RATIO between two shapes, and the whole suite runs its
-	// packages in parallel — so an arm can be measured while several other
-	// packages are hammering the same disk and cores. Noise only ever makes
-	// an arm SLOWER, never faster, so the minimum of a few runs is the
-	// least-contaminated sample of each and the ratio between two minima is
-	// the property being asserted.
-	//
-	// One run each was enough alone and not enough in the suite: a real run
-	// measured 766ms against 970ms — a ratio of 1.27 against a floor of 1.5
-	// — and failed a build over a machine that was busy rather than over a
-	// chunker that had stopped chunking. Widening the floor instead would
-	// have bought the same green build by making the test unable to notice
-	// the regression it exists for.
-	timeArm := func(run func(context.Context, *store.Writer, *store.DB, []benchItem) error) time.Duration {
+	limit := db.Caps().MaxVariables
+	perItem := store.RowsPerInsert(limit, itemColumns)
+	perEdge := store.RowsPerInsert(limit, edgeColumns)
+	wantMulti := chunksFor(len(items), perItem) + chunksFor(len(items), perEdge)
+	wantPerRow := 2 * len(items)
+
+	timeArm := func(run func() error) time.Duration {
 		t.Helper()
-		best := time.Duration(0)
-		for i := 0; i < benchArmRuns; i++ {
-			resetBenchT(ctx, t, w)
-			started := time.Now()
-			if err := run(ctx, w, db, items); err != nil {
-				t.Fatalf("apply: %v", err)
-			}
-			if took := time.Since(started); best == 0 || took < best {
-				best = took
-			}
+		resetBenchT(ctx, t, w)
+		started := time.Now()
+		if err := run(); err != nil {
+			t.Fatalf("apply: %v", err)
 		}
-		return best
+		return time.Since(started)
 	}
 
-	unprepared := timeArm(applyUnprepared)
-	prepared := timeArm(applyPrepared)
-	multirow := timeArm(applyPreparedMultiRow)
+	var perRow, multi stmtCount
+	unprepared := timeArm(func() error { return applyUnpreparedThrough(ctx, w, items, &perRow) })
+	prepared := timeArm(func() error { return applyPrepared(ctx, w, db, items) })
+	multirow := timeArm(func() error { return applyMultiRowThrough(ctx, w, db, items, &multi) })
+
 	rows := float64(2 * len(items))
 	t.Logf("4 000-record apply (%.0f rows): unprepared %v (%.0f rows/s), "+
 		"prepared %v (%.0f rows/s), multirow %v (%.0f rows/s)",
 		rows, unprepared, rows/unprepared.Seconds(),
 		prepared, rows/prepared.Seconds(),
 		multirow, rows/multirow.Seconds())
+	t.Logf("statements: per-row %d, multirow %d (%d items/stmt, %d edges/stmt "+
+		"at a probed limit of %d)", perRow.n, multi.n, perItem, perEdge, limit)
 
-	// A MARGIN RATHER THAN AN ORDERING. Measured at four times faster; half
-	// of that is still unambiguous and leaves room for a loaded machine,
-	// while anything at parity means the chunker has stopped chunking.
-	if float64(multirow) >= float64(prepared)/1.5 {
-		t.Errorf("multi-row inserts (%v) are not materially faster than one row "+
-			"per statement (%v) — the chunker is buying nothing, and every "+
-			"read-latency bound in the design is derived from this number",
-			multirow, prepared)
+	if perRow.n != wantPerRow {
+		t.Errorf("the per-row arm issued %d statements for %d rows, want %d — "+
+			"it is the control, and it is supposed to be one statement per row",
+			perRow.n, wantPerRow, wantPerRow)
 	}
-	if float64(multirow) >= float64(unprepared)/1.5 {
-		t.Errorf("multi-row inserts (%v) are not materially faster than the "+
-			"per-row execs the projection writer uses (%v)", multirow, unprepared)
+	if multi.n != wantMulti {
+		t.Errorf("the multi-row arm issued %d statements for %d rows, want %d "+
+			"(%d item chunks of %d + %d edge chunks of %d at a probed limit of %d) "+
+			"— the chunker has stopped chunking, and every read-latency bound in "+
+			"the design is derived from this number",
+			multi.n, wantPerRow, wantMulti,
+			chunksFor(len(items), perItem), perItem,
+			chunksFor(len(items), perEdge), perEdge, limit)
 	}
+	// A FLOOR ON THE RATIO, not a margin on the clock. Anything above one row
+	// per statement is the chunker working; this is what catches a probe that
+	// collapsed to a limit too small to batch, which is the one way the counts
+	// above could both be "right" and the shape still be worthless.
+	if got := float64(wantPerRow) / float64(multi.n); got < 10 {
+		t.Errorf("multi-row inserts collapsed %d rows into only %d statements "+
+			"(%.1f× fewer) — at a probed limit of %d the chunker is batching "+
+			"%d items and %d edges per statement, which is not enough to pay for "+
+			"the shape", wantPerRow, multi.n, got, limit, perItem, perEdge)
+	}
+}
+
+// chunksFor is how many statements n rows become at size per statement.
+func chunksFor(n, size int) int {
+	if n <= 0 || size <= 0 {
+		return 0
+	}
+	return (n + size - 1) / size
 }
 
 // ---- the three arms --------------------------------------------------- //
@@ -453,7 +479,16 @@ func applyUnprepared(ctx context.Context, w *store.Writer, _ *store.DB, items []
 	return w.Tx(ctx, func(tx *sql.Tx) error { return insertUnprepared(ctx, tx, items) })
 }
 
-func insertUnprepared(ctx context.Context, tx *sql.Tx, items []benchItem) error {
+// applyUnpreparedThrough is the same arm with a seam for the statement counter.
+func applyUnpreparedThrough(ctx context.Context, w *store.Writer, items []benchItem,
+	count *stmtCount) error {
+
+	return w.Tx(ctx, func(tx *sql.Tx) error {
+		return insertUnprepared(ctx, count.wrap(tx), items)
+	})
+}
+
+func insertUnprepared(ctx context.Context, tx store.Execer, items []benchItem) error {
 	for _, it := range items {
 		if _, err := tx.ExecContext(ctx, itemInsert,
 			it.id, it.project, it.title, it.status, it.assignee, it.version, it.updated); err != nil {
@@ -495,50 +530,62 @@ func applyPrepared(ctx context.Context, w *store.Writer, _ *store.DB, items []be
 	})
 }
 
+// applyPreparedMultiRow is THE SHIPPED SHAPE, and it goes through
+// [store.InsertRows] rather than expanding the statement itself.
+//
+// It used to carry its own expander. That made the benchmark a SECOND
+// implementation of the chunker's rule — and for as long as the appliers wrote
+// one row per statement, it was the ONLY implementation that ran, so the arm
+// this file calls "shipped" measured code the engine did not execute. Measuring
+// the real function is the whole point: a change to InsertRows now moves this
+// number, which is what makes the benchmark a record of the engine rather than
+// of the benchmark.
 func applyPreparedMultiRow(ctx context.Context, w *store.Writer, db *store.DB, items []benchItem) error {
+	return applyMultiRowThrough(ctx, w, db, items, nil)
+}
+
+// applyMultiRowThrough is the arm with a seam for the statement counter.
+func applyMultiRowThrough(ctx context.Context, w *store.Writer, db *store.DB,
+	items []benchItem, count *stmtCount) error {
+
 	limit := db.Caps().MaxVariables
 	return w.Tx(ctx, func(tx *sql.Tx) error {
-		for start, end := range store.Chunks(len(items), limit, itemColumns) {
-			stmt, args := multiRow(itemInsert, itemColumns, end-start, func(i int) []any {
-				it := items[start+i]
+		ex := count.wrap(tx)
+		if _, err := store.InsertRows(ctx, ex, limit,
+			itemPrefix, itemRow, itemSuffix, len(items), func(i int) []any {
+				it := items[i]
 				return []any{it.id, it.project, it.title, it.status, it.assignee, it.version, it.updated}
-			})
-			if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-				return err
-			}
+			}); err != nil {
+			return err
 		}
-		for start, end := range store.Chunks(len(items), limit, edgeColumns) {
-			stmt, args := multiRow(edgeInsert, edgeColumns, end-start, func(i int) []any {
-				it := items[start+i]
+		_, err := store.InsertRows(ctx, ex, limit,
+			edgePrefix, edgeRow, edgeSuffix, len(items), func(i int) []any {
+				it := items[i]
 				return []any{it.id, "blocks", it.other}
 			})
-			if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-				return err
-			}
-		}
-		return nil
+		return err
 	})
 }
 
-// multiRow expands a single-row INSERT into an n-row one, with the arguments
-// flattened in row order.
-func multiRow(single string, columns, rows int, args func(int) []any) (string, []any) {
-	group := "(" + strings.TrimSuffix(strings.Repeat("?,", columns), ",") + ")"
-	head := single[:strings.LastIndex(single, "VALUES")+len("VALUES")]
-	var b strings.Builder
-	b.WriteString(head)
-	b.WriteByte(' ')
-	for i := range rows {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(group)
+// stmtCount counts the statements an arm issues. A nil one wraps nothing, so
+// the benchmark pays neither an allocation nor an indirection for it.
+type stmtCount struct{ n int }
+
+func (c *stmtCount) wrap(ex store.Execer) store.Execer {
+	if c == nil {
+		return ex
 	}
-	out := make([]any, 0, rows*columns)
-	for i := range rows {
-		out = append(out, args(i)...)
-	}
-	return b.String(), out
+	return countedExec{c: c, inner: ex}
+}
+
+type countedExec struct {
+	c     *stmtCount
+	inner store.Execer
+}
+
+func (e countedExec) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	e.c.n++
+	return e.inner.ExecContext(ctx, q, args...)
 }
 
 // ---- the fixture ------------------------------------------------------ //

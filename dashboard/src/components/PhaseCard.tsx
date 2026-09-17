@@ -65,19 +65,7 @@ import {
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-
-/**
- * How tall a block of machine text is allowed to get before it scrolls itself.
- *
- * 460px, which is `.code`'s own ceiling in components.css and therefore the
- * height every one of these blocks has had since the card was written — not a
- * new number. It has to be STATED here because uilet's CodeBlock is unbounded
- * unless a caller says otherwise, and its own doc says why that would be wrong
- * on this card: a phase's verbatim system prompt runs to tens of kilobytes, and
- * unbounded it pushes the prompt, the tool surface and the workers off the
- * screen.
- */
-const CODE_MAX_PX = 460;
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 function ToolRow({
   name,
@@ -94,13 +82,18 @@ function ToolRow({
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
         mono
-        // `meta` IS our `mark`: a SIBLING of the name rather than part of it.
-        // Inside the title it sat in a truncating single-line span and was the
-        // thing that wrapped, so a failed call showed its alert on its own line
-        // above the tool.
-        meta={
-          failed ? <WarningGlyph size="xs" style={{ color: "var(--critical-ink)" }} /> : undefined
-        }
+        // THE WORD, not a glyph. `meta` IS our `mark`: a SIBLING of the name
+        // rather than part of it, because inside the title the mark sat in a
+        // truncating single-line span and was the thing that wrapped, so a
+        // failed call showed its alert on its own line above the tool.
+        //
+        // But it was a red glyph carrying NO ACCESSIBLE NAME, so the row a
+        // reader most needs to find was announced exactly like the one above
+        // it, and the hue was the only signal anybody got. It is the word
+        // "failed" now, after the tool's name and part of what the control is
+        // called; the row keeps its own tint, so colour and word say it
+        // together.
+        meta={failed ? "failed" : undefined}
         title={name}
         // A TRANSCRIPT ITEM IS NOT A SECTION OF THE PAGE. uilet wraps a
         // disclosure's trigger in a real heading by default, which is right for
@@ -130,7 +123,7 @@ function ToolRow({
           <CodeBlock
             plain
             wrap={false}
-            maxHeight={CODE_MAX_PX}
+            maxHeight={RECORD_MAX_HEIGHT}
             selectable
             label={`${name} — arguments`}
             code={args || "{}"}
@@ -138,7 +131,7 @@ function ToolRow({
           <div className="t-label">{failed ? "Error" : "Result"}</div>
           <CodeBlock
             plain
-            maxHeight={CODE_MAX_PX}
+            maxHeight={RECORD_MAX_HEIGHT}
             selectable
             label={`${name} — ${failed ? "error" : "result"}`}
             code={result || "(empty)"}
@@ -463,7 +456,7 @@ export function PhaseCard({
             <section className="col gap-1">
               <div className="t-label">
                 Rounds
-                <span className="faint">
+                <span className="muted">
                   {" · "}
                   what the model thought, said and called, in order
                 </span>
@@ -502,7 +495,7 @@ export function PhaseCard({
                 <section className="col gap-1">
                   <div className="t-label">
                     Transcript
-                    <span className="faint"> · recorded before rounds were kept apart</span>
+                    <span className="muted"> · recorded before rounds were kept apart</span>
                   </div>
                   <p className="prose">{legacy.answer.trim()}</p>
                 </section>
@@ -544,7 +537,7 @@ export function PhaseCard({
                         into one flag. */}
                     <CodeBlock
                       plain
-                      maxHeight={CODE_MAX_PX}
+                      maxHeight={RECORD_MAX_HEIGHT}
                       selectable
                       label={`The ${record.phase} phase's system prompt`}
                       code={record.systemPrompt}
@@ -556,7 +549,7 @@ export function PhaseCard({
                     <div className="t-label">User</div>
                     <CodeBlock
                       plain
-                      maxHeight={CODE_MAX_PX}
+                      maxHeight={RECORD_MAX_HEIGHT}
                       selectable
                       label={`The ${record.phase} phase's user message`}
                       code={record.userPrompt}
@@ -578,7 +571,7 @@ export function PhaseCard({
                   <div className="col gap-1">
                     <div className="t-label">
                       Callable this round
-                      <span className="faint"> · full JSON schemas were sent</span>
+                      <span className="muted"> · full JSON schemas were sent</span>
                     </div>
                     <div className="row wrap gap-1">
                       {/* A TOOL NAME IS AN IDENTITY, so it stays neutral —
@@ -596,7 +589,7 @@ export function PhaseCard({
                   <div className="col gap-1">
                     <div className="t-label">
                       Offered as prose
-                      <span className="faint"> · discoverable, not yet callable</span>
+                      <span className="muted"> · discoverable, not yet callable</span>
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolCatalogue.map((t) => (

@@ -49,7 +49,7 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
+import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
   Button,
@@ -830,7 +830,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
         {withoutActor(event.summary, actor) || event.type}
       </span>
       <span className="feed-tail">
-        <span className="faint mono truncate">{event.type}</span>
+        <span className="muted mono truncate">{event.type}</span>
       </span>
     </a>
   );
@@ -867,9 +867,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // weights, every trace the turn touched, and the JSON somebody attaches to
   // a bug report.
   const view = useTurnView(turnId);
-  const { loading, error, events, cut, phases, own, nested, rec, role, trigger } = view;
+  const { loading, error, events, cut, phases, own, nested, rec, role } = view;
   const { running, durationMs } = view;
-  const phaseEvents = usePhaseEvents();
 
   const story = useMemo(() => tellStory(events), [events]);
   const prefetch = useMemo(
@@ -889,7 +888,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "nothing was read" and "not everything was read" must not render alike.
   const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
-  const { from, to } = view.span;
   const traceIds = view.traceIds;
   const traceId = traceIds[0] ?? "";
 
@@ -1239,7 +1237,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   <CodeBlock
                     plain
                     copyable={false}
-                    maxHeight={460}
+                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="agent_turn_completed, as JSON"
                     code={summaryJSON}
@@ -1256,7 +1254,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   <CodeBlock
                     plain
                     copyable={false}
-                    maxHeight={460}
+                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="turn_completed, as JSON"
                     code={learningJSON}

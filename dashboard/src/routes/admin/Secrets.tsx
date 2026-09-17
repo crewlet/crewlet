@@ -286,7 +286,7 @@ function CredentialBody({
                 The active configuration could not be read, so it is not known whether anything
                 points at this name.
               </span>
-              {unknown && <span className="t-caption faint">{unknown}</span>}
+              {unknown && <span className="t-caption">{unknown}</span>}
             </span>
           </Callout>
         ) : paths.length === 0 ? (
@@ -693,7 +693,7 @@ export function Secrets({ name }: { name?: string }) {
 function Readers({ paths }: { paths: string[] | null }) {
   if (paths === null) {
     return (
-      <span className="faint" title="The active configuration could not be read.">
+      <span className="muted" title="The active configuration could not be read.">
         not known
       </span>
     );

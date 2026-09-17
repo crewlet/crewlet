@@ -103,7 +103,7 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
       value: (
         <>
           <code className="inline nowrap">{row.cron}</code>
-          {said && <span className="faint"> {said}</span>}
+          {said && <span className="muted"> {said}</span>}
         </>
       ),
     },
@@ -121,7 +121,7 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
           {row.problem}
         </Tag>
       ) : (
-        <span className="faint">
+        <span className="muted">
           {row.enabled ? "never — the calendar does not reach it" : "disabled"}
         </span>
       ),
@@ -132,7 +132,7 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
       // wakes every member, one targeting `lead` wakes one seat, and a role
       // schedule's target is meaningless rather than defaulted.
       label: "Wakes",
-      value: row.runners?.length ? row.runners.join(", ") : <span className="faint">nobody</span>,
+      value: row.runners?.length ? row.runners.join(", ") : <span className="muted">nobody</span>,
     },
   ];
 }
@@ -190,7 +190,7 @@ function ScheduleDefinition({ row }: { row: ScheduleRow }) {
               {
                 label: "Means",
                 value: said ?? (
-                  <span className="faint">this build cannot read this expression</span>
+                  <span className="muted">this build cannot read this expression</span>
                 ),
                 title: "the cron expression in words",
               },
@@ -208,7 +208,7 @@ function ScheduleDefinition({ row }: { row: ScheduleRow }) {
                 value:
                   row.target ||
                   (row.scope_type === "role" ? (
-                    <span className="faint">not used by a role schedule</span>
+                    <span className="muted">not used by a role schedule</span>
                   ) : (
                     ""
                   )),
@@ -305,7 +305,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
           <li key={at.toISOString()} className="row gap-2">
             <span className="mono t-caption">{fmtDateTime(at.toISOString())}</span>
             <span className="spacer" />
-            <span className="t-caption faint">{inTime(at.toISOString(), now)}</span>
+            <span className="t-caption">{inTime(at.toISOString(), now)}</span>
           </li>
         ))}
       </ol>
@@ -544,7 +544,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       >
                         {s.cron}
                       </code>
-                      {said && <span className="t-caption faint">{said}</span>}
+                      {said && <span className="t-caption">{said}</span>}
                     </span>
                   );
                 },
@@ -1002,7 +1002,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           {/* THE TICK BESIDE THE FIRE, which is the only way
                               to see a catchup: this ran now for something
                               that was due earlier. */}
-                          <span className="t-caption faint" title={r.fire_label}>
+                          <span className="t-caption" title={r.fire_label}>
                             {r.scheduled_at ? `for ${fmtDateTime(r.scheduled_at)}` : "no tick"}
                           </span>
                         </div>

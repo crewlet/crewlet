@@ -257,8 +257,18 @@ export interface SandboxEntry {
  *  `cancelled` and `reclaimed`, none of which the engine can write, so four of
  *  its seven entries were unreachable and three real states fell through to
  *  the neutral default. */
+/**
+ * The five statuses a run record can hold.
+ *
+ * THERE IS NO `done` OR `failed` HERE, and that is the engine's shape rather
+ * than an omission: a run's record is DELETED once the run settles and its box
+ * is reclaimed, so `sandbox.Active` is every status a record can carry and the
+ * terminal pair can never reach a client. How a run ended is on the event
+ * stream — the resumed turn's own events, or a `sandbox_run_failed` naming the
+ * reason — never on this row.
+ */
 export type SandboxStatus =
-  "launching" | "running" | "awaiting_clarification" | "resumed" | "done" | "failed" | "reseed";
+  "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
 
 export interface SandboxRun {
   turn_id: string;
@@ -488,6 +498,218 @@ export interface BudgetsAnswer {
 }
 
 // ---------------------------------------------------------------------------
+// The company document (the guarded `config` query, `GET /config`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The company document as the configuration surface serves it, REDACTED: a
+ * credential field holds a whole `${VAR}` reference or the mask
+ * `__redacted__`, never a value.
+ *
+ * WHERE EVERYTHING THE PROJECTION NO LONGER CARRIES IS READ. `/org` is
+ * anonymous, so it was narrowed to a charter and a tree ([OrgProjection]); a
+ * seat's email, model chain, token budget, contact identities, tool
+ * credentials, integration blocks and schedules live here instead, behind the
+ * operator token.
+ *
+ * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
+ * the index signature keeps every other key the engine writes — including the
+ * keys a NEWER engine writes that this build has never heard of — part of the
+ * value rather than something a typed copy silently drops.
+ */
+export interface CompanyDocument {
+  name?: string;
+  mission?: string;
+  vision?: string;
+  policies?: string[];
+  roles?: ConfigRole[];
+  units?: ConfigUnit[];
+  integrations?: Record<string, unknown>;
+  providers?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** One seat in the company document, as `config.Role` writes it. */
+export interface ConfigRole {
+  name: string;
+  kind?: string;
+  handle?: string;
+  email?: string;
+  /** A root seat's home unit: the engine MOVES the seat into it. */
+  unit?: string;
+  goal?: string;
+  backstory?: string;
+  responsibilities?: string[];
+  behavioral_guidelines?: string[];
+  manages?: string[];
+  workers?: string[];
+  /** 0 or absent is unlimited. */
+  token_budget?: number;
+  llm?: PhaseLLM;
+  llm_review?: ProviderKeys;
+  llm_subagent?: ProviderKeys;
+  llm_auxiliary?: ProviderKeys;
+  llm_judge?: ProviderKeys;
+  llm_sandbox?: ProviderKeys;
+  /** Unset means the company default, so this is three-valued. */
+  learning_enabled?: boolean | null;
+  /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
+  contact?: Record<string, string>;
+  availability?: string;
+  /** Server name to variable name to a `${VAR}` reference or the mask. */
+  mcp_env?: Record<string, Record<string, string>>;
+  sandbox?: Record<string, unknown>;
+  placement?: Record<string, unknown>;
+  integrations?: ConfigRoleIntegrations;
+  schedules?: ScheduleSpec[];
+  [key: string]: unknown;
+}
+
+/**
+ * The identities a human seat's `contact` holds, as `org.HumanContact` names
+ * them: a Slack member ID, a Mattermost USERNAME (the key says user id, the
+ * value is the name a mention renders), an Atlassian account ID, a GitHub
+ * login and a GitLab username. The engine refuses a human seat with none.
+ */
+export type HumanContactKey =
+  | "slack_user_id"
+  | "mattermost_user_id"
+  | "atlassian_account_id"
+  | "github_login"
+  | "gitlab_username";
+
+/** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
+export interface ConfigRoleIntegrations {
+  github?: {
+    tier?: string;
+    repos?: string[];
+    app_id?: number;
+    app_slug?: string;
+    installation_id?: number;
+    private_key?: string;
+    webhook_secret?: string;
+    [key: string]: unknown;
+  };
+  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
+  jira?: { project?: string; [key: string]: unknown };
+  confluence?: { space?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+/** One unit in the company document, as `config.Unit` writes it. */
+export interface ConfigUnit {
+  name: string;
+  type?: string;
+  /**
+   * The unit's STABLE IDENTITY, which a name is not — a rename moves
+   * everything keyed on the name and nothing keyed on this. Absent means the
+   * name IS the key, which is what `org.Unit.Key` falls back to. Guarded, so
+   * it is here rather than on [OrgUnit].
+   */
+  id?: string;
+  purpose?: string;
+  lead?: string;
+  goals?: string[];
+  channel?: string;
+  knowledge?: string[];
+  /** Inherited by the unit's direct AGENT members; a seat's own values win. */
+  mcp_env?: Record<string, Record<string, string>>;
+  /** The tracker project this unit owns. Vendor-neutral, and guarded. */
+  project?: string;
+  /** The knowledge container this unit writes pages in. Guarded. */
+  space?: string;
+  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
+  roles?: ConfigRole[];
+  children?: ConfigUnit[];
+  schedules?: ScheduleSpec[];
+  [key: string]: unknown;
+}
+
+/**
+ * What a validation problem IS, as a value to branch on. Widened with
+ * `string & {}` for the reason every other open enum here is: a newer engine
+ * may name a kind this build does not know, and it renders as its message.
+ */
+export type ConfigProblemKind =
+  | "missing"
+  | "unknown_value"
+  | "out_of_range"
+  | "conflict"
+  | "unknown_field"
+  | "shape"
+  | "invalid"
+  | (string & {});
+
+/**
+ * One located, classified validation failure, as `config.Problem` writes it.
+ *
+ * `segments` is the same place as `path`, split: a map key in a config path
+ * can hold a dot or a hyphen, so a path string cannot be split back into
+ * segments reliably, and nothing in this client parses `path` to find out
+ * where a problem is.
+ */
+export interface ConfigProblem {
+  /** The authored path in the validated document; "" for a parse failure. */
+  path: string;
+  /**
+   * Strings for keys, numbers for indexes. `null` for a document-level parse
+   * failure, whose path is "": Go marshals a nil slice that way, as it does
+   * every list in [Derived].
+   */
+  segments: (string | number)[] | null;
+  kind: ConfigProblemKind;
+  /** The full line, exactly as the refusal's `detail` carries it. */
+  message: string;
+  /** The engine-derived handle of the seat it is about. */
+  seat?: string;
+  unit?: string;
+  /** 1-based line in the submitted text, for parse failures only. */
+  line?: number;
+}
+
+/**
+ * Something the engine will run but a person should know: a reference naming
+ * nothing, or a rule a stored revision breaks that a new write would be
+ * refused for.
+ */
+export interface ConfigWarning {
+  kind: "dangling_reference" | "admission" | (string & {});
+  ref: "lead" | "unit" | "manages" | "gitlab_access_level" | "" | (string & {});
+  path: string;
+  /** As on [ConfigProblem]: `null` when it names no place in the document. */
+  segments: (string | number)[] | null;
+  seat: string;
+  unit: string;
+  /** Display text: who or what holds the reference. */
+  from: string;
+  /** Display text: what it names. */
+  to: string;
+  message: string;
+}
+
+/** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
+export interface DryRunResult {
+  valid: true;
+  /** The revision the draft was validated against. */
+  base_revision_id: string;
+  warnings: ConfigWarning[] | null;
+  derived: Derived;
+}
+
+/** `201` from a configuration write that stored and activated a revision. */
+export interface WriteResult {
+  revision_id: string;
+  epoch: number;
+  warnings: ConfigWarning[] | null;
+  /** The hierarchy the stored document derives to, as `configapi` writes it
+   *  beside the revision id on every 201. It was missing from this shape,
+   *  which is how a caller that wanted the new chart after a save came to
+   *  read it back from a second request the answer already carried. */
+  derived: Derived;
+}
+
+// ---------------------------------------------------------------------------
 // Org, tools, schedules
 // ---------------------------------------------------------------------------
 
@@ -510,74 +732,158 @@ export type PhaseLLM =
       sandbox?: ProviderKeys;
     };
 
-/** A role as `config.Company` serialises it. Verbatim: the config's own names. */
-export interface OrgRole {
+/**
+ * One seat on the ANONYMOUS org projection (`/org`, the snapshot's `org` key
+ * and the `org` push), as `internal/api`'s `OrgSeat` writes it.
+ *
+ * AN EXPLICIT PUBLIC SHAPE, never a marshal of the config's own role. The
+ * projection used to be `config.Role` verbatim, so every field a role gained
+ * reached anonymous readers the day it landed: contact identities, per-seat
+ * credentials, placement labels and sandbox setup commands among them. What
+ * is NOT here — `email`, `contact`, `llm`, `token_budget`, `schedules`,
+ * `integrations`, `mcp_env` — is read through the operator-gated `config`
+ * query instead, as [CompanyDocument].
+ *
+ * `handle` is what the DOCUMENT declares, and empty where the engine derives
+ * one from the name. The handle a seat actually runs under is
+ * [DerivedSeat.handle]; this client never derives one of its own.
+ */
+export interface OrgSeat {
   name: string;
   kind?: string;
   handle?: string;
-  email?: string;
   goal?: string;
   backstory?: string;
   responsibilities?: string[];
   behavioral_guidelines?: string[];
   manages?: string[];
-  token_budget?: number;
-  /** THREE SHAPES, not one. `config.PhaseLLM` marshals as a string for one
-   *  provider, an array for a fallback chain, and an object keyed on phase for
-   *  a per-phase mapping — all three are valid config and all three reach this
-   *  browser. Declared as a string, the array and the object both arrived as
-   *  values `String(...)` renders as `fast,backup` or `[object Object]`, and
-   *  any consumer calling a string method on one throws. Read it through
-   *  `llmChain()` in `lib/seats.ts`, never directly. */
-  llm?: PhaseLLM;
-  llm_auxiliary?: PhaseLLM;
-  learning_enabled?: boolean;
   availability?: string;
-  contact?: Record<string, string>;
-  mcp_env?: Record<string, Record<string, string>>;
-  integrations?: Record<string, unknown>;
-  schedules?: ScheduleSpec[];
 }
 
+/**
+ * One unit on the anonymous org projection, as `internal/api`'s `OrgUnit`
+ * writes it.
+ *
+ * `id`, `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not
+ * here: `internal/api/orgprojection_test.go` classifies every field of
+ * `config.Unit` and fails the build over an unclassified one. A screen that
+ * needs one of them reads the company document through the `config` query.
+ */
 export interface OrgUnit {
   name: string;
   type?: string;
-  /** The unit's STABLE IDENTITY, which a name is not — a rename moves
-   *  everything keyed on the name and nothing keyed on this. Absent means the
-   *  name is the key, which is what `org.Unit.Key` falls back to. Keying a
-   *  rendered tree on the name remounts a whole subtree on a rename. */
-  id?: string;
   purpose?: string;
+  /** The seat NAME the document declares as lead. Empty when it inherits one. */
   lead?: string;
   goals?: string[];
   channel?: string;
-  /** The tracker project this unit files under, and the knowledge container it
-   *  writes pages to. Vendor-neutral: the same key names a native project and
-   *  a Jira one. Both reach the wire and neither was declared here. */
-  project?: string;
-  space?: string;
-  knowledge_refs?: string[];
-  mcp_env?: Record<string, Record<string, string>>;
-  integrations?: Record<string, unknown>;
-  roles?: OrgRole[];
+  /** Free-text knowledge references. NOT a read scope. */
+  knowledge?: string[];
+  roles?: OrgSeat[];
   children?: OrgUnit[];
-  schedules?: ScheduleSpec[];
 }
 
-export interface OrgTree {
+/**
+ * The company as the anonymous projection carries it: its charter, its seats
+ * and units in the positions the document wrote them, and the hierarchy the
+ * ENGINE derived from that document.
+ *
+ * `derived` is optional because an engine older than the field serves the
+ * projection without it. A screen reading one without `derived` has the
+ * authored tree and nothing else: it may show what the document says, and it
+ * must not reconstruct what the engine would conclude from it.
+ */
+export interface OrgProjection {
   name?: string;
   mission?: string;
   vision?: string;
   policies?: string[];
-  roles?: OrgRole[];
+  roles?: OrgSeat[];
   units?: OrgUnit[];
+  derived?: Derived;
 }
 
+/**
+ * The hierarchy the engine derived from a company document: every rule this
+ * client must not re-implement — handle derivation, root seats moved into a
+ * unit by their `unit:` reference, lead and channel inheritance, unit names
+ * expanded inside `manages`, automatic management by a unit lead, and which
+ * of several managers is primary — resolved once, in Go, by `config.Derive`.
+ *
+ * Every list here may arrive as `null`: Go marshals a nil slice that way, and
+ * a company with no units has a nil unit list. A reader treats `null` as
+ * empty.
+ */
+export interface Derived {
+  /** In the engine's own seat order (`Organization.AllRoles`). */
+  seats: DerivedSeat[] | null;
+  /** Depth first, parents before children: the authored unit tree's order. */
+  units: DerivedUnit[] | null;
+}
+
+export interface DerivedSeat {
+  /**
+   * The seat's authored path in the document (`units[0].roles[1]`). Carried by
+   * the GUARDED config answers and omitted from the anonymous projection,
+   * which hands a reader no document to point into.
+   */
+  path?: string;
+  handle: string;
+  name: string;
+  kind: string;
+  /**
+   * The authored path of the seat's effective home unit, "" at the root.
+   * Omitted from the anonymous projection with `path`: there, membership is
+   * [DerivedUnit.seats].
+   */
+  unit_path?: string;
+  /** A root seat the engine moved into a unit because of its `unit:` reference. */
+  placed_by_ref: boolean;
+  /** Handle of the primary manager, by the engine's own rule. "" when none. */
+  manager: string;
+  /** Handles of every seat that manages this one, in engine order. */
+  managers: string[] | null;
+  /** Handles of this seat's reports after expansion, explicit and automatic. */
+  reports: string[] | null;
+  /** The subset of `reports` added by lead auto-management. */
+  auto_reports: string[] | null;
+  /** The unit names whose change makes this seat onboard again. */
+  onboarding_chain: string[] | null;
+}
+
+export interface DerivedUnit {
+  /** Authored path; omitted from the anonymous projection, as on a seat. */
+  path?: string;
+  name: string;
+  /** The EFFECTIVE type, after the engine's default. */
+  type: string;
+  /** Handle of the effective lead, declared or inherited. "" when it has none. */
+  lead: string;
+  lead_inherited: boolean;
+  channel: string;
+  channel_inherited: boolean;
+  /** Handles of the direct members, after root seats were attached. */
+  seats: string[] | null;
+}
+
+/**
+ * One entry of a seat's or a unit's `schedules:`, as `org.Schedule` writes it.
+ *
+ * GUARDED, like everything else a seat's own configuration holds: it reaches
+ * this client through the `config` query or through `/schedules`, never
+ * through the anonymous org projection.
+ */
 export interface ScheduleSpec {
   name: string;
   cron: string;
   task: string;
   timezone?: string;
+  /** A unit schedule's runner: the lead, or every member. */
+  target?: string;
+  /** Unset means ENABLED, so this is three-valued rather than a bool. */
+  enabled?: boolean | null;
+  timeout_seconds?: number;
+  catchup?: boolean | null;
 }
 
 /**
@@ -725,6 +1031,19 @@ export interface EngineHealth {
   engine_started_at?: string;
   queue?: string;
   clients?: number;
+  /**
+   * How far back the event log can be read, in SECONDS: the hard bottom of
+   * paging, past which every page is empty for ever.
+   *
+   * `store.EventHistory` is the only thing that decides it, and three screens
+   * restated it as literal copy ("the store keeps 30 days") while nothing on
+   * the wire carried it — so a change to the retention would have left all
+   * three lying with nothing to catch it, and a reader told the wrong floor
+   * stops paging early. Seconds rather than days, because a client that
+   * re-derives the unit is a second place it can be wrong; the sentence is
+   * `eventHistoryLabel` in `lib/format.ts`.
+   */
+  event_history_seconds?: number;
   in_flight?: number;
   shutting_down?: boolean;
   posture?: string;
@@ -2411,6 +2730,18 @@ export interface RevisionMeta {
   is_active?: boolean;
 }
 
+/**
+ * One revision with its document, as `GET /config/revisions/{id}` answers:
+ * the metadata of [RevisionMeta] beside a REDACTED `payload`.
+ *
+ * The builder reads it to settle a write whose answer never arrived: the
+ * write landed exactly when the revision now active names the draft's base
+ * as its parent and its summary carries the write id the save sent.
+ */
+export interface ConfigRevision extends RevisionMeta {
+  payload: CompanyDocument;
+}
+
 /** One difference, as `configapi.Change` writes it: `kind`, not `op`. */
 export interface ConfigChange {
   path: string;
@@ -2769,7 +3100,7 @@ export interface Snapshot {
   agents?: AgentRow[];
   events?: FeedRow[];
   sandboxes?: SandboxEntry[];
-  org?: OrgTree;
+  org?: OrgProjection;
   tools?: ToolRow[];
   health?: HealthPush;
   tokens?: Rollup;
@@ -3149,7 +3480,7 @@ export interface QueryMap {
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
-  config: OrgTree | null;
+  config: CompanyDocument | null;
   config_audit: RevisionMeta[];
   config_diff: ConfigDiff;
   config_entities: { kind: string; ids?: string[]; id?: string; entity?: unknown };

@@ -151,7 +151,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               <Callout key={`${a.kind}:${a.detail}`} variant="warning">
                 <span>
                   <InlineCode>{a.kind}</InlineCode> — {a.detail}{" "}
-                  <span className="faint">{a.remedy}</span>
+                  <span className="muted">{a.remedy}</span>
                 </span>
               </Callout>
             ))}
@@ -246,7 +246,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                   // never published a position is COUNTED — the trim waits
                   // for it — and rendering that as "never" or as position 0
                   // are two different wrong answers.
-                  <span className="faint">counted · no position yet</span>
+                  <span className="muted">counted · no position yet</span>
                 ),
             },
             {
@@ -444,7 +444,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
             <strong>Blocked:</strong> {op.blocked} — this needs a person, not time.
           </span>
         )}
-        <span className="t-caption faint">
+        <span className="t-caption">
           {missing.length > 0 ? (
             <>Waiting on {missing.join(", ")}.</>
           ) : (
@@ -494,13 +494,13 @@ export function NodePositions({ node }: { node: RetentionNode }) {
           <span className="t-num">
             {d.seq}
             {d.applied_through !== d.seq && (
-              <span className="faint"> · applied {d.applied_through}</span>
+              <span className="muted"> · applied {d.applied_through}</span>
             )}
           </span>
           {d.lag != null ? (
-            d.lag > 0 && <span className="faint">{d.lag} behind</span>
+            d.lag > 0 && <span className="muted">{d.lag} behind</span>
           ) : (
-            <span className="faint" title="the stream could not be read, so the lag is unknown">
+            <span className="muted" title="the stream could not be read, so the lag is unknown">
               lag —
             </span>
           )}
@@ -525,11 +525,11 @@ function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
       <div className="row wrap gap-2 baseline">
         <InlineCode>{d.domain}</InlineCode>
         <Tag appearance="outline">{d.replay}</Tag>
-        <span className="t-caption faint">generation {d.generation}</span>
+        <span className="t-caption">generation {d.generation}</span>
         <span className="t-caption t-num">
           {d.first_seq}…{d.last_seq}
         </span>
-        <span className="t-caption faint">
+        <span className="t-caption">
           floor {d.trim_floor}
           {d.trim_to !== d.trim_floor && <> · this tick concluded {d.trim_to}</>}
         </span>
@@ -539,7 +539,7 @@ function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
               why the server sends it absent. Rendering it as 0% would fire
               the one alarm nobody may ignore. */}
           {d.headroom_fraction != null && (
-            <span className="faint"> · {Math.round(d.headroom_fraction * 100)}% free</span>
+            <span className="muted"> · {Math.round(d.headroom_fraction * 100)}% free</span>
           )}
         </span>
         {d.blocked_by ? (
@@ -590,8 +590,8 @@ export function Terms({
                   <Tag variant={t.state === "unknown" ? "warning" : "neutral"}>{t.state}</Tag>
                 )}
               </td>
-              <td className="t-caption faint">{t.detail}</td>
-              <td className="t-caption faint">{t.remedy}</td>
+              <td className="t-caption">{t.detail}</td>
+              <td className="t-caption">{t.remedy}</td>
             </tr>
           ))}
         </tbody>

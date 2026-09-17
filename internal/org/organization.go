@@ -1,10 +1,10 @@
 package org
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -243,16 +243,23 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 //     invisible to the unit lead, so the move has to precede both.
 //  2. Lead and Slack channel CASCADE from a unit to any child that sets
 //     none, to any depth.
-//  3. A unit's MCP credentials are inherited by its DIRECT members, whose
-//     own values win per variable.
-//  4. A unit lead AUTO-MANAGES any direct member nobody else manages.
+//  3. A unit's MCP credentials are inherited by its DIRECT AGENT members,
+//     whose own values win per variable. Human seats inherit none.
+//  4. A unit lead AUTO-MANAGES any direct member that no direct member of
+//     the same unit already manages.
 //  5. A manages entry naming a UNIT expands to the seats in it.
 //
-// Steps 4 and 5 are in that order for a reason: auto-management reads
-// manages as written, so a unit reference there still shields its members
-// from being claimed by the lead as well.
+// Steps 4 and 5 both read manages through ONE resolver ([managesIndex]),
+// built once after step 1 has settled who sits where. Auto-management runs
+// before the expansion rewrites the lists, so it has to see each entry the
+// way the expansion will leave it: a direct member that manages its own unit
+// (or an ancestor) by name shields the members that reference reaches,
+// exactly as if it had listed them one by one. Reading the entry as written
+// instead let the lead claim those members too, giving each a second
+// manager, and claim the member itself when the reference reached the lead,
+// which is a two-seat management cycle.
 //
-// It is idempotent — running it twice changes nothing — because live config
+// It is idempotent (running it twice changes nothing) because live config
 // management re-applies whole revisions and a second pass must not compound
 // what the first derived.
 func (o *Organization) Normalize() {
@@ -261,8 +268,9 @@ func (o *Organization) Normalize() {
 		propagateDownward(u, "", "")
 	}
 	o.inheritMCPEnv()
-	o.autoManageByLead()
-	o.expandManages()
+	index := o.managesIndex()
+	o.autoManageByLead(index)
+	o.expandManages(index)
 	for r := range o.AllRoles() {
 		r.Contact.Normalize()
 	}
@@ -293,50 +301,160 @@ func (o *Organization) attachRootSeats() {
 // A child inherits what its parent RESOLVED to, not what the parent
 // literally declared, so a lead set on a division reaches a team three
 // levels down through units that named nothing themselves.
+//
+// What each unit wrote is recorded first, in [Unit.DeclaredLead] and
+// [Unit.DeclaredChannel], and the effective values are computed from that
+// record on every pass, which is what makes a second pass land on the same
+// tree as the first.
 func propagateDownward(u *Unit, parentLead, parentChannel string) {
 	if u.Type == "" {
 		u.Type = UnitTypeTeam
 	}
-	if u.Lead == "" {
-		u.Lead = parentLead
+	if !u.declared {
+		u.DeclaredLead, u.DeclaredChannel = u.Lead, u.Channel
+		u.declared = true
 	}
-	if u.Channel == "" {
-		u.Channel = parentChannel
-	}
+	u.Lead = cmp.Or(u.DeclaredLead, parentLead)
+	u.Channel = cmp.Or(u.DeclaredChannel, parentChannel)
 	for _, c := range u.Children {
 		propagateDownward(c, u.Lead, u.Channel)
 	}
 }
 
-// inheritMCPEnv layers each unit's tool credentials under its DIRECT
+// inheritMCPEnv layers each unit's tool credentials under its DIRECT AGENT
 // members' own.
 //
 // One level, deliberately: a unit declares what its own team shares, and a
 // child unit that needs the same credentials declares them too. Cascading
 // them would hand a division's credentials to every seat beneath it, which
 // is the opposite of the per-seat identity these exist to give.
+//
+// Agents only, because a human seat runs no tools and is REFUSED an mcp_env
+// of its own. Layering the unit's block under a human member put a field on
+// that seat its author never wrote, and validation then rejected the whole
+// company with an error pointing at it: a human lead in a unit that shares a
+// tracker token could not be declared at all.
 func (o *Organization) inheritMCPEnv() {
 	for u := range o.AllUnits() {
 		if len(u.MCPEnv) == 0 {
 			continue
 		}
 		for _, r := range u.Roles {
+			if !r.IsAgent() {
+				continue
+			}
 			r.MCPEnv = r.MCPEnv.WithDefaults(u.MCPEnv)
 		}
 	}
 }
 
+// managesIndex is how a manages entry resolves to seats: the one reading
+// both [Organization.autoManageByLead] and [Organization.expandManages] use.
+//
+// Built once, after [Organization.attachRootSeats] and before either step,
+// because neither step moves a seat between units, so the membership it
+// captures is the membership both of them see.
+type managesIndex struct {
+	// seats is every seat name in the company.
+	seats map[string]struct{}
+	// unitSeats is each unit's seat names, descendants included, in
+	// [Unit.AllRoles] order. The FIRST unit carrying a name owns it, the
+	// same answer [Organization.Unit] gives: a stored revision can still
+	// hold two units of one name, and an expansion that read the last one
+	// while every lookup read the first would manage one team while
+	// reporting another.
+	unitSeats map[string][]string
+}
+
+func (o *Organization) managesIndex() managesIndex {
+	index := managesIndex{
+		seats:     make(map[string]struct{}),
+		unitSeats: make(map[string][]string),
+	}
+	for r := range o.AllRoles() {
+		index.seats[r.Name] = struct{}{}
+	}
+	for u := range o.AllUnits() {
+		if _, claimed := index.unitSeats[u.Name]; claimed {
+			continue
+		}
+		names := make([]string, 0, len(u.Roles))
+		for r := range u.AllRoles() {
+			names = append(names, r.Name)
+		}
+		index.unitSeats[u.Name] = names
+	}
+	return index
+}
+
+// resolve returns the names one manages entry of manager stands for.
+//
+// A name that is BOTH a seat and a unit stays a seat reference. The seat is
+// the more specific reading, and an operator who named a person means that
+// person; expanding it would silently hand them a whole team.
+//
+// A unit name stands for every seat in that unit's subtree except manager
+// itself: a seat inside the unit it manages does not manage itself.
+//
+// An entry matching neither stands for itself, verbatim. Live config
+// management bootstraps an org in pieces, so a manages entry naming a seat
+// that has not arrived yet is ordinary, and dropping it would quietly
+// rewrite the chart the operator wrote. [Organization.DanglingRefs] is what
+// reports it.
+func (x managesIndex) resolve(manager, entry string) []string {
+	if _, isSeat := x.seats[entry]; isSeat {
+		return []string{entry}
+	}
+	members, isUnit := x.unitSeats[entry]
+	if !isUnit {
+		return []string{entry}
+	}
+	out := make([]string, 0, len(members))
+	for _, name := range members {
+		if name != manager {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// managed is the set of names r's manages entries resolve to.
+func (x managesIndex) managed(r *Role) map[string]struct{} {
+	out := make(map[string]struct{}, len(r.Manages))
+	for _, entry := range r.Manages {
+		for _, name := range x.resolve(r.Name, entry) {
+			out[name] = struct{}{}
+		}
+	}
+	return out
+}
+
 // autoManageByLead gives a unit lead a manages entry for every direct
-// member nobody else in the unit manages.
+// member that no direct member of the same unit already manages.
 //
 // This is what makes a lead's roster complete without an operator listing
 // every report twice. Three guards keep it from claiming what it should
 // not: a member another member already manages keeps that manager, a member
 // the lead already lists is not listed twice, and a member that manages the
-// LEAD is never claimed — that one would build a two-role cycle out of a
-// perfectly reasonable chart, where a tech lead reports to a VP who leads
+// LEAD is never claimed. That last one would build a two-seat cycle out of
+// a perfectly reasonable chart, where a tech lead reports to a VP who leads
 // the unit the tech lead sits in.
-func (o *Organization) autoManageByLead() {
+//
+// Every guard reads manages RESOLVED ([managesIndex.resolve]), so an entry
+// naming a unit counts for each seat it reaches. A member that manages its
+// own unit (or an ancestor) by name shields the members that reference
+// reaches, and is itself never claimed when the reference reaches the lead.
+//
+// THE SHIELD IS THE UNIT'S OWN DIRECT MEMBERS' manages, never the whole
+// company's, and the narrow scope is the point. Management is stored on the
+// manager, so a root CEO managing a division by name lists every seat in
+// it; an org-wide shield would therefore strip every team lead beneath that
+// division of the roster auto-management exists to fill. The consequence is
+// deliberate and visible: a seat reached both by an outside manager's unit
+// reference and by its own lead's auto-management has two managers, and
+// [Organization.Manager] answers with the first in [Organization.AllRoles]
+// order, which puts a root seat first.
+func (o *Organization) autoManageByLead(index managesIndex) {
 	for u := range o.AllUnits() {
 		if u.Lead == "" || len(u.Roles) == 0 {
 			continue
@@ -346,62 +464,41 @@ func (o *Organization) autoManageByLead() {
 			continue
 		}
 
-		managed := make(map[string]struct{})
+		shielded := make(map[string]struct{})
+		managedBy := make(map[*Role]map[string]struct{}, len(u.Roles))
 		for _, r := range u.Roles {
-			for _, name := range r.Manages {
-				managed[name] = struct{}{}
+			managedBy[r] = index.managed(r)
+			for name := range managedBy[r] {
+				shielded[name] = struct{}{}
 			}
 		}
-		byLead := make(map[string]struct{}, len(lead.Manages))
-		for _, name := range lead.Manages {
-			byLead[name] = struct{}{}
-		}
+		byLead := index.managed(lead)
 
 		for _, r := range u.Roles {
 			if r.Name == u.Lead {
 				continue
 			}
-			if _, taken := managed[r.Name]; taken {
+			if _, taken := shielded[r.Name]; taken {
 				continue
 			}
 			if _, already := byLead[r.Name]; already {
 				continue
 			}
-			if slices.Contains(r.Manages, u.Lead) {
+			if _, managesLead := managedBy[r][u.Lead]; managesLead {
 				continue
 			}
 			lead.Manages = append(lead.Manages, r.Name)
+			lead.AutoManaged = append(lead.AutoManaged, r.Name)
 			byLead[r.Name] = struct{}{}
 		}
 	}
 }
 
-// expandManages replaces a manages entry naming a UNIT with the seats in
-// that unit, descendants included, so an operator can write one team name
-// instead of five people.
-//
-// A name that is BOTH a seat and a unit stays a seat reference. The seat is
-// the more specific reading, and an operator who named a person means that
-// person; expanding it would silently hand them a whole team.
-//
-// An entry matching neither is kept verbatim. Live config management
-// bootstraps an org in pieces, so a manages entry naming a seat that has
-// not arrived yet is ordinary — dropping it would quietly rewrite the chart
-// the operator wrote.
-func (o *Organization) expandManages() {
-	seats := make(map[string]struct{})
-	for r := range o.AllRoles() {
-		seats[r.Name] = struct{}{}
-	}
-	unitSeats := make(map[string][]string)
-	for u := range o.AllUnits() {
-		names := make([]string, 0, len(u.Roles))
-		for r := range u.AllRoles() {
-			names = append(names, r.Name)
-		}
-		unitSeats[u.Name] = names
-	}
-
+// expandManages replaces each manages entry with the seats it resolves to,
+// so an operator can write one team name instead of five people. See
+// [managesIndex.resolve] for the reading, and [Organization.Normalize] for
+// why auto-management shares it.
+func (o *Organization) expandManages(index managesIndex) {
 	for r := range o.AllRoles() {
 		if len(r.Manages) == 0 {
 			continue
@@ -409,23 +506,7 @@ func (o *Organization) expandManages() {
 		expanded := make([]string, 0, len(r.Manages))
 		seen := make(map[string]struct{}, len(r.Manages))
 		for _, entry := range r.Manages {
-			if _, isSeat := seats[entry]; isSeat {
-				expanded = append(expanded, entry)
-				seen[entry] = struct{}{}
-				continue
-			}
-			members, isUnit := unitSeats[entry]
-			if !isUnit {
-				expanded = append(expanded, entry)
-				seen[entry] = struct{}{}
-				continue
-			}
-			for _, name := range members {
-				// A seat inside the unit it manages does not manage
-				// itself.
-				if name == r.Name {
-					continue
-				}
+			for _, name := range index.resolve(r.Name, entry) {
 				if _, dup := seen[name]; dup {
 					continue
 				}
@@ -443,44 +524,116 @@ func (o *Organization) expandManages() {
 type RefKind string
 
 const (
-	// RefLead is a unit whose lead names no seat in the org.
+	// RefLead is a unit whose own lead names no seat in the org.
 	RefLead RefKind = "lead"
 	// RefUnit is a root seat whose unit: names no unit in the org.
 	RefUnit RefKind = "unit"
+	// RefManages is a manages entry naming neither a seat nor a unit.
+	RefManages RefKind = "manages"
+	// RefGitLabAccessLevel is a key of
+	// integrations.gitlab.provisioning.access_levels naming no seat's
+	// handle. The organization carries no integrations, so
+	// [Organization.DanglingRefs] never reports it: the config layer does
+	// (config.Company.DanglingRefs). The kind is declared here so the whole
+	// vocabulary of dangling references, and its rendering in
+	// [DanglingRef.Message], lives in one place.
+	RefGitLabAccessLevel RefKind = "gitlab_access_level"
 )
 
 // DanglingRef is a name that resolved to nothing.
 type DanglingRef struct {
 	Kind RefKind
-	// From is the unit (for a lead) or the seat (for a unit reference)
-	// that carries the reference.
+	// From is what carries the reference: the unit (for a lead), the seat
+	// (for a unit reference or a manages entry), or the document path of
+	// the map (for a GitLab access level).
 	From string
 	// To is the name that resolved to nothing.
 	To string
+	// Seat and Unit are the entity carrying the reference, when it is one:
+	// the seat for a unit reference or a manages entry, the unit for a lead.
+	// From names it for a reader, and a name does not say which entity when
+	// two share it, so a caller placing the reference in a document locates
+	// it by these instead, as it does a validation error (see [SeatError]).
+	Seat *Role
+	Unit *Unit
+}
+
+// Message renders the reference for an operator: what names what, what the
+// engine does with it meanwhile, and the two ways to resolve it.
+func (d DanglingRef) Message() string {
+	switch d.Kind {
+	case RefLead:
+		return fmt.Sprintf("unit %q names lead %q, which is no seat, so the unit "+
+			"and every descendant inheriting its lead run with no lead. "+
+			"Correct the lead or add a seat with that name", d.From, d.To)
+	case RefUnit:
+		return fmt.Sprintf("seat %q names unit %q, which does not exist, so the "+
+			"seat stays at the root. Correct its unit or add a unit with that name",
+			d.From, d.To)
+	case RefManages:
+		return fmt.Sprintf("seat %q manages %q, which is neither a seat nor a "+
+			"unit, so the entry manages nobody. Correct the entry or add a seat "+
+			"or unit with that name", d.From, d.To)
+	case RefGitLabAccessLevel:
+		return fmt.Sprintf("%s names handle %q, which no seat has, so a seat "+
+			"added later with that handle would be given this access level. "+
+			"Remove the entry or correct the handle", d.From, d.To)
+	default:
+		return fmt.Sprintf("%s reference %q on %q resolves to nothing", d.Kind, d.To, d.From)
+	}
 }
 
 // DanglingRefs reports the soft references [Organization.Normalize] could
-// not resolve.
+// not resolve, in the order an author reads the document: root seats' unit
+// references, then each unit's own lead, then every seat's manages entries.
+// It assumes Normalize has run, like every other accessor.
 //
 // These are NOT validation errors, deliberately. Live config management
-// bootstraps an org in pieces — a unit is allowed to land before the seat
-// that leads it, and the engine applies every intermediate revision —
-// so rejecting a partially-wired org would make per-entity bootstrap
+// bootstraps an org in pieces (a unit is allowed to land before the seat
+// that leads it, and the engine applies every intermediate revision), so
+// rejecting a partially-wired org would make per-entity bootstrap
 // impossible. Every reader already treats a dangling reference as absent.
 //
 // They are worth a WARNING though: once the org is fully wired this list is
 // empty, and an entry that persists across revisions is a misspelling
-// nothing else will ever report. The config layer logs them.
+// nothing else will ever report. Each node logs them, through
+// config.Company.DanglingRefs, as org_dangling_reference once per epoch it
+// applies.
+//
+// WHAT WAS WRITTEN, ONCE. A lead is reported on the unit that declares it
+// ([Unit.DeclaredLead]), never on the descendants that inherited it: they
+// wrote nothing, and naming them sent an operator to fix units whose authors
+// had nothing to fix. A manages entry is reported when it names neither a
+// seat nor a unit. One naming a unit with no seats resolves to nobody, but it
+// is not a misspelling, so it is not reported.
 func (o *Organization) DanglingRefs() []DanglingRef {
+	seats := make(map[string]struct{})
+	for r := range o.AllRoles() {
+		seats[r.Name] = struct{}{}
+	}
+	units := make(map[string]struct{})
+	for u := range o.AllUnits() {
+		units[u.Name] = struct{}{}
+	}
+
 	var out []DanglingRef
 	for _, r := range o.Roles {
-		if r.UnitRef != "" && o.Unit(r.UnitRef) == nil {
-			out = append(out, DanglingRef{Kind: RefUnit, From: r.Name, To: r.UnitRef})
+		if _, found := units[r.UnitRef]; r.UnitRef != "" && !found {
+			out = append(out, DanglingRef{Kind: RefUnit, From: r.Name, To: r.UnitRef, Seat: r})
 		}
 	}
 	for u := range o.AllUnits() {
-		if u.Lead != "" && o.Role(u.Lead) == nil {
-			out = append(out, DanglingRef{Kind: RefLead, From: u.Name, To: u.Lead})
+		if _, found := seats[u.DeclaredLead]; u.DeclaredLead != "" && !found {
+			out = append(out, DanglingRef{Kind: RefLead, From: u.Name, To: u.DeclaredLead, Unit: u})
+		}
+	}
+	for r := range o.AllRoles() {
+		for _, entry := range r.Manages {
+			_, isSeat := seats[entry]
+			_, isUnit := units[entry]
+			if !isSeat && !isUnit {
+				out = append(out, DanglingRef{Kind: RefManages, From: r.Name, To: entry, Seat: r})
+			}
 		}
 	}
 	return out
@@ -488,9 +641,25 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 
 // ---- validation ------------------------------------------------------ //
 
-// Validate reports every rule the company breaks, joined. It assumes
+// Validate reports every RUNNABLE rule the company breaks, joined. It assumes
 // [Organization.Normalize] has run: the checks that need a fully wired
-// hierarchy — an inherited lead, a moved seat — cannot see it otherwise.
+// hierarchy, an inherited lead or a moved seat, cannot see it otherwise.
+//
+// # Two classes of rule
+//
+// RUNNABLE rules are what a running company depends on: a seat with no
+// handle owns no inbox, two seats on one handle share one, a lead-targeted
+// schedule on a human lead never fires. This method holds them, and nothing
+// may run a company that breaks one.
+//
+// ADMISSION rules were added after companies already existed, and a company
+// that breaks one still runs exactly as it did before the rule: two units
+// called "Platform" resolve references to the first of them today and did
+// yesterday. [Organization.ValidateAdmission] holds them. A document somebody
+// submits is refused for breaking one, while a STORED revision that breaks one
+// is applied with a warning, because refusing it would take a running company
+// down on upgrade (or on the older half of a rolling one) over a rule its
+// author never saw. The config layer decides which class a caller runs.
 func (o *Organization) Validate() error {
 	var errs []error
 	for _, r := range o.Roles {
@@ -506,9 +675,6 @@ func (o *Organization) Validate() error {
 	if err := o.validateHandles(); err != nil {
 		errs = append(errs, err)
 	}
-	if err := o.validateUnitKeys(); err != nil {
-		errs = append(errs, err)
-	}
 	if err := o.validateLeadSchedules(); err != nil {
 		errs = append(errs, err)
 	}
@@ -518,13 +684,127 @@ func (o *Organization) Validate() error {
 	return errors.Join(errs...)
 }
 
-// validateUnitKeys enforces chart-wide uniqueness of a unit's identity.
+// ValidateAdmission reports every ADMISSION rule the company breaks, joined:
+// duplicate seat names, two units answering to one key (a duplicate name, or
+// an id that is another unit's key), and a unit reference on a seat declared
+// inside a different unit. See the class note above [Organization.Validate].
+// It assumes [Organization.Normalize] has run, so a root seat moved into its
+// unit is counted once, where it now sits.
+func (o *Organization) ValidateAdmission() error {
+	return errors.Join(o.validateSeatNames(), o.validateUnitKeys(), o.validateUnitRefs())
+}
+
+// validateUnitRefs refuses a `unit:` reference on a seat that sits inside a
+// unit the reference does not name. See [ErrMisplacedUnitRef].
+//
+// Read after normalization, which is what makes one comparison enough: a
+// root seat whose reference resolved now sits in the unit it names, so its
+// reference matches, and one whose reference resolved to nothing is still at
+// the root, where [Organization.DanglingRefs] reports it. Every other member
+// carrying a reference that differs from its unit's name was declared there.
+// Compared as the exact string a reference resolves by.
+func (o *Organization) validateUnitRefs() error {
+	var errs []error
+	for u := range o.AllUnits() {
+		for _, r := range u.Roles {
+			if r.UnitRef == "" || r.UnitRef == u.Name {
+				continue
+			}
+			errs = append(errs, &SeatError{Seat: r, Field: []any{"unit"}, Err: fmt.Errorf(
+				"role %q: %w: it is declared in unit %q, and `unit: %s` places only a "+
+					"seat declared at the root, so here it moves nothing. Remove the "+
+					"reference, or declare the seat in unit %q or at the root",
+				r.Name, ErrMisplacedUnitRef, u.Name, r.UnitRef, r.UnitRef)})
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// validateHandles enforces org-wide handle uniqueness.
+//
+// The handle is the canonical seat identity (inbox topic, party resolution,
+// external-id registration), so a collision makes one seat silently
+// unreachable. Two agents would share an inbox; an agent colliding with a
+// human would absorb that person's inbound activity. Fatal either way.
+//
+// An EMPTY handle is skipped: a seat that derives none is already refused
+// by [Role.Validate], and counting every such seat as a collision with the
+// others reported one mistake two or three times over.
+func (o *Organization) validateHandles() error {
+	groups := groupBy(o.placedSeats(), func(s placedSeat) string { return s.role.Handle() })
+	var errs []error
+	for _, g := range groups {
+		errs = append(errs, &DuplicateError{
+			Kind: DuplicateHandle, Key: g.key, Seats: seatsOf(g.members),
+			Err: fmt.Errorf(
+				"%w %q: %d seats derive it (%s). The handle is the canonical seat "+
+					"identity, naming its inbox, its agent id and its external "+
+					"accounts, so give each of these seats a distinct name or an "+
+					"explicit handle",
+				ErrDuplicateHandle, g.key, len(g.members), describeSeats(g.members, true)),
+		})
+	}
+	return errors.Join(errs...)
+}
+
+// validateSeatNames enforces org-wide seat name uniqueness.
+//
+// Compared as the EXACT string, because that is how [Organization.Role]
+// resolves a lead or a manages entry: two names differing only in case or
+// spacing are distinct references there, so they are distinct here. A unit
+// key is folded instead (see validateUnitKeys below), and the two rules are
+// not in disagreement: a seat's key is its HANDLE, held unique by a runnable
+// rule, so nothing is ever filed under a seat's name, and a pair differing
+// only in case derives ONE handle unless it declares two, which is where that
+// rule reports it. A unit derives nothing of the sort: its name IS its key
+// wherever it declares no id. A name that is empty or blank is skipped, since
+// [Role.Validate] already refuses it.
+func (o *Organization) validateSeatNames() error {
+	groups := groupBy(o.placedSeats(), func(s placedSeat) string {
+		if strings.TrimSpace(s.role.Name) == "" {
+			return ""
+		}
+		return s.role.Name
+	})
+	var errs []error
+	for _, g := range groups {
+		errs = append(errs, &DuplicateError{
+			Kind: DuplicateSeatName, Key: g.key, Seats: seatsOf(g.members),
+			Err: fmt.Errorf(
+				"%w %q: %d seats carry it (%s). A unit's lead and every manages "+
+					"entry name exactly one seat, and resolve to the first seat of "+
+					"that name, so give each of these seats its own name",
+				ErrDuplicateSeatName, g.key, len(g.members), describeSeats(g.members, false)),
+		})
+	}
+	return errors.Join(errs...)
+}
+
+// foldUnitKey is THE fold a unit key is claimed and compared under, and the
+// only one: what a key means is decided here, and every question asked about
+// a group afterwards (which of its members carry the name, which answers by
+// an id) has to be asked in the same terms or the group and the message it
+// produces disagree.
+//
+// Not [strings.EqualFold] at those questions, which is close enough to read
+// as the same rule and is not: it folds by [unicode.SimpleFold], while this
+// folds by [unicode.ToLower], and the two part over characters that are real
+// in a team name. "İstanbul" and "Istanbul" are ONE key here, so the pair is
+// refused, and EqualFold calls them different, so the unit written second
+// used to lose the duplicate NAME sentinel and be described as answering by
+// an id it never declared.
+func foldUnitKey(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// validateUnitKeys enforces chart-wide uniqueness of a unit's identity: ONE
+// message per key, naming every unit that answers to it.
 //
 // # What a collision costs
 //
 // [Unit.Key] is what work, routing and pages are filed under, and
 // [Organization.Unit] resolves a name to the FIRST unit carrying it. So two
-// units answering to one key do not conflict loudly — one of them simply
+// units answering to one key do not conflict loudly: one of them simply
 // receives the other's work, for ever, and the chart looks correct.
 //
 // # Why an id may not collide with another unit's NAME either
@@ -534,103 +814,284 @@ func (o *Organization) Validate() error {
 // above. It arrives by a door nobody is watching: adding an id that is
 // already some other unit's name.
 //
-// The comparison is case-insensitive on the name side because a name is prose
-// and "Platform" and "platform" are one team; an id is already lowercase.
-func (o *Organization) validateUnitKeys() error {
-	var errs []error
-	owner := make(map[string]unitPath)
-	claim := func(key string, by unitPath) {
-		key = strings.ToLower(strings.TrimSpace(key))
-		if key == "" {
-			return
-		}
-		// POINTER IDENTITY, not the key's text: a unit whose id equals
-		// its own name claims the same key twice and collides with
-		// nobody.
-		if first, taken := owner[key]; taken && first.unit != by.unit {
-			errs = append(errs, fmt.Errorf(
-				"%w %q: %s and %s — a unit's key is what work, routing and pages "+
-					"are filed under, and two units answering to one key send a "+
-					"team's work to whichever one a reader resolved first",
-				ErrDuplicateUnit, key, first.path, by.path))
-			return
-		}
-		owner[key] = by
-	}
-
-	// EVERY NAME IS CLAIMED BEFORE ANY ID, so an id colliding with a name
-	// is reported against the id — which is the field somebody just added,
-	// and the one they can change without renaming a team.
-	units := slices.Collect(o.unitsWithPaths())
-	for _, c := range units {
-		claim(c.unit.Name, c)
-	}
-	for _, c := range units {
-		if strings.TrimSpace(c.unit.ID) != "" {
-			claim(c.unit.ID, c)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// unitPath is a unit and where it sits in the chart. The path is the only
-// thing that tells two units of the SAME NAME apart in a message.
-type unitPath struct {
-	unit *Unit
-	path string
-}
-
-// unitsWithPaths walks the chart yielding each unit with its slash-joined
-// ancestry, depth-first and parents before children — the same order
-// [Organization.AllUnits] uses, so a message names units in the order they
-// appear in the document.
-func (o *Organization) unitsWithPaths() iter.Seq[unitPath] {
-	return func(yield func(unitPath) bool) {
-		var walk func(prefix string, units []*Unit) bool
-		walk = func(prefix string, units []*Unit) bool {
-			for _, u := range units {
-				path := u.Name
-				if prefix != "" {
-					path = prefix + "/" + u.Name
-				}
-				if !yield(unitPath{unit: u, path: path}) {
-					return false
-				}
-				if !walk(path, u.Children) {
-					return false
-				}
-			}
-			return true
-		}
-		walk("", o.Units)
-	}
-}
-
-// validateHandles enforces org-wide handle uniqueness.
+// # EVERY KEY IS FOLDED, names and ids alike
 //
-// The handle is the canonical seat identity — inbox topic, party
-// resolution, external-id registration — so a collision makes one seat
-// silently unreachable. Two agents would share an inbox; an agent colliding
-// with a human would absorb that person's inbound activity. Fatal either
-// way.
-func (o *Organization) validateHandles() error {
-	var errs []error
-	owner := make(map[string]string)
-	for r := range o.AllRoles() {
-		h := r.Handle()
-		if first, dup := owner[h]; dup {
-			errs = append(errs, fmt.Errorf(
-				"%w %q: roles %q and %q — the handle is the canonical seat identity and must be unique",
-				ErrDuplicateHandle, h, first, r.Name))
+// A name is prose, and "Platform" and "platform" are one team. Two units a
+// reader cannot tell apart are refused here, naming both and where each one
+// sits, rather than admitted so that the first person to write the case they
+// remember files one team's work, routing and pages under the other for
+// ever.
+//
+// That a reference resolves a name EXACTLY ([Organization.Unit], [Unit.Child]
+// and the manages index all match the string as written) is what makes the
+// collision QUIET, not what makes it safe: both spellings resolve, each to a
+// different team, and the chart looks correct either way. A reference that
+// resolves is the symptom, so it is no argument for admitting the pair.
+//
+// Folding is also what makes the two vocabularies comparable. An id is a
+// lowercase key by rule while a name is written however a person writes it,
+// so an exact comparison would let `id: platform` sit beside `name: Platform`
+// unreported, which is the cross-check above. This package validates no shape
+// of its own and so may not lean on the config layer narrowing an id: an
+// `id: Platform` is folded here like every other key.
+//
+// The seat name rule beside this one does NOT fold, and the two are not in
+// disagreement. A seat's key is its HANDLE, which is unique by a runnable
+// rule, so a seat name is never what work is filed under; two seats named
+// "Dev" and "dev" that declare no handle derive one and are refused by the
+// handle rule (validateHandles above) before this class is reached. A unit
+// derives no second identity, so its name IS its key wherever it declares no
+// id, and this rule is the only thing between that pair and a silent
+// misfiling.
+//
+// THE FIRST SPELLING MET OWNS THE GROUP, and is what the message is reported
+// in: an operator searches their document for what they wrote, not for a form
+// nothing in it contains.
+//
+// # One rule, two sentinels
+//
+// A collision between two NAMES wraps [ErrDuplicateUnitName] as well as
+// [ErrDuplicateUnit], because a name IS the key on a unit that declares no
+// id: two rules reporting it put one mistake in front of an operator twice,
+// and in front of the builder twice for each unit carrying it.
+//
+// An ADMISSION rule (see the class note above [Organization.Validate]), like
+// the duplicate seat name beside it. Companies holding two units of one name
+// were admitted before the rule and run exactly as they did, so a submitted
+// document is refused for it while a stored revision is applied with a
+// warning. An id collision cannot reach a stored revision that predates the
+// field at all, so nothing is grandfathered by the class that had a choice.
+func (o *Organization) validateUnitKeys() error {
+	units := o.placedUnits()
+	// byKey indexes a group by the FOLDED text every member of it answers
+	// to, a name and an id alike, which is what makes "Platform",
+	// "platform" and `id: platform` one group rather than three near
+	// misses nobody is told about.
+	byKey := make(map[string]int, len(units))
+	var all []duplicateGroup[placedUnit]
+
+	// group returns the group indexed under folded, starting one reported
+	// in the spelling that key was first met in. A GROUP KEEPS ITS FIRST
+	// SPELLING, so a chart carrying both cases of a name is reported in the
+	// one written first rather than in whichever the walk reached last.
+	group := func(folded, spelling string) int {
+		i, seen := byKey[folded]
+		if !seen {
+			i = len(all)
+			byKey[folded] = i
+			all = append(all, duplicateGroup[placedUnit]{key: spelling})
+		}
+		return i
+	}
+	// join adds a unit to a group it is not already in. POINTER IDENTITY,
+	// not the key's text: a unit whose id equals its own name claims the
+	// same key twice and collides with nobody.
+	join := func(i int, by placedUnit) {
+		for _, m := range all[i].members {
+			if m.unit == by.unit {
+				return
+			}
+		}
+		all[i].members = append(all[i].members, by)
+	}
+
+	// EVERY NAME IS CLAIMED BEFORE ANY ID, so a group is reported in a name
+	// wherever one carries the key and an id colliding with a name is named
+	// after it in the message: the id is the field somebody just added, and
+	// the one they can change without renaming a team. A blank name is
+	// skipped rather than claimed, since [Unit.Validate] already reports it
+	// and an empty key would group every nameless unit together.
+	for _, c := range units {
+		name := strings.TrimSpace(c.unit.Name)
+		if name == "" {
 			continue
 		}
-		owner[h] = r.Name
+		join(group(foldUnitKey(name), name), c)
+	}
+	for _, c := range units {
+		id := strings.TrimSpace(c.unit.ID)
+		if id == "" {
+			continue
+		}
+		join(group(foldUnitKey(id), id), c)
+	}
+
+	var errs []error
+	for _, g := range all {
+		if len(g.members) < 2 {
+			continue
+		}
+		carriers := make([]*Unit, len(g.members))
+		named := 0
+		for i, m := range g.members {
+			carriers[i] = m.unit
+			// FOLDED BY foldUnitKey, the way the key was claimed. A
+			// unit named "platform" in a group reported as "Platform"
+			// answers by its NAME, and measuring that any other way
+			// would both count it as an id carrier in the message and
+			// drop the duplicate name sentinel from a pair that is
+			// exactly that.
+			if foldUnitKey(m.unit.Name) == foldUnitKey(g.key) {
+				named++
+			}
+		}
+		// A key two units carry as their NAME is a duplicate name as well,
+		// and the error carries both sentinels so a caller branching on
+		// either one means this collision. A key that arrived through an id
+		// carries the key sentinel alone: no name is duplicated, and saying
+		// one is sends an operator to rename a team that is named once.
+		key := fmt.Errorf("%w %q", ErrDuplicateUnit, g.key)
+		if named > 1 {
+			key = fmt.Errorf("%w %q (a %w)", ErrDuplicateUnit, g.key, ErrDuplicateUnitName)
+		}
+		errs = append(errs, &DuplicateError{
+			Kind: DuplicateUnitName, Key: g.key, Units: carriers,
+			Err: fmt.Errorf(
+				"%w: %d units answer to it (%s). A unit's key is its id when it "+
+					"declares one and its name otherwise, and a manages entry or a "+
+					"seat's unit reference resolves to the first unit answering to "+
+					"it, so one team's work, routing and pages are filed under "+
+					"another. Give each of these units its own name or id",
+				key, len(g.members), describeUnits(g.members, g.key)),
+		})
 	}
 	return errors.Join(errs...)
+}
+
+// placedSeat is a seat and where it sits, in words an operator can find in
+// their document.
+type placedSeat struct {
+	role  *Role
+	place string
+}
+
+// placedUnit is a unit and where it sits.
+type placedUnit struct {
+	unit  *Unit
+	place string
+}
+
+// placedSeats lists every seat in [Organization.AllRoles] order with its
+// place: "at the root", or the unit it is a direct member of.
+func (o *Organization) placedSeats() []placedSeat {
+	var out []placedSeat
+	for _, r := range o.Roles {
+		out = append(out, placedSeat{role: r, place: "at the root"})
+	}
+	for u := range o.AllUnits() {
+		for _, r := range u.Roles {
+			out = append(out, placedSeat{role: r, place: fmt.Sprintf("in unit %q", u.Name)})
+		}
+	}
+	return out
+}
+
+// placedUnits lists every unit depth-first, parents before children, with
+// its place: "at the top level", or the unit it is a child of.
+func (o *Organization) placedUnits() []placedUnit {
+	var out []placedUnit
+	var walk func(u *Unit, place string)
+	walk = func(u *Unit, place string) {
+		out = append(out, placedUnit{unit: u, place: place})
+		for _, c := range u.Children {
+			walk(c, fmt.Sprintf("under unit %q", u.Name))
+		}
+	}
+	for _, u := range o.Units {
+		walk(u, "at the top level")
+	}
+	return out
+}
+
+// duplicateGroup is every member sharing one key, in the order they were
+// met.
+type duplicateGroup[T any] struct {
+	key     string
+	members []T
+}
+
+// groupBy returns the keys carried by more than one member, each with all of
+// its members, in the order each key was first met. ONE GROUP PER KEY, so a
+// name used three times is one message naming all three rather than two
+// pairwise ones. An empty key is never a group: it is how a caller skips a
+// member whose missing identity another rule already reports.
+func groupBy[T any](members []T, key func(T) string) []duplicateGroup[T] {
+	index := make(map[string]int)
+	var all []duplicateGroup[T]
+	for _, m := range members {
+		k := key(m)
+		if k == "" {
+			continue
+		}
+		i, seen := index[k]
+		if !seen {
+			i = len(all)
+			index[k] = i
+			all = append(all, duplicateGroup[T]{key: k})
+		}
+		all[i].members = append(all[i].members, m)
+	}
+	var out []duplicateGroup[T]
+	for _, g := range all {
+		if len(g.members) > 1 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// seatsOf is the seats of a group, in the order they were met.
+func seatsOf(placed []placedSeat) []*Role {
+	out := make([]*Role, len(placed))
+	for i, s := range placed {
+		out[i] = s.role
+	}
+	return out
+}
+
+// describeSeats renders colliding seats for one grouped message. byName says
+// what tells them apart: their names when they share a handle, their handles
+// when they share a name.
+func describeSeats(seats []placedSeat, byName bool) string {
+	parts := make([]string, len(seats))
+	for i, s := range seats {
+		if byName {
+			parts[i] = fmt.Sprintf("seat %q %s", s.role.Name, s.place)
+		} else {
+			parts[i] = fmt.Sprintf("handle %q %s", s.role.Handle(), s.place)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// describeUnits renders colliding units for one grouped message: each unit's
+// name and where it sits, because two units answering to one key differ in
+// their place when the key is a shared name and in their name when it is an
+// id that is another unit's.
+//
+// A unit that does not answer to the key by its name answers by its id, and
+// the id is named: it is the field that collided, the one an operator just
+// added, and the one they can change without renaming a team.
+//
+// Asked through foldUnitKey, the way the key was claimed, and never through
+// [strings.EqualFold]: the two agree on the cases anyone writes by hand and
+// part over characters that are real in a team name, so a unit named
+// "Istanbul" in a group reported as "İstanbul" would be described as
+// answering by an id it never declared, reading `(id "")`.
+func describeUnits(units []placedUnit, key string) string {
+	parts := make([]string, len(units))
+	for i, u := range units {
+		parts[i] = fmt.Sprintf("unit %q %s", u.unit.Name, u.place)
+		if foldUnitKey(u.unit.Name) != foldUnitKey(key) {
+			parts[i] += fmt.Sprintf(" (id %q)", strings.TrimSpace(u.unit.ID))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // validateContactIdentities enforces chart-wide uniqueness of every external
-// account a seat is reachable at.
+// account a seat is reachable at: ONE message per identity, naming every seat
+// that claims it.
 //
 // # What a collision costs
 //
@@ -649,34 +1110,50 @@ func (o *Organization) validateHandles() error {
 // seats pointing at one ${VAR} is the same mistake spelled once, so it is
 // caught here too — the reference is compared as its own text.
 //
+// # Compared as the values SIT
+//
+// [HumanContact.Normalize] has already trimmed every value and folded the
+// ones whose field is canonically lowercase, leaving a ${VAR} reference
+// exempt. So the text stored on the contact IS the text each consumer routes
+// on, and comparing it as it sits is what makes this rule agree with them:
+// folding here as well would refuse `slack_user_id` values differing only in
+// case, which the registry keys apart and no inbound payload confuses, and it
+// would call `${FOO}` and `${foo}` one reference when the environment they
+// resolve from does not.
+//
 // Per FIELD, not per transport: Jira and Confluence share `atlassian_account_id`
 // and reporting one collision twice would read as two problems.
+//
+// A RUNNABLE rule (see the class note above [Organization.Validate]), unlike
+// the duplicate seat and unit names: an identity is what a message is ROUTED
+// by, so a company carrying a collision is not running as its author reads it
+// — one of the two people is already unreachable, today, and no later
+// revision makes the mail they never received arrive.
 func (o *Organization) validateContactIdentities() error {
+	seats := o.placedSeats()
 	var errs []error
-	type claimant struct{ role, field string }
-	owner := make(map[string]claimant)
-	for r := range o.AllRoles() {
-		if r == nil || r.Contact == nil {
-			continue
-		}
-		for _, f := range contactFields {
-			value := strings.TrimSpace(*f.value(r.Contact))
-			if value == "" {
-				continue
+	for _, f := range contactFields {
+		// One group per value of THIS field. A seat with no contact, and a
+		// field it left empty, key to "" and are skipped by groupBy: an
+		// identity that is missing is not a collision, the rule every
+		// duplicate here follows (see validateHandles above).
+		for _, g := range groupBy(seats, func(s placedSeat) string {
+			if s.role.Contact == nil {
+				return ""
 			}
-			// The same normalisation the lookups use, so a collision
-			// that differs only in case is still a collision.
-			key := f.key + "\x00" + strings.ToLower(value)
-			if first, taken := owner[key]; taken {
-				errs = append(errs, fmt.Errorf(
-					"%w %s=%q: roles %q and %q — an inbound message finds "+
-						"whichever seat a reader resolved first, and "+
-						"notification registration takes the other one, so "+
-						"one of these two silently stops being reachable",
-					ErrDuplicateIdentity, f.key, value, first.role, r.Name))
-				continue
-			}
-			owner[key] = claimant{role: r.Name, field: f.key}
+			return strings.TrimSpace(*f.value(s.role.Contact))
+		}) {
+			errs = append(errs, &DuplicateError{
+				Kind: DuplicateIdentity, Key: g.key, Seats: seatsOf(g.members),
+				Err: fmt.Errorf(
+					"%w %s=%q: %d seats claim it (%s). An inbound message finds "+
+						"whichever seat a reader resolved first and notification "+
+						"registration takes the other, so all but one of these "+
+						"seats silently stops being reachable. Give each of them "+
+						"its own account",
+					ErrDuplicateIdentity, f.key, g.key, len(g.members),
+					describeSeats(g.members, true)),
+			})
 		}
 	}
 	return errors.Join(errs...)
@@ -693,13 +1170,13 @@ func (o *Organization) validateLeadSchedules() error {
 		if lead == nil || !lead.IsHuman() {
 			continue
 		}
-		for _, s := range u.Schedules {
+		for i, s := range u.Schedules {
 			if !s.IsEnabled() || !s.TargetsLead() {
 				continue
 			}
-			errs = append(errs, fmt.Errorf(
+			errs = append(errs, &UnitError{Unit: u, Field: []any{"schedules", i}, Err: fmt.Errorf(
 				"unit %q: schedule %q: %w: it targets the unit lead, but the effective lead %q is a human seat — define the schedule on an agent seat instead",
-				u.Name, s.Name, ErrUnrunnableSchedule, lead.Name))
+				u.Name, s.Name, ErrUnrunnableSchedule, lead.Name)})
 		}
 	}
 	return errors.Join(errs...)

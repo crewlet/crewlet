@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // resumingEngine is an engine with nothing but the ledger a resumed turn
@@ -194,5 +198,81 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	}
 	if got.Context.Reply != turn.ToolReply("").String() {
 		t.Errorf("turn context reply = %q, want the delivery obligation", got.Context.Reply)
+	}
+}
+
+// A RESUME RUNS IN THE EPOCH THAT ADMITTED IT. The resumer finds the seat in
+// the company it read, and the turn it hands on must run in that same company:
+// a second read of the engine's company is the next epoch once an apply lands
+// between the two, the seat can be gone from it, and the run then failed with
+// "not an agent seat" rather than being routed to a node that has the seat.
+//
+// The engine's current company here has no seats at all, standing in for the
+// epoch an apply swapped in after the admission. The admitted company carries
+// no turn settings, so the turn stops at its first round: reaching that round
+// at all is the proof, since it needs a runner built for the seat, and a runner
+// built from the engine's current company is refused before it exists.
+func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
+	t.Parallel()
+	admitted, seat := modeCompany(t, "claude-code", false, "")
+	admitted.Tools = tools.NewRegistry()
+	e, _ := resumingEngine(t)
+	e.backends = &Backends{Queue: memory.New()}
+	e.epoch.current.Store(&Company{
+		Config: admitted.Config, Models: admitted.Models, Tools: admitted.Tools,
+		Org: &org.Organization{Name: admitted.Org.Name},
+	})
+	in := resumed("slack:C1")
+	in.Company = admitted
+	in.Run.AgentHandle = seat.Handle()
+	in.Turn = &turnctx.Turn{ID: in.Run.TurnID, Seat: seat, Org: admitted.Org}
+
+	err := e.resumeTurn(t.Context(), in)
+	if err == nil || !strings.Contains(err.Error(), "resume round 1") {
+		t.Fatalf("resumeTurn() = %v, want the turn to reach its first round: a runner "+
+			"built from the engine's current company is refused before it", err)
+	}
+}
+
+// A PARKED ROW OUTLIVES THE BUILD THAT WROTE IT, so who is waiting for a
+// resumed turn is read off it defensively.
+//
+// An ABSENT value is [turn.NoReply], the reading [sandbox.PendingRun] states
+// for it: `reply` is an omitempty column, nothing rewrites a parked row, and a
+// run launched before the field existed simply has none. Refused instead, those
+// runs could never be resumed, so a box that had already done the work was
+// collected and its answer dropped.
+//
+// A value this build does not recognise is a ROUTING refusal rather than a
+// default, so the completion reaches a peer that can read it instead of being
+// settled here against a guess at who is waiting.
+func TestAParkedRunsReplyIsReadOffItsRowDefensively(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stored string
+		want   turn.Reply
+	}{
+		{"a row written before the field existed", "", turn.NoReply()},
+		{"nobody is waiting", "none", turn.NoReply()},
+		{"somebody is waiting, on no surface the trigger named", "tool", turn.ToolReply("")},
+		{"somebody is waiting on a named surface", "tool:mattermost", turn.ToolReply("mattermost")},
+		{"a colleague asked over A2A", "engine", turn.EngineReply()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: tc.stored})
+			if err != nil {
+				t.Fatalf("resumeReply(%q) = %v", tc.stored, err)
+			}
+			if got != tc.want {
+				t.Errorf("resumeReply(%q) = %+v, want %+v", tc.stored, got, tc.want)
+			}
+		})
+	}
+	_, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: "whisper"})
+	if !errors.Is(err, sandbox.ErrResumeUnavailable) {
+		t.Fatalf("a reply kind this build does not know = %v, want a routing refusal so "+
+			"the completion reaches a node that can read it", err)
 	}
 }

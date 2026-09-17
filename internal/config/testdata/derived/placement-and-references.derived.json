@@ -1,0 +1,113 @@
+{
+  "seats": [
+    {
+      "path": "roles[0]",
+      "handle": "founder",
+      "name": "Founder",
+      "kind": "human",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": [
+        "product-lead"
+      ],
+      "auto_reports": null,
+      "onboarding_chain": null
+    },
+    {
+      "path": "roles[2]",
+      "handle": "wanderer",
+      "name": "Wanderer",
+      "kind": "agent",
+      "placed_by_ref": false,
+      "manager": "",
+      "managers": null,
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": null
+    },
+    {
+      "path": "units[0].roles[0]",
+      "handle": "product-lead",
+      "name": "Product Lead",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "founder",
+      "managers": [
+        "founder"
+      ],
+      "reports": [
+        "sarah-chen",
+        "designer"
+      ],
+      "auto_reports": [
+        "sarah-chen",
+        "designer"
+      ],
+      "onboarding_chain": [
+        "Product"
+      ]
+    },
+    {
+      "path": "units[0].roles[1]",
+      "handle": "sarah-chen",
+      "name": "Sarah Chen",
+      "kind": "human",
+      "unit_path": "units[0]",
+      "placed_by_ref": false,
+      "manager": "product-lead",
+      "managers": [
+        "product-lead"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Product"
+      ]
+    },
+    {
+      "path": "roles[1]",
+      "handle": "designer",
+      "name": "Designer",
+      "kind": "agent",
+      "unit_path": "units[0]",
+      "placed_by_ref": true,
+      "manager": "product-lead",
+      "managers": [
+        "product-lead"
+      ],
+      "reports": null,
+      "auto_reports": null,
+      "onboarding_chain": [
+        "Product"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "path": "units[0]",
+      "name": "Product",
+      "type": "team",
+      "lead": "product-lead",
+      "lead_inherited": false,
+      "channel": "",
+      "channel_inherited": false,
+      "seats": [
+        "product-lead",
+        "sarah-chen",
+        "designer"
+      ]
+    },
+    {
+      "path": "units[1]",
+      "name": "Hiring",
+      "type": "team",
+      "lead": "",
+      "lead_inherited": false,
+      "channel": "",
+      "channel_inherited": false,
+      "seats": null
+    }
+  ]
+}

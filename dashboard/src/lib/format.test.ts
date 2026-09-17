@@ -10,7 +10,10 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  configValueKind,
   elapsedMs,
+  eventHistoryLabel,
+  formatPhaseLLM,
   fmtCount,
   fmtDuration,
   fmtPct,
@@ -193,5 +196,82 @@ describe("a live counter reads as a clock, not as a glitch", () => {
     expect(fmtElapsed(null)).toBe("—");
     expect(fmtElapsed(undefined)).toBe("—");
     expect(fmtElapsed(NaN)).toBe("—");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Values read out of the company document
+// ---------------------------------------------------------------------------
+
+// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
+// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
+// seat screen rendered the field as a React child, which drew a chain as its
+// keys glued together and THREW on the mapping, taking the whole page with it.
+describe("a seat's model setting, as rows a person reads", () => {
+  test("one key and a chain are one row covering every phase", () => {
+    expect(formatPhaseLLM("fast")).toEqual([{ phase: "", chain: "fast" }]);
+    // The ORDER is the whole meaning of a chain, so it reads as one.
+    expect(formatPhaseLLM(["fast", "backup"])).toEqual([{ phase: "", chain: "fast, then backup" }]);
+  });
+
+  test("a mapping is one row per phase, in the engine's own order", () => {
+    expect(formatPhaseLLM({ judge: "tiny", default: ["big", "fast"] })).toEqual([
+      { phase: "default", chain: "big, then fast" },
+      { phase: "judge", chain: "tiny" },
+    ]);
+  });
+
+  // THE ONE READER standing between a field a newer engine may shape
+  // differently and a render that must not throw.
+  test("anything else is no rows rather than a throw", () => {
+    for (const odd of [undefined, null, 0, true, {}, [], "", [""], { default: "" }]) {
+      expect(formatPhaseLLM(odd)).toEqual([]);
+    }
+  });
+});
+
+describe("a value read from the redacted document", () => {
+  test("the mask says something is set and never what", () => {
+    expect(configValueKind("__redacted__")).toBe("hidden");
+    expect(configValueKind("")).toBe("empty");
+    expect(configValueKind(undefined)).toBe("empty");
+  });
+
+  test("one whole reference is a reference, and part of one is not", () => {
+    expect(configValueKind("${DEV_A_SLACK_BOT_TOKEN}")).toBe("reference");
+    expect(configValueKind("  ${TOKEN}  ")).toBe("reference");
+    expect(configValueKind("Bearer sk-live-${SUFFIX}")).toBe("literal");
+  });
+
+  // A CREDENTIAL FIELD SHOWS A WHOLE REFERENCE OR NOTHING, whatever the engine
+  // sent. Its redaction took any value CONTAINING `${` for a reference, so
+  // `Bearer sk-live-${SUFFIX}` reached the wire with its literal half intact —
+  // and what this dashboard prints must not depend on every engine it talks to
+  // having got that right.
+  test("in a credential field anything but a whole reference is hidden", () => {
+    expect(configValueKind("Bearer sk-live-${SUFFIX}", { secret: true })).toBe("hidden");
+    expect(configValueKind("U0FOUNDER", { secret: true })).toBe("hidden");
+    expect(configValueKind("${TOKEN}", { secret: true })).toBe("reference");
+    // And a field that is NOT a credential still shows its literal: a contact
+    // identity is a public handle at a vendor.
+    expect(configValueKind("U0FOUNDER")).toBe("literal");
+  });
+});
+
+describe("how far back the log goes", () => {
+  test("the floor is the engine's own, said in days", () => {
+    expect(eventHistoryLabel(30 * 24 * 3600)).toBe("the store keeps 30 days");
+    expect(eventHistoryLabel(24 * 3600)).toBe("the store keeps 1 day");
+    expect(eventHistoryLabel(6 * 3600)).toBe("the store keeps 6 hours");
+  });
+
+  // AN OPERATOR TOLD THE WRONG FLOOR STOPS PAGING EARLY, so the honest answer
+  // to "I do not know" is that sentence, never a number this client picked.
+  test("an engine that did not report it says so rather than guessing", () => {
+    for (const absent of [undefined, null, 0, -1, Number.NaN]) {
+      expect(eventHistoryLabel(absent)).toBe(
+        "this engine did not report how far back the log goes",
+      );
+    }
   });
 });

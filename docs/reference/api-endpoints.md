@@ -73,7 +73,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
-| `GET` | `/org` | The company's identity and its full tree: `name`, `mission`, `vision`, `policies`, then `units` and `roles` (including human seats with `"kind": "human"`). The four identity fields are the founder-authored half of a company and are plain prose — no credentials, no `${VAR}` references; providers, MCP servers and integrations stay behind the operator-gated `/config` |
+| `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
@@ -135,6 +135,40 @@ A body that does not arrive inside its deadline fails the read like any other tr
 
 Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and [`/operator/mcp`](#operatormcp--your-own-assistant). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
 
+### Security headers on every response
+
+Every response the API writes carries four headers, set before its status line
+(so a `304` carries them as well as a `200`):
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | The policy for what the response is (below) |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` |
+
+The policy depends on what was served:
+
+| Response | `Content-Security-Policy` |
+|---|---|
+| The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:` |
+| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src 'self'`, then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
+| Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
+
+These matter because the operator token the dashboard stores lives in the
+browser's storage for this origin, and the two landing pages are unauthenticated
+pages on that same origin that render values from their query string. A policy
+is per response, so each page carries its own: the dashboard runs only the
+bundle it was built into, and a landing page runs only the style and script the
+engine wrote into it. No response may be framed by another site.
+
+`form-action` on the dashboard allows `https:` as well as `'self'` for one flow:
+creating a seat's GitHub App posts the app manifest as a form to the code host,
+which is `github.com` or the GitHub Enterprise Server base the company
+configures. A reverse proxy in front of the engine should pass these headers
+through unchanged; one that adds its own `Content-Security-Policy` produces two
+policies, and a browser enforces both.
+
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
 `sandbox_runs`, `budgets`, `integrations`, `stream`, `webhooks`,
@@ -171,7 +205,10 @@ nothing naming the row that went away. Deriving it from `GET /config` in the
 client would mean a second copy of the `${VAR}` grammar, and the engine has
 already paid for that twice: a looser pattern once displayed a literal secret
 unmasked, and another once minted a live credential into a variable nothing
-reads. The path is the operator's own spelling
+reads. It would also miss references the read masks: `GET /config` shows a
+credential only when it is one whole `${VAR}`, so `"Bearer ${TOKEN}"` arrives
+as `"__redacted__"`. The index is built from the unredacted document and
+answers names and paths only, never a value. The path is the operator's own spelling
 (`roles[0].integrations.slack.bot_token`), the same one a validation failure
 reports, and a name with several readers appears once per reader. It carries
 the document's own `ETag`, because the index changes exactly when the revision
@@ -181,9 +218,9 @@ does.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match` — see [below](#conditional-requests) |
+| `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
-| `PATCH` | `/config` | Merge one or more sections into the active revision — see [below](#patch-config--the-narrower-write) |
+| `PATCH` | `/config` | Merge one or more sections into the active revision, see [below](#patch-config--the-narrower-write). `?dry_run=true` checks it and stores nothing |
 | `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
@@ -201,12 +238,95 @@ curl -X PATCH https://engine.example.com/config \
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
 - **`null` deletes.** `{"integrations": {"gitlab": null}}` removes the section — without it a config surface can only add.
-- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question.
-- **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available — the caller believes they changed something.
+- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question. What a replacement does not remove is a field this build cannot represent: see [Fields a newer build wrote survive every write](#fields-a-newer-build-wrote-survive-every-write).
+- **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available, because the caller believes they changed something. That holds whatever the key is set to, `null` included: deleting a key this build does not know is refused rather than ignored, because the write [carries it back](#fields-a-newer-build-wrote-survive-every-write) and the caller would be told a deletion landed that did not.
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
 
 **`If-Match` matters more here than on the full write.** A `PUT` carries the caller's whole intended document; a `PATCH` is merged against whatever is active at that instant. See [Concurrent writes](#concurrent-writes) for what the engine does and does not guarantee.
+
+#### What a write answers
+
+Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload and a revert) answers `201` with the revision, its epoch, and what the engine makes of the document it stored:
+
+```json
+{
+  "revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
+  "epoch": 42,
+  "warnings": [
+    {
+      "kind": "dangling_reference", "ref": "manages",
+      "path": "roles[0].manages[1]", "segments": ["roles", 0, "manages", 1],
+      "seat": "ceo", "unit": "", "from": "CEO", "to": "Ghost",
+      "message": "seat \"CEO\" manages \"Ghost\", which is neither a seat nor a unit, so the entry manages nobody. Correct the entry or add a seat or unit with that name"
+    }
+  ],
+  "derived": {"seats": [...], "units": [...]}
+}
+```
+
+- **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
+  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead), `unit` (a root seat's `unit:`), `manages` (one `manages` entry, at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
+  - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
+- **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
+
+#### Dry runs
+
+`PUT /config?dry_run=true` and `PATCH /config?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, so a check is always exactly the write a save would send.
+
+```bash
+curl -X PATCH "https://engine.example.com/config?dry_run=true" \
+  -H "Authorization: Bearer $TOKEN" -H "If-Match: \"$REV\"" \
+  -d '{"mission": "Ship the thing"}'
+```
+
+A valid check answers `200`:
+
+```json
+{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": [], "derived": {"seats": [...], "units": [...]}}
+```
+
+- **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
+- **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
+- **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
+- **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
+- **A process that cannot activate refuses the check with `503 no_control_plane`**, before validating, exactly as it refuses the write. A clean check there would promise a save that cannot land.
+- A dry run needs the same token a write does.
+
+#### Refusals carry located problems
+
+A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_body`) keeps `error`, `detail` (one line per failure) and `hint`, and adds **`problems`**: the same failures, located and classified, so a client puts each beside the field it is about without parsing the detail.
+
+```json
+{
+  "error": "validation_error",
+  "detail": "roles[1].llm: value not in the allowed set: \"nowhere\" is not a configured provider: providers.llm has zulu. ...",
+  "hint": "the WHOLE document a write produces is validated, ...",
+  "problems": [
+    {
+      "path": "roles[1].llm", "segments": ["roles", 1, "llm"], "kind": "unknown_value",
+      "message": "roles[1].llm: value not in the allowed set: ...", "seat": "cto"
+    }
+  ],
+  "derived": {"seats": [...], "units": [...]}
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into, and an entity body it cannot read is placed where that entity sits (`roles[1].gaol` for a typo in the second seat). `""` only for a failure that belongs to no place in it, such as a whole document that is not YAML at all |
+| `segments` | The same path taken apart: strings for keys, numbers for list indexes. A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is `""` |
+| `kind` | `missing`, `unknown_value`, `out_of_range`, `conflict`, `unknown_field`, `shape`, or `invalid` for anything this build does not classify |
+| `message` | The failure's whole line, exactly as it appears in `detail`. A duplicate name is one line naming every entity and one problem beside each, so there can be more problems than lines |
+| `seat` | The engine-derived handle of the seat the problem is about, when it is about one |
+| `unit` | The name of the unit the problem is about, when it is about one |
+| `line` | The 1-based line in the text that was sent, for a failure the parser found. A patch's failure found in the merged document names no line, because that text is the engine's merge rather than anything sent |
+
+`derived` is present whenever the document parsed: a document with problems still has a hierarchy, and a person fixing a misspelled lead finds it in the chart it breaks. A body or patch that never became a document carries none.
+
+No message repeats a credential. A document read from `GET /config` carries masks, which a write restores from the stored revision before validating, so the values a refusal judges are ones the caller was never shown: a message says what rule a value breaks and never the value, a fragment of it, or its length.
+
+The [`/setup`](#setting-an-integration-up) submissions that change the document answer their `validation_error` with the same `problems` and `derived`.
 
 #### Conditional requests
 
@@ -217,11 +337,13 @@ curl -X PATCH https://engine.example.com/config \
 | `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the document has not moved |
 | `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise |
 | `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
-| `If-None-Match: *` | writes | Proceed only if **nothing** is active — the create-only precondition; `412 already_configured` otherwise |
+| `If-None-Match: *` | writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
 
-The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-Match: none` is the pre-tag spelling of `If-None-Match: *` and still works; prefer the standard one.
+The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition, and every `If-Match` value other than `*` is an entity tag, matched against the active revision and nothing else.
 
 Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
+
+**Nothing under `/config` is cacheable.** Every response the surface writes carries `Cache-Control: no-store`: reads, `304`s, writes, refusals and error bodies, and the `404` and `405` it answers for a path or method it does not serve. A body here is the company document, with its contact identities and the `${VAR}` name behind every credential, and a stored copy would outlive the session and the token that read it. Revalidation still works, because it never depended on a cache: a client that wants a `304` sends `If-None-Match` with the `ETag` it kept.
 
 #### Per-entity read and write
 
@@ -254,29 +376,32 @@ invites, because the caller never sees the rest of the document.
 
 Four rules follow from that:
 
-- **An unknown field is refused, not dropped.** The entity body is decoded
-  strictly, the same way the whole-document parser is: `gaol` where `goal` was
-  meant is `400 invalid_body` naming the field. A decoder that ignored what it
-  did not recognise would answer `201` and store the seat with its goal
-  silently gone.
+- **An unknown field is refused, not dropped.** The entity body is read by the
+  whole-document parser, JSON or YAML: `gaol` where `goal` was meant is
+  `400 invalid_body` with an `unknown_field` [problem](#refusals-carry-located-problems)
+  placed where the seat sits in the document (`roles[1].gaol`), with its line in
+  the body. A decoder that ignored what it did not recognise would answer `201`
+  and store the seat with its goal silently gone.
 - **A `PUT` never creates.** An id nothing carries is `404 no_such_entity`, not
   a new entity: naming one that is not there is far more often a typo than an
   intent to add one, and creating through this route would grow the company
   without the caller ever seeing the document they changed. Add through
-  `PUT /config`, which shows the whole thing.
+  `PUT /config`, which shows the whole thing. The id is looked up before the
+  body is read, so a mistyped one is a `404` whatever the body holds.
 - **The id in the path is the identity, and a `PUT` never renames.** A body
   whose own identity disagrees with the path is `400 identity_mismatch`, not a
   move: nothing that points at the old identity travels with the splice. A
   seat's durable id is a UUIDv5 over (company name, handle), so a renamed
   handle strands that seat's diary, onboarding marker and counterparty
-  profiles behind an id nothing derives any more; a unit's or an MCP server's
-  name is referenced by every `manages:`, `lead:`, `unit:` and per-seat
-  credential block that names it. For a role the check is on the **derived**
-  handle, so a body that omits `handle` and changes `name` is refused too —
-  that is a rename, just an accidental one. Send the identity back unchanged
-  (changing a seat's display name while keeping its handle is an ordinary
-  edit); rename through `PUT /config`, where what has to move with it is
-  visible.
+  profiles behind an id nothing derives any more; a unit's name is referenced
+  by every `manages:` entry and root seat `unit:` that names it, and an MCP
+  server's name by every `mcp_env` block, a seat's or a unit's, keyed on it.
+  For a role the check is on the **derived** handle, so a body that omits
+  `handle` and changes `name` is refused too: that is a rename, just an
+  accidental one.
+  Send the identity back unchanged (changing a seat's display name while
+  keeping its handle is an ordinary edit); rename through `PUT /config`, where
+  what has to move with it is visible.
 - **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.
@@ -339,21 +464,25 @@ why the CLI goes through a running node rather than writing the KV itself.
 
 - Every write on this surface reads the active revision, derives from it, and names it as the new revision's parent. That parent is what the flip compares against, so a write that lost is refused with **`409 revision_advanced`** — **whether or not the caller sent `If-Match`**, because the server knows what it read.
 - `If-Match: <revision_id>` is still worth sending: it is checked before any work is done, so a caller editing a revision that has already moved is told so without a document being built, validated and stored first.
-- A losing write's revision **is kept**, and the `409` names it as `stored_revision_id`. It is stored, valid and inert — the operator's work survives as history they can revert to — and this node's reconciler adopts whichever revision actually won at its next tick. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
+- A losing write's revision **is kept**, and the `409` (or `412`) names it as `stored_revision_id`. It is stored in the history, valid and inert, so the operator's work survives as history they can revert to. Inert means on the node that served the write too: a revision becomes that node's active one only once the fleet has taken it, so the node goes on serving what it served, never offers the loser to the fleet at a restart, and adopts whichever revision actually won. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
+- **A node's active revision follows the fleet.** Once a node applies the fleet's epoch, the fleet's revision is its active one, which is what its `GET /config` serves and what it boots on; its reconciler checks that on every tick and corrects a copy that says otherwise.
 - **An unset pointer is not a race.** A node seeded from a file holds a locally-active revision before it has published anything; refusing there would fail every config write on a fresh single-node deployment that had done nothing wrong.
+- **A write built on nothing is a create.** A node whose own store is empty answers `404 no_active_revision` on `GET /config`, and it reaches that state while its fleet runs a company: it joined and has not reconciled yet, or its best-effort copy of the fleet's pointer failed. A write there was derived from nothing, so its activation is a **create-only compare-and-set**: it lands only while the fleet has no activation. `If-None-Match: *` also consults the fleet's pointer before anything is built, and answers `412 already_configured` naming the revision the fleet is on. Without both, the dashboard's create flow on such a node replaced the running company outright, which renames it, changes every seat id derived from the name and orphans all of their memory.
 - The **boot publish** is deliberately unconditional. Two nodes starting at once may both offer the revision they hold; both are legitimate, last-write-wins is the right answer, and every node converges. It is the *edit* path that must not lose a write.
 
 On a `409`, re-read `/config` and send the edit again.
 
 ### Status codes
 
-- `200 OK` — successful read
-- `201 Created` — a write produced a new revision; body has `{"revision_id": ..., "epoch": ...}`. A per-entity write returns this too: it changed one entity and created one revision.
-- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` when neither an `X-Summary` header nor a `_summary` body key is present on a write
-- `401 Unauthorized` — missing or invalid bearer token (`{"error": "invalid_token"}`)
-- `404 Not Found` — a revision that is not there, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
-- `409 Conflict` — `revision_advanced` (stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (per-entity write on an unconfigured node)
-- `412 Precondition Failed` — `If-Match` supplied when no revision exists yet
+- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`)
+- `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
+- `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
+- `401 Unauthorized`: missing or invalid bearer token (`{"error": "invalid_token"}`)
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
+- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
+- `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
+- `503 Service Unavailable`: `no_control_plane` when the process has no coordination store to activate a revision with, on a write and on a dry run alike
 
 ### The `config_audit` query
 
@@ -449,13 +578,74 @@ writes one: the history stays append-only, so "the credentials were reloaded
 at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
-Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
-is configured, and `503 no_control_plane` on a process that cannot activate.
+Answers `201` with the revision, its epoch, its warnings and its derived
+hierarchy (see [What a write answers](#what-a-write-answers)),
+`409 no_active_revision` when nothing is configured, `400 validation_error` when the active document breaks a
+runnable rule of this build (a reload is an apply, so it re-publishes only a
+company every node can run; correct it with `PUT` or `PATCH`), and
+`503 no_control_plane` on a process that cannot activate. A document that
+breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
+such as a duplicate seat or unit name stored before the rule existed, reloads:
+that is how a credential rotation still reaches a company carrying one. Its
+answer lists each violation as an `admission` warning.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.
 
+#### Stored revisions are read as they are
 
+A read never validates what it reads. `GET /config`, a revision read, a diff,
+the reference index, the entity reads and the prior a write restores its masks
+from all open a stored revision as it is, even one this build's validator would
+refuse: a revision is valid under the build that wrote it, and a later build
+(or an older peer still activating during a rolling upgrade) can leave one in
+the store that this build refuses. What validates is whatever would RUN a
+document, and to the rules its question needs:
+
+- **A write** (`PUT`, `PATCH`, a per-entity `PUT`, a `/setup` submission that
+  changes the document) validates
+  the whole document it produces against every rule, admission rules
+  included. So a revision this build refuses is always readable, a corrected
+  `PUT` or `PATCH` always replaces it, and a write that leaves it uncorrected
+  is refused with `400 validation_error`, even when the write touched nothing
+  near the problem.
+- **A reload or a revert** (including a `/setup` submission that only rotates a
+  sealed credential, which reloads) validates what it re-activates against the
+  runnable rules only. A revert to a revision that breaks one answers
+  `400 validation_error` naming the field; a revert to one that breaks only an
+  admission rule is accepted, and each node logs `org_admission_warning` when it
+  applies it. A revert to a revision sealed under a key this node does not hold
+  answers `409 unreadable_revision`.
+
+#### Fields a newer build wrote survive every write
+
+During a rolling upgrade an older node holds, byte for byte, documents a newer
+node wrote, including settings the older build has no field for. `GET /config`
+on the older node cannot show them, because its types cannot hold them, so a
+document read there and sent back never names them. Every write keeps them
+anyway: `PUT`, `PATCH`, a per-entity `PUT`, a reload and a revert all store a
+document built from the stored bytes, and carry back each key the writing
+build cannot represent that the write does not name.
+
+- **Only keys the writing build cannot decode are carried.** A key it knows and
+  the write left out was removed on purpose and stays removed. A caller of the
+  older build cannot name an unknown key at all (the strict reader refuses it),
+  so no write through it can mean to remove one.
+- **A list member is matched by identity, not by position**: a seat by its
+  handle and a unit by its name anywhere in the document, so a seat moved to
+  another unit keeps its settings; an MCP server or a sandbox setup step by its
+  name within its own list. An identity held twice in the stored document, or
+  empty, matches nothing, so no seat's setting reaches another. A member of a
+  list with no identity (a schedule, for example) keeps nothing the write
+  replaced.
+- **A `PATCH` replaces only what it names.** Everything it does not name is
+  stored exactly as it was, so a list the patch leaves alone keeps every
+  member's settings, identity or not, and a schedule loses a newer build's
+  settings only when the patch replaces the seat or unit list that holds it.
+- **A reload and a revert store the document exactly as it was stored**, since
+  neither changes it.
+- **A renamed seat or unit is a new identity**, so it keeps nothing of the old
+  one's unknown settings.
 
 ## Setting an integration up
 
@@ -1027,7 +1217,7 @@ opens — before a single turn has run:
 | Section | What it is |
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
-| `org` | The role and unit tree, **verbatim** as the company document holds it: root-level `roles` plus `units` nesting to any depth. The client walks it and reads the config's own field names, so it is not reshaped on the way out |
+| `org` | The same public projection [`GET /org`](#get-org) answers: the charter, root-level `roles` and `units` nesting to any depth, with only the public fields of each |
 | `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Absent on a standalone API, which has no engine to ask |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
@@ -1115,9 +1305,9 @@ completed record when the phase finishes. Progress envelopes carry
 `turn_id` / `phase` / `iteration` for this correlation; they are
 stream-only and never persisted to the event store.
 
-The **spend rollup** is maintained by the projection too, over the same
-window per-agent totals hydrate over, using the same
-`aggregate_phase_events` the REST endpoint calls. It ships in the
+The **spend rollup** is maintained by the projection too, over the last 24
+hours (`livestate.LiveSpendWindow`) of the phases this process has seen, using
+the same `tokens.Aggregate` the REST endpoint calls. It ships in the
 snapshot and is re-pushed (coalesced to at most one frame per second)
 whenever a phase completes, so the Tokens view and the overview widget
 stay live without a fetch and without a second implementation of the
@@ -1161,47 +1351,61 @@ its own `failed` field (a phase or turn that died) and for an event type that
 failures without re-deriving them from a type list of its own.
 
 The flag survives a restart: the event-store writer stamps a `failed` tag on
-those events, and the projection reads it back when it hydrates its feed from
-history.  `list_events` deliberately never selects the payload column, so
-without the tag every historical failure would read back as a success.
+those events, and the store's event listing (`GET /events` and the `events`
+query) reads it back. That listing deliberately never selects the payload
+column, so without the tag every historical failure would read back as a
+success.
+
+The projection itself is **not** seeded from the store when a process starts:
+its feed, its per-agent token totals and its spend rollup begin empty in each
+process and fill from the live stream. History from before the process
+started is on `GET /events`, `GET /tokens/breakdown` and the other store
+queries.
 
 ### The health envelope
 
-One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
-the snapshot's `health` section, and the 5-second push, so those three
-surfaces cannot disagree about whether the engine is healthy — and a
+One builder (`App.health`, `internal/api/health.go`) answers `GET /health`,
+the snapshot's `health` section, the 5-second push and the `stream` query, so
+those surfaces cannot disagree about whether the engine is healthy, and a
 reconnect restores every field without a second round trip.
 
 ```json
 {
   "status": "ok",
+  "node": "node-0",
   "configured": true,
   "engine": true,
-  "version": "0.4.0",
-  "started_at": "2026-04-01T12:00:00+00:00",
+  "version": "v0.4.0",
+  "started_at": "2026-04-01T12:00:00Z",
   "queue": "jetstream-embedded",
-  "event_store": "durable",
-  "feed_hydrated": true,
   "clients": 3,
+  "event_history_seconds": 2592000,
   "in_flight": 2,
-  "engine_started_at": "2026-04-01T11:58:03+00:00",
-  "shutting_down": false
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 40,
+  "engine_started_at": "2026-04-01T11:58:03Z",
+  "seats": ["ceo", "eng"]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
+| `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. A draining engine reports `shutting_down` whatever else is true of it. |
+| `node` | This process's `node.id`. |
 | `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `engine` | Whether this process has an engine to ask. Always `true` from `crewlet run`, which runs the engine in every process that serves the API, the `ingress`-only node of a split deployment included. The API contract keeps the flag and leaves the engine's fields (`in_flight`, `shutting_down`, `posture`, `applied_epoch`, `engine_started_at`, `seats`) absent when it is `false`, so a client can tell "nothing is running" from "this process cannot know" instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
+| `started_at` | When the **API** was built. Deliberately separate from `engine_started_at`: the listener binds before the engine starts, so the two differ even in one process, and one merged "uptime" would be wrong for at least one of them. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
-| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
 | `clients` | Dashboards currently connected to this API process. |
+| `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. Carried by `GET /health`, the snapshot's `health` section and the `stream` query; the 5-second push does not repeat it, because it does not change. |
 | `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens; the API server keeps serving until the engine has fully stopped. |
+| `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck` (embedded API only). |
+| `applied_epoch` | The activation epoch this node last applied (embedded API only). |
+| `seats` | The handles of the seats this node holds (embedded API only). |
+| `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
 
 Per-socket facts — how many envelopes *this* connection dropped, how deep
 its queue is — are deliberately **not** here. The tick encodes one JSON
@@ -1219,7 +1423,7 @@ configuration is alive. A readiness probe should read `configured`.
 `(timestamp, id)` **descending**, and accept an exclusive keyset cursor:
 
 ```
-GET /events?limit=100&before=2026-04-01T12:00:00%2B00:00&before_id=<event_id>
+GET /events?limit=100&before_time=2026-04-01T12:00:00Z&before_id=<event_id>
 ```
 
 Pass the oldest row you already hold to get the page beneath it. The id
@@ -1229,16 +1433,20 @@ skips or repeats whatever collided with it.
 
 **A page shorter than `limit` is the end of the history.** That rule
 holds for every filter the store pushes into SQL. It does *not* hold for
-`related_agent`, which over-fetches and post-filters (it also pulls in
+the `agent` filter, which over-fetches and post-filters (it also pulls in
 every event sharing a trace with a direct match, so a caller must dedupe
 by id); that surface only knows it is done when a page returns zero rows.
 
-The persistent store retains 30 days. Once a cursor crosses that floor
-every page is empty — which is why a client must distinguish it from
-quiet, rather than drawing the gap as silence. A deployment with no
-event store answers **503** (and `no_event_store` on the query channel)
-rather than an empty page, for the same reason: "there is nothing older"
-and "I cannot answer" are different facts.
+The persistent store retains 30 days, and
+[`event_history_seconds`](#the-health-envelope) on the health envelope is
+that floor on the wire — read it rather than restating the number, which
+is the store's own constant and not a promise this page makes. Once a
+cursor crosses that floor every page is empty — which is why a client
+must distinguish it from quiet, rather than drawing the gap as silence.
+A process with no event store does not register the `events` question at
+all, so `GET /events` answers **404** with `unknown_query` (the same code
+on the query channel) rather than an empty page, for the same reason:
+"there is nothing older" and "I cannot answer" are different facts.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
@@ -1287,6 +1495,13 @@ Two refusals, both **400** rather than a smaller answer:
 
 ### The live token meter
 
+> **Not populated in this build.** The projection builds `budget`, the
+> `budget` push and each agent's `budget` from `budget_reported` events, and
+> nothing in the engine publishes that event, so `budget` is always `{}` and
+> every agent's `budget` is `null`. The durable counter and the caps are on
+> [`GET /budgets`](#get-budgets). What follows is the shape the projection
+> accepts.
+
 `budget` carries the engine's in-memory token counters — the only figures
 that can honestly be divided into a configured cap, because both cover the
 same span: **the engine's run**. The dashboard's other two token figures
@@ -1299,7 +1514,7 @@ up.
   prior figure is dead, so a consumer must **replace** what it holds
   rather than merge or take a maximum.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
-  **best-effort**: the standalone API reads an ephemeral broadcast
+  **best-effort**: every node's projection reads an ephemeral broadcast
   subscription that takes no acks, starts at the stream's tail on every
   (re)connect, and lets a slow consumer miss frames rather than hold
   them. So a report at or below the held `seq` is dropped rather than
@@ -1315,10 +1530,11 @@ up.
   fact. What a refusal DOES leave is durable and fleet-wide: the phase
   records its outcome as `budget_exhausted` in the event log, with the
   seat, the turn and the instant.
-- `{}` means no engine is reporting one (the standalone API has no meter
-  of its own). Per-agent, `budget: null` means the same, or that the seat
-  has no per-agent cap at all — the engine seeds one only for a non-zero
-  `token_budget`.
+- `{}` means no engine is reporting one — in this build always the case
+  (see the note above), and permanently so for the standalone API, which
+  has no meter of its own. Per-agent, `budget: null` means the same, or
+  that the seat has no per-agent cap at all — the engine seeds one only
+  for a non-zero `token_budget`.
 
 It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
@@ -1372,7 +1588,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -1401,8 +1617,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | — | `GET /schedules` |
-| `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
-| `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
+| `fleet` | none | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. A lease store that cannot be read answers `query_failed` (the REST twin answers `500` with the same code) |
+| `sandbox_runs` | none | `GET /sandbox-runs`; `unknown_query` on a process with no pending-run store |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
@@ -1491,7 +1707,7 @@ that renders `read_level` and swallows `complete` looks confidently right.
 | `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
 | `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
-| `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
+| `stream` | none | The health envelope (`GET /health`), on demand over the socket. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
@@ -1527,13 +1743,14 @@ to the alphabetically first seat in the chart.
 
 ### Wiring
 
-Both deployment paths feed events into a single `StreamService.ingest`
-entry point.  The standalone API process subscribes to the engine's
-NATS JetStream event stream with an **ephemeral broadcast consumer** (it
-receives every event — this is a broadcast, not a work queue, because a
-dashboard served by one node must show turns that ran on another); the
-embedded API path (engine + API in the same process) wires `ingest` as
-a publish listener directly, no queue round-trip required.  Each event
+Every node that serves the API feeds its projection through one entry
+point, `stream.Service.Ingest`, from an **ephemeral broadcast
+subscription** to the event stream (`observe.Projector`). It receives
+every event from every node, because a dashboard served by one node must
+show turns that ran on another, and that is why it is not a publish
+listener: a listener sees only what its own node published. The event
+store takes the other route, a publish listener inline on the publishing
+node, so no two nodes can write one row.  Each event
 updates the live-state projection *and* fans out to connected
 dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
@@ -1548,6 +1765,14 @@ and filter in the URL, and one file per screen.  `/dashboard` serves the
 shell; `/static/{path}` serves its assets.  The build output is
 COMMITTED, so `go build ./...` needs no Node.
 
+`/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
+license text of every npm package the bundle contains, the design system's
+three among them, written by Vite's `build.license`, followed by the SIL Open
+Font License of the embedded Inter and JetBrains Mono faces and the Apache
+License and notice of the Material Symbols drawings every glyph is one of. The
+release archives and the container image carry the same file, beside the
+notices for the Go modules the binary links.
+
 A second build target, `/static/dashboard/protocol.js`, is the wire
 protocol alone as plain ESM: `internal/e2e` replays a real company's
 captured frames through it under `node`, so the client's understanding
@@ -1557,6 +1782,126 @@ fixture.
 Its visual system — the token layer, the measured palette, and the rules
 a change has to keep — is documented in
 [Dashboard Design System](dashboard-design.md).
+
+---
+
+## Organization
+
+### `GET /org`
+
+The company's charter and its organization tree, as an anonymous reader may see
+it. The same object is the `org` section of the [handshake
+snapshot](#what-the-handshake-snapshot-carries) and the body of every `org`
+push, so all three surfaces carry exactly one shape.
+
+```json
+{
+  "name": "Nimbus",
+  "mission": "...",
+  "vision": "...",
+  "policies": ["..."],
+  "roles": [
+    {"name": "Founder", "kind": "human", "manages": ["CTO"], "availability": "CET business hours"}
+  ],
+  "units": [
+    {
+      "name": "Engineering",
+      "type": "department",
+      "purpose": "...",
+      "lead": "CTO",
+      "goals": ["..."],
+      "channel": "engineering",
+      "knowledge": ["..."],
+      "roles": [
+        {
+          "name": "CTO",
+          "handle": "cto",
+          "goal": "...",
+          "backstory": "...",
+          "responsibilities": ["..."],
+          "behavioral_guidelines": ["..."],
+          "manages": ["Platform"]
+        }
+      ],
+      "children": [
+        {
+          "name": "Platform",
+          "purpose": "...",
+          "roles": [{"name": "Platform Engineer", "goal": "..."}]
+        }
+      ]
+    }
+  ],
+  "derived": {
+    "seats": [
+      {
+        "handle": "cto", "name": "CTO", "kind": "agent", "placed_by_ref": false,
+        "manager": "founder", "managers": ["founder"],
+        "reports": ["platform-engineer"], "auto_reports": ["platform-engineer"],
+        "onboarding_chain": ["Engineering"]
+      }
+    ],
+    "units": [
+      {
+        "name": "Platform", "type": "team", "lead": "cto", "lead_inherited": true,
+        "channel": "engineering", "channel_inherited": true,
+        "seats": ["platform-engineer"]
+      }
+    ]
+  }
+}
+```
+
+**`derived` is the hierarchy the engine derives from that document**, so a
+client draws a chart rather than deriving one. Each rule in it is one a second
+implementation gets wrong: a handle is a slug with Go's own case mapping, a
+root seat carrying `unit:` moves into that unit, a lead and a channel cascade
+to child units that set none, a `manages` entry naming a unit stands for the
+seats in its subtree, a unit's lead manages the members nobody else manages,
+and the primary manager is the first seat in the engine's own order that
+manages a seat. The dashboard derived these in TypeScript and had already
+diverged on three of them.
+
+The fields above it stay as WRITTEN, so a reader can still tell a declared lead
+from an inherited one. Every list here may arrive as `null` (Go marshals a nil
+slice that way); a reader treats `null` as empty. The authored `path` and
+`unit_path` of each entry are omitted, because an anonymous reader is given no
+document to point into, and membership is each unit's `seats`; the same block
+with paths comes back from [a configuration write or dry run](#what-a-write-answers).
+
+**What it carries, and nothing else.** The company's `name`, `mission`,
+`vision`, `policies` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
+`backstory`, `responsibilities`, `behavioral_guidelines`, `manages` and
+`availability`; for each unit its `name`, `type`, `purpose`, `lead`, `goals`,
+`channel`, `knowledge`, `roles` and `children`. Every value is the one the
+company document holds, as written: a seat with no declared `handle` has none
+here (the engine derives it from the name), and a unit that inherits its lead
+has no `lead` of its own. An empty field is omitted, and a node with no active
+company answers `{}`.
+
+**What it never carries.** A seat's `contact` identities, `email`, `unit`
+reference, `llm` and per-phase `llm_*` chains, `workers`, `token_budget`,
+`learning_enabled`, `mcp_env`, `sandbox`, `placement`, `integrations` and
+`schedules`; a unit's `mcp_env`, `integrations` and `schedules`; and every
+company block outside the charter (providers, MCP servers, integrations,
+knowledge, budgets). Those are read through the operator-gated `config` query
+or [`GET /config`](#config--live-config-management-auth-gated), which masks
+credentials. Two of them also have a read surface of their own, under the same
+posture as `/org`, and the tree does not repeat them:
+[`GET /schedules`](#routes) answers every configured schedule with its
+task and next run, and [`GET /budgets`](#get-budgets) answers each seat's token
+cap beside the counter it is enforced against.
+
+**Why an explicit shape.** `/org` is readable without a token under the
+default `api.auth.allow_anonymous_read: true`. Serialising the config's own
+seat and unit types would make every field added to a seat public the day it
+landed, whatever it held. The shape is declared field by field in
+`internal/api` instead, and a test fails when the config gains a seat or unit
+field nobody has classified as public or guarded.
+
+Founder prose is served as written. Nothing in the public fields is resolved as
+a `${VAR}`, so a reference typed into a goal is shown as the text it is; keep
+credentials in the fields built for them.
 
 ---
 
@@ -2020,6 +2365,11 @@ Every detached [coding run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `launching`, `running`, `awaiting_clarification`,
 `reseed`, and `resumed` run records.
 
+A run that has settled, whether its turn finished or it was lost, is not
+listed because it has no record: its record is deleted once its box is
+reclaimed. How it ended is on the event stream, in the resumed turn's own
+events or a `sandbox_run_failed` event naming the reason.
+
 A `launching` run is one whose coding job has started while the turn that
 started it is still unwinding, so the suspended conversation a resume
 re-enters is not on the row yet; it is listed but never polled, because a
@@ -2066,9 +2416,10 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 deliberately not returned: it is the largest column in the row and every
 prompt in it is already reachable through the event store.
 
-Without a database the engine cannot park a run at all, so that
-deployment gets `{"runs": [], "degraded": "..."}` rather than an error;
-a store that is configured and unreadable answers `503`.
+A process with no pending-run store does not register the question, so
+the route answers `404` with `unknown_query` rather than an empty board; a
+store that is configured and unreadable answers `500` with `query_failed`,
+its reason in the log.
 
 ### `GET /budgets`
 
@@ -2081,11 +2432,13 @@ mixing them can only be wrong:
   [coordination store](../concepts/coordination.md), written by every node
   running the company and surviving restarts. It is what the engine
   actually enforces against;
-- the **live meter** is per engine *run*. It is pushed to the dashboard as
-  `budget_reported` and resets when the process does.
+- the **live figure** is this process's own view: the projection's per-seat
+  token totals, folded from the phase events it has seen since it started, so
+  it resets when the process does.
 
-Only the meter and the cap share a span, which is why a seat card can draw
-a bar and this screen mostly cannot. What it could never show before is the
+Only a live figure and the cap could share a span, which is why this screen
+draws the durable counter against the cap rather than a bar from the live
+figure. What it could never show before is the
 more useful picture — "this seat has burned 94% of its cap across two
 restarts" — because the durable half was reachable only from
 `crewlet budgets show`, which is itself a client of this route.
@@ -2095,16 +2448,15 @@ restarts" — because the durable half was reachable only from
   "durable": true,
   "org": {
     "max_tokens": 5000000, "durable_used": 1284410,
-    "durable_updated_at": "2026-06-08T07:30:02+00:00",
+    "durable_updated_at": "2026-06-08T07:30:02Z",
     "live_used": 91200
   },
   "seats": [
     {
       "agent_id": "<uuid>", "role": "Engineer", "handle": "eng",
       "max_tokens": 100000, "durable_used": 99120,
-      "durable_updated_at": "2026-06-08T07:29:51+00:00",
-      "live_used": 41000, "live_max": 100000,
-      "refused_at": "2026-06-08T07:29:51+00:00"
+      "durable_updated_at": "2026-06-08T07:29:51Z",
+      "live_used": 41000
     }
   ]
 }
@@ -2114,16 +2466,20 @@ Two fields carry the honesty. `durable` is `false` when the shared counter
 could not be read — a counter that cannot be read is not a counter that
 reads zero, and without the flag a database blip renders every seat at the
 bottom of its cap, which is the most reassuring possible picture drawn at
-the moment nothing is known. `live_used` / `live_max` are `null`, never
-`0`, on a node with no engine in the process: zero would let a client draw
-an empty bar and call it "nothing spent this run", a claim about a run
-that is not happening.
+the moment nothing is known. `live_used` is `null`, never `0`, when this
+process's projection has no figure for the seat (or, for `org`, for any
+seat): zero would let a client draw an empty bar and call it "nothing spent
+this run", a claim about a run this process has not seen. Human seats have
+no row, because they spend nothing.
 
-Exhaustion is `refused_at`, the moment a charge was turned away — never
-`used >= max`. `TokenBudget` refuses a charge that would exceed the cap
-and increments nothing, so a seat charged in 3k-token rounds against a
-100k cap stalls near 99k and never compares equal to its own maximum. A
-ratio test shows a permanently blocked seat at 99% and calls it healthy.
+This answer does not say whether a cap is exhausted, and `durable_used >=
+max_tokens` is the wrong test for it. The counter (`coord.Budgets.Charge`)
+refuses a charge that would exceed the cap and increments nothing, so a seat
+charged in 3k-token rounds against a 100k cap stalls near 99k and never
+compares equal to its own maximum; a ratio test shows a permanently blocked
+seat at 99% and calls it healthy. A refused charge is recorded as a
+`budget_exhausted` event, which is what the seat's `afk` state and the
+activity feed show.
 
 ### `POST /budgets/reset`
 
@@ -2672,7 +3028,7 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 
 ### `GET /webhooks/slack-oauth`
 
-The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md) — every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds.
+The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md). Every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/github`
 
@@ -2681,8 +3037,9 @@ Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against
 ### `GET /webhooks/github-app`
 
 Where GitHub returns an operator's browser during the per-agent
-[GitHub App](../integrations/github.md#one-github-app-per-agent) flow, and the
-only `/webhooks/*` route that renders a page rather than accepting a delivery.
+[GitHub App](../integrations/github.md#one-github-app-per-agent) flow, and one
+of the two `/webhooks/*` routes that render a page rather than accept a delivery
+(the other is [`/webhooks/slack-oauth`](#get-webhooksslack-oauth)).
 Two arrivals, one route: after the app is **created**, with a one-time code to
 convert, and after it is **installed**, with nothing but `?installed=<handle>`.
 Unauthenticated, because a redirect from GitHub carries no engine credential;
@@ -2702,6 +3059,8 @@ and reissues neither. Answers `200` for a completion or an install, `400` for a
 refusal from GitHub, a missing code, or a state or code the engine will not
 accept, and `503` when this process has no setup surface. Error text is always
 the engine's own wording: GitHub's response body here carries the private key.
+The page runs only its own inline style and install countdown script, allowed
+by hash (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/gitlab`
 

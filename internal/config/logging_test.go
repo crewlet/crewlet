@@ -151,7 +151,7 @@ func TestTheRetiredDebugKeyNamesItsReplacement(t *testing.T) {
 // does not exist there — sending its author to edit a file they are not in.
 func TestTheRetiredKeyHintIsScopedToItsTier(t *testing.T) {
 	t.Parallel()
-	err := rejects(t, "name: Acme\ndebug: true\n", "line 2")
+	err := rejects(t, "name: Acme\ndebug: true\n", "debug: unknown field")
 	if !errors.Is(err, ErrUnknownField) {
 		t.Fatalf("want %v, got %v", ErrUnknownField, err)
 	}
@@ -205,7 +205,7 @@ func TestTheRetiredStoreDriverKeyNamesItsReplacement(t *testing.T) {
 // they are not in.
 func TestTheRetiredDriverHintIsScopedToItsBlock(t *testing.T) {
 	t.Parallel()
-	err := rejectsBootstrap(t, "stream:\n  driver: nats\n", "line 2")
+	err := rejectsBootstrap(t, "stream:\n  driver: nats\n", "stream.driver: unknown field")
 	if !errors.Is(err, ErrUnknownField) {
 		t.Fatalf("want %v, got %v", ErrUnknownField, err)
 	}

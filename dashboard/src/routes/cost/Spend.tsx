@@ -28,13 +28,14 @@ import { QueryState } from "~/components/common.tsx";
 import {
   BarList,
   Card,
+  dataColor,
+  EmptyValue,
   Legend,
   Meter,
   StackedBar,
   StatCard,
   StatGroup,
   Tag,
-  dataColor,
 } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
@@ -54,7 +55,7 @@ import {
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
-import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
 // OURS, AND THERE IS NO PEER FOR EITHER. `Charts` exports a line `TimeSeries`
@@ -369,13 +370,15 @@ export function Spend() {
         <StatCard
           icon={<LayersGlyph size="xs" />}
           label="Tokens"
-          value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
+          value={
+            tokens ? fmtCount(tokens.totals.total_tokens) : <EmptyValue label="Nothing recorded" />
+          }
           sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
         />
         <StatCard
           icon={<MemoryGlyph size="xs" />}
           label="Model calls"
-          value={tokens ? fmtCount(tokens.totals.calls) : "—"}
+          value={tokens ? fmtCount(tokens.totals.calls) : <EmptyValue label="Nothing recorded" />}
           sub={
             tokens && tokens.totals.calls
               ? `${fmtCount(Math.round(tokens.totals.total_tokens / tokens.totals.calls))} tokens per call`

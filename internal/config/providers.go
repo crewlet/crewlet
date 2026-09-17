@@ -60,9 +60,10 @@ type Providers struct {
 }
 
 // DefaultProviders is the empty provider surface: no models, no
-// embeddings, no sandbox. A company with no LLM provider parses — that is
-// what lets an org chart be authored before the credentials exist — and
-// fails at the first turn, which is where the failure is actionable.
+// embeddings, no sandbox. A company with no LLM provider parses, validates
+// and runs, which is what lets an org chart be authored before the
+// credentials exist: its seats are placed and hold their work until a
+// revision adds a provider.
 func DefaultProviders() Providers { return Providers{} }
 
 // llmKeyOrder reads the declaration order of providers.llm off the document
@@ -188,7 +189,7 @@ func (p *Providers) ProviderOrder() []string {
 	return append(out, rest...)
 }
 
-func (p *Providers) validate(path string) error {
+func (p *Providers) validate(path Path) error {
 	var probs problems
 	llmPath := at(path, "llm")
 	for key, provider := range p.LLM {
@@ -198,7 +199,7 @@ func (p *Providers) validate(path string) error {
 					"select this provider by")
 			continue
 		}
-		probs.wrap(provider.validate(at(llmPath, key)))
+		probs.wrap(provider.validate(entry(llmPath, key)))
 	}
 	probs.wrap(p.validateSharedStateDirs(llmPath))
 	if p.Embeddings != nil {
@@ -224,7 +225,7 @@ func (p *Providers) validate(path string) error {
 //
 // Caught here so it fails `crewlet validate` rather than at the first turn
 // of whichever seat lost the race.
-func (p *Providers) validateSharedStateDirs(path string) error {
+func (p *Providers) validateSharedStateDirs(path Path) error {
 	type claim struct {
 		key   string
 		agent CLIAgentName
@@ -245,7 +246,7 @@ func (p *Providers) validateSharedStateDirs(path string) error {
 		dir := filepath.Clean(cfg.CLI.StateDir)
 		prev, seen := byDir[dir]
 		if seen && prev.agent != cfg.CLI.Agent {
-			probs.add(at(at(path, key), "cli.state_dir"), ErrConflict,
+			probs.add(at(entry(path, key), "cli.state_dir"), ErrConflict,
 				"shares %q with providers.llm.%s but drives a different CLI "+
 					"(%q vs %q). One state directory is one login and one set "+
 					"of per-seat homes, which only works for the same CLI: "+
@@ -385,7 +386,7 @@ func (l *LLMProvider) ResolvedKeys(r *Resolver) []string {
 	return out
 }
 
-func (l *LLMProvider) validate(path string) error {
+func (l *LLMProvider) validate(path Path) error {
 	var p problems
 	if l.Type != "" && !slices.Contains(LLMProviderTypes, l.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", l.Type, names(LLMProviderTypes))
@@ -521,7 +522,7 @@ func (c CredentialCooldowns) Auth() int {
 	return c.AuthSeconds
 }
 
-func (c CredentialCooldowns) validate(path string) error {
+func (c CredentialCooldowns) validate(path Path) error {
 	var p problems
 	for _, f := range []struct {
 		name  string
@@ -804,7 +805,7 @@ func (c *CLIAgent) Concurrency() int {
 	return c.MaxConcurrent
 }
 
-func (c *CLIAgent) validate(path string) error {
+func (c *CLIAgent) validate(path Path) error {
 	var p problems
 	if c.Agent != "" && !c.Agent.Valid() {
 		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
@@ -932,7 +933,7 @@ func (e *EmbeddingProvider) Width() int {
 	return ModelWidths[strings.TrimSpace(e.Model)]
 }
 
-func (e *EmbeddingProvider) validate(path string) error {
+func (e *EmbeddingProvider) validate(path Path) error {
 	var p problems
 	if e.Type != "" && !slices.Contains(EmbeddingProviderTypes, e.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, names(EmbeddingProviderTypes))

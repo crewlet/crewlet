@@ -53,6 +53,7 @@ import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/pref
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
+import { FillRequest } from "./fill.tsx";
 
 /**
  * What a screen tells the frame about itself.
@@ -183,6 +184,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const [collapsed, toggleRail] = useRailCollapsed();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // A SCREEN THAT ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL — see
+  // `app/fill.tsx` for why this is a request and not a selector. One screen
+  // makes it (the org builder's canvas lens), and while it holds, the
+  // scroller stops being one and hands the column what is left of the window.
+  const [filling, setFilling] = useState(false);
   const [tokenOpen, setTokenOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
 
@@ -338,9 +344,15 @@ export function Shell({ children }: { children: ReactNode }) {
             onToggleSidebar={sections ? () => setDrawer((v) => !v) : undefined}
           />
           <StateBar degraded={degraded} coverage={coverage} />
-          <div className="screen" id="screen-scroll">
+          {/* THE ATTRIBUTE IS THE SHELL'S OWN, set from the request the screen
+              made. The chain it drives is in the stylesheet beside it, and it
+              names nothing inside any screen: a screen says THAT it wants the
+              height, never how the shell is built. */}
+          <div className="screen" id="screen-scroll" data-fill={filling || undefined}>
             <div className="screen-inner">
-              <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+              <FillRequest.Provider value={setFilling}>
+                <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+              </FillRequest.Provider>
             </div>
           </div>
         </main>

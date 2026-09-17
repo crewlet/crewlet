@@ -447,6 +447,242 @@
   background: transparent;
 }
 
+/* ---- Org builder: the lens ----------------------------------------------
+   The company screen's third lens (`routes/org/builder/`), which is the one
+   that WRITES. Its recipes live here beside the chart's because they are one
+   screen: `#/company` with `lens=builder`.
+
+   Read `routes/org/builder/builderStyles.test.ts` before changing anything
+   below — it reads these rules as text and states what each one buys. */
+
+/* THE CARD WIDTH IS A KNOB THE CONSUMER SETS. `--crewlet-tree-canvas-card-width`
+   is the design system's own variable for a tree card, and the design system
+   reads it with a fallback because a component has to draw without a consumer.
+   This declaration is what the builder's chart is drawn at: the component
+   renders every card itself, so this one line is the whole of what this
+   application says about how wide they are, and the cards, the rows measured
+   inside them and the connectors between them all lay out against it. */
+.org-builder {
+  --crewlet-tree-canvas-card-width: 15rem;
+}
+
+/* THE CANVAS VIEW FILLS THE SCREEN, and the shell's scroller has nothing to
+   scroll. The builder and its body become flex columns with a definite height,
+   so the canvas takes what is left under the toolbar instead of growing the
+   page.
+
+   THE HEIGHT ITSELF COMES FROM THE SHELL, which the screen ASKS for rather
+   than reaches into: `useFillScreen` raises the request, the shell answers it
+   with `data-fill` on its own scroller, and shell.css is where that column is
+   given the window's remaining height. Nothing here names a class the shell
+   draws, and nothing there names one of these. */
+.org-builder:has(> .org-builder-body.fill) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.org-builder-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.org-builder-body.fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Fullscreen takes the whole container, which paints its own ground: the
+   page's background is not behind a fullscreen element. */
+.org-builder:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  background: var(--bg);
+  overflow: auto;
+}
+
+.org-builder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
+   the drawer breakpoint; the check status and Review and save stay. */
+.org-builder-narrow {
+  display: none;
+}
+@media (max-width: 860px) {
+  .org-builder-wide {
+    display: none;
+  }
+  .org-builder-narrow {
+    display: inline-flex;
+  }
+}
+
+.org-builder-problems ul,
+.org-builder-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* A sentence that follows the one before it in a banner, on its own line. */
+.org-builder-note {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.org-builder-conflict {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* ---- Org builder: canvas ------------------------------------------------
+   The builder's charts (`routes/org/builder/CanvasView.tsx`).
+
+   THE CHART IS THE DESIGN SYSTEM'S `TreeCanvas`, so almost nothing about it is
+   here. The card's surface, boundary, radius and lift, the dashed edge a human
+   seat wears, the inset on each node, the focus ring, the accent ring on the
+   selection, the connectors, the gap probe and the reveal of every
+   pointer-only control are all drawn by the package. What is left below is
+   what the ENGINE says inside a card, which the package could not know.
+
+   Nothing here is a per-entity colour: a card is neutral whatever it holds,
+   and what marks a human seat is the boundary the package draws, so the mark
+   reads to somebody who cannot separate the hue at all. */
+
+.bchart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The canvas is the design system's, and this is the only thing the builder
+   says about it: it takes what is left of the column under the toolbar. */
+.bchart-canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Over the canvas's top edge, in its untransformed overlay layer, so it
+   neither resizes the viewport as it comes and goes nor takes a press meant
+   for the chart beneath it. */
+.bchart-note {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  right: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  background: var(--surface-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  pointer-events: none;
+}
+
+/* A LIVE STATE OR A CHECK NEVER RESIZES A NODE. The live state and the problem
+   count each have a slot on the card's first line that does not shrink, wrap
+   or push the name onto a second line: the name truncates instead, and the
+   line is as tall with a badge as without one. So a push that turns "idle"
+   into "working", and a count that leaves while a check is out and comes back
+   with its answer, change a word and never a measured height. */
+.bnode-state,
+.bnode-count {
+  display: inline-flex;
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A WIRING MARK ON A CHART NODE IS A GLYPH, and it keeps its size for the same
+   reason: a node one rank tall has no room for the sentence written out, and a
+   mark that changed size would move every node beside it. The sentence is the
+   glyph's own accessible name and this element's tooltip. */
+.bnode-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+/* ---- Org builder: table -------------------------------------------------
+   The builder's table (`routes/org/builder/TableView.tsx`).
+
+   THE TABLE IS THE DESIGN SYSTEM'S `OrgTable`, over its `TreeGrid`, so the
+   rows, the cells, the column template, the tree's wires, the two-line name
+   group, the strip of row controls and the split add pill are all drawn by it
+   and none of them are here.
+
+   WHICH LEAVES NOTHING TO DRAW. `.btable-name` and `.btable-label` are
+   HANDLES, not styles: the suite finds a row by its NAME cell rather than by
+   whichever cell happens to mention a name. Every declaration they used to
+   carry was already set on the same elements by `.crewlet-org-table__node`,
+   `__icon` and `__name`, four of them byte for byte, and the one that was not
+   (`min-width` on the label span) was inert, since the span is not a flex item
+   and the ellipsis lives on `__name`. */
+
+/* ---- Org builder: the node editor and its dialogs ------------------------
+   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
+   kind dialogs. A drawer's body is a column of fields; a section separates a
+   group of them (reports, a tool, what the document configures) with a rule
+   and a heading, so a long seat form reads as parts rather than one list. */
+
+/* KEYED ON THE SECTION'S OWN DEPTH, which it already knows: it reads the depth
+   to pick its heading level, so it says it. A section inside a section (one
+   tool inside Integrations) is a sub-part, not a new part, and takes no rule,
+   which the depth says directly rather than by being cancelled again below. */
+.builder-section[data-depth="0"] {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+.builder-section-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+.builder-section .builder-section .builder-section-title {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.builder-section p,
+.builder-fact p,
+.builder-note {
+  margin: 0;
+}
+.builder-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Two fields that make one answer (a contact's surface and its identity) sit
+   side by side and share the width, so neither reads as a separate question.
+
+   A GRID, so the split is the row's own rule rather than one each child has to
+   carry. It used to be a flex row that sized its children through `> .field`,
+   the class the engine's own field component drew; the design system draws the
+   field now, and that selector went with it, leaving the two questions to size
+   themselves and the pair to read as one wide and one narrow. */
+.builder-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
 /* ---- Feed --------------------------------------------------------------- */
 
 /* A feed row's columns are FIXED, so a run of rows scans as columns rather
@@ -1115,28 +1351,6 @@
   letter-spacing: var(--track-normal);
   text-transform: none;
   color: var(--text);
-}
-
-/* A choice inside a dialog: the box, and the sentence that says what ticking
-   it actually destroys. The description is part of the label so the whole
-   thing is one click target and one thing a screen reader reads. */
-.int-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  cursor: pointer;
-}
-.int-choice:hover {
-  border-color: var(--border);
-}
-.int-choice input {
-  margin: 2px 0 0;
-  flex: none;
-  accent-color: var(--critical);
-  cursor: pointer;
 }
 
 /* AN AGENT'S ROW IN A CARD'S ROSTER.

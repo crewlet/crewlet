@@ -28,20 +28,20 @@ import { QueryState } from "~/components/common.tsx";
 import {
   Button,
   EmptyState,
+  EmptyValue,
   FilterChip,
   FilterChipGroup,
   Select,
   Skeleton,
   Tag,
-  type TagVariant,
 } from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
-import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtElapsed, plural, tsKey } from "~/lib/format.ts";
+import { eventHistoryLabel, fmtElapsed, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
@@ -76,6 +76,7 @@ const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary", "jud
 export function ModelActivity() {
   const { socket } = useClient();
   const agents = useAgents();
+  const { data: engine } = useEngineHealth();
   const [phase, setPhase] = useParam("phase", "");
   const [role, setRole] = useParam("role", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
@@ -273,7 +274,15 @@ export function ModelActivity() {
       {
         key: "model",
         header: "Model",
-        cell: (r) => <span className="mono t-caption truncate">{r.model || "—"}</span>,
+        // A MARKED ABSENCE, not a punctuation mark. A bare dash is read as
+        // "dash" or skipped entirely, so the cell with the least to say said
+        // nothing at all.
+        cell: (r) =>
+          r.model ? (
+            <span className="mono t-caption truncate">{r.model}</span>
+          ) : (
+            <EmptyValue label="No model reported for this phase" />
+          ),
         sortValue: (r) => r.model,
       },
       {
@@ -294,8 +303,13 @@ export function ModelActivity() {
       },
       {
         key: "when",
+        // NOT RIGHT-ALIGNED, though the two columns before it are. A number is
+        // set right so a reader can compare magnitudes digit by digit down the
+        // column; "2 m ago" and "14:07" are a phrase and a clock, and neither
+        // is read from its last character. Set right the values also sat away
+        // from their own header, which is set left like every other header in
+        // this table.
         header: "When",
-        align: "right",
         shrink: true,
         // Elapsed while it runs, and when it landed once it has. Two
         // different questions, and a running phase has no "when" yet.
@@ -357,8 +371,8 @@ export function ModelActivity() {
       </PageActions>
       <PageNote>
         Every phase the models ran, one row each. Open a row for the turn it ran in, beside the
-        table — reading what a model said is a one-agent job, and this page has to stay readable
-        with fifty of them running.
+        table: reading what a model said is a one-agent job, and this page has to stay readable with
+        fifty of them running.
       </PageNote>
 
       {/* ONE row of controls. This screen had eighteen: a segmented control, a
@@ -457,7 +471,7 @@ export function ModelActivity() {
         <section className="col gap-1">
           <div className="t-label">
             Running now
-            <span className="faint"> · {plural(running.length, "phase")} mid-flight</span>
+            <span className="muted"> · {plural(running.length, "phase")} mid-flight</span>
           </div>
           <DataGrid
             rows={running}
@@ -483,7 +497,7 @@ export function ModelActivity() {
         <section className="col gap-1">
           <div className="t-label">
             Recent phases
-            <span className="faint"> · newest first · open a row for its turn</span>
+            <span className="muted"> · newest first · open a row for its turn</span>
           </div>
           <DataGrid
             name="settled"
@@ -518,7 +532,7 @@ export function ModelActivity() {
             >
               {paging ? "Loading…" : `Load ${PAGE} older phases`}
             </Button>
-            <span className="t-caption">the event store keeps 30 days</span>
+            <span className="t-caption">{eventHistoryLabel(engine?.event_history_seconds)}</span>
           </>
         )}
         <span className="spacer" />

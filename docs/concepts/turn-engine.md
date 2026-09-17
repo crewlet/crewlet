@@ -20,12 +20,12 @@ One agentic loop removes the reconciliation rather than improving it. What remai
 
 ## Phase-specific tool surfaces
 
-Each phase gets a filtered view over the shared `ToolRegistry` via `ToolSurface` (`internal/tools/surface.go`). This is the key constraint that keeps LLM payloads tight while still letting the executor recover from an under-specified catalogue.
+Each phase gets a filtered view over the shared `tools.Registry` through a `tools.Surface` (`internal/tools/surface.go`). This is the key constraint that keeps LLM payloads tight while still letting the executor recover from an under-specified catalogue.
 
-| Phase | `tools=[...]` | System prompt | Notes |
+| Phase | Tools | System prompt | Notes |
 |-------|---------------|---------------|-------|
-| **Onboarding** | `reflect_and_persist`, `mark_onboarded`, `load_tool_skill` always-on, plus the `activate_tool` / `list_mcp_server_tools` discovery meta-tools | One-line identity + the onboarding instructions (which pages to read, persist conventions, then `mark_onboarded`) + slim discovery catalogue | Runs only on a first turn for an unmarked agent, on its own budget. Discovers its knowledge-base tools via `list_mcp_server_tools` → `activate_tool` exactly like the executor. **No required-skill guard** — onboarding is a fixed read → persist → mark workflow and the prompt is its own guidance, so the load-before-use tax is skipped. Terminates on `mark_onboarded`; on budget exhaustion the agent stays unmarked and retries next turn. |
-| **Executor** | Every first-party tool except `mark_onboarded`, plus `submit_work`, `activate_tool`, `list_mcp_server_tools`, and any MCP tool it has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks + **slim** tool catalogue (builtin tool names + MCP server names only) | The slim catalogue lists every builtin tool but only the NAMES of MCP servers — individual MCP tool names (often 50–150 per role) stay out of the prompt. To use one the agent calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to promote it into `tools=[...]` so its schema arrives on the next round. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model — no DB seed step. `mark_onboarded` is the whole phase-scoped denylist: a seat that could mark itself here would permanently skip orientation. |
+| **Onboarding** | `reflect_and_persist` and `mark_onboarded` active from the first round, plus the `activate_tool` / `list_mcp_server_tools` discovery meta-tools | One-line identity + the onboarding instructions (which pages to read, persist conventions, then `mark_onboarded`) + slim discovery catalogue | Runs only on a first turn for an unmarked agent, on its own budget. Discovers its knowledge-base tools via `list_mcp_server_tools` → `activate_tool` exactly like the executor. **No required-skill guard**: onboarding is a fixed read → persist → mark workflow and the prompt is its own guidance, so the load-before-use tax is skipped. Terminates on `mark_onboarded`; on budget exhaustion the agent stays unmarked and retries next turn. |
+| **Executor** | Every first-party tool except `mark_onboarded`, plus `submit_work`, `activate_tool`, `list_mcp_server_tools`, and any MCP tool it has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks + **slim** tool catalogue (builtin tool names + MCP server names only) | The slim catalogue lists every builtin tool but only the NAMES of MCP servers; individual MCP tool names (often 50 to 150 per role) stay out of the prompt. To use one the agent calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to promote it into the phase's active tool list so its schema arrives on the next round. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist: a seat that could mark itself here would permanently skip orientation. |
 | **Review** | `submit_review` meta-tool only | One-line identity + the round's intent, outcome, tool log and produced text + decision-enum contract | No catalogue, no policies, no prefetch. Whether anything was DELIVERED is settled before this prompt is built — the reviewer's question is whether the work is any good. |
 | **Worker** | The task's (or its template's) allowlist minus the engine-control denylist (`delegate`, `run_sandbox`, `a2a_ask`, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface, **and** minus anything the parent cannot itself call — plus `submit_result` always | Persona (template or inline) + mandated preamble + slim catalogue | Fresh context; a wall-clock timeout; runtime-clamped `max_turns`. A worker CAN discover and activate more *read-only* tools itself, against the safety-filtered universe its grant was cut from — so discovery cannot widen it into a write or a control tool. External writes are denied by *capability* (derived from MCP annotations), not by a hardcoded name list, so the guard holds for any tool stack. |
 
@@ -35,13 +35,13 @@ Each phase gets a filtered view over the shared `ToolRegistry` via `ToolSurface`
 
 A fresh agent (no onboarding marker for its current org chain) needs to read its team's `Onboarding` knowledge-base pages and internalise the conventions before doing real work. This runs as a **dedicated phase before the executor** (`internal/agent/runner/onboarding.go`), gated on the marker store (`agent_onboarding_markers`):
 
-1. The engine checks the marker. The read is **tri-state**: `True` (marked for the current chain) skips; `False` (definitively unmarked) runs the pass; `None` (the lookup *failed* — state unknown) **skips this turn and retries the check next turn**. Collapsing a failed lookup into "not onboarded" would re-run a full onboarding pass for an already-marked agent on any transient DB error. Two further guards make onboarding strictly run-once per org chain: a **process-local latch** (the seat's onboarded-chain hash, set the moment a pass marks or a read confirms the marker) short-circuits before any DB read, and a **single-flight lock** (the seat's onboarding lock) holds a concurrent turn at the gate while a pass runs — turns are normally serialized per agent, but the sandbox busy-state transitions can free the agent while an earlier turn is still mid-flight, and without the lock both turns would read "unmarked" and run duplicate passes.
-2. Otherwise it runs `run_onboarding_phase` with its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10). The agent discovers its knowledge-base tools (`list_mcp_server_tools` → `activate_tool`), reads the pages, captures conventions with `reflect_and_persist`, and calls `mark_onboarded` (which terminates the phase). Onboarding is a **discovery-capable phase** — its surface exposes the slim tool catalogue and supports `activate_tool` exactly like the executor. (Without that, the agent could *see* its knowledge-base tools via `list_mcp_server_tools` but every `activate_tool` would hit an "availability gate" — it would never read its pages, never mark, and the pass would re-fire every turn.) Its rounds are governed by the same round-cap **extension judge** as the executor: the base cap can be extended up to `onboarding_max_tool_rounds_ceiling` (default 20) when the agent is still making progress, so a near-done pass isn't cut off mid-read.
-3. The turn then proceeds to the executor with the onboarding hint **suppressed for the rest of the turn**, so onboarding can't also happen inside it and re-spend the turn's budget. The hint path applies the same tri-state + latch rules: it renders only when the agent is *definitively* unmarked — never on a failed lookup, which would otherwise trigger a repeat onboarding for an already-marked agent.
+1. The engine checks the marker (`Runner.Onboard`). The read has **three answers**: marked for the current chain skips; definitively unmarked runs the pass; a lookup that *failed* (`onboarding_state_unknown_skipping`) **skips this turn and retries the check next turn**. Collapsing a failed lookup into "not onboarded" would re-run a full onboarding pass for an already-marked agent on any transient database error. Two further guards make onboarding run once per org chain: a **process-local latch** (`runner.Latch`, the chain hash this process has seen marked, set the moment a pass marks or a read confirms the marker) short-circuits before any database read, and a **cross-process pass lease** (`Markers.Claim`, held for at most `runner.ClaimTTL`, 15 minutes, and released explicitly when the pass ends) lets exactly one turn run the pass when two turns for the same unmarked seat start at once, for example on two nodes during a rolling restart. A turn that loses the lease skips the pass (`onboarding_claimed_elsewhere_skipping`). The lease also excludes a concurrent pass inside one process, so there is no separate in-process lock.
+2. Otherwise it runs the onboarding pass with its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10). The agent discovers its knowledge-base tools (`list_mcp_server_tools` → `activate_tool`), reads the pages, captures conventions with `reflect_and_persist`, and calls `mark_onboarded` (which terminates the phase). Onboarding is a **discovery-capable phase**: its surface exposes the slim tool catalogue and supports `activate_tool` exactly like the executor. (Without that, the agent could *see* its knowledge-base tools via `list_mcp_server_tools` but every `activate_tool` would hit an "availability gate", so it would never read its pages, never mark, and the pass would re-fire every turn.) Its rounds are governed by the same round-cap **extension judge** as the executor: the base cap can be extended up to `onboarding_max_tool_rounds_ceiling` (default 20) when the agent is still making progress, so a near-done pass isn't cut off mid-read.
+3. The turn then proceeds to the executor with the onboarding hint **suppressed for the rest of the turn**, so onboarding can't also happen inside it and re-spend the turn's budget. The hint path applies the same rules: it renders only when the agent is *definitively* unmarked, never on a failed lookup, which would otherwise trigger a repeat onboarding for an already-marked agent.
 
 **Why a separate phase.** If onboarding were only a hint injected into the executor's prompt, the agent would do the page-reads + `reflect_and_persist` + `mark_onboarded` inside its own round budget — on a first turn that could burn every round before it ever called `submit_work`, and the turn would fall through to a silent skip (the request dropped). Giving onboarding its own budget means a first turn always has its full budget for actual work.
 
-The marker invalidates itself when the org chain changes (`compute_chain_hash`), so a role move / reorg re-triggers onboarding for the new context. Set `onboarding_max_tool_rounds: 0` to disable the dedicated pass. When the marker store isn't wired (no DB), onboarding is skipped — there's no way to record completion, so it would otherwise run every turn.
+The marker invalidates itself when the org chain changes (`learning.ChainHash`, a hash of the seat's path through the organization), so a role move or a reorganization re-triggers onboarding for the new context. Set `onboarding_max_tool_rounds: 0` to disable the dedicated pass. When no marker store is wired (a node with no store), onboarding is skipped, because there is no way to record completion and the pass would otherwise run every turn. A human seat never onboards.
 
 On the dashboard, onboarding renders as its own phase within the turn it rode in on, with a neutral tag rather than one of the phase hues — it is one-time setup that happens to ride the first turn, not part of that turn's task, and colour is reserved for the phases a reader tracks across every screen.
 
@@ -49,7 +49,7 @@ On the dashboard, onboarding renders as its own phase within the turn it rode in
 
 ## The work submission
 
-The executor ends by calling `submit_work` (`internal/agent/runner/submit.go`), which is where the turn's account of itself becomes something the engine can act on:
+The executor ends by calling `submit_work` (the tool and its decoder are in `internal/agent/runner/submit.go`), which is where the turn's account of itself becomes something the engine can act on. The submission decodes into `turn.Work` (`internal/agent/turn/loop.go`):
 
 ```go
 type Work struct {
@@ -67,6 +67,9 @@ type Work struct {
 
     Text  string        // the final prose
     Calls []ledger.Call // engine-recorded, not self-reported
+
+    // Also engine-set: MissingTools (names called that the surface did
+    // not have), ExhaustedRounds, Suspended and Rescued.
 }
 ```
 
@@ -96,7 +99,7 @@ The turn engine checks the executor's account against its own record three times
 2. **Before the reviewer** (`Check`). Two of its three answers cost no model call: a `no_action` nobody asked for and nothing acted on ends the turn as skipped; a claim the record refutes loops back with an engine correction. What it cannot do is judge whether the work was any GOOD — everything that passes goes to the reviewer.
 3. **After the reviewer** (`OverrideDone`). A `done` on a `tool`-awaited turn where nothing reached the party waiting is overturned to `self_iterate`. This is the recorded failure: the reviewer's model judges the produced TEXT, finds a good answer in it, and says done even though nothing put that answer anywhere a person can see. The engine's correction is appended LAST, because on this path the reviewer wrote none of its own — and where the turn did reach *somewhere*, just not the asker, the correction says so by name, because "no tool was called" reads as plainly false to a model looking at its own successful write and gets argued with rather than acted on.
 
-**What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody** — the native tracker's writes and the knowledge base's do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count — a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
+**What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody** — the native tracker's writes and the knowledge base's do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count — a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
 
 Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), and an engine builtin's is the native feed's own source — `work` for the tracker, `page` for the knowledge base. Those are the same names an inbound notification reports its source under, and the gate compares the two — because "did this turn reach anybody" and "did the person waiting get told" are different questions, and only the second one matters to the asker. Asking the first is how a founder's Mattermost DM was closed out by a row in the tracker: the seat filed a work item instead of answering, every check passed, and the thread's last message stayed a clarification question the founder had already been answered out from under.
 
@@ -115,7 +118,9 @@ The per-phase headers are deliberately verbose — each rule traces to an observ
 
 ---
 
-## ReviewOutcome
+## The review
+
+The reviewer's `submit_review` decodes into `turn.Review`:
 
 ```go
 type Review struct {
@@ -198,11 +203,20 @@ carries its duplicate-delivery rule.
 
 ### Engine-driven `failed` outcome
 
-`failed` is not an LLM-emitted decision; it's set by the engine on guard breaches (stall, max-iter exhaustion, depth cap, unhandled exception, `LLMUnavailable`). Every `failed` turn publishes a `turn.guard_breach` event (with the specific `kind`) and an `AgentTurnCompleted(decision="failed")` carrying the classified `error` / `error_kind`.
+A turn can also end `failed` without the reviewer choosing it. Every failed turn publishes `agent_turn_completed` with `failed: true` and a classified `error` / `error_kind`, and the engine publishes one dedicated event beside it naming the cause (`Engine.publishFailure`):
 
-**The phase that died publishes too.** A phase runner that raises never reaches its own `publish_phase_completed`, so a failed phase used to leave nothing behind but the `AgentPhaseStarted` that opened it — the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. `phase_failure_guard` (installed once, at the sub-agent's own phase run, which every operator-visible phase goes through) publishes the missing `AgentPhaseCompleted` with `failed=True`, the classified `error_kind`, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on. It then re-raises the original exception untouched, so the `LLMChainExhausted` / wall-clock-timeout / guard-breach handling above is unchanged.
+| Cause | Dedicated event | `error_kind` on the summary |
+|---|---|---|
+| A turn guard fired: `stall`, `max_iter`, `depth_cap`, or a scheduled turn's `scheduled_timeout` | `turn.guard_breach` with that `kind` | the guard's kind |
+| The token budget refused a charge | `budget_exhausted` | `error` |
+| Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | `error` |
+| Any other broken phase | none | `error` |
 
-The dashboard renders that record as a failed invocation — error first, partial work beneath it — and keeps it on screen. AFK is sticky until the agent does real work again: the failure event and the `TaskFailed` that follows it land microseconds apart, so a projection that took the newest event at face value showed a healthy idle seat immediately after the failure that stopped it.
+Those three dedicated events are what the dashboard's `afk` state is derived from. A reviewer's own `failed` fired no guard, so it publishes none of them.
+
+**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so a failed phase used to leave nothing behind but the `agent_phase_started` that opened it: the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on, folded onto the rounds of any earlier extension. It then returns the original error unchanged, so the failure classification above is unaffected.
+
+The dashboard renders that record as a failed invocation (error first, partial work beneath it) and keeps it on screen. AFK is sticky until the agent does real work again: the projection leaves `afk` only on a new phase or turn activity, so the `agent_turn_completed` published beside the failure cannot flip a stopped seat back to a healthy idle one.
 
 ---
 
@@ -284,13 +298,13 @@ The engine prompts never name these tools (see [Tool Capabilities](tool-capabili
 | `jira_add_comment` / `jira_update_issue` | Jira | In-ticket collaboration and reassignment |
 | `confluence_add_footer_comment` / `confluence_add_comment` | Confluence | Page discussion; `@mention` uses the [platform-mentions skill](tool-skills.md) markup. The exact comment tool name is mcp-atlassian-version dependent; the LLM discovers whichever name the deployed server registered via `list_mcp_server_tools` |
 | `request_copilot_review` | GitHub | Request an automated review on an existing PR (an un-promoted lightweight option; code authoring goes through the [code sandbox](code-sandbox.md), not here) |
-| `a2a_ask` | Private A2A channel | The one engine builtin (`internal/agent/builtin/colleague.go`). Narrowly scoped: tight-loop / mechanical sync only — one ask, one answer, then the channel closes. The answering turn's final response *is* the reply; there is no send/close tool. See the tool description |
+| `a2a_ask` | Private A2A channel | The one engine builtin (`internal/agent/builtin/a2a.go`). Narrowly scoped: tight-loop or mechanical sync only, one ask and one answer, then the channel closes. The answering turn's final response *is* the reply; there is no send/close tool. See the tool description |
 
 ### What a delegation records
 
-Delegation bookkeeping rides on the base `Event` model (`crewlet.events.types.Event`) rather than on an event of its own: `delegation_depth`, `parent_turn_id` and `delegation_chain` are stamped onto every event the turn engine publishes for a turn, so each one names the turn it descends from and the handles the work has already passed through. A chain that reaches `turn_engine.delegation_depth_limit` ends the turn with `turn.guard_breach(kind="depth_cap")` before any phase runs.
+Delegation bookkeeping rides on the event envelope (`events.Event`, `internal/events/event.go`) rather than on an event of its own: `delegation_depth`, `parent_turn_id` and `delegation_chain` are stamped onto every event the turn engine publishes for a turn, so each one names the turn it descends from and the handles the work has already passed through. A chain that reaches `turn_engine.delegation_depth_limit` ends the turn with `turn.guard_breach(kind="depth_cap")` before any phase runs.
 
-`a2a_ask` is the only colleague call the engine itself mediates, so it is the only one that also records the *edge*: `A2AService.request_channel` publishes `a2a_channel_opened` (`requester`, `target`, `participants`), wakes the target with an `a2a_request` carrying `delegation_depth + 1` and the requester appended to the chain, and `a2a_message_sent` / `a2a_message_delivered` / `a2a_channel_closed` follow it.
+`a2a_ask` is the only colleague call the engine itself mediates, so it is the only one that also records the *edge*: `a2a.Service.Open` publishes `a2a_channel_opened` (`channel_id`, `requester`, `target`, `participants`) and an `a2a_message_sent` for the brief, then wakes the target with an `a2a_request` carrying `delegation_depth + 1` and the requester appended to the chain. The answer is a second `a2a_message_sent` plus an `a2a_message` wake on the asker's inbox (`Service.Reply`), and `a2a_channel_closed` records the channel ending with its message count and duration.
 
 A delegation graph drawn from this is therefore an **A2A graph, not a company-wide one**. Every other row above is an upstream MCP tool called like any other: the engine records that `jira_update_issue` ran, not who now holds the ticket, so a handoff across a shared surface is observed at neither end. It comes back as an inbound webhook, and no shipped integration round-trips the delegation metadata through the external surface, so that trigger arrives at depth 0 with an empty chain — a cross-surface hop breaks the chain rather than extending it.
 
@@ -327,7 +341,7 @@ roles:
     llm: claude-sonnet
 ```
 
-Resolution order for a satellite: `role.llm_<phase>` → `role.llm` → the provider keyed `"default"` → the first provider registered. The flat field wins over the same key inside the mapping, so a seat can take a shared mapping and override one phase without restating the block.
+Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`, `llm_sandbox`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the same key inside the mapping, so a seat can take a shared mapping and override one phase without restating the block.
 
 ---
 
@@ -343,9 +357,9 @@ The **extension judge** interposes between exhaustion and rescue: a
 cheap LLM call inspects the tool log and the last assistant message and
 decides:
 
-- `extend` — the agent is making meaningful progress; grant
-  `additional_rounds` more rounds (bounded by the per-phase ceiling and
-  `extension_round_step`).
+- `extend`: the agent is making meaningful progress; grant the
+  rounds it asked for (`AdditionalRounds`, advisory, bounded by the
+  per-phase ceiling and `extension_round_step`).
 - `rescue` — the agent is thrashing / stuck; fall through to the
   existing rescue path.
 
@@ -355,9 +369,9 @@ bounds the whole thing economically; the ceiling is a sanity check.
 
 ```mermaid
 flowchart TD
-    A["phase loop hits max_tool_rounds (exhausted=True)"]
+    A["phase loop hits max_tool_rounds (ExhaustedRounds)"]
     B["judge LLM (llm_judge → llm → default fallback chain)<br/>sees: phase, the turn's ask, tool log (last 12 calls), last assistant text<br/>returns: extend(N, reason) | rescue(reason)"]
-    C["<b>extend</b> → re-enter run_tool_loop with the same messages<br/>+ N more rounds on the same provider"]
+    C["<b>extend</b> → re-enter toolloop.Run with the same messages<br/>+ N more rounds on the same provider"]
     D["<b>rescue</b> → the engine writes an `incomplete` outcome and the reviewer judges the record<br/>(also fires when the ceiling is reached or the judge call failed)"]
     A --> B
     B -->|extend| C
@@ -392,7 +406,7 @@ phase events summing to the turn's number.
 
 **Forced tool calls are enforced, not just requested.** A phase whose
 whole contract is one submission calls the tool loop with
-`tool_choice="required"`: the **reviewer**, whose surface carries no
+`llm.ToolChoiceRequired`: the **reviewer**, whose surface carries no
 catalogue at all so "call a tool" and "submit the review" are the same
 instruction, and **onboarding**, whose every round discovers, activates,
 reads or reflects and whose last one marks. Some endpoints don't honor
@@ -400,13 +414,13 @@ reads or reflects and whose last one marks. Some endpoints don't honor
 with no tool call. The loop treats a no-tool-call completion on a
 `required` round as a non-terminal miss: it re-prompts with an explicit
 corrective naming the tool ("you must call `<tool>` now — no prose") and
-retries within the round budget (bounded by `max_forced_tool_retries` = 2
-and `max_rounds`), instead of accepting the prose as a finish. Without
+retries within the round budget (bounded by `maxForcedToolRetries` = 2
+and the call's `MaxRounds`), instead of accepting the prose as a finish. Without
 it a reviewer that thought and stopped fell through to the rescue, which
 sends the whole turn back for another executor round — a whole extra
 turn spent on the one failure a model reliably fixes when it is asked
-again. `review_max_tool_rounds` = 4 is that arithmetic: one submission,
-two correctives, one spare.
+again. The reviewer's budget (`reviewRounds` = 4) is that arithmetic: one
+submission, two correctives, one spare.
 
 **A round that said nothing at all is not a finish either.** The other
 half of "think then stop" is a round with **no tool call and no prose** —
@@ -494,12 +508,12 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed`. The threshold is a constant, not a knob: two identical rounds is the earliest point at which "unchanged" is a fact rather than a single sample, and the round cap already bounds how long a turn that IS changing may run. Max-iteration exhaustion (the executor/reviewer loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same terminal effect.
 7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch. The executor and its workers carry the same *slim* catalogue (builtins + MCP server names) and the same `activate_tool` / `list_mcp_server_tools` discovery meta-tools — a worker's catalogue is the safety-filtered universe the grant was cut from (read-only / non-control / non-shared-write), so discovery cannot breach invariant 1. Review and Judge carry no catalogue and cannot discover tools. A `self_iterate` builds a fresh surface, which is correct: its LLM context started over too. A RESUMED executor is the exception — it replays the surface and the skill-guard state it suspended with, because it is re-entering the same conversation.
 8. **Required-skill guard (load-before-use).** A [tool skill](tool-skills.md) gates the tools its trigger covers (the `required: true` default; `required: false` opts out for advisory content): within one phase session, calls to those tools are rejected (with an instructive error and a `phase.tool_skill_blocked` event) until the LLM has loaded the skill body via `load_tool_skill`. Enforced at the shared dispatch gate; tracked per LLM session because the executor and each worker run on separate message histories — and replayed across a sandbox suspend, since the resumed executor is the same session and the bodies it loaded are still in its transcript.
-9. **A busy agent queues — it never drops.** `run_turn` on a `WORKING` agent **waits** for the current turn to finish (raced against the shutdown gate, which NAKs the trigger to the next engine), keeping per-agent turns strictly serialized without erroring: erroring instead would NAK the triggering event into bounded redelivery (25 deliveries, then the dead-letter topic) and spend that budget on events whose only problem is that they arrived during a minutes-long turn. An agent parked on a detached sandbox job (`AWAITING_SANDBOX` — potentially hours) is handled differently: the inbox handler **requeues + acks** those deliveries, so nothing is held against a broker ack window.
+9. **A busy seat queues, it never drops.** A seat's inbox is one pull consumer that fetches again only after its handler returns, so a trigger that arrives during a minutes-long turn waits on the broker rather than erroring. Erroring instead would NAK it into bounded redelivery (25 deliveries, then the dead-letter topic) and spend that budget on events whose only problem is when they arrived. A seat parked on a detached sandbox job (potentially hours, `sandbox.Coordinator.AwaitingSandbox`) is handled differently: the dispatcher **parks** those deliveries, requeuing them onto the inbox and then acking (`inbox.ActionPark`), so nothing is held against a broker ack window. The one delivery it answers instead of requeuing is a person's reply to the run's own clarification question.
 
-> **Known gap.** Nothing takes a pause hold on the seat's inbox while it is parked, although this page and three others have said the coordinator does. The requeued copies therefore land back on a topic the seat is still consuming and are re-parked immediately, so a seat parked on a long run spins on republish-and-ack for the length of the run. The work is not lost — the same-id dedupe and the completion ledger hold — but the loop is real. Fixing it means a pause taken at the park AND released when the run settles; a pause without the release is strictly worse, because a seat that never resumes is deaf until the process restarts. `ResumeTopic` has no caller today, so both halves land together or neither does. `CREATED`/`TERMINATED` still fail fast — that's a caller bug, not queuing.
+> **Known gap.** Nothing takes a pause hold on the seat's inbox while it is parked on a sandbox run. The requeued copies therefore land back on a topic the seat is still consuming and are re-parked immediately, so a seat parked on a long run spins on republish-and-ack for the length of the run. The work is not lost (the same-id dedupe and the completion ledger hold) but the loop is real. Fixing it means a pause taken at the park AND released when the run settles; a pause without the release is strictly worse, because a seat that never resumes is deaf until the process restarts. The no-provider park is the model: it pauses the inbox, and the apply that adds a provider releases it.
 10. **A phase that breaks is two cases, not one.** `turn.Run` returns an error only when a *phase itself* broke — a failed turn, an exhausted round budget and a not-done review are all results. What the dispatcher does with that error depends on what the turn's own record proves it already did: a turn that reached outside the engine (an MCP write, a colleague ask, a coding run) is **recorded and acked**, because a redelivery would repeat writes it cannot take back; one that proved nothing is **redelivered** exactly as before, which keeps the retry for every pre-effect failure. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
 
-11. **A suspended turn owns its busy transition.** A turn whose Execute suspended for a detached sandbox run flips its agent `WORKING → AWAITING_SANDBOX` in its own `finally` — the state never passes through `IDLE`, so a queued event cannot slip a turn in between the suspend and the coordinator's (asynchronous) `SandboxRunStarted` handling. The coordinator only pauses the inbox and re-enters the busy state after an engine restart; on completion the agent stays busy through result collection and is freed immediately before the resume dispatch, whose failure un-claims the run row so a redelivery can retry (the suspended Execute loop is never lost) — unless the resumed turn had already written outside the engine, in which case the claim is left taken so the completion is not redelivered into a conversation whose writes already landed.
+11. **A suspended turn's seat is marked busy from the store.** A turn whose executor suspended for a detached sandbox run writes its conversation to the run's row before its frame unwinds (`Engine.persistSuspension`, which is also what opens the run to the completion poll). The launch publishes `sandbox_run_started` to the seat's control topic, and the coordinator sets the seat's busy count from the pending store's own list of the seat's active runs (`Coordinator.syncBusy`), so a redelivered start, a restart and a seat takeover converge on the same answer. A run parked on a clarification question does not hold the seat, because the answer arrives on its inbox. On completion the coordinator claims the row and marks the seat busy through result collection; a resume that fails un-claims the row so a redelivery can retry (the suspended executor loop is never lost), unless the resumed turn had already written outside the engine (`sandbox.ErrResumeActed`), in which case the run is settled instead of un-claimed (its box reclaimed, its record deleted and the seat's busy count recounted), so the completion is not redelivered into a conversation whose writes already landed and the seat is not left parked on a turn that is over.
 
 ---
 
@@ -590,7 +604,8 @@ the socket hub can carry. The fragment rides `partial_round` on
 `agent_turn_progress` — live-only, so nothing persists a half-written
 sentence — and is cleared the instant the round commits, because from then on
 its narration is authoritative. Streaming is opt-in per CALL, not a property
-of a backend: twelve of the engine's thirteen provider call sites want an
+of a backend: only the tool loop sets `OnDelta`, because every other provider
+call in the engine (reflection, summaries, the extension judge) wants an
 answer rather than a running commentary. An endpoint that accepts a streaming
 request and answers without streaming is negotiated down to the unary call,
 once per process.
@@ -633,13 +648,13 @@ committed round twenty rounds earlier), and the completed record took the
 invocation's token counters (every round before the extension billed, then
 dropped from the report).
 
-**Never load-bearing.** Every progress publish is a live view of the
-phase, not part of it: failures are logged (`turn_progress_publish_failed`)
-and swallowed, so a broker hiccup cannot kill an otherwise healthy turn,
-and cannot stand in for the real error when the phase is already dying.
-This matters most for the opening update, which fires before the provider
-is called at all — an unguarded raise there would end a phase that had
-not yet run.
+**Never load-bearing.** Every phase telemetry publish is a live view of
+the phase, not part of it: a failure is logged
+(`phase_telemetry_publish_failed`) and not returned, so a broker hiccup
+cannot kill an otherwise healthy turn, and cannot stand in for the real
+error when the phase is already dying. This matters most for the opening
+update, which fires before the provider is called at all: a publish error
+returned there would end a phase that had not yet run.
 
 On a **resumed** executor phase — one that suspended on `run_sandbox` and
 picked up when the detached run landed — both events are scoped to the
@@ -649,18 +664,19 @@ therefore still agree across a suspend.
 
 ### Turn source (the triggering event)
 
-Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor — built by `internal/events/types` from the turn's the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack / jira / github / …), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration — a branded Slack/Jira badge with the sender — instead of a generic "external notification". **Turns** renders this as the turn's own header line — what woke it, and the integration badge when one did — and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/activity/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
+Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor, built by `types.DescribeTrigger` from the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack, jira, github and so on), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration (a branded Slack or Jira badge with the sender) instead of a generic "external notification". **Turns** renders this as the turn's own header line (what woke it, and the integration badge when one did) and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/activity/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
 
 Each phase row in that view is keyed to its **phase colour** (execute / review / auxiliary / worker / judge — the same hue as the phase pill): a left accent stripe identifies the phase at a glance even while the row is collapsed, and expanding a row tints its border, header, and body with that colour so several open sections stay visually distinct instead of blurring into one neutral stack. The standalone per-phase detail card carries the same accent.
 
 | Event | Purpose |
 |-------|---------|
 | `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens`, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base) |
-| `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`) and `detail` carries its message |
-| `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic — the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain` |
+| `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`, `scheduled_timeout`) and `detail` carries its message |
+| `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain` |
 | `prompt.size` | The final size of one phase's prompt — system and user characters, plus a ~4-chars-per-token approximation — so prompt growth is measurable across builds without reading every phase payload back |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
-| `budget_exhausted` | Unchanged; emitted by the shared tool-loop's budget check |
+| `budget_exhausted` | A charge the token budget refused ended the turn; published by the engine beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError` |
+| `llm_unavailable` | Every member of the seat's provider chain failed retryably; carries the chain it tried and the last error |
 
 ---
 
@@ -718,21 +734,21 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/runner/resume.go` | Re-entering a suspended executor loop when a detached run completes |
 | `internal/agent/execstate/` | The wire format that suspended loop is serialised into, and the permanent reader for the previous version of it |
 | `internal/agent/subagent/` | `delegate`: the worker boundary (`subagent.go`), the task graph (`workflow.go`), how a worker answers (`result.go`), the tool (`tool.go`) |
-| `internal/agent/turn/guards.go` | Depth cap, stall detector |
+| `internal/agent/turn/guards.go` | Depth cap, stall detector, and the breach kinds the engine publishes |
 | `internal/agent/ledger/iteration.go` | Prior-work ledger: the iteration record and how it renders into the next round |
 | `internal/agent/ledger/conversation.go` | The cross-turn ledger — what this seat already said in one thread |
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |
 | `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through |
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |
-| `internal/agent/builtin/colleague.go` | `a2a_ask` — the only surviving colleague wrapper; outreach to a third-party app goes through that third-party app's MCP tools directly |
+| `internal/agent/builtin/a2a.go` | `a2a_ask`, the only colleague wrapper; outreach to a third-party app goes through that app's MCP tools directly (`colleague.go` beside it is `lookup_colleague`) |
 | `internal/notify/status.go` | Working-status sessions: conversation resolution, `addressed` gating, heartbeat + clear |
 
 ---
 
 ## Further reading
 
-- [Agent Runtime](agent-runtime.md) — lifecycle, state machine, agent pool.
-- [Organization Model](organization-model.md) — hierarchy, roles, handles.
-- [Event System](event-system.md) — EventQueue, topics, routing.
-- [Tools & MCP](../guides/tools-and-mcp.md) — tool registry, built-ins, MCP.
+- [Agent Runtime](agent-runtime.md): the seat lifecycle, its states and graceful shutdown.
+- [Organization Model](organization-model.md): hierarchy, roles, handles.
+- [Event System](event-system.md): the queue contract, topics, routing.
+- [Tools & MCP](../guides/tools-and-mcp.md): the tool registry, built-ins, MCP.

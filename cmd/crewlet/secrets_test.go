@@ -310,8 +310,8 @@ func TestKeygenHandsOverAPasteableSnippetThatDoesNotInlineTheKey(t *testing.T) {
 	for _, want := range []string{
 		"active_key_id: prod-2",
 		"id: prod-2",
-		`material: "${CREWLET_SECRET_PROD_2}"`,
-		"export CREWLET_SECRET_PROD_2=",
+		`material: "${CREWLET_SECRET_KEY_PROD_2}"`,
+		"export CREWLET_SECRET_KEY_PROD_2=",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the snippet does not contain %q:\n%s", want, body)

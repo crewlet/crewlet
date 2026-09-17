@@ -84,9 +84,9 @@ sent re-creates the duplicate-answer bug in a place nothing else can catch.
 - **Reviewer** — `completed_work`, the prose on what already landed
 - **Turn ended** — only when the decision was not `done`
 
-The reviewer's *other* field, `ReviewOutcome.notes`, is deliberately **not**
-carried. It is documented as "shown to the next Plan round when the decision is
-`self_iterate`" and is written as an instruction to that round — *"the next
+The reviewer's *other* field, `turn.Review.Notes`, is deliberately **not**
+carried. It is what the executor's next round is shown when the decision is
+`self_iterate`, and is written as an instruction to that round: *"the next
 round should retry posting X"*. Replayed into a later turn it stops being
 history and becomes a standing order the reviewer never issued, aimed at a
 round that already came and went. Nothing is lost by dropping it: the calls

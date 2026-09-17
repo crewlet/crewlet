@@ -558,11 +558,18 @@ rotation should introduce a new one.
 const defaultKeyID = "key-1"
 
 // keyEnvVar is the variable the generated snippet reads the key from.
+//
+// CREWLET_SECRET_KEY_<ID>, the name every document and example uses for a
+// keyring key. The snippet printed CREWLET_SECRET_<ID> while the docs told an
+// operator to export CREWLET_SECRET_KEY_<ID>, so following the page beside the
+// command's own output exported a variable the pasted config never read, and
+// the node refused to open its sealed revision naming a variable that was
+// "set".
 func keyEnvVar(keyID string) string {
 	upper := strings.ToUpper(keyID)
 	upper = strings.ReplaceAll(upper, "-", "_")
 	upper = strings.ReplaceAll(upper, ".", "_")
-	return "CREWLET_SECRET_" + upper
+	return "CREWLET_SECRET_KEY_" + upper
 }
 
 // currentOperator names who wrote a row, for the provenance column.

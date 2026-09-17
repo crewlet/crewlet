@@ -51,6 +51,12 @@ const (
 	// accepts.
 	CodeInvalidBody Code = "invalid_body"
 
+	// CodeInvalidQuery is a query parameter that is not one of the values
+	// the route accepts. Its own code rather than invalid_body, because the
+	// body may be perfectly good, and a client told the body is wrong
+	// changes the one thing that was right.
+	CodeInvalidQuery Code = "invalid_query"
+
 	// CodeInternalError is the deliberately opaque answer to a failure the
 	// caller can do nothing about. The detail goes to the log.
 	CodeInternalError Code = "internal_error"
@@ -60,7 +66,7 @@ const (
 func (c Code) Valid() bool {
 	switch c {
 	case CodeEncodeFailed, CodeBodyTooLarge, CodeUnreadableBody,
-		CodeInvalidBody, CodeInternalError:
+		CodeInvalidBody, CodeInvalidQuery, CodeInternalError:
 		return true
 	default:
 		return false
@@ -107,8 +113,23 @@ func Fail(w http.ResponseWriter, status int, code Code) {
 // `error` is always present and always wins: a caller that branches on it must
 // never find it missing because a route's extras happened to omit it.
 func FailWith(w http.ResponseWriter, status int, code Code, extra map[string]string) {
-	body := make(map[string]string, len(extra)+1)
+	fields := make(map[string]any, len(extra))
 	for k, v := range extra {
+		fields[k] = v
+	}
+	FailWithFields(w, status, code, fields)
+}
+
+// FailWithFields is [FailWith] for a refusal whose extras are structured
+// rather than text: a list of located problems, a derived hierarchy, a
+// revision id beside them.
+//
+// ONE implementation under both, so the rule that `error` is always present
+// and always wins cannot hold for one of them and not the other. The caller's
+// map is not written to.
+func FailWithFields(w http.ResponseWriter, status int, code Code, fields map[string]any) {
+	body := make(map[string]any, len(fields)+1)
+	for k, v := range fields {
 		body[k] = v
 	}
 	body["error"] = string(code)

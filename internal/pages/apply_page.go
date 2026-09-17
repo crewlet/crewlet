@@ -550,14 +550,14 @@ func (a *Applier) writeHead(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows := int(n)
 
-	labels, err := replaceChildSet(ctx, tx, "pages_labels", "page_id", "label",
-		head.ID, head.Labels)
+	labels, err := replaceChildSet(ctx, tx, at.maxVariables, "pages_labels",
+		"page_id", "label", head.ID, head.Labels)
 	if err != nil {
 		return 0, err
 	}
 	rows += labels
 
-	watchers, err := a.writeWatchers(ctx, tx, head)
+	watchers, err := a.writeWatchers(ctx, tx, at, head)
 	if err != nil {
 		return 0, err
 	}
@@ -571,7 +571,14 @@ func (a *Applier) writeHead(ctx context.Context, tx *sql.Tx, at applyContext,
 }
 
 // writeWatchers replaces the watcher set, carrying the mute flag.
-func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, head Page) (int, error) {
+//
+// A DELETE AND ONE INSERT PER CHUNK, not one per watcher: the set's size is
+// driven by how many people follow the page, so a busy page is exactly where
+// the per-row loop cost the most. The DELETE stays — this converges a
+// collection, and a watcher who left has to lose their row.
+func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, at applyContext,
+	head Page) (int, error) {
+
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM pages_watchers WHERE page_id = ?`, head.ID); err != nil {
 		return 0, fmt.Errorf("pages: clear %s's watchers: %w", head.ID, err)
@@ -580,23 +587,31 @@ func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, head Page) (int
 	for _, handle := range head.Muted {
 		muted[handle] = true
 	}
-	rows := 0
 	// SORTED, because a collection written from a map without sorting it
 	// is the one purity rule an applier breaks without noticing: the rows
 	// land in a different order on every node and the file's checksum
 	// diverges.
-	for _, handle := range sorted(head.Watchers) {
-		flag := 0
-		if muted[handle] {
-			flag = 1
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO pages_watchers (page_id, handle, muted) VALUES (?, ?, ?)
-			 ON CONFLICT (page_id, handle) DO UPDATE SET muted = excluded.muted`,
-			head.ID, handle, flag); err != nil {
-			return 0, fmt.Errorf("pages: watch %s as %s: %w", head.ID, handle, err)
-		}
-		rows++
+	watchers := sorted(head.Watchers)
+	// THE CONFLICT CLAUSE OUTLIVES THE DELETE ABOVE, which looks redundant
+	// and is not: the delete clears what a PREVIOUS record wrote, and a
+	// record naming one handle twice now collides with itself INSIDE one
+	// statement, where a per-row loop could only ever collide across two.
+	rows, err := store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO pages_watchers (page_id, handle, muted) VALUES`,
+		`(?, ?, ?)`,
+		`ON CONFLICT (page_id, handle) DO UPDATE SET muted = excluded.muted`,
+		len(watchers), func(i int) []any {
+			flag := 0
+			if muted[watchers[i]] {
+				flag = 1
+			}
+			return []any{head.ID, watchers[i], flag}
+		})
+	if err != nil {
+		// The chunk names no single handle, so neither does this: a
+		// statement carrying 285 of them failed, and naming one of
+		// them would point a reader at a row that is probably fine.
+		return 0, fmt.Errorf("pages: write %s's watchers: %w", head.ID, err)
 	}
 	return rows, nil
 }
@@ -751,26 +766,30 @@ func pageIsPurged(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
 
 // replaceChildSet rewrites one exploded child table for one owner.
 //
-// Its own rather than [replaceSet]'s, and only until that one goes with the
-// projection: this returns the ROW COUNT, which the framework needs as the
-// apply transaction's budget input and which an approximation would turn into
-// a transaction holding this store's only writer for as long as the
-// approximation is wrong.
-func replaceChildSet(ctx context.Context, tx *sql.Tx, table, owner, column,
-	id string, values []string) (int, error) {
+// A DELETE and then one INSERT per chunk rather than one per value: the set is
+// a page's labels, so its size is the founder's, not the engine's.
+//
+// It returns the ROW COUNT, which the framework needs as the apply
+// transaction's budget input and which an approximation would turn into a
+// transaction holding this store's only writer for as long as the
+// approximation is wrong. That is why the count is what the statements ACTUALLY
+// AFFECTED rather than how many values were offered: a record naming one label
+// twice writes one row, and counting two would spend a budget on a row that
+// does not exist.
+func replaceChildSet(ctx context.Context, tx *sql.Tx, maxVariables int,
+	table, owner, column, id string, values []string) (int, error) {
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM `+table+` WHERE `+owner+` = ?`, id); err != nil {
 		return 0, fmt.Errorf("pages: clear %s for %s: %w", table, id, err)
 	}
-	rows := 0
-	for _, value := range sorted(values) {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO `+table+` (`+owner+`, `+column+`) VALUES (?, ?)
-			 ON CONFLICT DO NOTHING`, id, value); err != nil {
-			return 0, fmt.Errorf("pages: write %s for %s: %w", table, id, err)
-		}
-		rows++
+	set := sorted(values)
+	rows, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO `+table+` (`+owner+`, `+column+`) VALUES`, `(?, ?)`,
+		`ON CONFLICT DO NOTHING`,
+		len(set), func(i int) []any { return []any{id, set[i]} })
+	if err != nil {
+		return 0, fmt.Errorf("pages: write %s for %s: %w", table, id, err)
 	}
 	return rows, nil
 }

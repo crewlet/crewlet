@@ -12,7 +12,8 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 > themselves. Point your editor at it for autocomplete and typo
 > squiggles, or hand it to an AI assistant — see
 > [Authoring with an AI assistant](ai-authoring.md). Check your file with
-> `crewlet validate <file>` (add `-json` for machine-readable errors);
+> `crewlet validate <file>` (add `-json` for located, classified problems
+> and warnings, see [the validation loop](ai-authoring.md#the-validation-loop));
 > it reads no environment, so it works before any secret is exported.
 >
 > **Unknown keys are rejected.** Every config model forbids extra
@@ -235,9 +236,12 @@ providers:
       api_keys:                         # one or more keys; multiple enables rate-limit rotation
         - "${LLM_API_KEY}"              # supports ${ENV_VAR} references
         # - "${LLM_API_KEY_BACKUP}"     # add more for rate-limit rotation
-                                        # empty list is allowed ONLY if the conventional env var
-                                        # (OPENAI_API_KEY / ANTHROPIC_API_KEY) is set — otherwise the
-                                        # engine fails fast at startup instead of deep in the first turn
+                                        # an empty list takes the conventional variable
+                                        # (OPENAI_API_KEY / ANTHROPIC_API_KEY, from the secret
+                                        # store, then the environment); with neither, the
+                                        # provider still builds and sends no key, and a vendor
+                                        # that needs one refuses its calls as unauthorized
+                                        # (401), each failure naming the provider
       cooldowns:                        # optional — TTL when a key is marked exhausted
         rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
         auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;
@@ -607,6 +611,8 @@ coordination:
                                     #   renewals still leave a full interval to
                                     #   recover in. Shorter speeds failover and
                                     #   sheds healthy seats on ordinary jitter.
+                                    #   Seats and presence only: a fleet duty
+                                    #   sizes its lease from its own tick.
                                     #   IT IS THE BUCKET'S TTL, set by whichever
                                     #   node created the lease bucket first and
                                     #   ADOPTED by every node after it — a peer
@@ -753,7 +759,7 @@ units:
         space: "BACK"                   #   write target. NOT read scope, NOT a credential,
                                         #   and NOT vendor-specific — the same keys name a
                                         #   native project/space or a Jira/Confluence one
-        mcp_env:                        # optional — per-agent MCP creds, inherited by roles
+        mcp_env:                        # optional: MCP creds shared by the unit's direct agent roles
           atlassian:                     #   (real tool credentials only; the chat transport
             JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
         roles:

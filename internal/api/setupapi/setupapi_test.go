@@ -476,8 +476,24 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", res.Code, res.Body)
 	}
-	if got := decode(t, res)["error"]; got != "validation_error" {
+	body := decode(t, res)
+	if got := body["error"]; got != "validation_error" {
 		t.Errorf("error = %v: %s", got, res.Body)
+	}
+	// LOCATED, in the config surface's own shape, so the screen that sent
+	// it can put the refusal beside the field rather than above the form.
+	problems, _ := body["problems"].([]any)
+	var paths []string
+	for _, raw := range problems {
+		problem, _ := raw.(map[string]any)
+		path, _ := problem["path"].(string)
+		paths = append(paths, path)
+	}
+	if !slices.Contains(paths, "integrations.datadog.route_to") {
+		t.Errorf("problems name %v, want integrations.datadog.route_to: %s", paths, res.Body)
+	}
+	if _, ok := body["derived"].(map[string]any); !ok {
+		t.Errorf("the refusal carries no derived hierarchy: %s", res.Body)
 	}
 }
 

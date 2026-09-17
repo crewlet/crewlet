@@ -50,7 +50,6 @@ import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
   CloseGlyph,
-  ErrorGlyph,
   HelpGlyph,
   Package2Glyph,
   TerminalGlyph,
@@ -91,8 +90,6 @@ const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "inf
   // question survives.
   awaiting_clarification: "warning",
   reseed: "warning",
-  done: "success",
-  failed: "danger",
 };
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
@@ -259,10 +256,6 @@ function doingLine(run: SandboxRun): string {
       return "A box is up and the coding agent is working in it.";
     case "resumed":
       return "An answer came back and the suspended Execute phase is running again.";
-    case "done":
-      return "The run finished and the phase it suspended was resumed to completion.";
-    case "failed":
-      return "The run failed. The turn's own record says what the phase did with it.";
     default:
       return "The run is waiting on a person — see above.";
   }
@@ -474,12 +467,12 @@ export function Runs({ runId }: { runId?: string }) {
         }
       </PageActions>
       <PageNote>
-        Each one is an Execute phase that suspended. It resumes when the sandbox reports back —
-        after a restart, or on another node.
+        Each one is an Execute phase that suspended. It resumes when the sandbox reports back, after
+        a restart or on another node.
       </PageNote>
 
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
-      <StatGroup columns={4}>
+      <StatGroup columns={3}>
         <StatCard
           icon={<TerminalGlyph size="xs" />}
           label="Running"
@@ -492,17 +485,18 @@ export function Runs({ runId }: { runId?: string }) {
           value={waiting}
           sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
         />
+        {/* NO "FAILED" TILE, and its absence is the honest answer rather
+            than a gap. A settled run has no record, so a count of failed
+            rows is structurally zero on every company for ever — and a tile
+            reading "Failed 0" tells an operator nothing failed, when what is
+            true is that this is not where failures are recorded. They are on
+            the event stream, as the resumed turn's own events or a
+            `sandbox_run_failed` naming the reason. */}
         <StatCard
           icon={<Package2Glyph size="xs" />}
           label="In the record"
           value={rows.length}
-          sub="live and finished"
-        />
-        <StatCard
-          icon={<ErrorGlyph size="xs" />}
-          label="Failed"
-          value={rows.filter((r) => r.status === "failed").length}
-          sub="in the retained record"
+          sub="every run the fleet still holds"
         />
       </StatGroup>
 
@@ -526,7 +520,6 @@ export function Runs({ runId }: { runId?: string }) {
             onRowActivate={openRun}
             rowHref={(r) => peekHref({ kind: "run", id: r.turn_id })}
             isSelected={(r) => r.turn_id === focused}
-            isFailed={(r) => r.status === "failed"}
             defaultSort="-updated"
             columns={[
               {

@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The CLI's client for /config, and why the command needs one.
@@ -102,10 +104,23 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 	return body.RevisionID, body.Epoch, nil
 }
 
-// maxConfigResponseBytes bounds one answer. Every response this client reads
-// is a small JSON object — a revision id and an epoch, or a refusal and its
-// hint.
-const maxConfigResponseBytes = 64 << 10
+// maxConfigResponseBytes bounds one answer.
+//
+// SIZED FOR THE COMPANY, not for the two fields this client reads. A write's
+// answer carries the engine's derived hierarchy of the whole document it
+// stored, every seat with its managers and reports, and a refusal carries a
+// located problem per failure beside the same hierarchy, so an answer grows
+// with the company it describes. The 64 KiB this used to be is about two
+// hundred seats of hierarchy: past that, a write that had landed was reported
+// as an answer this build could not read, and a refusal lost its detail.
+//
+// Sixteen times the largest document the route accepts
+// ([configapi.MaxBodyBytes]), because the hierarchy restates each seat of the
+// document with its relations spelled out, and that restatement is several
+// times the size of a seat as it is usually written. It still bounds a node
+// that answers with far more than any company could produce, and the client's
+// own timeout bounds one that never stops.
+const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.
 func (c *configClient) refusal(status int, raw []byte) error {
@@ -125,18 +140,14 @@ func (c *configClient) refusal(status int, raw []byte) error {
 		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
 			"api.auth.tokens", c.base, apiTokenEnv)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
-		// STORED BUT NOT ACTIVATED, which is a recoverable state and has
-		// to be said as one: the operator's document is safe in the
-		// history, and one command puts it live.
-		return fmt.Errorf("another write activated first, so this document was "+
-			"stored as revision %s but is NOT active (the fleet is on %s).\n"+
-			"Review the difference and activate it if it is still what you "+
-			"want:\n  crewlet config diff %s\n  crewlet config activate %s",
-			body.Stored, body.Current, body.Stored, body.Stored)
+		return lostRace(c.base, body.Current, body.Stored)
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = strings.TrimSpace(string(raw))
+		// NOT THE ENGINE'S JSON, so a proxy's page or a plain-text error,
+		// shown for a person to recognise rather than read whole: an
+		// answer can be as large as maxConfigResponseBytes.
+		msg = textcut.Ellipsis(strings.TrimSpace(string(raw)), maxRefusalTextBytes)
 	}
 	for _, extra := range []string{body.Detail, body.Hint} {
 		if extra != "" {
@@ -144,4 +155,43 @@ func (c *configClient) refusal(status int, raw []byte) error {
 		}
 	}
 	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status, msg)
+}
+
+// maxRefusalTextBytes is how much of an answer that is not the engine's JSON
+// a refusal quotes: a screenful, enough to tell a proxy's error page from a
+// node's plain-text one.
+const maxRefusalTextBytes = 2 << 10
+
+// lostRace is what an import refused with revision_advanced tells the
+// operator: what won, whether their document was kept, and what puts it live
+// from where they are.
+//
+// FROM WHERE THEY ARE, which is talking to a running node: this route is taken
+// because the engine holds its store, or because -api names a node elsewhere.
+// `crewlet config diff` and `crewlet config activate` open that store
+// directly, so the commands this used to suggest refused on exactly the node
+// that had just answered. The node's own routes are what work: the revision
+// endpoints to look at what was kept, a revert to make it live, and a second
+// import to write the file again over what won.
+//
+// NOTHING STORED IS ITS OWN ANSWER. A write refused before it stored anything
+// names no revision, and a hint built around one sent the operator to
+// activate an empty id.
+func lostRace(base, current, stored string) error {
+	fleet := "a newer revision"
+	if current != "" {
+		fleet = "revision " + current
+	}
+	if stored == "" {
+		return fmt.Errorf("another write activated first, so nothing was stored "+
+			"(the fleet is on %s).\nRead %s/config to see what is live, and run "+
+			"this import again if this document should replace it", fleet, base)
+	}
+	return fmt.Errorf("another write activated first, so this document was "+
+		"stored as revision %s but is NOT active (the fleet is on %s).\n"+
+		"Compare it with what is live, and make it live if it is still what you "+
+		"want, through the node that answered:\n"+
+		"  GET  %s/config/revisions/%s/diff\n"+
+		"  POST %s/config/revisions/%s/revert",
+		stored, fleet, base, stored, base, stored)
 }

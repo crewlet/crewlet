@@ -155,6 +155,19 @@ func (r *waiterRig) get(turnID string) PendingRun {
 	return run
 }
 
+// finished asserts that a run ended: its record is deleted, which is the
+// only shape a settled run has.
+func (r *waiterRig) finished(turnID string) {
+	r.t.Helper()
+	run, ok, err := r.pending.Get(r.t.Context(), turnID)
+	if err != nil {
+		r.t.Fatalf("Get %s: %v", turnID, err)
+	}
+	if ok {
+		r.t.Fatalf("run %s still has a record in %q; a settled run has none", turnID, run.Status)
+	}
+}
+
 func (r *waiterRig) tick() int {
 	r.t.Helper()
 	fired, err := r.waiter.Tick(r.t.Context())

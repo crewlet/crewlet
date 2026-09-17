@@ -64,7 +64,7 @@ type Service struct {
 
 	// roster, org and tools are the config-derived surfaces. See Options.
 	roster    func() []map[string]any
-	org       func() map[string]any
+	org       func() any
 	tools     func() []map[string]any
 	schedules func() any
 
@@ -108,8 +108,13 @@ type Options struct {
 	//
 	// Nil is an empty surface rather than a fault: a standalone API has no
 	// engine to ask for tools, and that screen says so.
+	//
+	// Org answers `any` because its shape is an explicit public type owned
+	// by package api (the anonymous org projection), and api imports this
+	// package, so naming the type here would be an import cycle. This
+	// service only carries the value to the wire and never reads into it.
 	Roster    func() []map[string]any
-	Org       func() map[string]any
+	Org       func() any
 	Tools     func() []map[string]any
 	Schedules func() any
 
@@ -239,7 +244,7 @@ func (s *Service) Snapshot() map[string]any {
 func (s *Service) Roster() []map[string]any { return s.state.MergeAgents(s.currentRoster()) }
 
 // Org is the company's role and unit tree, for the same re-send.
-func (s *Service) Org() map[string]any { return s.currentOrg() }
+func (s *Service) Org() any { return s.currentOrg() }
 
 // Tools is this node's catalogue, for the same re-send. It changes on an
 // apply too — a revision that adds an MCP server adds its tools.
@@ -264,7 +269,7 @@ func (s *Service) currentRoster() []map[string]any {
 	return s.roster()
 }
 
-func (s *Service) currentOrg() map[string]any {
+func (s *Service) currentOrg() any {
 	if s.org == nil {
 		return map[string]any{}
 	}

@@ -44,11 +44,20 @@ func RowsPerInsert(maxVariables, columns int) int {
 // maxBatchRows caps a chunk regardless of how many parameters would fit.
 //
 // A statement's TEXT grows with its rows — each is a "(?,?,…)" group the
-// engine parses — so a 32 000-row insert of a two-column table builds a
-// 160 KB statement to save round trips that were never the cost. It also
+// engine parses — so a wide-open chunk of a two-column table builds a
+// six-figure statement to save round trips that were never the cost. It also
 // bounds the memory one chunk holds while it is being assembled. 1 000 rows
 // is where the round-trip saving has already flattened: it is 1/1000th of the
 // per-row overhead, and the next order of magnitude buys a further 0.09 %.
+//
+// ON THE DRIVER PINNED HERE IT IS INERT, and that is worth saying rather than
+// discovering: [Capabilities.MaxVariables] probes to 2 000, so this cap can
+// only bind for rows of two columns or fewer (2 000 ÷ 2 = 1 000) and the
+// divisor wins at every width an applier actually uses — 285 rows at seven
+// columns, 666 at three. It is a ceiling against a FUTURE engine reporting
+// SQLite's post-3.32 limit of 32 766, where a two-column insert would
+// otherwise chunk at 16 383 rows. Keeping it costs nothing and removing it
+// would make that engine's first bulk apply the place the cost is found.
 const maxBatchRows = 1000
 
 // Chunks splits n rows into contiguous [start, end) ranges of at most

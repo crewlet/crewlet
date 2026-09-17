@@ -1962,7 +1962,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                     // delivery is routed by the notification spine rather than
                     // addressed in the URL, and calling that unaddressed would
                     // read as a delivery that reached no one.
-                    <span className="faint t-caption">the company</span>
+                    <span className="t-caption">the company</span>
                   ),
               },
               {
@@ -2860,7 +2860,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                           <Tag variant={phaseTone(finding.phase ?? "")} appearance="outline">
                             {finding.kind.replace(/_/g, " ")}
                           </Tag>
-                          {present.length > 1 && <span className="t-caption faint">{surface}</span>}
+                          {present.length > 1 && <span className="t-caption">{surface}</span>}
                         </span>
                         <span className="int-note-problem">
                           {finding.detail ||

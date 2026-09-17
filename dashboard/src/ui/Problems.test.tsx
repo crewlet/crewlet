@@ -8,9 +8,9 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
-import { Problems, marked, split } from "./Problems.tsx";
+import { Problems, marked, paths, split, withProblems } from "./Problems.tsx";
 
 afterEach(cleanup);
 
@@ -142,4 +142,80 @@ test("a path inside a refusal takes the message's ink, and one in prose does not
   expect(screen.getByText("integrations.jira.project").className).not.toContain(
     "crewlet-inline-code--inherit",
   );
+});
+
+// A MAP KEY IS WRITTEN AS THE OPERATOR WROTE IT. A server name can carry a
+// hyphen and a variable name is upper snake case, and the three patterns that
+// find a path each missed both, in three slightly different ways: the path
+// rendered as prose, and a caller acting on `paths` never heard about it.
+describe("a path through map keys", () => {
+  const upper = "roles[2].mcp_env.tracker.TOKEN";
+  const hyphenated = "units[0].children[1].mcp_env.jira-cloud.API_TOKEN";
+
+  test("opens a problem line", () => {
+    expect(split(`${upper}: literal value is masked`)[0]?.path).toBe(upper);
+    expect(split(`${hyphenated}: literal value is masked`)[0]?.path).toBe(hyphenated);
+    expect(split("mcp_env.tracker.TOKEN: unresolved")[0]?.path).toBe("mcp_env.tracker.TOKEN");
+  });
+
+  test("is found inside a sentence, in the same shape as at the head", () => {
+    expect(paths(`the mask at ${hyphenated} could not be restored`)).toEqual([hyphenated]);
+    expect(paths(`${upper}: set it, or remove roles[2].mcp_env.tracker.TOKEN`)).toEqual([upper]);
+  });
+
+  test("is marked up as one path, not as a word and a fragment", () => {
+    render(<span>{marked(`restore ${hyphenated} before renaming`)}</span>);
+    expect(screen.getByText(hyphenated).tagName).toBe("CODE");
+  });
+
+  test("stops where the key does", () => {
+    // A trailing index, and a dash that belongs to the sentence.
+    expect(paths("remove roles[0].contact.emails[1] and retry")).toEqual([
+      "roles[0].contact.emails[1]",
+    ]);
+    expect(paths("check mcp_env.jira-cloud.API_TOKEN - then retry")).toEqual([
+      "mcp_env.jira-cloud.API_TOKEN",
+    ]);
+  });
+
+  // AND A PATH IS STILL FOUND WHERE THE DASH IS GLUED TO IT. A key may carry
+  // a hyphen and may not end in one, so a sentence that runs a dash straight
+  // onto a path used to leave the pattern backtracking segment by segment for
+  // a shorter path it would accept, finding none, and reporting nothing: the
+  // path rendered as prose and no caller heard about it. The one thing that
+  // may be lost at the end is the dash, never the path.
+  test("a dash run straight onto a path does not lose the path", () => {
+    expect(paths(`check ${hyphenated}- then retry`)).toEqual([hyphenated]);
+    expect(paths("see integrations.jira.project-key- for the key")).toEqual([
+      "integrations.jira.project-key",
+    ]);
+  });
+
+  test("an ordinary sentence is still prose", () => {
+    expect(paths("See crewlet.yaml, e.g. the API section.")).toEqual([]);
+    expect(split("The Engine refused: try again")).toEqual([
+      { text: "The Engine refused: try again" },
+    ]);
+  });
+});
+
+// A FIELD'S ERROR LINE IS A REFUSAL OR IT IS NOTHING.
+//
+// [FormField] takes a NODE for its error and draws the line only where one is
+// truthy, so the absent case has to stay absent: a field handed an element
+// wrapping an empty refusal would carry `aria-invalid` and an alert region on
+// a value nobody has refused. And the present case has to be the LIST, not the
+// string — a field rendering the refusal as plain text would be the one place
+// in the product where a config path does not read as one.
+describe("a refusal as a field's error line", () => {
+  test("no refusal is no node", () => {
+    expect(withProblems(undefined)).toBeUndefined();
+    expect(withProblems("")).toBeUndefined();
+  });
+
+  test("a refusal is the problems, marked up", () => {
+    render(<span>{withProblems("integrations.jira.project_key: required value missing")}</span>);
+    expect(screen.getByText("integrations.jira.project_key").tagName).toBe("CODE");
+    expect(screen.getByText(/required value missing/)).toBeTruthy();
+  });
 });

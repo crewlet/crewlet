@@ -1,6 +1,14 @@
 /**
  * Configuration: what the fleet is running, how it got here, and what changed.
  *
+ * THE DIFF LENS COMPARES AGAINST THE ACTIVE REVISION UNLESS A LINK NAMES
+ * ANOTHER. What one save changed is its revision against its PARENT: once the
+ * save is active, its diff against the active revision is empty, so a "View
+ * changes" link that named only the revision opened "No differences" with a
+ * note about credential rotation. `against=` is the side to compare with, and
+ * picking a row from the history drops it, because a row picked here is a
+ * question about the active document again.
+ *
  * Read-only, deliberately. The previous editor was a bare JSON textarea with
  * no schema hints, no validation until Save, no diff before saving, and a
  * dirty flag that was set and never read — so navigating away lost the edit
@@ -189,7 +197,7 @@ function AppliedAcross({
     loading && !answered ? (
       <Skeleton variant="text" rows={2} label="Loading" />
     ) : !answered ? (
-      <p className="t-body faint">
+      <p className="t-body muted">
         The lease table did not answer, so which nodes are on this revision is not known.
       </p>
     ) : nodes.length === 0 ? (
@@ -403,6 +411,12 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
   const now = useNow();
   const [lens, setLens] = useTab("lens", LENSES);
   const [chosen, setRevision] = useParam("revision", "");
+  // THE SIDE A DIFF IS READ AGAINST. Empty is the active revision, which is
+  // what the engine's own `against: "active"` means, so the parameter is
+  // absent from every link that wants the ordinary comparison. A FILTER rather
+  // than a section: it narrows what is already on screen, so it replaces the
+  // history entry instead of adding one to press Back through.
+  const [against, setAgainst] = useParam("against", "", "filter");
 
   const [kind, setKind] = useParam("kind", ENTITY_KINDS[0].kind);
   const [entity, setEntity] = useParam("entity", "");
@@ -438,7 +452,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
   );
   const diff = useQuery(
     "config_diff",
-    { revision_id: revision, against: "active" },
+    { revision_id: revision, against: against || "active" },
     { enabled: lens === "diff" && !!revision },
   );
   const fleet = useQuery("fleet", undefined, {
@@ -481,6 +495,10 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
     (row: RevisionMeta, e: React.MouseEvent | React.KeyboardEvent) => {
       const go = () => {
         setRevision(row.revision_id);
+        // AND DROPS THE SIDE A LINK NAMED. A row picked here is "compare this
+        // one with what we are running"; carrying somebody else's `against=`
+        // into it would answer a question this reader did not ask.
+        setAgainst("");
         openPeek({ kind: "revision", id: row.revision_id });
       };
       if (!("button" in e)) {
@@ -489,7 +507,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
       }
       rowPeekHandler(go)?.(e);
     },
-    [openPeek, setRevision],
+    [openPeek, setRevision, setAgainst],
   );
 
   const pretty = useMemo(
@@ -553,6 +571,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                       leadingIcon={<ForkRightGlyph size="sm" />}
                       onClick={() => {
                         setRevision(addressed.revision_id);
+                        setAgainst("");
                         setLens("diff");
                       }}
                     >
@@ -792,7 +811,11 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             <Card>
               <Card.Header
                 icon={<ForkRightGlyph size="sm" />}
-                subtitle="against the active revision"
+                subtitle={
+                  against
+                    ? `against revision ${against.slice(0, 10)}`
+                    : "against the active revision"
+                }
               >
                 {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
               </Card.Header>
@@ -844,7 +867,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                       // all that changed". The server used to report it as a
                       // pathless CHANGE, which this screen drew as a blank
                       // path turning undefined into a sentence.
-                      <div className="t-caption faint" style={{ paddingTop: 6 }}>
+                      <div className="t-caption" style={{ paddingTop: 6 }}>
                         {diff.data?.changes.length} of {diff.data?.changes_total} shown —{" "}
                         <InlineCode>crewlet config diff</InlineCode> prints them all
                       </div>

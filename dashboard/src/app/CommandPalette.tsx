@@ -366,8 +366,11 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           group: "Units",
           icon: "account_tree",
           label: unit.name,
-          hint: `${unit.type ?? "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          go: () => nav.to(["company", "units", unit.id || unit.name]),
+          hint: `${unit.type || "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
+          // BY NAME. A unit's stable `id:` is part of the guarded
+          // configuration rather than the anonymous org projection, so no
+          // link this palette can build carries one.
+          go: () => nav.to(["company", "units", unit.name]),
         },
         s + 2,
       );

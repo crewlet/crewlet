@@ -78,8 +78,9 @@ type Conditions struct {
 	// doing it.
 	Owned bool
 
-	// TurnEngineReady is false when the node booted with no LLM providers
-	// and cannot run a turn at all.
+	// TurnEngineReady is false when the company this node serves configures
+	// no model (an empty providers.llm, which is a valid company), so no
+	// turn can run until a revision adds one.
 	TurnEngineReady bool
 
 	// AwaitingSandbox is whether the seat is parked on a detached coding
@@ -153,7 +154,7 @@ func (s Screening) Result() queue.Result {
 //  3. NO TURN ENGINE. Pause the topic first so the requeued copies buffer,
 //     then park. Consuming and dropping them would lose the work outright;
 //     requeuing without the pause loops them at whatever rate the broker will
-//     serve.
+//     serve. The pause is the caller's to release, when a model arrives.
 //
 //  4. AWAITING SANDBOX. Park. The job outlasts any ack window.
 //
@@ -189,7 +190,10 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 	case !c.Owned:
 		return Screening{Action: ActionDefer, Reason: "seat is not owned here", NoteDeferred: true}
 	case !c.TurnEngineReady:
-		return Screening{Action: ActionPauseAndPark, Reason: "no turn engine", Events: evs}
+		return Screening{
+			Action: ActionPauseAndPark, Events: evs,
+			Reason: "no turn engine: the company configures no providers.llm",
+		}
 	case c.AwaitingSandbox:
 		return Screening{
 			Action: ActionPark, Reason: "awaiting a detached sandbox run",

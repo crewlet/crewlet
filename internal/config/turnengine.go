@@ -109,7 +109,7 @@ func DefaultTurnEngine() TurnEngine {
 // the true default.
 func (t *TurnEngine) Extends() bool { return t.ExtensionEnabled.Or(true) }
 
-func (t *TurnEngine) validate(path string) error {
+func (t *TurnEngine) validate(path Path) error {
 	var p problems
 
 	positive := []struct {
@@ -223,7 +223,7 @@ func DefaultConversationSession() ConversationSession {
 // Records reports whether the ledger is on, applying the true default.
 func (c *ConversationSession) Records() bool { return c.Enabled.Or(true) }
 
-func (c *ConversationSession) validate(path string) error {
+func (c *ConversationSession) validate(path Path) error {
 	var p problems
 	if c.MaxEntries < 1 {
 		p.add(at(path, "max_entries"), ErrOutOfRange, "must be at least 1, got %d", c.MaxEntries)

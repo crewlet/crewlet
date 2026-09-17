@@ -37,7 +37,7 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Button, Card, EmptyState, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, Skeleton, Tabs, Tag } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   CheckGlyph,
@@ -68,7 +68,6 @@ import {
   typeName,
 } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { useViewer } from "~/lib/viewer.ts";
@@ -760,7 +759,7 @@ function Thread({
               something — and says so, rather than rendering as an empty one. */}
           <div className="prose md">
             {comment.removed ? (
-              <span className="faint">(this comment was removed)</span>
+              <span className="muted">(this comment was removed)</span>
             ) : (
               renderMarkdown(comment.body)
             )}
@@ -797,7 +796,7 @@ function History({
             {/* A COMMIT THAT ANNOUNCED NOTHING — a fact about the change
                 rather than about its importance: a bulk edit is quiet by
                 construction. */}
-            {entry.quiet && <span className="faint"> (quiet)</span>}
+            {entry.quiet && <span className="muted"> (quiet)</span>}
             {entry.turn_id && (
               <>
                 {" "}
@@ -886,7 +885,7 @@ function Woke({
                 </strong>{" "}
                 {describeHistory(entry)}
               </span>
-              <span className="t-caption faint" title={fmtDateTime(entry.at)}>
+              <span className="t-caption" title={fmtDateTime(entry.at)}>
                 {relTime(entry.at, now)}
               </span>
             </span>
@@ -933,7 +932,7 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
           </Tag>
         )}
       </div>
-      {shared && <p className="t-caption faint">{shared}</p>}
+      {shared && <p className="t-caption">{shared}</p>}
       <div className="list">
         {answer.recipients.map((r) => (
           <div key={r.handle} className="thread-entry">
@@ -957,12 +956,12 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
                 </Tag>
               )}
             </div>
-            {!shared && r.excerpt && <p className="t-caption faint">{r.excerpt}</p>}
+            {!shared && r.excerpt && <p className="t-caption">{r.excerpt}</p>}
           </div>
         ))}
       </div>
       {answer.truncated && (
-        <p className="t-caption faint">
+        <p className="t-caption">
           The list was cut. A change this engine wrote cannot name this many people, so a peer on a
           different build wrote a larger recipient set.
         </p>
@@ -1136,7 +1135,7 @@ export function ItemProps({
                             would silently re-add everybody on the next
                             mention. */}
                         {(item.muted ?? []).includes(handle) && (
-                          <span className="faint">(muted)</span>
+                          <span className="muted">(muted)</span>
                         )}
                       </span>
                     ))}
@@ -1177,7 +1176,7 @@ export function ItemProps({
           value: item.due_at ? (
             <span className="row gap-1">
               {fmtDate(item.due_at)}
-              {item.due_all_day && <span className="faint">all day</span>}
+              {item.due_all_day && <span className="muted">all day</span>}
             </span>
           ) : undefined,
           setBy: by("due"),

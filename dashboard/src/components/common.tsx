@@ -40,6 +40,25 @@ import { runState, seatTone, stateLabel, statusLine, toneOf, type Seat } from "~
 import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 
+/**
+ * How tall a block of machine text grows before it scrolls itself, in px.
+ *
+ * 460px, which is `.code`'s own ceiling in components.css and therefore the
+ * height every one of these blocks has had since they were written — not a new
+ * number. It has to be STATED at each call because uilet's CodeBlock is
+ * unbounded unless a caller says otherwise, and unbounded is wrong for every
+ * record this dashboard shows: a phase's verbatim system prompt runs to tens
+ * of kilobytes, an event payload and a whole configuration to hundreds of
+ * lines, and one of them at nine hundred lines pushes everything under it off
+ * the screen.
+ *
+ * ONE CONSTANT, because it was five: a named one on the phase card and the
+ * bare literal `460` at four call sites on the event and turn screens, which
+ * is exactly how the phase card's ceiling and the event screen's come to
+ * disagree with nothing to say so.
+ */
+export const RECORD_MAX_HEIGHT = 460;
+
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
   name,
@@ -227,7 +246,7 @@ export function EventRow({
       </span>
       <span className="feed-tail">
         {event.source && <span className="truncate">{event.source}</span>}
-        <span className="faint">{humanize(event.category) || "system"}</span>
+        <span className="muted">{humanize(event.category) || "system"}</span>
       </span>
     </>
   );

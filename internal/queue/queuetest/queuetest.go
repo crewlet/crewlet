@@ -116,7 +116,7 @@
 //   - Enumerate the POINTS IN A LIFECYCLE at which each operation is sent. A
 //     separate axis from the one above, and a suite can be thorough on values
 //     while never touching it: after a Stop this suite sent exactly two of
-//     thirteen verbs, and the window it never visited held a hold that survived
+//     fourteen verbs, and the window it never visited held a hold that survived
 //     into the next life and left a restarted seat silently deaf. Build the
 //     WHOLE matrix rather than probing the verb you suspect — the suspected one
 //     is chosen from inside the blind spot.
@@ -366,7 +366,7 @@ type Capabilities struct {
 	// streams, so Start is a no-op — but the CONSISTENCY is not optional.
 	// Whichever way this flag points,
 	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
-	// thirteen and refuses a backend that answers some one way and some the
+	// fourteen and refuses a backend that answers some one way and some the
 	// other. After Stop there is no choice — see
 	// a_stopped_queue_refuses_every_verb.
 	//
@@ -427,6 +427,9 @@ func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Ca
 	// guard. See runReentrancy.
 	t.Run("Reentrancy", s.runReentrancy)
 	t.Run("Fleet", s.runFleet)
+	// Which mailboxes exist, asked of the broker rather than of any
+	// record. See runListing.
+	t.Run("Listing", s.runListing)
 	// A "no" has two halves: the answer and the write that must not
 	// happen. See runNegativePaths.
 	t.Run("NegativePaths", s.runNegativePaths)

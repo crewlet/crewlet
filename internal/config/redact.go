@@ -3,6 +3,8 @@ package config
 import (
 	"reflect"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Redacted is what a masked credential reads as on every HTTP surface.
@@ -30,11 +32,12 @@ const secretTag = "secret"
 // place would leave the process holding a company whose credentials are all the
 // literal string "__redacted__" — an outage produced by looking at something.
 //
-// A ${VAR} REFERENCE IS NOT MASKED. It names a credential rather than being
-// one, it is what an operator edits, and hiding it would make the document
-// unreadable for the one purpose this surface exists to serve. The value it
-// points at never enters this document at all — references are resolved where
-// a provider is constructed, not at parse.
+// A WHOLE ${VAR} REFERENCE IS NOT MASKED. It names a credential rather than
+// being one, it is what an operator edits, and hiding it would make the
+// document unreadable for the one purpose this surface exists to serve. The
+// value it points at never enters this document at all, since references are
+// resolved where a provider is constructed, not at parse. A value that only
+// embeds a reference beside literal text is masked; see mask.
 func (c *Company) Redact() *Company {
 	if c == nil {
 		return nil
@@ -56,11 +59,17 @@ func (c *Company) Redact() *Company {
 //
 // Only the marker is substituted. A field the caller actually changed keeps
 // their value, and a field they cleared stays cleared.
+//
+// Every member that can name itself is matched by that name, and a seat or a
+// unit is matched ANYWHERE in the prior document (see [documentIdentified]).
+// A mask that cannot be matched to exactly one prior member is left standing,
+// and [Company.Validate] names the field.
 func (c *Company) RestoreRedacted(prior *Company) {
 	if c == nil || prior == nil {
 		return
 	}
-	restore(reflect.ValueOf(c).Elem(), reflect.ValueOf(*prior), false)
+	r := restorer{documentWide: indexDocumentWide(reflect.ValueOf(*prior))}
+	r.restore(reflect.ValueOf(c).Elem(), reflect.ValueOf(*prior), false)
 }
 
 // copyMasking deep-copies src into dst, replacing credential strings with the
@@ -78,6 +87,18 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 		copyMasking(src.Elem(), p.Elem(), secret)
 		dst.Set(p)
 	case reflect.Struct:
+		// THE WHOLE VALUE FIRST, then every exported field over it.
+		// Reflection can neither read nor set an unexported field on its
+		// own, so walking the exported fields alone left each one at its
+		// zero value in the copy. That is not cosmetic: a [Toggle] keeps
+		// its state unexported, so every explicit `enabled: false`,
+		// `learning_enabled: false` and `shared: false` read as UNSET on
+		// every config read, and a GET-edit-PUT round trip re-enabled a
+		// disabled schedule without anybody touching it. Copying the
+		// struct carries that state; the walk below then replaces every
+		// exported field with its own deep, masked copy, so nothing a
+		// credential can live in is shared with the original.
+		dst.Set(src)
 		for i := range src.NumField() {
 			field := src.Type().Field(i)
 			if !field.IsExported() {
@@ -113,130 +134,258 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 	}
 }
 
-// restore walks a config beside its prior version, replacing masked
+// identified is a collection member that knows WHO it is.
+//
+// Position is not an identity, and treating it as one is how a caller who
+// merely REORDERED the roster had every seat's credentials resolved against
+// its neighbour's: each agent then authenticated to its tools as somebody
+// else, with nothing left holding the marker for [Company.UnresolvedMasks] to
+// catch and no validation error to raise. The lengths matched, so no guard
+// fired; the masks are anonymous, so the wrong answer looked exactly like the
+// right one.
+//
+// A list of credentials genuinely has no identity (a reordered `api_keys`
+// cannot be matched to what it hid) and stays positional. What separates the
+// two is whether a member can name itself, so the member is what says.
+type identified interface{ IdentityKey() string }
+
+// documentIdentified is a member whose identity is unique across the WHOLE
+// document rather than within its own list: a seat (its handle) and a unit
+// (its name).
+//
+// Both MOVE. A seat goes from the root into a unit, from one unit to another,
+// or back to the root; a unit goes under another unit. Its credentials move
+// with it, and a restore that matched only within the list the member sits in
+// now left every moved member's masks standing, because its old list was
+// somewhere else. So these are matched against one index over the whole
+// prior document, wherever they sat in it.
+//
+// A marker method rather than a list of types in this file, so the property
+// is declared where the identity is.
+type documentIdentified interface {
+	identified
+	identityIsDocumentWide()
+}
+
+var (
+	identifiedType         = reflect.TypeOf((*identified)(nil)).Elem()
+	documentIdentifiedType = reflect.TypeOf((*documentIdentified)(nil)).Elem()
+)
+
+// restorer walks a config beside its prior version, replacing masked
 // credentials with what the prior held.
-func restore(target, prior reflect.Value, secret bool) {
-	if target.Type() != prior.Type() {
+type restorer struct {
+	// documentWide is, per [documentIdentified] member type, every identity
+	// the prior document holds exactly once, mapped to that member.
+	documentWide map[reflect.Type]map[string]reflect.Value
+}
+
+// indexDocumentWide collects every [documentIdentified] member of the prior
+// document, at any depth, by identity.
+//
+// AN IDENTITY THAT IS EMPTY OR NOT UNIQUE IS NOT IN THE INDEX. Two units
+// called "Platform" in a stored revision (which a build before the name rules
+// admitted) are two members with no identity between them: picking either
+// hands one team's credentials to the other, and so does falling back to
+// position, which is exactly what the previous restore did for a duplicated
+// or empty identity. Left out, their masks stay standing and validation names
+// the field, which is the one outcome that invents nothing.
+func indexDocumentWide(prior reflect.Value) map[reflect.Type]map[string]reflect.Value {
+	seen := map[reflect.Type]map[string]reflect.Value{}
+	ambiguous := map[reflect.Type]map[string]bool{}
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Pointer, reflect.Interface:
+			if !v.IsNil() {
+				walk(v.Elem())
+			}
+		case reflect.Struct:
+			for i := range v.NumField() {
+				if v.Type().Field(i).IsExported() {
+					walk(v.Field(i))
+				}
+			}
+		case reflect.Slice:
+			elem := v.Type().Elem()
+			documentWide := elem.Implements(documentIdentifiedType)
+			if documentWide && seen[elem] == nil {
+				seen[elem], ambiguous[elem] = map[string]reflect.Value{}, map[string]bool{}
+			}
+			for i := range v.Len() {
+				member := v.Index(i)
+				if documentWide {
+					key := member.Interface().(identified).IdentityKey()
+					if _, twice := seen[elem][key]; twice || key == "" {
+						ambiguous[elem][key] = true
+					}
+					seen[elem][key] = member
+				}
+				walk(member)
+			}
+		case reflect.Map:
+			iter := v.MapRange()
+			for iter.Next() {
+				walk(iter.Value())
+			}
+		}
+	}
+	walk(prior)
+	for elem, keys := range ambiguous {
+		for key := range keys {
+			delete(seen[elem], key)
+		}
+	}
+	return seen
+}
+
+// restore replaces masks in target with the values at the same place in
+// prior.
+//
+// An INVALID prior means "nothing corresponds here": a member that is new, was
+// renamed, or whose identity is ambiguous. The walk still descends through it,
+// restoring nothing of its own, because a new unit can hold seats that are not
+// new at all and are matched by their own identity.
+func (r *restorer) restore(target, prior reflect.Value, secret bool) {
+	if prior.IsValid() && target.Type() != prior.Type() {
 		return
 	}
 	switch target.Kind() {
 	case reflect.String:
-		if secret && target.String() == Redacted {
+		if prior.IsValid() && secret && target.String() == Redacted {
 			target.SetString(prior.String())
 		}
 	case reflect.Pointer:
-		if !target.IsNil() && !prior.IsNil() {
-			restore(target.Elem(), prior.Elem(), secret)
+		if target.IsNil() {
+			return
 		}
+		var previous reflect.Value
+		if prior.IsValid() && !prior.IsNil() {
+			previous = prior.Elem()
+		}
+		r.restore(target.Elem(), previous, secret)
 	case reflect.Struct:
 		for i := range target.NumField() {
 			field := target.Type().Field(i)
 			if !field.IsExported() {
 				continue
 			}
-			restore(target.Field(i), prior.Field(i),
-				secret || field.Tag.Get(secretTag) == "true")
+			var previous reflect.Value
+			if prior.IsValid() {
+				previous = prior.Field(i)
+			}
+			r.restore(target.Field(i), previous, secret || field.Tag.Get(secretTag) == "true")
 		}
 	case reflect.Slice:
-		// BY IDENTITY where the members have one, exactly as the map
-		// branch below matches on its key: a seat's credentials belong to
-		// the seat, not to the slot it happened to occupy.
-		if restoreByIdentity(target, prior, secret) {
-			return
-		}
-		// By POSITION otherwise, which is the only correspondence a list
-		// of anonymous values has — a reordered `api_keys` is genuinely
-		// ambiguous, so the mask is refused rather than guessed when the
-		// lengths differ, and the validation that follows reports a
-		// literal "__redacted__" where a credential should be.
-		if target.Len() != prior.Len() {
-			return
-		}
-		for i := range target.Len() {
-			restore(target.Index(i), prior.Index(i), secret)
-		}
+		r.restoreSlice(target, prior, secret)
 	case reflect.Map:
 		for _, key := range target.MapKeys() {
-			previous := prior.MapIndex(key)
-			if !previous.IsValid() {
-				continue
+			var previous reflect.Value
+			if prior.IsValid() {
+				previous = prior.MapIndex(key)
 			}
+			// A map element is not addressable, so it is restored in a
+			// temporary and set back.
 			element := reflect.New(target.Type().Elem()).Elem()
 			element.Set(target.MapIndex(key))
-			restore(element, previous, secret)
+			r.restore(element, previous, secret)
 			target.SetMapIndex(key, element)
 		}
 	}
 }
 
-// identified is a collection member that knows WHO it is.
+// restoreSlice matches each member of a list to its prior value.
 //
-// Position is not an identity, and treating it as one is how a caller who
-// merely REORDERED the roster had every seat's credentials resolved against
-// its neighbour's — each agent then authenticating to its tools as somebody
-// else, with nothing left holding the marker for [Company.UnresolvedMasks] to
-// catch and no validation error to raise. The lengths matched, so the guard
-// below never fired; the masks are anonymous, so the wrong answer looked
-// exactly like the right one.
+// Three correspondences, chosen by what the member can say about itself, and
+// NEVER a fall back from one to another:
 //
-// A list of credentials genuinely has no identity — a reordered `api_keys`
-// cannot be matched to what it hid — and stays positional. What separates the
-// two is whether a member can name itself, so the member is what says.
-type identified interface{ IdentityKey() string }
+//   - A [documentIdentified] member (a seat, a unit) is matched in the index
+//     over the whole prior document, so a move keeps its credentials.
+//   - An [identified] member (an MCP server, a sandbox setup step) is matched
+//     by identity within the prior list it sits in.
+//   - Anything else is matched by position, which is the only correspondence
+//     a list of anonymous values has. A list that changed length is refused
+//     rather than guessed: every slot's mask stays standing.
+//
+// A member whose identity has no unambiguous prior is left unrestored, and
+// its mask survives into [Company.Validate]. Positional matching used to be
+// the fallback for an identity that was duplicated or empty, which is the one
+// case where position is certain to be wrong about who is who.
+func (r *restorer) restoreSlice(target, prior reflect.Value, secret bool) {
+	elem := target.Type().Elem()
+	var match func(i int) reflect.Value
+	switch {
+	case elem.Implements(documentIdentifiedType):
+		index := r.documentWide[elem]
+		match = func(i int) reflect.Value {
+			return index[target.Index(i).Interface().(identified).IdentityKey()]
+		}
+	case elem.Implements(identifiedType):
+		byKey := uniqueMembers(prior)
+		match = func(i int) reflect.Value {
+			return byKey[target.Index(i).Interface().(identified).IdentityKey()]
+		}
+	default:
+		positional := prior.IsValid() && prior.Len() == target.Len()
+		match = func(i int) reflect.Value {
+			if !positional {
+				return reflect.Value{}
+			}
+			return prior.Index(i)
+		}
+	}
+	for i := range target.Len() {
+		r.restore(target.Index(i), match(i), secret)
+	}
+}
 
-var identifiedType = reflect.TypeOf((*identified)(nil)).Elem()
-
-// restoreByIdentity matches members by who they are and reports whether it
-// could — false hands the slice back to positional matching.
-//
-// A target member whose identity the prior document does not carry is left
-// alone: it is new, or it was renamed, and either way there is no value of
-// ITS to restore. Its mask survives into [Company.Validate], which is the
-// outcome that names the field rather than inventing a credential for it.
-func restoreByIdentity(target, prior reflect.Value, secret bool) bool {
-	if !target.Type().Elem().Implements(identifiedType) {
-		return false
+// uniqueMembers indexes one prior list of [identified] members by identity,
+// leaving out any identity that is empty or held by more than one member, for
+// the reason [indexDocumentWide] gives.
+func uniqueMembers(prior reflect.Value) map[string]reflect.Value {
+	if !prior.IsValid() {
+		return nil
 	}
 	byKey := make(map[string]reflect.Value, prior.Len())
+	ambiguous := map[string]bool{}
 	for i := range prior.Len() {
 		key := prior.Index(i).Interface().(identified).IdentityKey()
-		if key == "" {
-			// A member that cannot name itself makes the whole list
-			// ambiguous again, so nothing here is matched by identity.
-			return false
-		}
-		if _, duplicate := byKey[key]; duplicate {
-			// TWO MEMBERS, ONE IDENTITY. The document is invalid and
-			// will be refused, but not until after this runs — and an
-			// identity that is not unique is not an identity, so this
-			// falls back rather than picking one of them.
-			return false
+		if _, twice := byKey[key]; twice || key == "" {
+			ambiguous[key] = true
 		}
 		byKey[key] = prior.Index(i)
 	}
-	for i := range target.Len() {
-		previous, found := byKey[target.Index(i).Interface().(identified).IdentityKey()]
-		if !found {
-			continue
-		}
-		restore(target.Index(i), previous, secret)
+	for key := range ambiguous {
+		delete(byKey, key)
 	}
-	return true
+	return byKey
 }
 
 // mask hides a literal credential and leaves a reference alone.
+//
+// # Only a WHOLE reference is shown
+//
+// A value that is exactly one ${VAR} names a credential and carries none: the
+// engine resolves it where a provider is built, so nothing it points at is in
+// this document to leak, and it is the half an operator edits.
+//
+// Anything else is masked, including a value that merely CONTAINS a
+// reference. "Bearer sk-live-${SUFFIX}" and "sk-live-SECRET-${ROTATION}" are
+// legitimate (the resolver expands embedded references), and the literal
+// half of each is a credential. The previous rule showed any value containing
+// "${" and so published exactly that half; a malformed "${line#host=}" or an
+// unclosed "${" is not a reference at all by the resolver's own grammar. The
+// names an embedded reference carries are not lost to the operator:
+// [References] reads the unredacted document and lists every one with its
+// path, and a masked value is restored from the prior revision on a write.
 func mask(value string, secret bool) string {
-	switch {
-	case !secret || value == "":
+	if !secret || value == "" {
 		return value
-	case strings.Contains(value, "${"):
-		// A reference, not a credential. The engine resolves it where a
-		// provider is built, so the value it names is not in this
-		// document to leak — and it is the half an operator edits.
-		return value
-	default:
-		return Redacted
 	}
+	if _, whole := envref.Whole(value); whole {
+		return value
+	}
+	return Redacted
 }
 
 // UnresolvedMasks lists the credential fields still holding the redaction
@@ -250,16 +399,16 @@ func mask(value string, secret bool) string {
 // not. The literal "__redacted__" would be handed to a provider as an API key
 // and fail at the first call, hours later, with an authentication error that
 // names nothing about where it came from.
-func (c *Company) UnresolvedMasks() []string {
+func (c *Company) UnresolvedMasks() []Path {
 	if c == nil {
 		return nil
 	}
-	var found []string
-	findMasks(reflect.ValueOf(*c), "", false, &found)
+	var found []Path
+	findMasks(reflect.ValueOf(*c), nil, false, &found)
 	return found
 }
 
-func findMasks(v reflect.Value, path string, secret bool, found *[]string) {
+func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 	switch v.Kind() {
 	case reflect.String:
 		if secret && v.String() == Redacted {
@@ -283,8 +432,8 @@ func findMasks(v reflect.Value, path string, secret bool, found *[]string) {
 			findMasks(v.Index(i), idx(path, i), secret, found)
 		}
 	case reflect.Map:
-		for _, key := range v.MapKeys() {
-			findMasks(v.MapIndex(key), at(path, key.String()), secret, found)
+		for _, mapKey := range v.MapKeys() {
+			findMasks(v.MapIndex(mapKey), entry(path, mapKey.String()), secret, found)
 		}
 	}
 }

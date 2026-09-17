@@ -539,6 +539,38 @@ const ALLOWED: Allowed[] = [
   },
 ];
 
+/**
+ * A class a screen writes that NO stylesheet declares, deliberately.
+ *
+ * THE MIRROR OF [ALLOWED], and it needs its own list for the same reason that
+ * one does: the honest cases are few, each has a reason, and a blanket prefix
+ * would hide the next `stack`. A handle is the one honest case — a name on an
+ * element so a suite can find it, where the drawing is somebody else's and a
+ * rule here would be this tree quietly restating the package's own.
+ *
+ * TWO-SIDED, like everything else in this file. An entry fails when nothing
+ * writes the name any more (the handle went, the excuse outlived it) and when
+ * a stylesheet DOES declare it (the excuse is a lie, and the rule it now
+ * carries is unreviewed). So the list cannot drift away from what it excuses
+ * in either direction.
+ */
+interface Handle {
+  name: string;
+  /** What finds it, and why nothing draws it. */
+  why: string;
+}
+
+const HANDLES: Handle[] = [
+  {
+    name: "btable-name",
+    why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-table__node` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
+  },
+  {
+    name: "btable-label",
+    why: "The name span inside that cell, for the same suites. `min-width: 0` on it was inert — the span is not a flex item and the ellipsis lives on the package's `__name`. See btable-name.",
+  },
+];
+
 /** Every declared class with nothing in the tree that writes it. */
 export function orphans(
   declared: Map<string, string>,
@@ -580,9 +612,26 @@ describe("every class the dashboard names", () => {
   }));
   const all = files.flatMap((f) => usesIn(f.name, f.text));
 
-  test("is declared by a stylesheet", () => {
-    const missing = all.filter((u) => !css.has(u.name));
+  test("is declared by a stylesheet, or is a handle that says it is not", () => {
+    const handles = new Set(HANDLES.map((h) => h.name));
+    const missing = all.filter((u) => !css.has(u.name) && !handles.has(u.name));
     expect(missing.map((u) => `${u.name} — ${u.where}`)).toEqual([]);
+  });
+
+  // BOTH WAYS ON THE EXCUSES THEMSELVES. A handle whose element went is an
+  // excuse with nothing left to excuse, and a handle a stylesheet has since
+  // picked up is a rule that got in without being read.
+  test("every handle is still written, and still drawn by nothing", () => {
+    const written = new Set(all.map((u) => u.name));
+    expect(
+      HANDLES.filter((h) => !written.has(h.name)).map((h) => h.name),
+      "these are excused as handles and nothing writes them — delete the entry",
+    ).toEqual([]);
+    expect(
+      HANDLES.filter((h) => css.has(h.name)).map((h) => h.name),
+      "these are excused as drawing nothing and a stylesheet now declares them — " +
+        "delete the entry, and read the rule it let in",
+    ).toEqual([]);
   });
 
   test("is found at all, so the scan cannot pass by reading nothing", () => {

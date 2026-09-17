@@ -119,7 +119,7 @@ units:
 
 (`mcp_env.atlassian` carries the `mcp-atlassian` server's env vars directly — `JIRA_USERNAME`, `JIRA_API_TOKEN`, the matching Confluence creds, and `JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER` for scoping — for any var the server reads. The unit's Jira project / Confluence space *identity* lives in the unit's `project` / `space`, not in `mcp_env`.)
 
-The project identity is set once on the unit's `project` — it is integration identity (webhook routing + write home), not a tool credential, and it does not scope knowledge reads. The per-agent `mcp_env.atlassian` creds inherit `{**unit_mcp_env, **role_mcp_env}` (role-level overrides win), so each agent still authenticates as itself.
+The project identity is set once on the unit's `project`. It is integration identity (webhook routing + write home), not a tool credential, and it does not scope knowledge reads. An agent seat's `mcp_env.atlassian` is layered over its unit's, variable by variable, with the seat's own values winning, so each agent still authenticates as itself. Only the unit's direct agent seats inherit the unit's block; a human seat inherits none.
 
 ---
 

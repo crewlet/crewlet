@@ -198,7 +198,7 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
               has simply not caught up to it. The panel behind this dialog clears the chip when it
               has.
             </span>
-            <span className="t-caption faint">
+            <span className="t-caption">
               Retrying would append a second record for a gesture that already landed.
             </span>
           </span>
@@ -216,7 +216,7 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
               it may have landed and it may not. This is the case to retry.
             </span>
             {result.op_id && (
-              <span className="t-caption faint">
+              <span className="t-caption">
                 Retry with the same operation id so a landed record is not duplicated:{" "}
                 <InlineCode>{result.op_id}</InlineCode>
               </span>

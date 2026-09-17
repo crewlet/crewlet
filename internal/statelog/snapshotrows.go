@@ -194,7 +194,7 @@ func CheckTables(ctx context.Context, db *store.DB, d Domain) error {
 	probe := errCheckRolledBack
 	err = db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := t.retain(ctx, tx, rec, false); err != nil {
+		if err := t.retain(ctx, tx, rec, false, db.Caps().MaxVariables); err != nil {
 			return fmt.Errorf("the deferred record's own tables: %w", err)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml

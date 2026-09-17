@@ -108,7 +108,26 @@ test("no JSX guard is a bare number", () => {
  * screens. Each rendered normally and each landed on Not Found, because the
  * failure of a moved route is a screen that says nothing is there rather than
  * a build that says the link is wrong.
+ *
+ * AND `path:` IS NOT ONLY A ROUTE. It is also the ENGINE's word for a pointer
+ * into the company document — `ConfigProblem.path`, `ConfigWarning.path`,
+ * `ConfigReference.path` all carry it, and the org builder's model writes the
+ * same shape for a field it sets or forbids: `{ path: ["llm"], credential:
+ * false }`, `set: [{ path: ["goal"], value }]`. Those heads are FIELD names
+ * and can never be route segments, so reading them here reports twenty-two
+ * dead links that are not links at all — and a gate that cries wolf is one
+ * somebody switches off, which costs the eighteen real ones above.
+ *
+ * The two are told apart by what the pointer is FOR, which is on the line:
+ * a document pointer names the `value` it sets or marks itself a `credential`
+ * field, and a route never does either. The exemption is asserted in both
+ * directions below rather than trusted — it has to still fire, and a real nav
+ * row has to still be read — because an exemption nobody checks is how a gate
+ * quietly stops covering the thing it was written for.
  */
+
+/** Whether a `path:` on this line points into the company document, not at a screen. */
+const documentPointer = (line: string) => /\bvalue:|\bcredential:/.test(line);
 test("every link names a segment a workspace owns", () => {
   const owned = new Set(RAIL.flatMap((r) => r.owns));
   const literal = /(?:href\(|nav\.to\(|\bpath:\s*)\[\s*"([a-z0-9_-]+)"/g;
@@ -120,9 +139,42 @@ test("every link names a segment a workspace owns", () => {
       let m: RegExpExecArray | null;
       while ((m = literal.exec(line))) {
         const head = m[1];
+        // `href(` and `nav.to(` are unambiguous; only the bare `path:`
+        // spelling collides with the document pointer.
+        if (m[0].startsWith("path") && documentPointer(line)) continue;
         if (head && !owned.has(head)) dead.push(`${path}:${i + 1} — #/${head}`);
       }
     });
   }
   expect(dead, "these links go to a screen that does not exist").toEqual([]);
+});
+
+/*
+ * BOTH SIDES OF THAT EXEMPTION. It must still let a document pointer through
+ * — otherwise it has stopped mattering and the next reader deletes it — and
+ * it must NOT swallow a nav destination, which is the failure that would make
+ * the check above silently cover less than it claims.
+ */
+test("the document-pointer exemption fires, and spares no real link", () => {
+  // The shapes routes/org/builder/model writes.
+  expect(documentPointer('  { path: ["llm"], credential: false },')).toBe(true);
+  expect(documentPointer('    set: [{ path: ["goal"], value: "Ship" }],')).toBe(true);
+  // The shapes a nav destination is written in, across all four tables.
+  expect(documentPointer('      path: ["admin", "config"],')).toBe(false);
+  expect(documentPointer('        { label: "Work", path: ["work"] },')).toBe(false);
+  expect(documentPointer('    path: ["activity", "turns"],')).toBe(false);
+  expect(documentPointer('      href(["company", "people", handle])')).toBe(false);
+});
+
+test("something in the tree is actually exempted, so the rule is not dead weight", () => {
+  const exempted = sources([".tsx", ".ts"]).flatMap(({ path, text }) =>
+    text
+      .split("\n")
+      .map((line, i) => ({ line, at: `${path}:${i + 1}` }))
+      .filter(({ line }) => /\bpath:\s*\[\s*"/.test(line) && documentPointer(line)),
+  );
+  expect(
+    exempted.length,
+    "nothing writes a document pointer any more — delete documentPointer and read the `path:` spelling straight",
+  ).toBeGreaterThan(0);
 });

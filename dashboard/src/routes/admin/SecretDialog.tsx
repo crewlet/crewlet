@@ -142,7 +142,7 @@ export function SecretDialog({
             {/* WHEN it takes effect, because a rotation that appears to
                 succeed and quietly does not is the failure the store exists
                 to remove. A provider holds the value it was built with. */}
-            <span className="t-caption faint">
+            <span className="t-caption">
               A running seat keeps the value it was built with until the configuration is
               re-activated or the node restarts.
             </span>

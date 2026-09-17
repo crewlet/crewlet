@@ -39,10 +39,42 @@ export interface Problem {
   text: string;
 }
 
-// A CONFIG PATH, which is what a problem line opens with: dotted segments,
-// optionally indexed. Anchored, so a sentence that merely contains a dot is
-// not mistaken for one.
-const pathHead = /^([a-z][a-z0-9_]*(?:\[\d+\])?(?:\.[a-z0-9_]+(?:\[\d+\])?)*): (.*)$/s;
+// A CONFIG PATH, as ONE FRAGMENT shared by the three patterns below that find
+// one: at the head of a line, inside a sentence, and among the tokens a
+// sentence is marked up with. They were three spellings of one shape, and
+// they drifted in the direction that hides a problem: a map key is written
+// as the operator wrote it, so `mcp_env.jira-cloud.API_TOKEN` has a hyphen
+// and capitals, and none of the three recognised it: a refusal naming one
+// rendered the path as prose, and [paths] never reported it to a caller that
+// acts on what a refusal names.
+//
+// The first segment is a top-level key, always lower snake case, which is
+// what stops an ordinary capitalised word from starting a path. Later
+// segments are map keys too: letters of either case, digits, underscores and
+// hyphens, never ending in a hyphen, so a path followed by a dash in a
+// sentence does not swallow it. Each segment may carry list indexes.
+const INDEX = String.raw`(?:\[\d+\])*`;
+const HEAD_SEGMENT = String.raw`[a-z][a-z0-9_]*` + INDEX;
+const KEY_SEGMENT = String.raw`\.[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?` + INDEX;
+// Not followed by more of a key: a lookahead rather than `\b`, because a
+// path can end in `]`, where a word boundary before a space does not exist.
+//
+// AND THE HYPHEN IS NOT IN IT, although a key may carry one. Excluding it
+// here refuses the whole match rather than a shorter one: the segment above
+// already declines to end in a hyphen, so on `mcp_env.jira-cloud.API_TOKEN-`
+// the engine backtracks segment by segment looking for a shorter path that
+// this lookahead will accept, finds none, and reports NO PATH AT ALL —
+// measured on three sentences, each of which named a path and rendered it as
+// prose. The segment is what stops a trailing dash being swallowed; this only
+// has to stop a path ending mid-key.
+const END = String.raw`(?![A-Za-z0-9_])`;
+// A path inside a sentence has three segments or more, so an abbreviation
+// ("e.g") or a file name ("crewlet.yaml") is not mistaken for one.
+const INLINE_PATH = String.raw`\b${HEAD_SEGMENT}(?:${KEY_SEGMENT}){2,}${END}`;
+
+// What a problem line opens with. Anchored, so a sentence that merely
+// contains a dot is not mistaken for one, and any number of segments counts.
+const pathHead = new RegExp(String.raw`^(${HEAD_SEGMENT}(?:${KEY_SEGMENT})*): (.*)$`, "s");
 
 /**
  * split turns a joined refusal into its problems.
@@ -88,10 +120,10 @@ export function paths(detail: string): string[] {
   return [...out];
 }
 
-// A config path sitting inside a sentence: three segments or more, so an
-// ordinary abbreviation is not mistaken for one. The same shape [marked]
-// recognises below, kept beside it so the two cannot drift.
-const inlinePath = /\b[a-z][a-z0-9_]*(?:\[\d+\])?(?:\.[a-z0-9_]+(?:\[\d+\])?){2,}\b/g;
+// A config path sitting inside a sentence. The same fragment [marked] builds
+// its path token from below, so what a caller matches on is what a reader
+// sees marked up.
+const inlinePath = new RegExp(INLINE_PATH, "g");
 
 // What gets its own face inside a sentence, in the order they are tried.
 //
@@ -102,8 +134,13 @@ const inlinePath = /\b[a-z][a-z0-9_]*(?:\[\d+\])?(?:\.[a-z0-9_]+(?:\[\d+\])?){2,
 // a route and a quoted value are what the engine's own sentences are full of,
 // and asking every message to annotate them would be asking every author to
 // remember.
-const token =
-  /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|`([^`]+)`|(https?:\/\/[^\s,)]+[^\s,.)])|(\$\{[A-Za-z0-9_]+\})|(\/[a-z0-9-]+(?:\/[a-z0-9{}_-]+)+)|("[^"]*")|\b([a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,})\b/g;
+const token = new RegExp(
+  String.raw`\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|` +
+    "`([^`]+)`|" +
+    String.raw`(https?:\/\/[^\s,)]+[^\s,.)])|(\$\{[A-Za-z0-9_]+\})|(\/[a-z0-9-]+(?:\/[a-z0-9{}_-]+)+)|("[^"]*")|` +
+    `(${INLINE_PATH})`,
+  "g",
+);
 
 /**
  * marked renders a sentence with its values, paths and links picked out.
@@ -208,4 +245,17 @@ export function Problems({ detail }: { detail: string }) {
       ))}
     </ul>
   );
+}
+
+/**
+ * A refusal as a field's error line, or nothing at all.
+ *
+ * The design system's form row takes a NODE for its error, so every caller
+ * would otherwise spell the same ternary: a refusal is a list of problems
+ * rather than a sentence, and a field that rendered its error as plain text
+ * would be the one place in the product where a config path does not read as
+ * one.
+ */
+export function withProblems(detail: string | undefined): ReactNode {
+  return detail ? <Problems detail={detail} /> : undefined;
 }

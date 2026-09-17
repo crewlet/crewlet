@@ -57,9 +57,10 @@ type Unit struct {
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 
-	// Lead names the seat that leads this unit — routing work within it,
+	// Lead names the seat that leads this unit: routing work within it,
 	// acting as its single point of contact, and auto-managing any direct
-	// member nobody else manages.
+	// member that no direct member of this unit already manages (see
+	// [Organization.Normalize] for how a unit reference counts).
 	//
 	// The name may resolve to a seat in this unit, in a descendant, or —
 	// after inheritance — in an ancestor. A unit with no lead of its own
@@ -73,6 +74,32 @@ type Unit struct {
 	// Channel is where this unit talks. Inherited by child units that
 	// do not set their own.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
+
+	// DeclaredLead and DeclaredChannel are what this unit itself WROTE,
+	// recorded by [Organization.Normalize] before the cascade fills Lead and
+	// Channel with an ancestor's value. Empty means the unit named none.
+	//
+	// They mirror [Role.DeclaredHandle]: every reader resolves through the
+	// effective field, and the authored half exists for the questions the
+	// effective value can no longer answer once the cascade has run. Two
+	// such questions exist. A dangling-reference report has to name the unit
+	// that wrote a misspelled lead ONCE, rather than every descendant that
+	// inherited it and whose author wrote nothing; and a chart has to tell
+	// an inherited lead from a unit naming the same seat itself, which read
+	// identically in Lead.
+	//
+	// Not part of the wire form: the authored values are `lead` and
+	// `channel` in the document, and these are derived from them. A caller
+	// building a Unit sets Lead and Channel.
+	DeclaredLead    string `yaml:"-" json:"-"`
+	DeclaredChannel string `yaml:"-" json:"-"`
+
+	// declared reports that DeclaredLead and DeclaredChannel have been
+	// recorded. It is what keeps Normalize idempotent: after the cascade an
+	// inherited Lead and an authored one are the same string, so a second
+	// pass that recorded again would promote every inherited lead to a
+	// declared one.
+	declared bool
 
 	// Project and Space are the unit's tracker and knowledge IDENTITY:
 	// inbound activity with no better recipient routes to the unit lead,
@@ -91,9 +118,10 @@ type Unit struct {
 
 	KnowledgeRefs []string `yaml:"knowledge_refs,omitempty" json:"knowledge_refs,omitempty"`
 
-	// MCPEnv is the tool credentials this unit's DIRECT members share.
+	// MCPEnv is the tool credentials this unit's DIRECT AGENT members share.
 	// Inherited by those members with their own values winning; see
-	// [Organization.Normalize] for why it stops at one level.
+	// [Organization.Normalize] for why it stops at one level and skips
+	// human seats.
 	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
 	Roles    []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`
@@ -241,20 +269,23 @@ func (u *Unit) hasDirectAgent() bool {
 // report instead.
 func (u *Unit) Validate() error {
 	var errs []error
+	add := func(field []any, err error) {
+		errs = append(errs, &UnitError{Unit: u, Field: field, Err: err})
+	}
 	name := strings.TrimSpace(u.Name)
 	if name == "" {
-		errs = append(errs, fmt.Errorf("unit: %w", ErrMissingName))
+		add([]any{"name"}, fmt.Errorf("unit: %w", ErrMissingName))
 	}
 
 	owner := fmt.Sprintf("unit %q", name)
-	if err := validateSchedules(owner, u.Schedules); err != nil {
-		errs = append(errs, err)
+	for _, f := range validateSchedules(owner, u.Schedules) {
+		add(f.field, f.err)
 	}
-	for _, s := range u.Schedules {
+	for i, s := range u.Schedules {
 		// A fan-out with nothing to fan out to can never fire. Failing at
 		// load beats a schedule that silently no-ops every minute it is due.
 		if s.IsEnabled() && !s.TargetsLead() && !u.hasDirectAgent() {
-			errs = append(errs, fmt.Errorf(
+			add([]any{"schedules", i}, fmt.Errorf(
 				"%s: schedule %q: %w: target each fans out to direct agent members only — never descendants, never human seats — and this unit has none",
 				owner, s.Name, ErrUnrunnableSchedule))
 		}

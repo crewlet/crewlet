@@ -65,7 +65,7 @@ import {
   TextCell,
 } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -135,9 +135,9 @@ function FleetScreen() {
         }
       </PageActions>
       <PageNote>
-        Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that
-        cannot reach the configuration it should be running releases its seats rather than serving
-        stale work.
+        Seat ownership is a lease with a fencing epoch, so no two nodes ever run one seat. A node
+        that cannot reach the configuration it should be running releases its seats rather than
+        serving stale work.
       </PageNote>
 
       {error && (
@@ -300,7 +300,7 @@ function FleetScreen() {
                     </Tag>
                     {data && (n.config_epoch ?? 0) < data.target_epoch && (
                       <span
-                        className="t-caption faint"
+                        className="t-caption"
                         title={`applied epoch ${n.config_epoch ?? 0}, target ${data.target_epoch}`}
                       >
                         behind
@@ -566,7 +566,7 @@ export function NodeScreen({ id }: { id: string }) {
                     />
                   </div>
                   {node.owner && (
-                    <p className="t-caption faint">
+                    <p className="t-caption">
                       Fencing token <InlineCode>{node.owner}</InlineCode> — this node's id plus a
                       per-process suffix, so a restart is a new owner of the same leases.
                       {node.protocol != null && ` Seat protocol v${node.protocol}.`}
@@ -787,7 +787,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               {node.config_status || "unknown"}
             </Tag>
             <span className="spacer" />
-            <span className="t-caption faint">reported</span>
+            <span className="t-caption">reported</span>
             <DateCell at={node.config_reported_at} now={now} />
           </div>
           {node.config_error && (
@@ -803,7 +803,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             <span className="t-label">Up since</span>
             <DateCell at={node.started_at} now={now} />
           </div>
-          <p className="t-caption faint">
+          <p className="t-caption">
             A node reports the epoch it has applied; the activation pointer names the one the fleet
             agreed on. The two differ for as long as a node takes to rebuild — and for ever if it
             cannot, which is what the apply error above is.
@@ -822,7 +822,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
         <div className="row wrap gap-2" style={{ padding: "var(--space-3)" }}>
           <span className="t-label">Its own lease</span>
           <DurationCell ms={leaseMs(node.expires_in)} />
-          <span className="t-caption faint">
+          <span className="t-caption">
             until expiry — a node that stops renewing loses every seat below to whoever claims it
             next
           </span>

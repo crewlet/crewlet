@@ -94,7 +94,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	children, err := a.explodeTask(ctx, tx, next)
+	children, err := a.explodeTask(ctx, tx, next, c)
 	if err != nil {
 		return 0, err
 	}
@@ -670,7 +670,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 // handful of rows and is a pure function of the document, where a diff would
 // depend on what this node happened to hold.
 func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
-	task Task) (int, error) {
+	task Task, c applyContext) (int, error) {
 
 	written := 0
 	for _, child := range []struct {
@@ -682,36 +682,27 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			for _, handle := range task.Muted {
 				muted[handle] = true
 			}
-			n := 0
-			for _, handle := range task.Watchers {
-				res, err := tx.ExecContext(ctx, `
-					INSERT INTO tracker_watchers (task_id, handle, muted)
-					VALUES (?,?,?)
-					ON CONFLICT (task_id, handle) DO UPDATE SET
-						muted = excluded.muted`,
-					task.ID, handle, boolInt(muted[handle]))
-				if err != nil {
-					return 0, err
-				}
-				rows, err := affected(res)
-				if err != nil {
-					return 0, err
-				}
-				n += rows
-			}
-			return n, nil
+			return insertMany(ctx, tx, c.maxVariables,
+				`INSERT INTO tracker_watchers (task_id, handle, muted) VALUES`,
+				`(?,?,?)`,
+				`ON CONFLICT (task_id, handle) DO UPDATE SET
+					muted = excluded.muted`,
+				task.Watchers, func(handle string) []any {
+					return []any{task.ID, handle, boolInt(muted[handle])}
+				})
 		}},
 		{"tracker_collaborators", func() (int, error) {
-			return insertMany(ctx, tx,
-				`INSERT INTO tracker_collaborators (task_id, handle) VALUES (?,?)
-				 ON CONFLICT (task_id, handle) DO NOTHING`,
+			return insertMany(ctx, tx, c.maxVariables,
+				`INSERT INTO tracker_collaborators (task_id, handle) VALUES`,
+				`(?,?)`,
+				`ON CONFLICT (task_id, handle) DO NOTHING`,
 				task.Collaborators, func(h string) []any { return []any{task.ID, h} })
 		}},
 		{"tracker_task_tags", func() (int, error) {
-			return insertMany(ctx, tx,
-				`INSERT INTO tracker_task_tags (task_id, project_key, slug)
-				 VALUES (?,?,?)
-				 ON CONFLICT (task_id, slug) DO NOTHING`,
+			return insertMany(ctx, tx, c.maxVariables,
+				`INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
+				`(?,?,?)`,
+				`ON CONFLICT (task_id, slug) DO NOTHING`,
 				task.Tags, func(s string) []any { return []any{task.ID, task.Project, s} })
 		}},
 		{"tracker_task_sprints", func() (int, error) {
@@ -721,11 +712,12 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			// rebuilt from the document on every apply, like every
 			// other collection here, so a reprocess converges rather
 			// than accumulating.
-			return insertMany(ctx, tx, `
+			return insertMany(ctx, tx, c.maxVariables, `
 				INSERT INTO tracker_task_sprints
 					(task_id, sprint, project_key, from_at, to_at, rolled_to)
-				VALUES (?,?,?,?,?,?)
-				ON CONFLICT (task_id, sprint, from_at) DO UPDATE SET
+				VALUES`,
+				`(?,?,?,?,?,?)`,
+				`ON CONFLICT (task_id, sprint, from_at) DO UPDATE SET
 					to_at = excluded.to_at,
 					rolled_to = excluded.rolled_to`,
 				task.SprintHistory, func(v SprintStay) []any {
@@ -746,16 +738,27 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			// `one_sided_final` is the opposite kind of fact and stays
 			// on the record: it is the duty's DECISION that this edge
 			// will never be mirrored, which no derivation can reach.
-			return insertMany(ctx, tx, `
+			//
+			// THE SUBQUERY REPEATS PER ROW AND STILL READS WHAT IT
+			// READ BEFORE, which is what makes the multi-row form
+			// safe here. It probes tracker_task_dependents while
+			// this statement writes tracker_relations, so no row of
+			// the batch can change what a later row of the same
+			// batch sees — and the only write to that table in this
+			// apply is the entry BELOW this one in the same loop,
+			// which is still ahead of us whether the rows went out
+			// one at a time or all at once.
+			return insertMany(ctx, tx, c.maxVariables, `
 				INSERT INTO tracker_relations
 					(task_id, other_id, kind, derived, one_sided,
 					 one_sided_final, note, created_at)
-				VALUES (?,?,?,0,
+				VALUES`,
+				`(?,?,?,0,
 					CASE WHEN ? = 'waiting_on' AND NOT EXISTS (
 						SELECT 1 FROM tracker_task_dependents d
 						WHERE d.task_id = ? AND d.dependent_id = ?)
-					THEN 1 ELSE 0 END, ?, ?, ?)
-				ON CONFLICT (task_id, other_id, kind) DO UPDATE SET
+					THEN 1 ELSE 0 END, ?, ?, ?)`,
+				`ON CONFLICT (task_id, other_id, kind) DO UPDATE SET
 					one_sided = excluded.one_sided,
 					one_sided_final = excluded.one_sided_final,
 					note = excluded.note`,
@@ -774,10 +777,10 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 		{"tracker_task_dependents", func() (int, error) {
 			// THE MIRROR AS A ROW, so the derivation above is an
 			// indexed probe rather than a document decode per edge.
-			return insertMany(ctx, tx, `
-				INSERT INTO tracker_task_dependents (task_id, dependent_id)
-				VALUES (?,?)
-				ON CONFLICT (task_id, dependent_id) DO NOTHING`,
+			return insertMany(ctx, tx, c.maxVariables,
+				`INSERT INTO tracker_task_dependents (task_id, dependent_id) VALUES`,
+				`(?,?)`,
+				`ON CONFLICT (task_id, dependent_id) DO NOTHING`,
 				task.Dependents, func(id string) []any {
 					return []any{task.ID, id}
 				})
@@ -808,13 +811,13 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("tracker: clear tracker_field_values for %s: %w",
 			task.ID, err)
 	}
-	values, err := a.explodeFieldValues(ctx, tx, task)
+	values, err := a.explodeFieldValues(ctx, tx, task, c)
 	if err != nil {
 		return 0, err
 	}
 	written += values
 
-	deps, err := a.maintainDeps(ctx, tx, task)
+	deps, err := a.maintainDeps(ctx, tx, task, c)
 	if err != nil {
 		return 0, err
 	}
@@ -822,7 +825,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return 0, err
 	}
-	keys, err := a.maintainKeys(ctx, tx, task)
+	keys, err := a.maintainKeys(ctx, tx, task, c)
 	if err != nil {
 		return 0, err
 	}
@@ -838,36 +841,46 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 // DERIVED RATHER THAN CARRIED, so the two flags a query reads — is this task
 // blocked, and when was it cleared — are a pure function of the rows present
 // and identical whatever order the records arrived in.
-func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
+func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
+	c applyContext) (int, error) {
+
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tracker_task_deps WHERE task_id = ?`, task.ID); err != nil {
 		return 0, fmt.Errorf("tracker: clear the dependencies of %s: %w", task.ID, err)
 	}
-	written := 0
+	// THE WAITING_ON EDGES ARE THE COLLECTION, filtered out of the
+	// relations the record carries, because a task's other relations
+	// (`relates_to`, `duplicates`) are not dependencies and write no row
+	// here.
+	blockers := make([]Relation, 0, len(task.Relations))
 	for _, relation := range task.Relations {
-		if relation.Kind != RelationWaitingOn {
-			continue
+		if relation.Kind == RelationWaitingOn {
+			blockers = append(blockers, relation)
 		}
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tracker_task_deps (blocker_id, task_id, blocker_open, cleared_at)
-			SELECT ?, ?,
-			       COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
-			                             THEN 0 ELSE 1 END
-			                 FROM tracker_tasks b WHERE b.id = ?), 1),
-			       (SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?)
-			ON CONFLICT (blocker_id, task_id) DO UPDATE SET
-				blocker_open = excluded.blocker_open,
-				cleared_at = excluded.cleared_at`,
-			relation.Other, task.ID, relation.Other, relation.Other)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write the dependency %s→%s: %w",
-				relation.Other, task.ID, err)
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
+	}
+	// A ROW OF LITERAL SUBQUERIES rather than the INSERT ... SELECT this
+	// was: with no FROM clause the SELECT produced exactly one row, so the
+	// two forms insert the same row from the same four binds — and only
+	// the VALUES form is a row template a multi-row insert can repeat.
+	// Each row's two probes read tracker_tasks while this statement writes
+	// tracker_task_deps, so batching cannot change what any of them sees.
+	written, err := insertMany(ctx, tx, c.maxVariables, `
+		INSERT INTO tracker_task_deps (blocker_id, task_id, blocker_open, cleared_at)
+		VALUES`,
+		`(?, ?,
+		  COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
+		                        THEN 0 ELSE 1 END
+		            FROM tracker_tasks b WHERE b.id = ?), 1),
+		  (SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?))`,
+		`ON CONFLICT (blocker_id, task_id) DO UPDATE SET
+			blocker_open = excluded.blocker_open,
+			cleared_at = excluded.cleared_at`,
+		blockers, func(r Relation) []any {
+			return []any{r.Other, task.ID, r.Other, r.Other}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write the dependencies of %s: %w",
+			task.ID, err)
 	}
 	// AND THE OTHER DIRECTION: this task finishing clears every edge that
 	// names it as a blocker. It is the same statement on every node,
@@ -979,27 +992,34 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 }
 
 // maintainKeys keeps the key directory, current and former.
-func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
-	written := 0
+func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
+	c applyContext) (int, error) {
+
+	// THE CURRENT KEY AND THE FORMER ONES ARE ONE COLLECTION, with the
+	// empty ones dropped rather than skipped mid-loop — a row template
+	// repeats for every element it is given, so the filtering happens here
+	// instead.
+	//
+	// A key that is in both lists — a rename that came back — is two rows
+	// in one statement, and they agree: `current` is computed from the
+	// entry rather than from its position, so the upsert resolves the pair
+	// to the same value whichever of them lands second.
+	entries := make([]string, 0, 1+len(task.FormerKeys))
 	for _, entry := range append([]string{task.Key}, task.FormerKeys...) {
-		if entry == "" {
-			continue
+		if entry != "" {
+			entries = append(entries, entry)
 		}
-		current := boolInt(entry == task.Key)
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tracker_task_keys (key, task_id, current) VALUES (?,?,?)
-			ON CONFLICT (key) DO UPDATE SET current = excluded.current
-			WHERE tracker_task_keys.task_id = excluded.task_id`,
-			entry, task.ID, current)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: claim key %s for %s: %w",
-				entry, task.ID, err)
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
+	}
+	written, err := insertMany(ctx, tx, c.maxVariables,
+		`INSERT INTO tracker_task_keys (key, task_id, current) VALUES`,
+		`(?,?,?)`,
+		`ON CONFLICT (key) DO UPDATE SET current = excluded.current
+		 WHERE tracker_task_keys.task_id = excluded.task_id`,
+		entries, func(entry string) []any {
+			return []any{entry, task.ID, boolInt(entry == task.Key)}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("tracker: claim the keys of %s: %w", task.ID, err)
 	}
 	return written, nil
 }
@@ -1289,26 +1309,36 @@ func nullableStringPtr(v *string) any {
 	return *v
 }
 
-// insertMany runs one statement per element, which is what a bounded
-// collection deserves: every one of them is capped, so the loop is a handful
-// of statements and a generated multi-row insert would be a second statement
-// builder to keep correct.
-func insertMany[T any](ctx context.Context, tx *sql.Tx, statement string,
-	items []T, args func(T) []any) (int, error) {
+// insertMany writes a whole collection as MULTI-ROW INSERTS, chunked to the
+// estate's parameter limit.
+//
+// It used to run one statement per element, on the reasoning that every
+// collection here is capped so the loop is "a handful of statements" and a
+// generated multi-row insert would be a second statement builder to keep
+// correct. Both halves were wrong. The caps are [MaxWatchers]'s 64,
+// [MaxTagsPerTask]'s 40 and [MaxTagsPerProject]'s 512 rather than "small", and
+// every one of those rows cost a statement of its own — the shape
+// BenchmarkLogApplyDrain names "unprepared" and measures as the slowest of the
+// three. And the statement builder is not a second one: it is
+// [store.InsertRows], written once beside the chunker it uses, which is the
+// arrangement [textcut] and [whsec] exist to record the cost of not having.
+//
+// WHAT IS KEPT FROM THE OLD SHAPE is the generic ergonomics: a caller hands a
+// typed slice and a per-item argument builder rather than an index closure, so
+// a call site reads as the collection it writes. What CHANGES is that the
+// statement arrives in three parts — the prefix through VALUES, one
+// parenthesised row template, and the ON CONFLICT clause that follows the
+// value list — because the row template is what gets repeated and the row
+// templates here carry a CASE, a scalar subquery and literals, so no rule that
+// splits a whole statement string on "VALUES" survives them.
+//
+// maxVariables is [applyContext.maxVariables]. Zero degrades to a row per
+// statement, which is exactly the behaviour this replaced.
+func insertMany[T any](ctx context.Context, tx *sql.Tx, maxVariables int,
+	prefix, row, suffix string, items []T, args func(T) []any) (int, error) {
 
-	written := 0
-	for _, item := range items {
-		res, err := tx.ExecContext(ctx, statement, args(item)...)
-		if err != nil {
-			return 0, err
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
-	}
-	return written, nil
+	return store.InsertRows(ctx, tx, maxVariables, prefix, row, suffix,
+		len(items), func(i int) []any { return args(items[i]) })
 }
 
 // explode writes the child rows a whole-document object produces.
@@ -1325,12 +1355,13 @@ func (a *Applier) explode(ctx context.Context, tx *sql.Tx, subject Subject,
 			`DELETE FROM tracker_tags WHERE project_key = ?`, subject.ID); err != nil {
 			return 0, fmt.Errorf("tracker: clear the tags of %s: %w", subject.ID, err)
 		}
-		return insertMany(ctx, tx, `
+		return insertMany(ctx, tx, c.maxVariables, `
 			INSERT INTO tracker_tags
 				(project_key, slug, label, label_norm, color, description,
 				 archived, tags_version)
-			VALUES (?,?,?,?,?,?,?,?)
-			ON CONFLICT (project_key, slug) DO UPDATE SET
+			VALUES`,
+			`(?,?,?,?,?,?,?,?)`,
+			`ON CONFLICT (project_key, slug) DO UPDATE SET
 				label = excluded.label, label_norm = excluded.label_norm,
 				color = excluded.color, description = excluded.description,
 				archived = excluded.archived,
@@ -1522,48 +1553,78 @@ func (a *Applier) explodeGoal(ctx context.Context, tx *sql.Tx, id string,
 		}
 	}
 	written := 0
-	for member, handles := range map[int][]string{0: goal.Owners, 1: goal.Members} {
-		n, err := insertMany(ctx, tx, `
-			INSERT INTO tracker_goal_owners (goal_id, handle, member) VALUES (?,?,?)
-			ON CONFLICT (goal_id, handle) DO UPDATE SET
+	// AN ORDERED PAIR RATHER THAN A MAP, because a map's iteration order is
+	// random and the rows would leave in a different order on every apply.
+	// The upsert's MIN makes the RESULT order-independent either way — but
+	// a statement whose row order is a coin flip is one nobody can compare
+	// between two nodes when they disagree.
+	for _, group := range []struct {
+		member  int
+		handles []string
+	}{{0, goal.Owners}, {1, goal.Members}} {
+		n, err := insertMany(ctx, tx, c.maxVariables,
+			`INSERT INTO tracker_goal_owners (goal_id, handle, member) VALUES`,
+			`(?,?,?)`,
+			`ON CONFLICT (goal_id, handle) DO UPDATE SET
 				member = MIN(tracker_goal_owners.member, excluded.member)`,
-			handles, func(h string) []any { return []any{id, h, member} })
+			group.handles, func(h string) []any {
+				return []any{id, h, group.member}
+			})
 		if err != nil {
 			return 0, fmt.Errorf("tracker: write the owners of %s: %w", id, err)
 		}
 		written += n
 	}
+	// THE TARGETS ARE ONE COLLECTION AND THEIR REFERENCES ANOTHER, so the
+	// targets go out first and every target's references after them,
+	// rather than interleaved a target at a time. Nothing reads across the
+	// two inside this transaction and neither table carries a foreign key,
+	// so the only difference the reordering makes is the statement count.
+	n, err := insertMany(ctx, tx, c.maxVariables, `
+		INSERT INTO tracker_goal_targets
+			(goal_id, target_id, name, type, start, goal, current, unit, done)
+		VALUES`,
+		`(?,?,?,?,?,?,?,?,?)`, "",
+		goal.Targets, func(target GoalTarget) []any {
+			return []any{id, target.ID, target.Name, target.Type, target.Start,
+				target.Goal, target.Current, target.Unit, boolInt(target.Done)}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write a target of %s: %w", id, err)
+	}
+	written += n
 	for _, target := range goal.Targets {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tracker_goal_targets
-				(goal_id, target_id, name, type, start, goal, current, unit, done)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
-			id, target.ID, target.Name, target.Type, target.Start, target.Goal,
-			target.Current, target.Unit, boolInt(target.Done))
-		if err != nil {
-			return 0, fmt.Errorf("tracker: write a target of %s: %w", id, err)
+		// TASKS THEN PROJECTS, ordered for the reason the owners are.
+		refs := make([]goalTargetRef, 0, len(target.Tasks)+len(target.Projects))
+		for _, ref := range target.Tasks {
+			refs = append(refs, goalTargetRef{kind: "task", ref: ref})
 		}
-		n, err := affected(res)
+		for _, ref := range target.Projects {
+			refs = append(refs, goalTargetRef{kind: "project", ref: ref})
+		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := insertMany(ctx, tx, c.maxVariables,
+			`INSERT INTO tracker_goal_target_refs (goal_id, target_id, kind, ref) VALUES`,
+			`(?,?,?,?)`,
+			`ON CONFLICT (goal_id, target_id, kind, ref) DO NOTHING`,
+			refs, func(r goalTargetRef) []any {
+				return []any{id, target.ID, r.kind, r.ref}
+			})
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("tracker: write a target reference of %s: %w",
+				id, err)
 		}
 		written += n
-		for kind, refs := range map[string][]string{
-			"task": target.Tasks, "project": target.Projects,
-		} {
-			n, err := insertMany(ctx, tx, `
-				INSERT INTO tracker_goal_target_refs (goal_id, target_id, kind, ref)
-				VALUES (?,?,?,?)
-				ON CONFLICT (goal_id, target_id, kind, ref) DO NOTHING`,
-				refs, func(ref string) []any { return []any{id, target.ID, kind, ref} })
-			if err != nil {
-				return 0, fmt.Errorf("tracker: write a target reference of %s: %w",
-					id, err)
-			}
-			written += n
-		}
 	}
 	return written, nil
+}
+
+// goalTargetRef is one row of [tracker_goal_target_refs] before it is bound:
+// the two kinds a target names are one collection here, so they are one
+// statement rather than two.
+type goalTargetRef struct {
+	kind string
+	ref  string
 }
 
 // writeThread writes the rows a record's own payload carries, as against the
@@ -1587,7 +1648,7 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	c applyContext) (int, error) {
 
 	written := 0
-	items, err := writeChecklistItems(ctx, tx, task)
+	items, err := writeChecklistItems(ctx, tx, task, c.maxVariables)
 	if err != nil {
 		return 0, err
 	}
@@ -1760,35 +1821,47 @@ func writeBodyRevision(ctx context.Context, tx *sql.Tx, task Task,
 // A CLEAR-AND-REBUILD, like every other document collection here, so a
 // reprocess converges rather than accumulating — and so an item DELETED from a
 // checklist leaves the table, which an upsert-only write would never do.
-func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
+func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task,
+	maxVariables int) (int, error) {
+
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tracker_checklist_items WHERE task_id = ?`, task.ID); err != nil {
 		return 0, fmt.Errorf("tracker: clear the checklist of %s: %w", task.ID, err)
 	}
-	written := 0
+	// EVERY LIST'S ITEMS ARE ONE COLLECTION, flattened before the write
+	// because a row template repeats over one slice and the nesting here
+	// is a detail of the document rather than of the table: the rows carry
+	// their own `checklist_id`, and `ord` is the item's index WITHIN ITS
+	// OWN LIST, which is why the flattening keeps it rather than using the
+	// flat position.
+	type row struct {
+		list string
+		item ChecklistItem
+		ord  int
+	}
+	rows := make([]row, 0, len(task.Checklists))
 	for _, list := range task.Checklists {
 		for i, item := range list.Items {
-			res, err := tx.ExecContext(ctx, `
-				INSERT INTO tracker_checklist_items
-					(task_id, checklist_id, item_id, name, done, assignee,
-					 parent_id, ord, promoted_to)
-				VALUES (?,?,?,?,?,?,?,?,?)
-				ON CONFLICT (task_id, checklist_id, item_id) DO UPDATE SET
-					name = excluded.name, done = excluded.done,
-					assignee = excluded.assignee, parent_id = excluded.parent_id,
-					ord = excluded.ord, promoted_to = excluded.promoted_to`,
-				task.ID, list.ID, item.ID, item.Name, boolInt(item.Done),
-				item.Assignee, item.Parent, i, item.PromotedTo)
-			if err != nil {
-				return 0, fmt.Errorf("tracker: write checklist item %s of %s: %w",
-					item.ID, task.ID, err)
-			}
-			n, err := affected(res)
-			if err != nil {
-				return 0, err
-			}
-			written += n
+			rows = append(rows, row{list: list.ID, item: item, ord: i})
 		}
+	}
+	written, err := insertMany(ctx, tx, maxVariables, `
+		INSERT INTO tracker_checklist_items
+			(task_id, checklist_id, item_id, name, done, assignee,
+			 parent_id, ord, promoted_to)
+		VALUES`,
+		`(?,?,?,?,?,?,?,?,?)`,
+		`ON CONFLICT (task_id, checklist_id, item_id) DO UPDATE SET
+			name = excluded.name, done = excluded.done,
+			assignee = excluded.assignee, parent_id = excluded.parent_id,
+			ord = excluded.ord, promoted_to = excluded.promoted_to`,
+		rows, func(r row) []any {
+			return []any{task.ID, r.list, r.item.ID, r.item.Name,
+				boolInt(r.item.Done), r.item.Assignee, r.item.Parent, r.ord,
+				r.item.PromotedTo}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write the checklists of %s: %w", task.ID, err)
 	}
 	return written, nil
 }

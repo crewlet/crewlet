@@ -2,10 +2,7 @@ package queries_test
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,18 +37,11 @@ func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.CoordStore {
 
 func askRuns(t *testing.T, store queries.PendingRuns) []map[string]any {
 	t.Helper()
-	return askRunsWith(t, store, nil)
-}
-
-func askRunsWith(t *testing.T, store queries.PendingRuns,
-	params map[string]any) []map[string]any {
-
-	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: store})
-	got, err := r.Answer(t.Context(), "sandbox_runs", params, "")
+	got, err := r.Answer(t.Context(), "sandbox_runs", nil, "")
 	if err != nil {
-		t.Fatalf("sandbox_runs%v: %v", params, err)
+		t.Fatalf("sandbox_runs: %v", err)
 	}
 	payload, ok := got.(map[string]any)
 	if !ok {
@@ -103,14 +93,14 @@ func TestTheDurableRecordAnswersForEveryActiveState(t *testing.T) {
 	}
 }
 
-// A terminal run is not something anybody can act on, and a board that showed
+// A settled run is not something anybody can act on, and a board that showed
 // them would grow without bound.
 func TestASettledRunLeavesTheBoard(t *testing.T) {
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
 	})
-	if err := store.SetStatus(t.Context(), "t1", sandbox.StatusDone, sandbox.Fence{}); err != nil {
-		t.Fatalf("SetStatus: %v", err)
+	if _, err := store.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil {
+		t.Fatalf("Finish: %v", err)
 	}
 	if rows := askRuns(t, store); len(rows) != 0 {
 		t.Fatalf("a finished run is still on the board: %v", rows)
@@ -235,65 +225,6 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 		if got := where[turn]; got != want {
 			t.Errorf("run %s reports placement %v, want %q", turn, got, want)
 		}
-	}
-}
-
-// A RUN'S RECORD OUTLIVES ITS RUN, and the board never served it.
-//
-// The answer read `ListActive`, which is the RECOVERY path's question — what
-// still owns engine state — so a finished or failed run left the screen at the
-// exact moment somebody would go looking for it. "What did the coding runs do
-// today" had no answer anywhere in the product, while the store held every one
-// of them.
-func TestTheRetainedRunsAreServableAndActiveIsTheDefault(t *testing.T) {
-	t.Parallel()
-	store := seedRuns(t,
-		sandbox.PendingRun{TurnID: "t-live", Role: "Dev", Status: sandbox.StatusRunning},
-		sandbox.PendingRun{TurnID: "t-done", Role: "Dev", Status: sandbox.StatusDone},
-		sandbox.PendingRun{TurnID: "t-bad", Role: "Dev", Status: sandbox.StatusFailed},
-	)
-	ids := func(params map[string]any) []string {
-		t.Helper()
-		out := []string{}
-		for _, row := range askRunsWith(t, store, params) {
-			out = append(out, fmt.Sprint(row["turn_id"]))
-		}
-		slices.Sort(out)
-		return out
-	}
-
-	// ACTIVE BY DEFAULT, which is what a board watching a working company
-	// is for — and is what already shipped, so a caller naming nothing sees
-	// no change.
-	if got := ids(nil); !slices.Equal(got, []string{"t-live"}) {
-		t.Errorf("the default gave %v, want only the active run", got)
-	}
-	if got := ids(map[string]any{"status": "done"}); !slices.Equal(got, []string{"t-done"}) {
-		t.Errorf("status=done gave %v", got)
-	}
-	if got := ids(map[string]any{"status": "failed"}); !slices.Equal(got, []string{"t-bad"}) {
-		t.Errorf("status=failed gave %v", got)
-	}
-	if got := ids(map[string]any{"status": "all"}); !slices.Equal(got,
-		[]string{"t-bad", "t-done", "t-live"}) {
-
-		t.Errorf("status=all gave %v, want every run this store holds", got)
-	}
-}
-
-// A STATUS NOBODY DEFINES IS REFUSED NAMING THE FOUR, rather than silently
-// answering the default — which would hand a caller the active runs under a
-// heading saying "failed".
-func TestAnUnknownRunStatusIsRefusedNamingTheSets(t *testing.T) {
-	t.Parallel()
-	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Sandbox: seedRuns(t)})
-	_, err := r.Answer(t.Context(), "sandbox_runs", map[string]any{"status": "parked"}, "")
-	if !errors.Is(err, queries.ErrBadParams) {
-		t.Fatalf("status=parked answered %v, want bad params", err)
-	}
-	if !strings.Contains(err.Error(), "active") || !strings.Contains(err.Error(), "all") {
-		t.Errorf("the refusal is %q and does not name what would have worked", err)
 	}
 }
 

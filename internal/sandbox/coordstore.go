@@ -195,7 +195,7 @@ func (s *CoordStore) ClaimOwnership(ctx context.Context, turnID, owner string, e
 
 // SetStatus moves a run to a new lifecycle state, fenced on the epoch.
 func (s *CoordStore) SetStatus(ctx context.Context, turnID, status string, fence Fence) error {
-	if !slices.Contains(allStatuses, status) {
+	if !slices.Contains(Active, status) {
 		return fmt.Errorf("sandbox: unknown status %q", status)
 	}
 	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
@@ -338,25 +338,6 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 	return s.list(ctx, func(r PendingRun) bool { return slices.Contains(Active, r.Status) })
 }
 
-// ListWithStatus returns the runs whose status is in `want`, or every run this
-// store still holds when `want` is empty.
-//
-// FOR THE READ SURFACE, and it exists because [CoordStore.ListActive] is the
-// wrong question there: a run's record OUTLIVES its run — the store keeps a
-// finished one so a reviewer can read what it did — and a listing that only
-// ever showed the active set meant the retained record was never served to
-// anybody. "What did the coding runs do today" had no answer, and a run that
-// failed disappeared from the board at the moment somebody would look for it.
-//
-// The recovery paths deliberately keep [CoordStore.ListActive]: they are about
-// state that must be reclaimed, and widening their set would have boot walk
-// rows that own nothing.
-func (s *CoordStore) ListWithStatus(ctx context.Context, want []string) ([]PendingRun, error) {
-	return s.list(ctx, func(r PendingRun) bool {
-		return len(want) == 0 || slices.Contains(want, r.Status)
-	})
-}
-
 // ListActiveForSeat returns one seat's unfinished runs.
 //
 // The read a seat's new owner makes inside on_acquire, and the whole reason
@@ -385,42 +366,30 @@ func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, con
 	return got[len(got)-1], true, nil
 }
 
-// ListPausedBefore returns the boxes whose pause TTL has expired.
-func (s *CoordStore) ListPausedBefore(ctx context.Context, cutoff time.Time) ([]PendingRun, error) {
-	got, err := s.list(ctx, func(r PendingRun) bool {
-		return r.Paused() && r.HasBox() && r.PausedAt.Before(cutoff)
-	})
-	if err != nil {
-		return nil, err
-	}
-	slices.SortStableFunc(got, func(a, b PendingRun) int { return a.PausedAt.Compare(b.PausedAt) })
-	return got, nil
-}
-
-// Delete removes a run record.
+// Finish ends a run by deleting its record. See the contract on
+// [PendingStore].
 //
-// Conditional on the version it read, and retried: a terminal delete racing a
-// write that reopened the run must not take the reopened record with it.
-// Deleting a run that is already gone is not an error — both parties reaching
-// the end of one run is ordinary.
-func (s *CoordStore) Delete(ctx context.Context, turnID string) error {
+// A read-decide-delete under the record's version, like every flip here: the
+// fence is evaluated against what the store holds, and a lost race re-reads,
+// so a claim that moved the lease in between is seen rather than deleted over.
+func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
 	for range casRetries {
-		_, version, found, err := s.read(ctx, turnID)
+		run, version, found, err := s.read(ctx, turnID)
 		if err != nil {
-			return err
+			return false, err
 		}
-		if !found {
-			return nil
+		if !found || outranked(run, fence) {
+			return false, nil
 		}
 		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
 		if err != nil {
-			return fmt.Errorf("sandbox: delete run %s: %w", turnID, err)
+			return false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
 		}
 		if gone {
-			return nil
+			return true, nil
 		}
 	}
-	return fmt.Errorf("sandbox: delete run %s: the record kept changing under the delete", turnID)
+	return false, fmt.Errorf("sandbox: finish run %s: the record kept changing under the delete", turnID)
 }
 
 // read decodes one record and the version it was read at.

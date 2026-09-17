@@ -1,12 +1,23 @@
 /**
- * The company: what it is for, and the shape it has.
+ * The company: what it is for, the shape it has, and where that shape is
+ * edited.
  *
- * # Two tabs, not three
+ * # Three lenses, and the third one writes
  *
- * The chart and the charter. The DIRECTORY that used to be a third lens here
- * is now its own destination — `#/company/people` — because a list of every
- * seat is a place a reader goes rather than a way of looking at the tree, and
- * a row in the rail beats a segmented control nobody finds.
+ * The chart, the charter and the BUILDER. The DIRECTORY that used to be a
+ * lens here is now its own destination — `#/company/people` — because a list
+ * of every seat is a place a reader goes rather than a way of looking at the
+ * tree, and a row in the rail beats a segmented control nobody finds.
+ *
+ * The builder (`routes/org/builder/Builder.tsx`) is the odd one: the two read
+ * lenses draw the ANONYMOUS org projection this node has applied, and the
+ * builder edits the GUARDED configuration document a revision behind it. That
+ * is why [PreviousRevisionNote] is drawn on the read lenses and not on the
+ * builder — between a save and this node applying it, the chart has not moved
+ * and would otherwise read as a save that did nothing — and why the builder
+ * is the one lens that can hold work a move would lose. Its leave guard is
+ * what holds such a move, and `builder/BuilderContext.keepsTheLens` is where
+ * this screen's own address is written down for it.
  *
  * The tree is drawn as nested units rather than as a centred graph: the
  * hierarchy nests to any depth by design, and a centred layout at depth four
@@ -21,9 +32,9 @@
 
 import { useMemo, type CSSProperties } from "react";
 import { plural } from "~/lib/format.ts";
-import { href, useParam } from "~/app/router.tsx";
+import { href } from "~/app/router.tsx";
 import { StateBadge, Section } from "~/components/common.tsx";
-import { Avatar, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Avatar, Callout, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import {
   AccountTreeGlyph,
   ArrowForwardGlyph,
@@ -42,15 +53,21 @@ import {
 // then has to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
-import type { OrgUnit } from "~/protocol/index.ts";
+import { indexOrg, seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
+import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
+import { Builder } from "~/routes/org/builder/Builder.tsx";
+import { builderSurfaces } from "~/routes/org/builder/surfaces.ts";
 
-const LENSES = ["chart", "charter"] as const;
+// THE ORDER IS THE STRIP'S, AND THE FIRST IS THE DEFAULT: `useTab` drops the
+// parameter when it equals the first entry, so landing on the company writes
+// no `lens=` and only a reader who moved carries one. The builder goes last
+// because it is the only lens that WRITES — a reader arrives to look.
+const LENSES = ["chart", "charter", "builder"] as const;
 type Lens = (typeof LENSES)[number];
 
 /**
@@ -74,9 +91,9 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
     <div className="org-seats" style={style}>
       {seats.map((seat) => (
         <a
-          key={seat.handle}
+          key={seat.key}
           className={`org-node${seat.kind === "human" ? " human" : ""}`}
-          href={href(["company", "people", seat.handle])}
+          href={href(seatPath(seat))}
         >
           {/* THEIR `variant="dashed"` IS OUR `human`, and it means the same
               thing: a human seat is DRAWN rather than tinted, because the
@@ -91,7 +108,11 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
           />
           <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
             <span className="truncate t-cell">{seat.name}</span>
-            <span className="truncate t-caption mono">@{seat.handle}</span>
+            {/* ONLY A HANDLE THE ENGINE REPORTED. An engine that sends no
+                derived hierarchy leaves the handle of a seat that declares
+                none unknown, and deriving one here is the second
+                implementation `lib/seats.ts` exists to have removed. */}
+            {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
           </span>
           {seat.kind === "human" ? (
             <Tag appearance="outline">human</Tag>
@@ -113,15 +134,11 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
  * list this object is not in — the row goes to the unit's own page instead,
  * where its seats and its own children are the point rather than a preview.
  */
-function SubUnitLinks({ units }: { units: OrgUnit[] }) {
+function SubUnitLinks({ units }: { units: Unit[] }) {
   return (
     <div className="list">
       {units.map((child) => (
-        <a
-          key={child.name}
-          className="thread-entry"
-          href={href(["company", "units", child.id || child.name])}
-        >
+        <a key={child.name} className="thread-entry" href={href(["company", "units", child.name])}>
           <FolderGlyph size="sm" />
           <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
             <strong className="t-cell truncate">{child.name}</strong>
@@ -144,90 +161,106 @@ function SubUnitLinks({ units }: { units: OrgUnit[] }) {
  * immediately in it — and two hand-written fact lists would eventually answer
  * them the other way round in one of the two frames.
  */
-function unitView(index: OrgIndex, unit: OrgUnit): { seats: Seat[]; facts: Fact[] } {
-  const seats = index.seats.filter((s) => s.unitChain.some((u) => u.name === unit.name));
-  const direct = index.seats.filter((s) => s.unit?.name === unit.name);
+function unitView(index: OrgIndex, unit: Unit): { seats: Seat[]; facts: Fact[] } {
+  const seats = index.seats.filter((s) => s.unitChain.some((u) => u === unit));
   // THE EFFECTIVE LEAD, which is the nearest ancestor's where this unit
   // declares none. It behaves identically everywhere in the engine, and hiding
-  // the difference is how somebody concludes a team is unmanaged.
-  const lead = direct[0]?.unitLead ?? unit.lead ?? "";
+  // the difference is how somebody concludes a team is unmanaged. The ENGINE
+  // resolves it: inheritance cascades to any depth and a client that walked
+  // the chain itself would be the second implementation of that rule.
+  const lead = unit.effectiveLead;
   return {
     seats,
     facts: [
       { label: "Type", value: unit.type || "unit" },
       {
         label: "Lead",
+        // NOT REPORTED IS NOT NOBODY. Without the engine's derived block an
+        // inherited lead is a question this client cannot answer, and an
+        // empty cell there would read as a unit nobody leads.
         value: lead ? (
           <>
-            {index.byName.get(lead)?.name ?? lead}
-            {!unit.lead && <span className="faint"> (inherited)</span>}
+            {lead.name}
+            {unit.leadInherited && <span className="muted"> (inherited)</span>}
           </>
+        ) : !index.hierarchy && !unit.lead ? (
+          <EmptyValue label="Not reported by this engine" />
         ) : (
           ""
         ),
-        path: lead ? ["company", "people", index.byName.get(lead)?.handle ?? lead] : undefined,
+        path: lead ? seatPath(lead) : undefined,
       },
       { label: "Seats", value: seats.length },
-      { label: "Directly in it", value: direct.length },
-      { label: "Sub-units", value: (unit.children ?? []).length },
+      { label: "Directly in it", value: unit.seats.length },
+      { label: "Sub-units", value: unit.children.length },
     ],
   };
 }
 
 /** The hint under every "no such unit", on the page and in the rail alike. */
 const NO_UNIT_HINT =
-  "A unit is addressed by its id where it declares one and by its name where it does not — the same key the engine files work, routing and pages under.";
+  "A unit is addressed by name here. Its stable id is part of the guarded configuration rather than the public org projection, so no link this screen can build carries one.";
 
 /** And what an empty one costs, which is the part a reader acts on. */
 const NO_SEATS_HINT =
   "A unit with no seats routes nothing: work filed to it reaches its lead, or nobody.";
+
+/**
+ * One unit in the chart, and everything under it.
+ *
+ * A UNIT BLOCK IS ONE COMPONENT FOR ITS WHOLE LIFE. This was declared inside
+ * the screen's render, which makes it a NEW component type on every render, so
+ * each `agents` push — twice per tool-loop round, for every seat in the
+ * company — unmounted the whole chart and built it again. React cannot
+ * reconcile two function identities as one type, so nothing about the tree
+ * survived: scroll position, focus and every open disclosure in it.
+ *
+ * Its members are [Unit.seats], which is what the ENGINE placed there: a root
+ * seat its `unit:` reference moved into this unit is a member here and is
+ * marked as one, where the document wrote it above every unit.
+ */
+function UnitBlock({ unit }: { unit: Unit }) {
+  const lead = unit.effectiveLead;
+  return (
+    <div className="org-unit">
+      <div className="org-unit-head">
+        <FolderGlyph size="sm" style={{ color: "var(--text-faint)" }} />
+        <strong className="t-body truncate">{unit.name}</strong>
+        <Tag appearance="outline">{unit.type || "unit"}</Tag>
+        {lead && (
+          <Tag
+            variant="neutral"
+            leadingIcon={<CrownGlyph size="xs" />}
+            title={unit.leadInherited ? "inherited from the parent unit" : "explicit lead"}
+          >
+            {lead.name}
+            {unit.leadInherited && <span className="muted"> (inherited)</span>}
+          </Tag>
+        )}
+        <span className="spacer" />
+        <span className="t-caption">{plural(unit.seats.length, "seat")}</span>
+      </div>
+      {unit.purpose && <div className="t-caption measure">{unit.purpose}</div>}
+      {unit.seats.length > 0 && (
+        <SeatLinks seats={unit.seats} style={{ marginTop: "var(--space-2)" }} />
+      )}
+      {unit.children.length > 0 && (
+        <div className="org-children">
+          {unit.children.map((child) => (
+            <UnitBlock key={child.key} unit={child} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function CompanyScreen() {
   const org = useOrg();
   const [lens, setLens] = useTab("lens", LENSES);
   const index = useMemo(() => indexOrg(org), [org]);
 
-  function UnitBlock({ unit, depth }: { unit: OrgUnit; depth: number }) {
-    const seats = index.seats.filter((s) => s.unit === unit);
-    // A unit with no lead of its own inherits the nearest ancestor's, and the
-    // chart says which it is: an inherited lead behaves identically to an
-    // explicit one everywhere in the engine, and hiding the difference is how
-    // an operator comes to think a unit is unmanaged.
-    const explicitLead = unit.lead;
-    const effectiveLead = seats[0]?.unitLead ?? explicitLead ?? "";
-    return (
-      <div className="org-unit">
-        <div className="org-unit-head">
-          <FolderGlyph size="sm" style={{ color: "var(--text-faint)" }} />
-          <strong className="t-body truncate">{unit.name}</strong>
-          <Tag appearance="outline">{unit.type || "unit"}</Tag>
-          {effectiveLead && (
-            <Tag
-              variant="neutral"
-              leadingIcon={<CrownGlyph size="xs" />}
-              title={explicitLead ? "explicit lead" : "inherited from the parent unit"}
-            >
-              {effectiveLead}
-              {!explicitLead && <span className="faint"> (inherited)</span>}
-            </Tag>
-          )}
-          <span className="spacer" />
-          <span className="t-caption">{plural(seats.length, "seat")}</span>
-        </div>
-        {unit.purpose && <div className="t-caption measure">{unit.purpose}</div>}
-        {seats.length > 0 && <SeatLinks seats={seats} style={{ marginTop: "var(--space-2)" }} />}
-        {(unit.children?.length ?? 0) > 0 && (
-          <div className="org-children">
-            {unit.children!.map((child) => (
-              <UnitBlock key={child.name} unit={child} depth={depth + 1} />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const rootSeats = index.seats.filter((s) => !s.unit);
+  const rootSeats = index.rootSeats;
 
   return (
     <>
@@ -240,6 +273,7 @@ export function CompanyScreen() {
             options={[
               { value: "chart", label: "Chart", icon: "account_tree" },
               { value: "charter", label: "Charter", icon: "flag" },
+              { value: "builder", label: "Builder", icon: "edit" },
             ]}
           />
         }
@@ -247,6 +281,11 @@ export function CompanyScreen() {
       <PageNote>
         The hierarchy is the execution graph: knowledge, delegation and routing all follow it.
       </PageNote>
+      {/* A SAVE IS NOT AN APPLY: until this node applies the revision the
+          builder saved, the projection both read lenses draw is the previous
+          one, and a chart that has not moved reads as a save that did
+          nothing. Not on the builder, which draws the draft itself. */}
+      {lens !== "builder" && <PreviousRevisionNote />}
 
       {lens === "chart" && (
         <>
@@ -258,11 +297,22 @@ export function CompanyScreen() {
               <SeatLinks seats={rootSeats} />
             </Card>
           )}
+          {/* A HIERARCHY NOBODY DERIVED IS NOT A HIERARCHY. Without the
+              engine's `derived` block the tree is only what the document
+              wrote: a root seat its `unit:` reference belongs in sits above
+              every unit here, and an inherited lead is not shown at all. */}
+          {!index.hierarchy && (org?.units ?? []).length > 0 && (
+            <Callout variant="info">
+              This engine did not report its derived hierarchy, so the chart is drawn as the
+              document writes it: seats sit where they were written, and an inherited unit lead is
+              not shown.
+            </Callout>
+          )}
           <div className="org-tree">
-            {(org?.units ?? []).map((unit) => (
-              <UnitBlock key={unit.name} unit={unit} depth={0} />
+            {index.topUnits.map((unit) => (
+              <UnitBlock key={unit.key} unit={unit} />
             ))}
-            {!(org?.units ?? []).length && !rootSeats.length && (
+            {!index.units.length && !rootSeats.length && (
               <EmptyState
                 icon={<AccountTreeGlyph size={32} />}
                 title="No organisation is loaded"
@@ -280,7 +330,7 @@ export function CompanyScreen() {
               <Card.Title>Mission</Card.Title>
             </Card.Header>
             <p className="t-body measure">
-              {org?.mission || <span className="faint">No mission is set.</span>}
+              {org?.mission || <span className="muted">No mission is set.</span>}
             </p>
           </Card>
           {org?.vision && (
@@ -315,12 +365,12 @@ export function CompanyScreen() {
           <Section title="Unit goals" hint="what each team is for">
             <div className="grid grid-auto">
               {index.units.map((u) => (
-                <Card key={u.name}>
+                <Card key={u.key}>
                   <Card.Header subtitle={u.type}>
                     <Card.Title>{u.name}</Card.Title>
                   </Card.Header>
                   {u.purpose && <p className="t-caption">{u.purpose}</p>}
-                  {u.goals?.length ? (
+                  {u.goals.length ? (
                     <ul
                       className="col gap-1"
                       style={{ paddingLeft: "var(--space-4)", margin: "var(--space-2) 0 0" }}
@@ -332,7 +382,7 @@ export function CompanyScreen() {
                       ))}
                     </ul>
                   ) : (
-                    <span className="t-caption faint">No goals set.</span>
+                    <span className="t-caption">No goals set.</span>
                   )}
                 </Card>
               ))}
@@ -340,6 +390,11 @@ export function CompanyScreen() {
           </Section>
         </div>
       )}
+
+      {/* THE SURFACES ARE PASSED, NOT IMPORTED BY THE BUILDER: every dialog and
+          both views are injected so a suite can drive the lens with fakes.
+          `builderSurfaces` is the real set. */}
+      {lens === "builder" && <Builder surfaces={builderSurfaces} />}
     </>
   );
 }
@@ -362,7 +417,7 @@ export function UnitScreen({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
 
-  const unit = index.units.find((u) => (u.id || u.name) === id || u.name === id);
+  const unit = index.units.find((u) => u.name === id);
   usePageLabels(unit ? { [id]: unit.name } : {});
 
   if (!unit) {
@@ -387,13 +442,7 @@ export function UnitScreen({ id }: { id: string }) {
         }
       </PageActions>
 
-      <ObjectHeader
-        kind="Unit"
-        icon="account_tree"
-        identifier={unit.id || undefined}
-        title={unit.name}
-        facts={facts}
-      />
+      <ObjectHeader kind="Unit" icon="account_tree" title={unit.name} facts={facts} />
 
       {unit.purpose && (
         <Card>
@@ -439,12 +488,12 @@ export function UnitScreen({ id }: { id: string }) {
         )}
       </Card>
 
-      {(unit.children ?? []).length > 0 && (
+      {unit.children.length > 0 && (
         <Card padding="none">
-          <Card.Header icon={<AccountTreeGlyph size="sm" />} count={(unit.children ?? []).length}>
+          <Card.Header icon={<AccountTreeGlyph size="sm" />} count={unit.children.length}>
             <Card.Title>Sub-units</Card.Title>
           </Card.Header>
-          <SubUnitLinks units={unit.children ?? []} />
+          <SubUnitLinks units={unit.children} />
         </Card>
       )}
     </>
@@ -478,7 +527,7 @@ export function UnitPeek({ id }: { id: string }) {
   const org = useOrg();
   const { connected } = useConnection();
   const index = useMemo(() => indexOrg(org), [org]);
-  const unit = index.units.find((u) => (u.id || u.name) === id || u.name === id);
+  const unit = index.units.find((u) => u.name === id);
 
   if (!unit) {
     if (!connected) return <Skeleton variant="text" rows={6} label="Loading the org tree" />;
@@ -493,18 +542,11 @@ export function UnitPeek({ id }: { id: string }) {
   }
 
   const { seats, facts } = unitView(index, unit);
-  const children = unit.children ?? [];
+  const children = unit.children;
 
   return (
     <>
-      <ObjectHeader
-        size="peek"
-        kind="Unit"
-        icon="account_tree"
-        identifier={unit.id || undefined}
-        title={unit.name}
-        facts={facts}
-      />
+      <ObjectHeader size="peek" kind="Unit" icon="account_tree" title={unit.name} facts={facts} />
       <div className="col gap-3">
         {/* WHAT IT IS FOR, always drawn — including when nobody wrote one.
             "Is this the one I meant" is the question the rail answers, and a

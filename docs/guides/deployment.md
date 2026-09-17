@@ -315,10 +315,11 @@ uses, on every start and idempotently: the six engine streams
 `CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
-publishes under, one durable consumer per seat mailbox — an ordinary API
-call, measured at 1.7 ms — and the fifteen `crewlet_*` KV buckets:
-two in the lease store, holding the leases and the fencing epochs, and
-thirteen in the fleet store holding the shared records. A credential
+publishes under, one durable consumer per seat mailbox (an ordinary API
+call, measured at 1.7 ms), and the seventeen `crewlet_*` KV buckets:
+three in the lease store, holding the seat and presence leases, the duty
+leases and the fencing epochs, and fourteen in the fleet store holding the
+shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
@@ -428,6 +429,8 @@ crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
+If any seat runs in [agent mode](../concepts/subscription-llm-backends.md), give the seats node a port instead of `-api-port 0`, and set its `CREWLET_MCP_BRIDGE_URL` to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge and nothing else (`api_bridge_listening`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
+
 `crewlet migrate` is idempotent and safe to re-run. Each node also
 auto-migrates its own store file on boot, and two nodes starting together
 cannot race, because they are not migrating the same file — every node owns
@@ -440,7 +443,7 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` — and `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md) — at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver and the `/mcp/{token}` tool bridge. Both use per-run signed tokens, so the node that mints and the node that verifies need no shared memory. Signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key and logs a warning — and every token one process mints is forged as far as the other is concerned.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies).
 
@@ -470,8 +473,9 @@ draining, and rolling upgrades. The two things that bite hardest:
 > **A fleet needs shared coordination.**
 >
 > Seat leases live in the coordination slot. `coordination.type: local` is a
-> per-process store, so every node then believes it owns the whole company —
-> the engine logs `seat_placement_is_process_local` at boot. A fleet needs
+> per-process store, so every node would believe it owns the whole company,
+> which is why a Tier A file that pairs it with a clustered or external stream
+> is refused at load on `coordination.type`. A fleet needs
 > `coordination.type: embedded-kv`; see [Running a Fleet](fleet.md). The slot
 > governs the *leases* only — the fleet's shared records are on the KV
 > regardless, because they have to survive a restart as much as a peer, and
@@ -555,7 +559,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet — and it covers **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) — they share one `worker:` lease, so a fleet runs each of them on exactly one node — along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick, so a node that dies mid-duty hands it back by lapsing.
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
 - *Unbounded table growth.* `scheduled_runs`, `conversation_sessions` and `chat_thread_follows` all answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
@@ -718,7 +722,7 @@ flowchart TD
     A["<b>webhook.receive</b><br/>the delivery arrives, and roots the trace"]
     B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
     C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
-    D["<b>agent.turn.plan / .execute / .review</b><br/>one span per phase"]
+    D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
@@ -1148,8 +1152,9 @@ Set budgets at two levels:
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
 
-When exceeded, the shared tool loop emits a `BudgetExhausted` event, stops the
-turn and marks the task failed. The check is atomic: if the agent's budget
+When a charge would exceed a cap, the tool loop refuses it and stops the phase;
+the engine ends the turn as failed and publishes `budget_exhausted` beside its
+`agent_turn_completed`. The check is atomic: if the agent's budget
 fails, the org-level consumption it had already charged is rolled back. In a
 fleet the counters live in the coordination slot, so an org cap of 500 k is
 500 k across every node rather than per process.
@@ -1160,16 +1165,15 @@ Every significant operation emits structured log entries:
 
 ```json
 {
-  "timestamp": "2026-03-12T10:30:00Z",
-  "level": "info",
-  "component": "agent.turn",
-  "agent_id": "abc-123",
-  "role": "Senior Engineer",
-  "event": "turn_completed",
-  "task_id": "def-456",
-  "llm_input_tokens": 1200,
-  "llm_output_tokens": 647,
-  "duration_ms": 3200,
+  "time": "2026-03-12T10:30:00.412Z",
+  "level": "INFO",
+  "msg": "onboarding_phase_complete",
+  "component": "agent.onboarding",
+  "agent": "sarah-chen",
+  "turn_id": "9f3c1e70-…",
+  "marked": true,
+  "rounds": 6,
+  "chain": "…",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "span_id": "00f067aa0ba902b7"
 }
@@ -1181,9 +1185,8 @@ shipper indexing them never sees an empty placeholder. They are the same ids the
 [tracing](#tracing) section exports, which is what lets you pivot from a slow
 span in Jaeger to the lines the engine wrote while it was open.
 
-Note the JSON key for the message is `msg`, slog's own; `event` above is
-illustrative of the *value* — the short, machine-parsable event name every line
-carries in place of a sentence.
+The JSON key for the message is `msg`, slog's own, and its *value* is the
+short, machine-parsable event name every line carries in place of a sentence.
 
 ### Reacting to events
 

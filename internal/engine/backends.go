@@ -217,20 +217,40 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	return out, nil
 }
 
+// sweepWriterPins is the replicated pin the maintenance worker needs beside
+// the state log's own.
+//
+// ONE, and the bound is the worker's own shape rather than a guess: two of its
+// jobs pin a writer on the replicated estate (`tracker_notifications`, which
+// range-deletes a person's inbox rows, and the tracker duty's clear of a
+// project's duplicate-rank flag), and a tick runs every job in series, so at
+// most one of them holds a pin at a time. Neither holds it past its own run,
+// which is what makes one enough for both.
+//
+// Without it the declaration was exactly the number of apply loops, and those
+// hold theirs for the life of the loop: every pin was taken before the first
+// sweep ever asked for one, so the inbox job failed on EVERY tick with
+// "declared 3 pinned writer(s) and 3 are held" and a company's notification
+// rows grew for the life of the deployment. The declaration is what SIZES the
+// pool, so a shortfall cannot show up as contention that clears, only as a
+// refusal that never does.
+const sweepWriterPins = 1
+
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
 		BusyTimeout:    b.Store.BusyTimeout(),
-		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN. Each domain's apply
-		// loop holds one for its life — it is the single writer of that
-		// domain's tables, and a loop that had to reacquire one per batch
-		// would be competing with the readers it is applying for. The
-		// count is DECLARED rather than discovered so the pool is sized
-		// for them: an undeclared pin is a reader starved out of the pool
-		// by a writer that never gives its connection back.
-		PinnedWriters: len(registeredDomains()),
+		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN, PLUS THE SWEEP'S.
+		// Each domain's apply loop holds one for its life: it is the
+		// single writer of that domain's tables, and a loop that had to
+		// reacquire one per batch would be competing with the readers it
+		// is applying for. The count is DECLARED rather than discovered
+		// so the pool is sized for them: an undeclared pin is a reader
+		// starved out of the pool by a writer that never gives its
+		// connection back. See [sweepWriterPins] for the other term.
+		PinnedWriters: len(registeredDomains()) + sweepWriterPins,
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it

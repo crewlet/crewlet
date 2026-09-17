@@ -773,9 +773,7 @@ export function PagePeek({ id }: { id: string }) {
                   <>
                     <div className="prose md">{renderMarkdown(excerpt.head)}</div>
                     {excerpt.more > 0 && (
-                      <p className="t-caption faint">
-                        {plural(excerpt.more, "more line")} on the page.
-                      </p>
+                      <p className="t-caption">{plural(excerpt.more, "more line")} on the page.</p>
                     )}
                   </>
                 ) : (
@@ -802,7 +800,7 @@ export function PagePeek({ id }: { id: string }) {
                     </a>
                     {ancestors.map((a) => (
                       <span key={a.id} className="row gap-1">
-                        <span className="faint">/</span>
+                        <span className="muted">/</span>
                         <PageLink page={a} />
                       </span>
                     ))}
@@ -838,7 +836,7 @@ export function PagePeek({ id }: { id: string }) {
                       </span>
                     ))}
                     {history.length > PEEK_SAVES && (
-                      <p className="t-caption faint">
+                      <p className="t-caption">
                         {plural(history.length - PEEK_SAVES, "older save")} on the page, with what
                         each one changed.
                       </p>
@@ -1000,7 +998,7 @@ function PageHistory({
             {body.data ? (
               <>
                 <div className="row wrap gap-2">
-                  <span className="t-caption faint">
+                  <span className="t-caption">
                     Version {body.data.version}
                     {body.data.title ? ` — “${body.data.title}”` : ""}, as it was saved.
                   </span>
@@ -1125,7 +1123,7 @@ function PageChanges({
                 <Tag appearance="outline">{change.kind}</Tag>
                 <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
                 {change.quiet && (
-                  <span className="faint t-caption" title="this change announced nothing">
+                  <span className="t-caption" title="this change announced nothing">
                     quiet
                   </span>
                 )}
@@ -1142,7 +1140,7 @@ function PageChanges({
                   {relTime(change.at, now)}
                 </span>
               </span>
-              {change.excerpt && <p className="t-caption faint">{change.excerpt}</p>}
+              {change.excerpt && <p className="t-caption">{change.excerpt}</p>}
             </div>
           ))}
         </div>

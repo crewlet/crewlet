@@ -55,6 +55,7 @@ import {
   DATA_COLOR_OTHER,
   dataColor,
   EmptyState,
+  EmptyValue,
   Legend,
   Skeleton,
   StatCard,
@@ -339,7 +340,7 @@ function SprintReport({ project }: { project: string }) {
               <StatGroup columns={3}>
                 <StatCard
                   label="Velocity"
-                  value={report.data?.velocity_avg ?? "—"}
+                  value={report.data?.velocity_avg ?? <EmptyValue label="No velocity yet" />}
                   sub={
                     report.data?.velocity_avg === undefined
                       ? "no sprint has closed yet"
@@ -693,7 +694,7 @@ function OpenInSprint({
               hundred and saying nothing reads as a sprint with fifty tasks
               left, which is the number a lead would plan against. */}
           {truncated && (
-            <p className="t-caption faint" style={{ padding: "var(--space-3)" }}>
+            <p className="t-caption" style={{ padding: "var(--space-3)" }}>
               {rows.length} of {data?.total_hint} open, in the board's own order — the board has the
               rest.
             </p>

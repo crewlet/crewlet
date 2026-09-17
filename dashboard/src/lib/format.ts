@@ -488,3 +488,126 @@ function wallFormatter(tz: string): Intl.DateTimeFormat {
   }
   return f;
 }
+
+// ---------------------------------------------------------------------------
+// Values read out of the company document
+// ---------------------------------------------------------------------------
+
+/**
+ * The order the engine declares a seat's per-phase chains in
+ * (`config.PhaseLLM`), so a mapping renders in the order its reader wrote it
+ * against rather than in whatever order a JSON object happened to arrive.
+ *
+ * `LLM_` in the name deliberately: `PHASE_ORDER` on the Integrations screen is
+ * the order a SETUP runs its steps in, `lib/phaseOrder.test.ts` holds that one
+ * to a single declaration, and two unrelated things called `PHASE_ORDER` is
+ * how one of them gets changed in the other's name.
+ */
+const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
+
+/** One row of a seat's model setting: which phase, and the chain it runs on. */
+export interface PhaseChain {
+  /** The mapping key, or "" when one chain covers every phase. */
+  phase: string;
+  /** The provider keys, first choice first, joined for reading. */
+  chain: string;
+}
+
+/**
+ * A seat's `llm:` field as rows a person reads.
+ *
+ * THREE SHAPES, ONE READING. A key and a chain are one row covering every
+ * phase; a per-phase mapping is one row per phase it names. The seat screen
+ * used to render the field as a React child, which drew a chain as its keys
+ * glued together and threw on the mapping, taking the whole page with it.
+ *
+ * A fallback chain reads as "first, then second": the order is the whole
+ * meaning of a chain, and a bare comma list reads as a set.
+ *
+ * `unknown` in, because this is the one reader standing between a field a
+ * newer engine may shape differently and a render that must not throw.
+ */
+export function formatPhaseLLM(llm: unknown): PhaseChain[] {
+  const chain = (keys: unknown): string => {
+    if (typeof keys === "string") return keys.trim();
+    if (!Array.isArray(keys)) return "";
+    return keys
+      .filter((k): k is string => typeof k === "string" && k.trim() !== "")
+      .map((k) => k.trim())
+      .join(", then ");
+  };
+  if (typeof llm === "string" || Array.isArray(llm)) {
+    const only = chain(llm);
+    return only ? [{ phase: "", chain: only }] : [];
+  }
+  if (!llm || typeof llm !== "object") return [];
+  const rank = (phase: string) => {
+    const at = LLM_PHASE_ORDER.indexOf(phase);
+    return at < 0 ? LLM_PHASE_ORDER.length : at;
+  };
+  return Object.entries(llm as Record<string, unknown>)
+    .map(([phase, keys], i) => ({ phase, chain: chain(keys), i }))
+    .filter((row) => row.chain !== "")
+    .sort((a, b) => rank(a.phase) - rank(b.phase) || a.i - b.i)
+    .map(({ phase, chain: joined }) => ({ phase, chain: joined }));
+}
+
+/**
+ * The mask the engine writes in place of a credential it will not send.
+ *
+ * `config.Redacted` in Go. A redacted document carries this in every
+ * credential field holding a literal; a field holding one whole `${VAR}`
+ * reference carries the reference, which NAMES a secret rather than being one.
+ */
+export const REDACTED = "__redacted__";
+
+/** How a value read from the redacted document may be shown. */
+export type ConfigValueKind = "empty" | "hidden" | "reference" | "literal";
+
+/**
+ * What a value read from the redacted document is, for rendering.
+ *
+ * `hidden` is the mask: a literal is set and its value is not on the wire. A
+ * `reference` is ONE whole `${NAME}`, the only form the engine sends unmasked
+ * in a credential field. Anything else is a `literal`.
+ *
+ * `secret` says the value comes from a CREDENTIAL field, and there a literal
+ * is `hidden` as well. The engine is meant never to send one, but its
+ * redaction took any value CONTAINING `${` for a reference, so
+ * `Bearer sk-live-${SUFFIX}` reached the wire with its literal half intact.
+ * What this dashboard prints must not depend on every engine it talks to
+ * having got that right: a credential field shows a whole reference or
+ * nothing.
+ */
+export function configValueKind(
+  value: string | null | undefined,
+  { secret = false }: { secret?: boolean } = {},
+): ConfigValueKind {
+  if (value == null || value === "") return "empty";
+  if (value === REDACTED) return "hidden";
+  // The grammar and the trim are `envref.Whole`'s, so what this calls a
+  // reference is exactly what the engine resolves as one.
+  if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
+  return secret ? "hidden" : "literal";
+}
+
+/**
+ * How far back the event log can be read, as a sentence, from what the engine
+ * REPORTED.
+ *
+ * NOT A LITERAL. Three screens said "the store keeps 30 days" in their own
+ * copy while `store.EventHistory` was the only thing that decided it, so a
+ * change to the retention would have left all three lying with nothing to
+ * catch it. An engine that did not report the floor says so rather than
+ * having a number guessed for it: an operator told the wrong floor stops
+ * paging early.
+ */
+export function eventHistoryLabel(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) {
+    return "this engine did not report how far back the log goes";
+  }
+  const days = Math.round(seconds / 86_400);
+  if (days >= 1) return `the store keeps ${plural(days, "day")}`;
+  const hours = Math.max(1, Math.round(seconds / 3_600));
+  return `the store keeps ${plural(hours, "hour")}`;
+}

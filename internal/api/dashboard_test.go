@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -21,6 +22,7 @@ func tree() fstest.MapFS {
 		"dashboard/js/app.js":      {Data: []byte("export const app = 1")},
 		"dashboard/styles/app.css": {Data: []byte(":root{}")},
 		"dashboard/data.bin":       {Data: []byte{0x00, 0x01}},
+		"dashboard/NOTICES.txt":    {Data: []byte("notices")},
 	}
 }
 
@@ -92,6 +94,9 @@ func TestEachAssetKindGetsItsOwnType(t *testing.T) {
 		"/static/dashboard/styles/app.css": "text/css; charset=utf-8",
 		"/static/dashboard/index.html":     "text/html; charset=utf-8",
 		"/static/dashboard/favicon.ico":    "image/x-icon",
+		// A notice is read, so it is text a browser shows rather than a
+		// download.
+		"/static/dashboard/NOTICES.txt": "text/plain; charset=utf-8",
 		// Anything unrecognised is bytes, not a guess.
 		"/static/dashboard/data.bin": "application/octet-stream",
 	} {
@@ -167,6 +172,66 @@ func TestATraversalNeverReachesTheAssetHandler(t *testing.T) {
 		if res.StatusCode == http.StatusOK {
 			body, _ := io.ReadAll(res.Body)
 			t.Errorf("%s served %d bytes", path, len(body))
+		}
+	}
+}
+
+// THE SHELL AND EVERY ASSET CARRY THE DASHBOARD'S POLICY, the revalidation
+// answer included.
+//
+// The 304 is the case that was missing: the asset handler wrote it before any
+// header after it, and a header set after the status is dropped without a
+// word. A browser mostly receives the 304, so a policy on the 200 alone is a
+// policy on the first visit.
+func TestTheDashboardCarriesItsSecurityHeaders(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{Assets: tree()})
+	etag := fetch(t, a, "/static/dashboard/js/app.js", nil).Header.Get("ETag")
+
+	for name, res := range map[string]*http.Response{
+		"the shell":      fetch(t, a, "/dashboard", nil),
+		"the favicon":    fetch(t, a, "/favicon.ico", nil),
+		"an asset (200)": fetch(t, a, "/static/dashboard/js/app.js", nil),
+		"an asset (304)": fetch(t, a, "/static/dashboard/js/app.js", map[string]string{"If-None-Match": etag}),
+	} {
+		assertSecurityHeaders(t, name, res, pagepolicy.Dashboard)
+	}
+	if res := fetch(t, a, "/static/dashboard/js/app.js", map[string]string{"If-None-Match": etag}); res.StatusCode != http.StatusNotModified {
+		t.Fatalf("the revalidation case answered %d, so the 304 was not exercised", res.StatusCode)
+	}
+}
+
+// EVERY OTHER RESPONSE CARRIES THE API POLICY, including the ones no handler
+// writes on purpose: the redirect from `/` (an HTML body), the mux's own 404,
+// a JSON read and a refusal from the guard.
+func TestEveryOtherResponseCarriesTheAPIPolicy(t *testing.T) {
+	t.Parallel()
+	open := newApp(t, api.Options{Assets: tree()})
+	closed := closedPosture()
+	guarded := newApp(t, api.Options{Bootstrap: &closed, Assets: tree()})
+
+	for name, res := range map[string]*http.Response{
+		"the redirect from /":  fetch(t, open, "/", nil),
+		"an unrouted path":     fetch(t, open, "/no-such-route", nil),
+		"a JSON read":          fetch(t, open, "/health", nil),
+		"a refusal (401)":      fetch(t, guarded, "/org", nil),
+		"a missing asset":      fetch(t, open, "/static/dashboard/js/nope.js", nil),
+		"a traversal redirect": fetch(t, open, "/static/../../etc/passwd", nil),
+	} {
+		assertSecurityHeaders(t, name, res, pagepolicy.API)
+	}
+}
+
+func assertSecurityHeaders(t *testing.T, name string, res *http.Response, policy string) {
+	t.Helper()
+	for header, want := range map[string]string{
+		"Content-Security-Policy": policy,
+		"X-Frame-Options":         "DENY",
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         "no-referrer",
+	} {
+		if got := res.Header.Get(header); got != want {
+			t.Errorf("%s (%d): %s = %q, want %q", name, res.StatusCode, header, got, want)
 		}
 	}
 }

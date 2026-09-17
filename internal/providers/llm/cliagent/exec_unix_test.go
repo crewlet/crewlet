@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -38,9 +39,9 @@ func fakeStubborn() {
 		fmt.Fprintf(os.Stderr, "fake CLI could not fork: %v\n", err)
 		os.Exit(1)
 	}
-	// Never returns. os/exec's WaitDelay kill reaches this process, and this
-	// process alone.
-	select {}
+	// Holds until something ends it. os/exec's WaitDelay kill reaches this
+	// process, and this process alone.
+	procgrouptest.Hold()
 }
 
 // fakeGrandchild is the descendant the reap has to reach.
@@ -57,7 +58,7 @@ func fakeGrandchild() {
 	// completes, and the call this witnesses is cancelled — so nothing ever
 	// reads it.
 	_ = os.WriteFile(os.Getenv("FAKE_PIDFILE"), fmt.Appendf(nil, "%d", os.Getpid()), 0o600)
-	select {}
+	procgrouptest.Hold()
 }
 
 // A CANCELLED CALL REAPS THE WHOLE TREE, not just the process it started.
@@ -97,7 +98,7 @@ func TestCancellingACallReapsTheWholeTree(t *testing.T) {
 		t.Fatal("Complete never returned after the caller cancelled")
 	}
 
-	if !waitGoneUnix(grandchild) {
+	if !procgrouptest.AwaitGone(t, grandchild, 10*time.Second) {
 		t.Fatalf("grandchild %d survived the cancelled call: the reap runs on "+
 			"the deadline path only, so a shutdown leaves a runtime holding "+
 			"this seat's workspace and sockets", grandchild)
@@ -132,17 +133,4 @@ func reapTree(grandchild int) {
 		_ = procgroup.Kill(pgid)
 	}
 	_ = syscall.Kill(grandchild, syscall.SIGKILL)
-}
-
-func aliveUnix(pid int) bool { return syscall.Kill(pid, 0) == nil }
-
-func waitGoneUnix(pid int) bool {
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if !aliveUnix(pid) {
-			return true
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return false
 }

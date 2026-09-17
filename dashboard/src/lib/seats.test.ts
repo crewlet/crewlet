@@ -1,11 +1,18 @@
 // @vitest-environment node
 
 /**
- * The org derivations every screen consumes, and the seat-state rules.
+ * The org index every screen consumes, and the seat-state rules.
  *
- * These are resolved ONCE, into an index, because doing them per screen is how
- * the previous dashboard came to walk the whole roster once per rendered row:
- * its `managerOf` was a linear scan called per seat AND again per row, roughly
+ * THE HIERARCHY IS THE ENGINE'S. The projection fixture is written out field
+ * for field from `internal/api`'s `OrgProjection` with its public `derived`
+ * block, because every reporting line, inherited lead and placement pinned
+ * here is a READING of that block rather than a rule this client applies: the
+ * TypeScript copy that used to apply them had drifted from Go on four counts,
+ * and nothing compared the two.
+ *
+ * It is resolved ONCE, into an index, because doing it per screen is how the
+ * previous dashboard came to walk the whole roster once per rendered row: its
+ * `managerOf` was a linear scan called per seat AND again per row, roughly
  * 80,000 array scans per event push on a 200-seat company.
  */
 
@@ -13,21 +20,44 @@ import { describe, expect, test } from "vitest";
 import {
   indexOrg,
   llmChain,
+  mcpEnvOf,
   runState,
+  seatPath,
+  seatSettings,
   seatTone,
-  slugify,
   statusLine,
   staleness,
   STALE_MS,
   STALLED_MS,
+  unitSettings,
 } from "./seats.ts";
-import type { OrgTree, SandboxEntry } from "~/protocol/index.ts";
+import type {
+  CompanyDocument,
+  DerivedSeat,
+  OrgProjection,
+  SandboxEntry,
+} from "~/protocol/index.ts";
 
-const org: OrgTree = {
+const seat = (over: Partial<DerivedSeat> & Pick<DerivedSeat, "handle" | "name">): DerivedSeat => ({
+  kind: "agent",
+  placed_by_ref: false,
+  manager: "",
+  managers: null,
+  reports: null,
+  auto_reports: null,
+  onboarding_chain: null,
+  ...over,
+});
+
+const org: OrgProjection = {
   name: "Acme",
   roles: [
-    { name: "Jane Founder", kind: "human", manages: ["CEO"], contact: { slack_user_id: "U1" } },
+    { name: "Jane Founder", kind: "human", manages: ["CEO"] },
     { name: "CEO", handle: "ceo", manages: ["Engineering"] },
+    // A root seat whose `unit:` reference the ENGINE moved into Backend. The
+    // document writes it above every unit; only the derived block says where
+    // it actually sits.
+    { name: "Designer" },
   ],
   units: [
     {
@@ -41,69 +71,177 @@ const org: OrgTree = {
           type: "team",
           // No lead: it inherits VP Engineering from the parent.
           roles: [{ name: "Dev A" }, { name: "Dev B" }],
-          mcp_env: { github: { GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
         },
       ],
-      mcp_env: { github: { GITHUB_HOST: "example.com" } },
     },
   ],
+  derived: {
+    seats: [
+      seat({ handle: "jane-founder", name: "Jane Founder", kind: "human", reports: ["ceo"] }),
+      seat({
+        handle: "ceo",
+        name: "CEO",
+        manager: "jane-founder",
+        managers: ["jane-founder"],
+        reports: ["vpe", "dev-a", "dev-b"],
+      }),
+      seat({ handle: "vpe", name: "VP Engineering", manager: "ceo", managers: ["ceo"] }),
+      seat({ handle: "dev-a", name: "Dev A", manager: "ceo", managers: ["ceo"] }),
+      seat({ handle: "dev-b", name: "Dev B", manager: "ceo", managers: ["ceo"] }),
+      seat({
+        handle: "designer",
+        name: "Designer",
+        placed_by_ref: true,
+        manager: "vpe",
+        managers: ["vpe"],
+        auto_reports: null,
+      }),
+    ],
+    units: [
+      {
+        name: "Engineering",
+        type: "department",
+        lead: "vpe",
+        lead_inherited: false,
+        channel: "",
+        channel_inherited: false,
+        seats: ["vpe"],
+      },
+      {
+        name: "Backend",
+        type: "team",
+        lead: "vpe",
+        lead_inherited: true,
+        channel: "",
+        channel_inherited: false,
+        seats: ["dev-a", "dev-b", "designer"],
+      },
+    ],
+  },
 };
 
 const index = indexOrg(org);
 
-describe("flattening", () => {
-  test("every role becomes a seat, wherever it sits", () => {
+/** The same company, from an engine that reports no derived hierarchy. */
+const { derived: _omitted, ...older } = org;
+const authored = indexOrg(older);
+
+describe("the engine's hierarchy", () => {
+  test("every role becomes a seat, wherever the document wrote it", () => {
     expect(index.seats.map((s) => s.name).sort()).toEqual([
       "CEO",
+      "Designer",
       "Dev A",
       "Dev B",
       "Jane Founder",
       "VP Engineering",
     ]);
+    expect(index.hierarchy).toBe(true);
   });
 
-  test("a handle is derived exactly as the engine derives it", () => {
-    // A handle that differs from the seat's real one is a cross-link to a
-    // page that does not exist — and the seat's durable id is derived from
-    // it, so the two must agree.
+  // THE HANDLE IS THE ENGINE'S AND IS NEVER DERIVED HERE. The copy this
+  // replaced lower-cased "İlker" into `i-lker` where Go derives `ilker`, and
+  // the handle keys a seat's memory — so a link pinning the client's version
+  // pointed at nothing.
+  test("a handle is the engine's, and is unknown where it did not say", () => {
     expect(index.byName.get("Dev A")?.handle).toBe("dev-a");
-    expect(slugify("Sarah Chen")).toBe("sarah-chen");
     expect(index.byName.get("CEO")?.handle).toBe("ceo");
+    // Without the block, only a DECLARED handle is known.
+    expect(authored.byName.get("CEO")?.handle).toBe("ceo");
+    expect(authored.byName.get("Dev A")?.handle).toBe("");
+    expect(authored.hierarchy).toBe(false);
   });
 
-  test("a unit with no lead INHERITS the nearest ancestor's", () => {
+  // A LINK STILL REACHES A SEAT WITH NO REPORTED HANDLE: the seat screen
+  // resolves a name as well as a handle, and the rule lives in one place.
+  test("a seat with no reported handle is addressed by name", () => {
+    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["company", "people", "dev-a"]);
+    expect(seatPath(authored.byName.get("Dev A")!)).toEqual(["company", "people", "Dev A"]);
+  });
+
+  // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
+  // above every unit; its `unit:` reference put it in Backend.
+  test("a root seat the engine placed sits in its unit, and says it was placed", () => {
+    const designer = index.byName.get("Designer")!;
+    expect(designer.unit?.name).toBe("Backend");
+    expect(designer.placedByRef).toBe(true);
+    expect(index.rootSeats.map((s) => s.name).sort()).toEqual(["CEO", "Jane Founder"]);
+    // Without the block it sits where it was WRITTEN, and nothing claims more.
+    expect(authored.byName.get("Designer")!.unit).toBeNull();
+    expect(authored.byName.get("Designer")!.placedByRef).toBe(false);
+  });
+
+  test("a unit with no lead of its own takes the inherited one, marked", () => {
     // It behaves identically to an explicit lead everywhere in the engine, so
     // hiding the difference is how an operator comes to think a unit is
     // unmanaged.
+    const backend = index.units.find((u) => u.name === "Backend")!;
+    expect(backend.effectiveLead?.name).toBe("VP Engineering");
+    expect(backend.leadInherited).toBe(true);
+    expect(index.units.find((u) => u.name === "Engineering")!.leadInherited).toBe(false);
     expect(index.byName.get("Dev A")?.unitLead).toBe("VP Engineering");
-    expect(index.byName.get("Dev A")?.unit?.name).toBe("Backend");
     expect(index.byName.get("Dev A")?.unitChain.map((u) => u.name)).toEqual([
       "Engineering",
       "Backend",
     ]);
+    // An INHERITED lead is the engine's conclusion, so without the block the
+    // unit has none rather than one this client cascaded.
+    expect(authored.units.find((u) => u.name === "Backend")!.effectiveLead).toBeNull();
+    expect(authored.units.find((u) => u.name === "Engineering")!.effectiveLead?.name).toBe(
+      "VP Engineering",
+    );
   });
 
-  test("mcp_env merges DOWN the unit chain with the seat's own winning", () => {
-    const env = index.byName.get("Dev A")?.mcpEnv.github;
-    expect(env?.GITHUB_HOST).toBe("example.com");
-    expect(env?.GITHUB_TOKEN).toBe("${BACKEND_TOKEN}");
-  });
-});
-
-describe("the management graph", () => {
-  test("a unit name in `manages` expands to every role beneath it", () => {
-    // Including descendants: the CEO manages Engineering, which is the VP and
-    // both Backend devs.
-    const reports = index.reportsOf
-      .get("CEO")
-      ?.map((s) => s.name)
-      .sort();
-    expect(reports).toEqual(["Dev A", "Dev B", "VP Engineering"]);
+  test("reporting lines are the engine's, and unknown without them", () => {
+    expect(
+      index.byName
+        .get("CEO")!
+        .reports.map((r) => r.name)
+        .sort(),
+    ).toEqual(["Dev A", "Dev B", "VP Engineering"]);
+    expect(index.byName.get("Dev A")!.manager?.name).toBe("CEO");
+    expect(index.byName.get("CEO")!.manager?.name).toBe("Jane Founder");
+    // NOT NOBODY: the engine did not say.
+    expect(authored.byName.get("Dev A")!.manager).toBeNull();
+    expect(authored.byName.get("CEO")!.reports).toEqual([]);
   });
 
-  test("a unit lead auto-manages anyone nobody else already does", () => {
-    expect(index.managerOf.get("Dev A")?.name).toBe("CEO");
-    expect(index.managerOf.get("CEO")?.name).toBe("Jane Founder");
+  // A BLOCK THAT DOES NOT DESCRIBE THIS TREE IS NOT HALF A HIERARCHY. A chart
+  // drawn from one that disagrees with its own seats is a chart that lies.
+  test("a derived block that does not match the tree is refused whole", () => {
+    const mismatched = indexOrg({
+      ...org,
+      derived: { ...org.derived!, seats: (org.derived!.seats ?? []).slice(0, 2) },
+    });
+    expect(mismatched.hierarchy).toBe(false);
+    expect(mismatched.byName.get("Dev A")!.manager).toBeNull();
+
+    // And one naming a handle that belongs to no seat in it.
+    const dangling = indexOrg({
+      ...org,
+      derived: {
+        ...org.derived!,
+        seats: (org.derived!.seats ?? []).map((d) =>
+          d.handle === "dev-a" ? { ...d, manager: "nobody-here" } : d,
+        ),
+      },
+    });
+    expect(dangling.hierarchy).toBe(false);
+
+    // A UNIT'S MEMBERSHIP IS THE SAME KIND OF CLAIM, and it has its own guard:
+    // a unit naming a handle no seat in the block carries would otherwise
+    // leave that unit a member short and every seat placed from it wrong,
+    // silently.
+    const phantom = indexOrg({
+      ...org,
+      derived: {
+        ...org.derived!,
+        units: (org.derived!.units ?? []).map((u) =>
+          u.name === "Backend" ? { ...u, seats: [...(u.seats ?? []), "ghost"] } : u,
+        ),
+      },
+    });
+    expect(phantom.hierarchy).toBe(false);
   });
 
   test("a human seat holds a place in the hierarchy", () => {
@@ -111,13 +249,92 @@ describe("the management graph", () => {
     // terminate at a person.
     const founder = index.byName.get("Jane Founder");
     expect(founder?.kind).toBe("human");
-    expect(founder?.contact.slack_user_id).toBe("U1");
+    expect(founder?.reports.map((r) => r.name)).toEqual(["CEO"]);
   });
 
   test("nobody manages themselves", () => {
-    for (const [name, reports] of index.reportsOf) {
-      expect(reports.map((r) => r.name)).not.toContain(name);
+    for (const s of index.seats) {
+      expect(s.reports.map((r) => r.name)).not.toContain(s.name);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The guarded half
+// ---------------------------------------------------------------------------
+
+// EVERYTHING BELOW IS OFF THE COMPANY DOCUMENT, not the projection. `/org` is
+// anonymously readable, so email, the model chain, the token budget, contact
+// identities, `mcp_env`, `space:` and `id:` are not on it at all.
+const doc: CompanyDocument = {
+  name: "Acme",
+  roles: [
+    { name: "Jane Founder", kind: "human", contact: { slack_user_id: "U0FOUNDER" } },
+    { name: "CEO", handle: "ceo", email: "ceo@example.com", token_budget: 250000 },
+  ],
+  units: [
+    {
+      name: "Engineering",
+      id: "eng",
+      mcp_env: { github: { GITHUB_HOST: "example.com" } },
+      roles: [{ name: "VP Engineering", handle: "vpe" }],
+      children: [
+        {
+          name: "Backend",
+          space: "ENG",
+          mcp_env: { github: { GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
+          roles: [
+            { name: "Dev A", mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } } },
+            { name: "Dev B" },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+describe("what only the company document says", () => {
+  test("a seat is found by the name the document addresses it by", () => {
+    const found = seatSettings(doc, index.byName.get("CEO")!);
+    expect(found.state).toBe("found");
+    expect(found.state === "found" && found.role.email).toBe("ceo@example.com");
+    expect(found.state === "found" && found.role.token_budget).toBe(250000);
+  });
+
+  // THE PROJECTION AND THE DOCUMENT CAN DISAGREE for a moment either side of
+  // an apply, and a seat that is in one and not the other is a state to say
+  // rather than a blank panel.
+  test("a seat the document does not hold is missing, not empty", () => {
+    expect(seatSettings(doc, index.byName.get("Designer")!).state).toBe("missing");
+    expect(seatSettings(null, index.byName.get("CEO")!).state).toBe("missing");
+  });
+
+  // TWO SEATS WITH ONE NAME can only come from a revision stored before names
+  // had to be unique, and attributing either one's settings to the page would
+  // be a guess.
+  test("a name held by two seats is ambiguous rather than the first match", () => {
+    const twice: CompanyDocument = { ...doc, roles: [...(doc.roles ?? []), { name: "CEO" }] };
+    expect(seatSettings(twice, index.byName.get("CEO")!).state).toBe("ambiguous");
+  });
+
+  test("mcp_env merges DOWN the unit chain with the seat's own winning", () => {
+    const env = mcpEnvOf(seatSettings(doc, index.byName.get("Dev A")!), "agent").github;
+    expect(env?.GITHUB_HOST).toBeUndefined();
+    expect(env?.GITHUB_TOKEN).toBe("${DEV_A_TOKEN}");
+    const inherited = mcpEnvOf(seatSettings(doc, index.byName.get("Dev B")!), "agent").github;
+    expect(inherited?.GITHUB_TOKEN).toBe("${BACKEND_TOKEN}");
+  });
+
+  // A HUMAN SEAT RUNS NO TOOLS, so it inherits none of its unit's credentials.
+  test("a human seat inherits no tool credentials", () => {
+    const found = seatSettings(doc, index.byName.get("Dev B")!);
+    expect(Object.keys(mcpEnvOf(found, "human"))).toEqual([]);
+  });
+
+  test("a unit's guarded fields are read from the document, and only from it", () => {
+    expect(unitSettings(doc, { name: "Engineering" })?.id).toBe("eng");
+    expect(unitSettings(doc, { name: "Backend" })?.space).toBe("ENG");
+    expect(unitSettings(null, { name: "Backend" })).toBeNull();
   });
 });
 

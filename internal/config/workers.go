@@ -113,7 +113,7 @@ type Worker struct {
 // the turn that happened to reach it first — hours after the edit, on
 // whichever seat drew the short straw — and reports as a delegate failure
 // rather than as the config error it is.
-func (w Worker) validate(path string, providers map[string]struct{}, ceiling int) error {
+func (w Worker) validate(path Path, providers map[string]struct{}, ceiling int) error {
 	var p problems
 	if strings.TrimSpace(w.Description) == "" {
 		p.add(at(path, "description"), ErrMissing,
@@ -178,7 +178,7 @@ const (
 // passed through untouched, because the provider may well support it and
 // refusing it here would make the engine the bottleneck on somebody else's
 // schema support.
-func validateOutputSchema(path string, schema map[string]any) error {
+func validateOutputSchema(path Path, schema map[string]any) error {
 	if len(schema) == 0 {
 		return nil
 	}
@@ -285,7 +285,7 @@ func (c *Company) validateWorkers() error {
 
 	ceiling := c.TurnEngine.Delegation.MaxTurnsCeiling
 	for _, name := range sortedKeys(c.Workers) {
-		path := at("workers", name)
+		path := entry(field("workers"), name)
 		if !workerKey.MatchString(name) {
 			p.add(path, ErrUnknownValue,
 				"worker names are lowercase slugs matching %s: an executor types "+
@@ -301,16 +301,16 @@ func (c *Company) validateWorkers() error {
 	// be there. That is the same silent-typo shape a role's provider key
 	// has, and it is refused for the same reason.
 	for i, r := range c.Roles {
-		p.wrap(validateWorkerRefs(idx("roles", i), r.Workers, c.Workers))
+		p.wrap(validateWorkerRefs(idx(field("roles"), i), r.Workers, c.Workers))
 	}
 	for i := range c.Units {
-		p.wrap(c.Units[i].validateWorkerRefs(idx("units", i), c.Workers))
+		p.wrap(c.Units[i].validateWorkerRefs(idx(field("units"), i), c.Workers))
 	}
 	return p.err()
 }
 
 // validateWorkerRefs checks one seat's visibility list.
-func validateWorkerRefs(path string, refs []string, defined map[string]Worker) error {
+func validateWorkerRefs(path Path, refs []string, defined map[string]Worker) error {
 	var p problems
 	for i, name := range refs {
 		if _, ok := defined[name]; !ok {
@@ -323,7 +323,7 @@ func validateWorkerRefs(path string, refs []string, defined map[string]Worker) e
 }
 
 // validateWorkerRefs walks a unit's own seats and its descendants.
-func (u *Unit) validateWorkerRefs(path string, defined map[string]Worker) error {
+func (u *Unit) validateWorkerRefs(path Path, defined map[string]Worker) error {
 	var p problems
 	for i, r := range u.Roles {
 		p.wrap(validateWorkerRefs(idx(at(path, "roles"), i), r.Workers, defined))
@@ -565,7 +565,7 @@ func DefaultDelegation() Delegation {
 	}
 }
 
-func (d Delegation) validate(path string) error {
+func (d Delegation) validate(path Path) error {
 	var p problems
 
 	positive := []struct {

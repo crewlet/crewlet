@@ -6,28 +6,35 @@ Agents interact with external systems and internal engine operations through too
 
 ## Built-in Tools
 
-These tools are registered globally and available to all agents:
+The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no sandbox) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
 
 | Tool | Description |
 |------|-------------|
-| `lookup_colleague` | Resolve any agent identifier (handle, Slack user, Jira ID, GitHub login, …) to a canonical handle and its known cross-platform identities. Falls back to case-insensitive / substring / fuzzy match (e.g. `ceo` → `agent-ceo`); ambiguous fuzzy queries return the candidate list so the LLM picks rather than guessing |
-| `reflect_and_persist` | Capture a durable fact in the agent's private diary (LONG / SHORT) |
+| `lookup_colleague` | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; ambiguous queries return the candidate list so the LLM picks rather than guessing |
+| `reflect_and_persist` | Capture a durable fact in the agent's private diary (`kind`: `long` or `short`) |
 | `refresh_memory` | Re-run the personal-memory filter mid-turn after gathering richer context |
-| `query_episodes` | Search the agent's own past completed turns by similarity |
-| `use_skill` | Load one of the agent's own [synthesized skills](../concepts/agent-learning.md#5-skillsynthesizer--skill-induction) on demand |
-| `refine_skill` | Append a bullet to a synthesized skill (or replace its body) |
-| `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages |
-| `a2a_ask` | Tight-loop synchronous handoff to a colleague (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
+| `query_episodes` | Recall the agent's own past turns: by meaning, by conversation, or most recent first |
+| `use_skill` | Load one of the agent's own [synthesized skills](../concepts/agent-learning.md#5-synthesizer-skill-induction) on demand |
+| `refine_skill` | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
+| `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages (offered to the onboarding pass) |
+| `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
 | `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. Registered wherever the company has a knowledge backend at all |
+| `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key |
+| `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md) |
+
+`delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 
 ### The native tracker and knowledge base
 
-Twelve more, registered **only where the company runs the engine's own backends**
+Twenty more, registered **only where the company runs the engine's own backends**
 (`tracker.backend: native` / `knowledge.backend: native`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
-learns to distrust the whole catalogue.
+learns to distrust the whole catalogue. The twelve below are the item and page
+tools; the other eight read the catalogue, the projects, the goals and the
+activity feed, and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists
+the tracker's fifteen in full.
 
 | Tool | Description |
 |------|-------------|
@@ -49,9 +56,11 @@ did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
-The same fifteen tools are served to **your** AI assistant over
+The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-with the writes attributed to your token rather than to a seat.
+with the writes attributed to your token rather than to a seat, and twelve more
+beside them that no seat is given: the saved views, the goal and catalogue
+writes, a person's own queue and inbox, sprint management, and the trash.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 
@@ -221,16 +230,14 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 
 ### Per-Unit Config
 
-A unit declares its Jira project / Confluence space *identity* under `integrations` (used for inbound webhook routing and as the team's write home — not a tool credential, and it does not scope knowledge reads). Real per-agent tool credentials still live in `mcp_env`, which all roles inherit:
+A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a native project and container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
 
 ```yaml
 units:
   - name: Backend
     type: team
     lead: Tech Lead
-    integrations:
-      jira:
-        project: "BACK"             # the unit's Jira project (integration identity)
+    project: "BACK"                 # the unit's tracker project (integration identity)
     mcp_env:
       atlassian:
         JIRA_URL: "${JIRA_URL}"     # shared by the whole unit
@@ -243,7 +250,7 @@ units:
           atlassian: { JIRA_API_TOKEN: "${ENG_JIRA_TOKEN}" }
 ```
 
-Inheritance: the unit's `mcp_env` is the base, role values override per key. The unit's `integrations` identity (Jira project / Confluence space) is separate from these credentials.
+Inheritance: the unit's `mcp_env` is the base and a seat's own values override it variable by variable, so a seat that sets one variable of a server keeps the unit's other variables for that server. Only the unit's **direct agent** seats inherit it. A child unit inherits nothing (it declares its own block), and a human seat inherits nothing, because a human seat runs no tools and may not carry an `mcp_env`. The unit's `project` / `space` identity is separate from these credentials.
 
 ---
 
@@ -260,14 +267,17 @@ difference is a lifetime as much as a scope.
 | Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
 
-**An `mcp_servers` edit takes effect on the next turn, not at the next
-restart.** Applying a revision reconciles the bridge server by server: an entry
-that did not change is left alone, and one that was added, removed or re-pointed
-starts, stops or restarts **only that child**. A seat mid-turn finishes on the
-tool surface it started with, and its next turn renders the new one — the same
-next-turn promise [tool skills](../concepts/tool-skills.md), embeddings and the
-org chart make. A per-role template is reconciled the same way, on the seats
-this node holds.
+**A shared `mcp_servers` edit takes effect on the next turn, not at the next
+restart.** Applying a revision reconciles the shared bridge server by server: an
+entry that did not change is left alone, and one that was added, removed or
+re-pointed starts, stops or restarts **only that child**. A seat mid-turn
+finishes on the tool surface it started with, and its next turn renders the new
+one, the same next-turn promise [tool skills](../concepts/tool-skills.md),
+embeddings and the org chart make. A per-role (`shared: false`) child is **not**
+on the apply path: it belongs to the seat's lease, so an apply rebuilds the
+catalogue each held seat's turns are built against (its builtins and shared
+servers) and leaves the running child alone. A change to a per-role template or
+to a seat's `mcp_env` reaches that child when the seat next changes hands.
 
 **A per-role child belongs to a seat, not to a node.** In a fleet each node
 claims a slice of the company, and it spawns children only for the seats it

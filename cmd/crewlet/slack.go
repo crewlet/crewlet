@@ -64,7 +64,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompany(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return err
 	}

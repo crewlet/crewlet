@@ -17,7 +17,7 @@
  * worse than one with no recents.
  */
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 /** One place the reader was. */
 export interface Recent {

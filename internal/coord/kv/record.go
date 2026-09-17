@@ -18,9 +18,23 @@ import (
 // a coord.Lease.
 const claimingEpoch int64 = 0
 
-// leaseValue is the JSON body of a key in the leases bucket — the EPHEMERAL
-// half of a resource's state. The bucket's MaxAge reaps it, which is exactly
-// what makes a dead node's seat reclaimable.
+// layoutDutyLane is the storage layout of a build that keeps duty leases in the
+// duty bucket rather than in the seat lease bucket, and every record this build
+// writes carries it.
+//
+// A LAYOUT RATHER THAN A PROTOCOL BUMP. What moved is where a duty is written,
+// not what holding any lease means, and coord.ProtocolVersion's gate refuses
+// SEAT claims beside an older peer: bumping it would have stalled seat
+// placement for a whole rolling upgrade to fix a duty. The layout gates only
+// duty claims, and only while a record by an older build is live. A record
+// written before the field existed reads as zero, which is the fail-closed
+// reading. See the package doc's rolling-upgrade rule.
+const layoutDutyLane = 1
+
+// leaseValue is the JSON body of a key in the leases or the duties bucket, the
+// EPHEMERAL half of a resource's state. Its deadline, or on the seat lease
+// bucket the bucket's MaxAge, ends it, which is exactly what makes a dead
+// node's seat or duty reclaimable.
 //
 // Schema evolution here is additive-only, for the reason coord.ProtocolVersion
 // states: a rolling upgrade has two builds reading each other's records, and a
@@ -43,10 +57,11 @@ type leaseValue struct {
 	// yet committed its fencing token. See TryAcquire.
 	Epoch int64 `json:"epoch"`
 
-	// TTLNanos is the deadline the claimant asked for. It equals the
-	// bucket's own TTL in every production path, in which case the record's
-	// disappearance IS its expiry and nothing consults a clock. See the
-	// package doc on shorter TTLs.
+	// TTLNanos is the deadline the claimant asked for. On the seat lease
+	// bucket it equals the bucket's own TTL in every production path, in which
+	// case the record's disappearance IS its expiry and nothing consults a
+	// clock. On the duty bucket it is always judged against the store's clock.
+	// See the package doc on the two lease buckets.
 	//
 	// Nanoseconds rather than the milliseconds an operator would rather
 	// read: time.Duration IS nanoseconds, so this round-trips exactly, and
@@ -57,6 +72,10 @@ type leaseValue struct {
 	Preferred string         `json:"preferred,omitempty"`
 	Protocol  int            `json:"protocol"`
 	Meta      map[string]any `json:"meta,omitempty"`
+
+	// Layout is the storage layout of the build that wrote the record; see
+	// layoutDutyLane. Zero on a record from a build that predates it.
+	Layout int `json:"layout,omitempty"`
 }
 
 func (v leaseValue) ttl() time.Duration { return time.Duration(v.TTLNanos) }
@@ -82,6 +101,9 @@ type resourceValue struct {
 // deadline is computed from.
 type entry struct {
 	resource string
+	// lane is the bucket the record was read from, which decides how its
+	// expiry is judged and against whose clock.
+	lane     *lane
 	revision uint64
 	// created is the store's own clock at the moment of this revision.
 	// coord.Lease.ExpiresAt is derived from it and never from time.Now, so

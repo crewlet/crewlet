@@ -12,7 +12,7 @@
  * and never rendered against a real answer is a screen nobody has seen.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { ConfigScreen } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
@@ -76,6 +76,9 @@ class InertWebSocket {
 // it is the default here rather than a case's own argument: a default of
 // `undefined` cannot be passed back in, and a helper that quietly substituted
 // the empty collection for it would test the opposite of what it said.
+/** Every question the screen asked, with its parameters. */
+let asked: { what: string; params: Record<string, unknown> | undefined }[] = [];
+
 function mount(hash: string, answer: unknown = diff, entities?: unknown) {
   location.hash = hash;
   const store = new Store();
@@ -83,8 +86,13 @@ function mount(hash: string, answer: unknown = diff, entities?: unknown) {
   // The screen's only data path. Stubbed rather than driven through a fake
   // server, because what is under test is the rendering of an answer whose
   // shape is already pinned by the Go side.
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what, params) => {
+    asked.push({ what, params });
+    return Promise.resolve(
       what === "config_audit"
         ? revisions
         : what === "config_diff"
@@ -93,6 +101,7 @@ function mount(hash: string, answer: unknown = diff, entities?: unknown) {
             ? entities
             : {},
     );
+  };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -103,6 +112,7 @@ function mount(hash: string, answer: unknown = diff, entities?: unknown) {
 }
 
 beforeEach(() => {
+  asked = [];
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
 });
 
@@ -187,4 +197,56 @@ test("a deep link to an entity with no active revision renders no literal null",
 
   expect(await screen.findAllByText("No company configuration is active")).toBeDefined();
   expect(screen.queryByText("null")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Which side a diff is read against
+// ---------------------------------------------------------------------------
+
+/** The side each diff the screen asked for was compared against. */
+const againstAsked = () =>
+  asked.filter((q) => q.what === "config_diff").map((q) => q.params?.against);
+
+// WHAT ONE SAVE CHANGED is its revision against its PARENT. Against the active
+// revision, a save that is active now is byte-identical to itself, so a "View
+// changes" link that named only the revision opened an empty diff under a note
+// about credential rotation.
+test("a link naming the side to compare against reads the diff against it", async () => {
+  mount(
+    "#/admin/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+  );
+
+  expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
+  expect(againstAsked()).toEqual(["01JCFGBBBB0000000000000002"]);
+  expect(screen.getByText("against revision 01JCFGBBBB")).toBeDefined();
+});
+
+// THE CONTROL, and the half that keeps the case above from passing on a screen
+// that simply forwards whatever the URL holds: a row picked from the history
+// is a question about the ACTIVE document again, so it drops the side a link
+// named rather than carrying somebody else's comparison into it.
+test("a revision picked from the history is compared with the active one again", async () => {
+  mount(
+    "#/admin/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+  );
+
+  // THE ROW'S OWN LINK, which is what a reader presses: the grid draws a real
+  // anchor over each row so a revision can be opened in a tab, and a plain
+  // left click on it peeks and points the diff.
+  await screen.findByText("first import");
+  fireEvent.click(screen.getByRole("link", { name: /first import/ }));
+  await waitFor(() => expect(location.hash).not.toContain("against="));
+  expect(location.hash).toContain("revision=01JCFGBBBB0000000000000002");
+  await waitFor(() => expect(againstAsked().at(-1)).toBe("active"));
+  expect(screen.getByText("against the active revision")).toBeDefined();
+});
+
+// AND THE ORDINARY CASE NAMES NO SIDE, so every link that wants the plain
+// comparison carries no parameter at all.
+test("with no side named the diff is read against the active revision", async () => {
+  mount("#/admin/config?lens=diff&revision=01JCFGAAAA0000000000000001");
+
+  expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
+  expect(againstAsked()).toEqual(["active"]);
+  expect(screen.getByText("against the active revision")).toBeDefined();
 });

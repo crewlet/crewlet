@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -180,27 +181,54 @@ func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 {
 		t.Fatalf("killed %v, want the unreferenced box reclaimed", killed)
 	}
-	run := rig.get("t1")
-	if run.Status != StatusFailed {
-		t.Fatalf("status = %q, want %q", run.Status, StatusFailed)
-	}
-	if run.SandboxID != "" {
-		t.Fatalf("the row still names a box that was killed: %q", run.SandboxID)
-	}
+	rig.finished("t1")
 }
 
 // A crash between the row and the box leaves a record recovery can act on;
 // the reverse ordering leaves a box nothing names.
+//
+// Asserted at the moment the box is created rather than after the launch
+// returns: a launch that fails closes the row it opened, so afterwards there is
+// nothing to see either way, and only the provider's own view of the store
+// can tell the two orderings apart.
 func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	rig := newWaiterRig(t)
-	rig.provider.CreateErr = errors.New("no capacity")
+	witness := &rowWitness{FakeProvider: rig.provider, store: rig.pending, turnID: "t1"}
+	manager, err := NewManager(ManagerOptions{
+		Providers: map[Placement]Provider{Direct: witness},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
 
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err == nil {
-		t.Fatal("a launch with no box reported success")
+	if _, err := Launch(t.Context(), manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+		t.Fatalf("Launch: %v", err)
 	}
-	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || !found {
-		t.Fatalf("Get = %v, %v; the row must exist so recovery has something to act on", found, err)
+	if !witness.checked {
+		t.Fatal("the launch never created a box, so the ordering was not observed")
 	}
+	if !witness.found {
+		t.Fatal("the box was created before the run's row existed: a crash there leaves a box nothing names")
+	}
+}
+
+// rowWitness is a provider that looks for the run's row at the moment it is
+// asked for a box.
+type rowWitness struct {
+	*FakeProvider
+	store          PendingStore
+	turnID         string
+	checked, found bool
+}
+
+func (w *rowWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
+	_, found, err := w.store.Get(ctx, w.turnID)
+	if err != nil {
+		return nil, err
+	}
+	w.checked, w.found = true, found
+	return w.FakeProvider.Create(ctx, spec)
 }
 
 // A launch that opened a row and then failed must CLOSE it. A run left
@@ -226,16 +254,9 @@ func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
 			if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err == nil {
 				t.Fatal("a launch that could not finish reported success")
 			}
-			run := rig.get("t1")
-			if run.Status == StatusLaunching {
-				t.Fatalf("the row was left open at %q — nothing will ever poll or claim it", run.Status)
-			}
-			if run.Status != StatusFailed {
-				t.Fatalf("status = %q, want %q", run.Status, StatusFailed)
-			}
-			if run.SandboxID != "" {
-				t.Fatalf("the row still names a box: %q", run.SandboxID)
-			}
+			// Closed means gone: a launching row left behind is polled by
+			// nothing and claimed by nothing.
+			rig.finished("t1")
 		})
 	}
 }

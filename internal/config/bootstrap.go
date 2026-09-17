@@ -213,7 +213,7 @@ type LogFile struct {
 	MaxBackups *int `yaml:"max_backups,omitempty" json:"max_backups,omitempty" js:"min=0;max=1000" desc:"Rotated files kept beside the live one. Unset = 5; 0 keeps none. Each rotation renames every file it keeps, so the count is bounded."`
 }
 
-func (l *Logging) validate(path string) error {
+func (l *Logging) validate(path Path) error {
 	var p problems
 	if l.Level != "" && !l.Level.Valid() {
 		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
@@ -238,7 +238,7 @@ func (l *Logging) validate(path string) error {
 	return p.err()
 }
 
-func (f *LogFile) validate(path string) error {
+func (f *LogFile) validate(path Path) error {
 	var p problems
 	if f.Format != "" && !f.Format.Valid() {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
@@ -383,13 +383,13 @@ func DefaultBootstrap() Bootstrap {
 func (b *Bootstrap) Validate() error {
 	var p problems
 	p.wrap(b.normalize())
-	p.wrap(b.Node.validate("node"))
-	p.wrap(b.Store.validate("store"))
-	p.wrap(b.Stream.validate("stream"))
-	p.wrap(b.Coordination.validate("coordination"))
-	p.wrap(b.API.validate("api"))
-	p.wrap(b.Secrets.validate("secrets"))
-	p.wrap(b.Logging.validate("logging"))
+	p.wrap(b.Node.validate(field("node")))
+	p.wrap(b.Store.validate(field("store")))
+	p.wrap(b.Stream.validate(field("stream")))
+	p.wrap(b.Coordination.validate(field("coordination")))
+	p.wrap(b.API.validate(field("api")))
+	p.wrap(b.Secrets.validate(field("secrets")))
+	p.wrap(b.Logging.validate(field("logging")))
 	p.wrap(b.validateTopology())
 	return p.err()
 }
@@ -420,7 +420,7 @@ func (b *Bootstrap) validateTopology() error {
 	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded
 
 	if b.Coordination.Type == CoordinationLocal && clustered {
-		p.add("coordination.type", ErrConflict,
+		p.add(field("coordination.type"), ErrConflict,
 			"local coordination holds its leases in this process, so every "+
 				"node in a fleet would claim every seat. A fleet needs "+
 				"coordination.type %q", CoordinationEmbeddedKV)
@@ -437,7 +437,7 @@ func (b *Bootstrap) validateTopology() error {
 	// every topology, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
 		if members := peers + 1; members == 2 {
-			p.add("stream.cluster.peers", ErrConflict,
+			p.add(field("stream.cluster.peers"), ErrConflict,
 				"a two-node fleet has no coordination quorum: run one node "+
 					"or three or more (this config names %d peer, so %d nodes)",
 				peers, members)
@@ -457,7 +457,7 @@ func (b *Bootstrap) validateTopology() error {
 	// for availability kept its seat mailboxes and every lease on whichever
 	// single server happened to hold them, and lost them with it.
 	if b.Stream.Type != StreamNATS && b.Stream.Replicas > 1 && peers == 0 {
-		p.add("stream.replicas", ErrConflict,
+		p.add(field("stream.replicas"), ErrConflict,
 			"replicas > 1 needs peers to replicate to; a solo node keeps 1")
 	}
 	return p.err()
@@ -537,7 +537,7 @@ var nodeRoleNames = []string{
 	string(placement.RoleWorkers),
 }
 
-func (n *Node) validate(path string) error {
+func (n *Node) validate(path Path) error {
 	var p problems
 
 	// Zero is unset and takes the engine's default. A NEGATIVE is refused
@@ -628,7 +628,7 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 		return DefaultNodeID, nil
 	}
 	if !nodeIDPattern.MatchString(value) {
-		return "", fault("node.id", ErrUnknownValue,
+		return "", fault(field("node.id"), ErrUnknownValue,
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars)", value)
 	}
@@ -724,7 +724,7 @@ type Store struct {
 	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a statement fails; 0 takes the store default."`
 }
 
-func (s *Store) validate(path string) error {
+func (s *Store) validate(path Path) error {
 	var p problems
 	if s.Path == "" {
 		p.add(at(path, "path"), ErrMissing,
@@ -1058,7 +1058,7 @@ func (c StreamCluster) IsZero() bool {
 		c.Host == "" && c.Advertise == ""
 }
 
-func (s *Stream) validate(path string) error {
+func (s *Stream) validate(path Path) error {
 	var p problems
 	if s.Type != "" && !slices.Contains(StreamTypes, s.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(StreamTypes))
@@ -1232,10 +1232,15 @@ type Coordination struct {
 	// network.
 	Type CoordinationType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=local|embedded-kv" desc:"local (single node, default) or embedded-kv (a fleet)."`
 
-	// LeaseTTLSeconds overrides how long a lease survives without a renew.
-	// 0 takes the coordination layer's own measured default; shortening it
-	// speeds up failover at the cost of shedding seats over a store blip.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Lease TTL; 0 takes the measured default."`
+	// LeaseTTLSeconds overrides how long a seat or presence lease survives
+	// without a renew. 0 takes the coordination layer's own measured
+	// default; shortening it speeds up failover at the cost of shedding
+	// seats over a store blip.
+	//
+	// It does not bound a fleet duty's lease: a duty's TTL follows its own
+	// tick, up to coord.MaxDutyTTL, which is why duties are kept in a lease
+	// bucket of their own.
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own."`
 }
 
 // NATSTLS is the transport material for an external NATS server.
@@ -1275,7 +1280,7 @@ type NATSTLS struct {
 func (t NATSTLS) IsZero() bool { return t.CA == "" && t.Cert == "" && t.Key == "" }
 
 // validate refuses half a keypair.
-func (t NATSTLS) validate(path string) error {
+func (t NATSTLS) validate(path Path) error {
 	var p problems
 	switch {
 	case t.Cert != "" && t.Key == "":
@@ -1290,7 +1295,7 @@ func (t NATSTLS) validate(path string) error {
 	return p.err()
 }
 
-func (c *Coordination) validate(path string) error {
+func (c *Coordination) validate(path Path) error {
 	var p problems
 	if c.Type != "" && !slices.Contains(CoordinationTypes, c.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, names(CoordinationTypes))
@@ -1324,7 +1329,7 @@ type API struct {
 	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
 }
 
-func (a *API) validate(path string) error {
+func (a *API) validate(path Path) error {
 	var p problems
 	// Unbounded, a port of 70000 passes validation and fails at bind,
 	// long after `crewlet validate` said the config was good.
@@ -1383,7 +1388,7 @@ type APIToken struct {
 	Token string `yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 }
 
-func (a *APIAuth) validate(path string) error {
+func (a *APIAuth) validate(path Path) error {
 	var p problems
 	seen := make(map[string]struct{}, len(a.Tokens))
 	for i, t := range a.Tokens {
@@ -1454,7 +1459,7 @@ func (a *APIAuth) validate(path string) error {
 // this field's own previous default, and what it does is let any site a
 // logged-in operator visits read every unauthenticated endpoint — which on
 // this API means LLM transcripts, diary entries and the whole event stream.
-func checkOrigin(path, origin string) error {
+func checkOrigin(path Path, origin string) error {
 	var p problems
 	switch {
 	case origin == "":
@@ -1529,7 +1534,7 @@ type SecretKey struct {
 	Material string `yaml:"material" json:"material" js:"required" desc:"base64(32 bytes), or a ${VAR} reference to it."`
 }
 
-func (s *Secrets) validate(path string) error {
+func (s *Secrets) validate(path Path) error {
 	var p problems
 	ids := make(map[string]struct{}, len(s.Keys))
 	for i, k := range s.Keys {
@@ -1587,12 +1592,15 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 		ActiveID: s.ActiveKeyID,
 		Keys:     make(map[string][]byte, len(s.Keys)),
 	}
-	for _, key := range s.Keys {
+	for i, key := range s.Keys {
 		material, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key.Material))
 		if err != nil {
-			// The ID reaches the message and the material never does.
-			return nil, fault(at("secrets.keys", key.ID), ErrShape,
-				"key material must be base64 (generate one with `crewlet secrets keygen`)")
+			// The ID reaches the message and the material never does. The
+			// path is the element's own material field: `keys` is a list, so
+			// a path naming the id as if it were a map key pointed at nothing
+			// in the file.
+			return nil, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
+				"key %q: key material must be base64 (generate one with `crewlet secrets keygen`)", key.ID)
 		}
 		ring.Keys[key.ID] = material
 	}
@@ -1607,7 +1615,7 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 // place where the choice would be recorded and then not honoured — which is
 // worse than either answer, because the operator believes the number they
 // wrote.
-func (s *Stream) validateSync(path string, external bool) error {
+func (s *Stream) validateSync(path Path, external bool) error {
 	var p problems
 	raw := s.Sync
 	if raw == "" || raw == StreamSyncAlways {

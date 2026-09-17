@@ -407,6 +407,26 @@ type ActivationRequest struct {
 	// did. The lost-update this exists to catch needs a winner, and an
 	// empty pointer has none.
 	Expect string
+
+	// ExpectAbsent is the create-only compare-and-set: publish this only
+	// if the fleet has no activation at all.
+	//
+	// It is what Expect cannot say. An empty Expect is unconditional, and
+	// an Expect naming a revision passes when there is no pointer, so
+	// neither refuses the write that matters here: a node whose OWN store
+	// is empty, writing the company it believes is the first, while the
+	// fleet is already running one. A node reaches that state
+	// legitimately, by joining a fleet and not having reconciled yet, or
+	// by failing the best-effort copy of the pointer into its own store,
+	// and its write would replace a running company outright: the company
+	// name changes, so every seat id derived from it changes, and all of
+	// their memory is orphaned.
+	//
+	// Refused with [ErrActivationRaced], like any other lost race, leaving
+	// nothing behind. Set together with Expect it is a programming error
+	// rather than a posture, because a write cannot have been built on a
+	// revision and on nothing at once.
+	ExpectAbsent bool
 }
 
 // ErrActivationRaced reports an activation whose Expect no longer matches.
@@ -454,6 +474,11 @@ type Plane interface {
 	// succeed and the later write silently wins. With it the loser gets
 	// [ErrActivationRaced] and can re-read, which is the whole difference
 	// between a lost edit and a 409.
+	//
+	// [ActivationRequest.ExpectAbsent] is that same guard for a write built
+	// on NOTHING: it lands only while the fleet has no activation, so a
+	// node that has not caught up cannot replace the company the fleet is
+	// running with the first one it is handed.
 	Activate(ctx context.Context, req ActivationRequest) (Activation, error)
 
 	// Payload returns the sealed payload of the revision the fleet is
@@ -815,11 +840,114 @@ type Integrations interface {
 	DeleteIntegrationStatus(ctx context.Context, kind string) error
 }
 
+// MailboxRecord is the fleet's record of one agent seat's durable mailbox.
+//
+// # Why the fleet has to remember a mailbox at all
+//
+// A mailbox is a durable subscription whose name is derived from the seat's
+// handle, so while the seat is in the company nothing needs a record of it:
+// every node can compute the name. The moment the seat LEAVES the company that
+// stops being true. The handle is gone from the org every node derives names
+// from, and the subscription goes on retaining whatever is still addressed to
+// the seat, for ever. A seat later added under the same handle then resumes
+// that backlog under a role definition that never wrote it.
+//
+// So every node records a handle here BEFORE it creates the subscription, which
+// makes this bucket the fleet's list of mailboxes that may exist, and the
+// maintenance sweep retires the ones whose seat has been gone long enough. The
+// broker can list its subscriptions too, and the sweep uses that to register a
+// mailbox this bucket missed; but only a record can carry the absence stamp,
+// the retirement mark and the version every writer's compare-and-set is taken
+// against, which is why the record exists at all.
+//
+// # Coordination stores the stamps; it does not interpret them
+//
+// What an absence means, how long it is tolerated and when a retirement counts
+// as abandoned are internal/maintenance's decisions, made against its own
+// constants. This package keeps two instants and a version, and certifies only
+// that they round-trip and that every write is conditional.
+type MailboxRecord struct {
+	// Handle is the seat's handle, and the record's key.
+	Handle string
+
+	// AbsentSince is when a sweep first found the handle missing from the
+	// active revision. Zero while the seat is in it.
+	AbsentSince time.Time
+
+	// RetiringSince is when a sweep began deleting the mailbox. Zero unless
+	// a retirement is in flight or was abandoned part way.
+	RetiringSince time.Time
+
+	// Version is the store's version of the record as it was read. OPAQUE,
+	// like [Record.Version]: pass back exactly what a read or a write handed
+	// you. Ignored by CreateMailbox.
+	Version uint64
+}
+
+// Present reports whether the record describes a seat in the active revision
+// with no retirement begun.
+func (r MailboxRecord) Present() bool {
+	return r.AbsentSince.IsZero() && r.RetiringSince.IsZero()
+}
+
+// Retiring reports whether a sweep has begun deleting the mailbox.
+func (r MailboxRecord) Retiring() bool { return !r.RetiringSince.IsZero() }
+
+// Mailboxes is the fleet's registry of seat mailboxes, behind the retirement of
+// a removed seat's mailbox.
+//
+// # RAISES rather than answering empty, on every read
+//
+// "There is no record" lets a sweep conclude that nothing is left to retire,
+// and lets a registering node write a fresh record over a retirement that is
+// still deleting the subscription it is about to create. A store that could
+// not be read must never be able to say either.
+//
+// # COMPARE-AND-SET on every change
+//
+// The writers are real and concurrent: every node registers the seats of the
+// revision it applied, and the sweep marks, retires and deletes. A write
+// carries the version its caller read, a false answer is a LOST RACE to re-read
+// and re-decide rather than a failure, and the version a successful write
+// returns is the one the caller's next write must carry. Nothing here is last
+// write wins, because the one lost update that matters is a returning seat's
+// registration overwritten by a sweep that read the record a moment earlier.
+//
+// # No retention
+//
+// The bucket has no age, for the channel bucket's reason: a record's age cannot
+// tell a seat that is present from one that left, so removing a record is the
+// sweep's decision rather than a broker's clock. The set is bounded by the
+// handles a company has ever used rather than by anything that grows per event.
+type Mailboxes interface {
+	// Mailbox reads one record.
+	Mailbox(ctx context.Context, handle string) (MailboxRecord, bool, error)
+
+	// Mailboxes returns every record, ordered by handle, so two backends
+	// answer a sweep in the same order.
+	Mailboxes(ctx context.Context) ([]MailboxRecord, error)
+
+	// CreateMailbox writes a new record and returns it as stored, with the
+	// version its next write must carry. A handle that already has a record
+	// is left alone and reports false: the existing record may be mid-way
+	// through a retirement, and only a conditional update may change it.
+	CreateMailbox(ctx context.Context, rec MailboxRecord) (MailboxRecord, bool, error)
+
+	// UpdateMailbox writes rec at rec.Version and returns it as stored,
+	// reporting false when that version no longer holds, including when the
+	// record is gone.
+	UpdateMailbox(ctx context.Context, rec MailboxRecord) (MailboxRecord, bool, error)
+
+	// DeleteMailbox removes a record at a version, reporting whether that
+	// version still held. A record deleted this way can be created again.
+	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
-// One interface at the CONSTRUCTION seam and nine at the call sites: the
-// webhook edge takes a Claims and nothing else, the valve takes a Counter,
+// One interface at the CONSTRUCTION seam and a narrow one at each call site:
+// the webhook edge takes a Claims and nothing else, the valve takes a Counter,
 // a turn's meter takes a Budgets. A consumer that could reach the whole store
 // would eventually use it.
 type Fleet interface {
@@ -834,6 +962,7 @@ type Fleet interface {
 	SandboxRuns
 	Secrets
 	Integrations
+	Mailboxes
 	PositionRegister
 	HoldRegister
 	FloorRegister

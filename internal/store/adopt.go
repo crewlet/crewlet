@@ -259,15 +259,17 @@ func (d *DB) ReopenReplicated(ctx context.Context) error {
 		return nil
 	}
 	path := ReplicatedPath(d.path, d.opened.ReplicatedPath)
-	replicated, err := openEstate(ctx, EstateReplicated, path, d.opened)
+	// THE PROBE IS NOT REPEATED, for [Open]'s reason: it answers a
+	// question about the driver compiled into this process, and a file
+	// arriving from a peer did not change which driver that is. HANDED OVER
+	// rather than assigned afterwards, so the adopted estate's own
+	// `store_opened` line reports the capabilities it will actually use —
+	// an adoption is precisely when an operator reads that line.
+	replicated, err := openEstate(ctx, EstateReplicated, path, d.opened, &d.caps)
 	if err != nil {
 		return fmt.Errorf("store: reopen the replicated estate at %s — this "+
 			"node has none open and cannot serve without one: %w", path, err)
 	}
-	// THE PROBE IS NOT REPEATED, for [Open]'s reason: it answers a
-	// question about the driver compiled into this process, and a file
-	// arriving from a peer did not change which driver that is.
-	replicated.caps = d.caps
 	d.replicated.Store(replicated)
 	return nil
 }

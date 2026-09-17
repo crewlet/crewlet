@@ -14,11 +14,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -96,6 +99,30 @@ func TestValidateCatchesWhatASchemaCannot(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "nonexistent") {
 		t.Errorf("the error does not name the provider: %v", err)
+	}
+}
+
+// A COMPANY WITH NO MODELS VALIDATES, as it does over the API and in every
+// node's apply. Validate builds the epoch, and the build used to refuse an
+// empty providers.llm, so the one command meant to predict a write's fate
+// called invalid the company `PUT /config` had just stored and activated. Both
+// forms are checked, because each prints a provider count read off the epoch's
+// registry, and a company with no models has none.
+func TestValidateAcceptsACompanyWithNoModels(t *testing.T) {
+	t.Parallel()
+	const noModels = "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\n"
+	for name, args := range map[string][]string{
+		"one file":  {"validate", writeYAML(t, "company.yaml", noModels)},
+		"two tiers": append([]string{"validate"}, configPair(t, "", noModels)...),
+	} {
+		var out, errOut bytes.Buffer
+		if err := run(args, &out, &errOut); err != nil {
+			t.Errorf("%s: a company with no models was refused: %v", name, err)
+			continue
+		}
+		if !strings.Contains(out.String(), "0 LLM providers") {
+			t.Errorf("%s: summary %q does not say the company has no provider", name, out.String())
+		}
 	}
 }
 
@@ -251,6 +278,142 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	}
 }
 
+// A node whose roles leave out ingress binds nothing, even with api.port set.
+// The role was validated and advertised to peers while serveAPI read only the
+// port, so a seats-only satellite opened a listener it was placed on a private
+// host to avoid. The port is left free and the node says why.
+func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	e := testEngine(t)
+	boot := bootstrapFor(t, 0)
+	boot.API.Host = "127.0.0.1"
+	boot.API.Port = freePort(t)
+	boot.Node.Roles = []string{"seats", "workers"}
+
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface != nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("a node without the ingress role built an HTTP surface")
+	}
+	if !strings.Contains(logged.String(), "api_not_started") {
+		t.Errorf("the node did not say why it serves no HTTP:\n%s", logged.String())
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(boot.API.Port)))
+	if err != nil {
+		t.Fatalf("api.port is held although the node serves no HTTP: %v", err)
+	}
+	_ = listener.Close()
+}
+
+// A SEATS NODE WITHOUT INGRESS STILL SERVES ITS OWN TOOL BRIDGE, and nothing
+// else. A bridged session lives in the process that opened it, so the box of an
+// agent-mode seat can reach only the node running that seat; gating the bridge
+// on ingress with the rest of the API launched boxes whose every tool call found
+// nothing listening. The listener carries the bridge's own refusal for a bad
+// token, and no dashboard, probe or REST route.
+func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	port := freePort(t)
+	bridge := mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+	})
+	e := testEngineWithBridge(t, bridge)
+	boot := bootstrapFor(t, port)
+	boot.Node.Roles = []string{"seats"}
+
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface == nil {
+		t.Fatalf("a seats node with a bridge URL bound no listener, so its "+
+			"agent-mode boxes can reach no tools:\n%s", logged.String())
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if surface.app != nil || surface.projector != nil {
+		t.Error("a node without the ingress role built the whole API")
+	}
+	if !bridge.Mounted() {
+		t.Error("the listener did not mount the bridge, so no session can open")
+	}
+	if !strings.Contains(logged.String(), "api_bridge_listening") {
+		t.Errorf("the node did not say what its listener serves:\n%s", logged.String())
+	}
+
+	base := "http://127.0.0.1:" + strconv.Itoa(port)
+	status := func(method, path string) int {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			req, reqErr := http.NewRequestWithContext(t.Context(), method, base+path,
+				strings.NewReader("{}"))
+			if reqErr != nil {
+				t.Fatal(reqErr)
+			}
+			res, doErr := http.DefaultClient.Do(req)
+			if doErr == nil {
+				_ = res.Body.Close()
+				return res.StatusCode
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s %s: %v", method, path, doErr)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if got := status(http.MethodPost, mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
+		t.Errorf("POST %snot-a-token = %d, want the bridge's own 401", mcpbridge.PathPrefix, got)
+	}
+	for _, path := range []string{"/health", "/dashboard", "/agents"} {
+		if got := status(http.MethodGet, path); got != http.StatusNotFound {
+			t.Errorf("GET %s = %d on a bridge-only listener, want 404", path, got)
+		}
+	}
+}
+
+// A NODE THAT RUNS NO SEATS BINDS NOTHING FOR A BRIDGE, whatever its
+// environment says. It opens no session, so a listener there could only answer
+// every box with 401, and a workers node placed on a private host would open a
+// port for nothing.
+func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	port := freePort(t)
+	e := testEngineWithBridge(t, mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+	}))
+	boot := bootstrapFor(t, port)
+	boot.Node.Roles = []string{"workers"}
+
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface != nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("a node that runs no seats bound a listener for a bridge it never uses")
+	}
+	if !strings.Contains(logged.String(), "api_not_started") {
+		t.Errorf("the node did not say why it serves no HTTP:\n%s", logged.String())
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("api.port is held although the node serves no HTTP: %v", err)
+	}
+	_ = listener.Close()
+}
+
 func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	t.Parallel()
 	// A port already in use, or one this process may not have, is a
@@ -312,12 +475,19 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 // testEngine builds a real engine on an embedded stream in a temp directory.
 func testEngine(t *testing.T) *engine.Engine {
 	t.Helper()
+	return testEngineWithBridge(t, nil)
+}
+
+// testEngineWithBridge is testEngine holding the given tool bridge. Nil builds
+// the bridge from the environment, as a node does.
+func testEngineWithBridge(t *testing.T, bridge *mcpbridge.Bridge) *engine.Engine {
+	t.Helper()
 	boot := bootstrapFor(t, 0)
 	company, err := config.ParseCompany([]byte(companyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company})
+	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company, Bridge: bridge})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -691,59 +861,283 @@ func TestValidateRefusesAnUnknownTier(t *testing.T) {
 	}
 }
 
-// THE -json PAYLOAD CARRIES A PATH PER PROBLEM, which is the whole reason an
-// authoring loop uses it: prose it would have to parse converges on whatever
-// the prose happened to say.
+// validateJSON runs `crewlet validate <file> -json` and decodes the payload
+// into the config package's own problem and warning types, which is the
+// contract: a loop written against the API reads the CLI's output unchanged.
+func validateJSON(t *testing.T, body string) (payload struct {
+	Valid    bool             `json:"valid"`
+	Problems []config.Problem `json:"problems"`
+	Warnings []config.Warning `json:"warnings"`
+}, raw string, stderr string) {
+	t.Helper()
+	path := writeYAML(t, "company.yaml", body)
+	var out, errOut bytes.Buffer
+	runErr := run([]string{"validate", path, "-json"}, &out, &errOut)
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	if (runErr == nil) != payload.Valid {
+		t.Errorf("exit disposition %v disagrees with valid=%v", runErr, payload.Valid)
+	}
+	// BOTH LISTS ARE ALWAYS ARRAYS, so a consumer iterates them without a
+	// nil check.
+	var shape map[string]any
+	if err := json.Unmarshal(out.Bytes(), &shape); err != nil {
+		t.Fatal(err)
+	}
+	for _, list := range []string{"problems", "warnings"} {
+		if _, isArray := shape[list].([]any); !isArray {
+			t.Errorf("%s is %v, want an array: %s", list, shape[list], out.String())
+		}
+	}
+	return payload, out.String(), errOut.String()
+}
+
+// THE -json PAYLOAD CARRIES A LOCATED, CLASSIFIED PROBLEM PER FAILURE, which is
+// the whole reason an authoring loop uses it: prose it would have to parse
+// converges on whatever the prose happened to say.
 func TestTheJSONOutputCarriesAPathPerProblem(t *testing.T) {
 	t.Parallel()
-	bad := writeYAML(t, "company.yaml",
+	got, _, stderr := validateJSON(t,
 		strings.Replace(companyYAML, "llm: primary\n", "llm: nonexistent\n", 1))
+	if got.Valid {
+		t.Errorf("valid = true on a broken document")
+	}
+	want := config.Problem{
+		Path: "roles[0].llm", Segments: config.Path{"roles", 0, "llm"},
+		Kind: "unknown_value", Seat: "ceo",
+	}
+	if len(got.Problems) != 1 {
+		t.Fatalf("problems = %+v, want exactly one", got.Problems)
+	}
+	p := got.Problems[0]
+	if p.Path != want.Path || !reflect.DeepEqual(p.Segments, want.Segments) ||
+		p.Kind != want.Kind || p.Seat != want.Seat {
+		t.Errorf("problem = %+v, want %+v", p, want)
+	}
+	// THE MESSAGE IS THE WHOLE LINE, path and all, exactly as the refusal's
+	// text carries it.
+	if !strings.HasPrefix(p.Message, "roles[0].llm: ") || !strings.Contains(p.Message, "nonexistent") {
+		t.Errorf("message = %q, want the full rendered line", p.Message)
+	}
+	// AND NOTHING IS ECHOED ON STDERR: a second copy of what the payload
+	// already carries is what makes a machine consumer's log unreadable.
+	if strings.Contains(stderr, "nonexistent") {
+		t.Errorf("the problem was printed twice: %s", stderr)
+	}
+}
+
+// A RULE THE ORG MODEL CHECKS IS LOCATED TOO, by the seat it is about rather
+// than by its name: two seats of one name are one line of text and one
+// problem beside each seat, at the name each one wrote.
+func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1)
+	got, raw, _ := validateJSON(t, doc)
+	var paths []string
+	for _, p := range got.Problems {
+		if strings.Contains(p.Message, "duplicate seat name") {
+			paths = append(paths, p.Path+"@"+p.Seat)
+			if p.Kind != "conflict" {
+				t.Errorf("kind = %q, want conflict", p.Kind)
+			}
+		}
+	}
+	if want := []string{"roles[0].name@ceo", "roles[1].name@cto"}; !slices.Equal(paths, want) {
+		t.Errorf("duplicate problems at %v, want %v\n%s", paths, want, raw)
+	}
+}
+
+// THE PROSE SAYS EACH THING ONCE, AND WHERE. A rule the org model reports
+// names its seat in words, so the path leads the line; two seats sharing a
+// name are one message, printed once and led by both paths rather than
+// repeated for the second seat. A warning is printed too, and fails nothing.
+func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
+		"units:\n  - name: Platform\n    lead: Ghost\n"
+	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
-	err := run([]string{"validate", bad, "-json"}, &out, &errOut)
+	err := run([]string{"validate", path}, &out, &errOut)
 	if err == nil {
-		t.Fatal("a broken document reported success")
+		t.Fatalf("a document with a duplicate seat name validated: %s", out.String())
+	}
+	if n := strings.Count(err.Error(), "duplicate seat name"); n != 1 {
+		t.Errorf("the duplicate is printed %d times, want once:\n%v", n, err)
+	}
+	if !strings.Contains(err.Error(), "roles[0].name, roles[1].name: duplicate seat name") {
+		t.Errorf("the duplicate is not led by both paths:\n%v", err)
+	}
+	if !strings.Contains(out.String(), "warning (dangling reference): units[0].lead: ") {
+		t.Errorf("the dangling lead is not printed as a dangling-reference warning: %q",
+			out.String())
+	}
+}
+
+// A REFERENCE THAT RESOLVES TO NOTHING IS A WARNING, located where it was
+// written, and it fails nothing: the engine runs a company assembled in
+// pieces, and a gate refusing one would refuse every intermediate state.
+//
+// AN ADVISORY RIDES THE SAME LIST (a unit written with no id is valid and
+// still worth knowing before it is applied), and the two are told apart by
+// Kind, so a consumer branches on the field rather than on the prose. They
+// arrive in [config.Company.Warnings]' own order: what is broken first, what
+// could be better after it.
+func TestTheJSONOutputCarriesWarnings(t *testing.T) {
+	t.Parallel()
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	got, raw, _ := validateJSON(t, doc)
+	if !got.Valid {
+		t.Fatalf("a dangling lead failed validation: %s", raw)
+	}
+	want := []config.Warning{{
+		Kind: config.WarningDanglingReference, Ref: "lead",
+		Path: "units[0].lead", Segments: config.Path{"units", 0, "lead"},
+		Unit: "Platform", From: "Platform", To: "Ghost",
+	}, {
+		Kind: config.WarningAdvisory,
+		Path: "units[0].id", Segments: config.Path{"units", 0, "id"},
+		Unit: "Platform",
+	}}
+	if len(got.Warnings) != len(want) {
+		t.Fatalf("warnings = %+v, want %d: %s", got.Warnings, len(want), raw)
+	}
+	for i, w := range want {
+		g := got.Warnings[i]
+		// THE SENTENCE ITSELF IS NOT PINNED, because it is prose and it
+		// gets reworded. Its PRESENCE is: a warning with no message is one
+		// nobody can act on.
+		if g.Message == "" {
+			t.Errorf("warnings[%d] carries no message: %+v", i, g)
+		}
+		g.Message = ""
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("warnings[%d] = %+v, want %+v", i, g, w)
+		}
+	}
+}
+
+// THE TWO-FLAG FORM CARRIES THE COMPANY'S WARNINGS TOO. It is the form a CI
+// step runs over a deployment's pair of files, and a dangling lead reported
+// by `crewlet validate company.yaml` but not by `crewlet validate -config
+// crewlet.yaml -company company.yaml` would be a misspelling the gate never
+// shows.
+//
+// TIER A'S OWN ADVISORIES LEAD THE LIST, which is the order the two files are
+// named in, and the company's follow in their own. Both files' warnings on
+// one run is the same rule both files' problems follow: an operator who fixes
+// one file and hears about the other on the next run has paid twice for one
+// edit.
+func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
+	t.Parallel()
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	var out, errOut bytes.Buffer
+	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
+	if err := run(args, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v\n%s", err, out.String())
 	}
 	var got struct {
-		Valid  bool `json:"valid"`
-		Errors []struct {
-			Path    string `json:"path"`
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"errors"`
+		Valid    bool             `json:"valid"`
+		Warnings []config.Warning `json:"warnings"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
 	}
-	if got.Valid {
-		t.Errorf("valid = true on a broken document")
+	if !got.Valid {
+		t.Errorf("valid = false for a document whose only faults are warnings: %s", out.String())
 	}
-	if len(got.Errors) == 0 {
-		t.Fatalf("no errors reported: %s", out.String())
-	}
-	var found, pathed bool
-	for _, e := range got.Errors {
-		if e.Message == "" || e.Type == "" {
-			t.Errorf("an error carries no message or type: %+v", e)
+	// KIND WITH PATH, because either one alone lets the other move: a path
+	// under the wrong kind is a misclassified warning, and a kind at the
+	// wrong path is one no editor can jump to.
+	located := make([]string, 0, len(got.Warnings))
+	for _, w := range got.Warnings {
+		if w.Message == "" {
+			t.Errorf("the warning at %q carries no message: %+v", w.Path, w)
 		}
-		if e.Path != "" {
-			pathed = true
+		located = append(located, w.Kind+" "+w.Path)
+	}
+	want := []string{
+		config.WarningAdvisory + " retention.backup_owner",
+		config.WarningDanglingReference + " units[0].lead",
+		config.WarningAdvisory + " units[0].id",
+	}
+	if !slices.Equal(located, want) {
+		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())
+	}
+}
+
+// AN OPERATOR CAN TELL THE TWO APART IN PROSE. Both tiers' advisories share
+// the warning list with the references now, and under one undifferentiated
+// `warning:` line a dangling lead, which is broken and has to be corrected,
+// reads exactly like a unit with no id, which is a choice with a consequence.
+// The kind leads the line, so the list can be skimmed by a person and grepped
+// by a CI step.
+func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
+	t.Parallel()
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	var out, errOut bytes.Buffer
+	args := append([]string{"validate"}, configPair(t, "", doc)...)
+	if err := run(args, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v\n%s", err, errOut.String())
+	}
+	for _, want := range []string{
+		"warning (advisory): retention.backup_owner: ",
+		"warning (dangling reference): units[0].lead: ",
+		"warning (advisory): units[0].id: ",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the output does not carry %q:\n%s", want, out.String())
 		}
-		if strings.Contains(e.Message, "nonexistent") {
-			found = true
-		}
 	}
-	if !found {
-		t.Errorf("the provider problem is not in the payload: %s", out.String())
-	}
-	// THE PATH IS THE POINT. A loop that gets only a message has to parse
-	// prose to find the field, which is exactly what -json exists to avoid.
-	if !pathed {
-		t.Errorf("no error carries a path: %s", out.String())
-	}
-	// AND NOTHING IS ECHOED ON STDERR: a second copy of what the payload
-	// already carries is what makes a machine consumer's log unreadable.
-	if strings.Contains(errOut.String(), "nonexistent") {
-		t.Errorf("the problem was printed twice: %s", errOut.String())
+}
+
+// EVERY KIND HAS WORDS, and one this build does not classify renders as its
+// wire value rather than as an empty pair of brackets: the label is the only
+// thing on the line that says how much the warning matters.
+func TestAWarningLineCarriesItsKind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		w    config.Warning
+		want string
+	}{{
+		name: "a dangling reference",
+		w: config.Warning{Kind: config.WarningDanglingReference,
+			Path: "units[0].lead", Message: "no seat holds that name"},
+		want: "warning (dangling reference): units[0].lead: no seat holds that name",
+	}, {
+		name: "an admission rule",
+		w: config.Warning{Kind: config.WarningAdmission,
+			Path: "roles[0].name", Message: "duplicate seat name"},
+		want: "warning (admission): roles[0].name: duplicate seat name",
+	}, {
+		name: "an advisory",
+		w: config.Warning{Kind: config.WarningAdvisory,
+			Path: "stream.sync", Message: "an acknowledged write may lag the disk"},
+		want: "warning (advisory): stream.sync: an acknowledged write may lag the disk",
+	}, {
+		name: "a kind this build does not classify",
+		w:    config.Warning{Kind: "invented", Path: "stream.sync", Message: "something"},
+		want: "warning (invented): stream.sync: something",
+	}, {
+		name: "no kind at all",
+		w:    config.Warning{Path: "stream.sync", Message: "something"},
+		want: "warning: stream.sync: something",
+	}, {
+		// The path is not printed twice when the message already opens
+		// with it, which is prose's own rule. The kind still leads.
+		name: "a message that already opens with its path",
+		w: config.Warning{Kind: config.WarningAdvisory,
+			Path: "stream.sync", Message: "stream.sync: something"},
+		want: "warning (advisory): stream.sync: something",
+	}}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := warningLine(c.w); got != c.want {
+				t.Errorf("warningLine = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 )
 
 // Where GitHub returns a browser after an operator creates or installs one
@@ -29,7 +31,7 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Crewlet: {{.Heading}}</title>
-    <link rel="icon" href="/static/crewlet-icon.svg">
+    <link rel="icon" href="/static/dashboard/crewlet-icon.svg">
     <style>
       /* The dashboard's own dark palette, restated rather than imported: this
          page is served by the webhook mux to a browser arriving from GitHub,
@@ -103,7 +105,7 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
   </head>
   <body>
     <div class="wrap">
-      <img class="mark" src="/static/crewlet-icon.svg" alt="Crewlet">
+      <img class="mark" src="/static/dashboard/crewlet-icon.svg" alt="Crewlet">
       <h1>{{.Heading}}{{if .Seat}} <span class="seat">{{.Seat}}</span>{{end}}</h1>
       <div class="card">
         <div class="row">
@@ -182,6 +184,22 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
   </body>
 </html>
 `))
+
+// githubAppPolicy is the page's Content-Security-Policy: its own inline style
+// and script, by hash, and nothing else.
+//
+// Rendered with a view for each branch that holds a block, because only the
+// install arrival carries the script. The page is unauthenticated and renders
+// a seat name and GitHub's refusal text from the query, and it shares an origin
+// with the dashboard, whose operator token is in localStorage: a hash policy
+// means that even markup the template failed to escape could run nothing.
+var githubAppPolicy = pagepolicy.MustForTemplate(githubAppPage,
+	githubAppView{Heading: "App not created", Error: "refused"},
+	githubAppView{
+		Heading: "App created for", Seat: "seat", Message: "created",
+		InstallURL: "https://github.invalid/install", InstallDelay: installCountdownSeconds,
+	},
+)
 
 // installCountdownSeconds is how long the created-app page waits before it
 // sends the operator on to the install.
@@ -336,8 +354,8 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 				"screen shows this agent ready in a moment."
 		} else {
 			view.Message = "Crewlet picks the installation up on its next " +
-				"reconcile pass — within a minute if this agent was set up " +
-				"just now, and up to ten minutes on a surface that has been " +
+				"reconcile pass, within a minute if this agent was set up " +
+				"just now and up to ten minutes on a surface that has been " +
 				"waiting a while. Press Recheck on the Integrations screen " +
 				"to look immediately."
 		}
@@ -375,6 +393,7 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	pagepolicy.Set(w.Header(), githubAppPolicy)
 	w.WriteHeader(status)
 	// Rendered straight to the response: the template is parsed at
 	// startup, so the only way this errors is a broken connection, and

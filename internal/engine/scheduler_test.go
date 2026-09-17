@@ -113,6 +113,47 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	}
 }
 
+// A COMPANY WITH NO MODEL ARMS NO LOOP, AND ITS FIRST PROVIDER ARMS ONE. Every
+// fire is work on a seat's inbox, and that company's inboxes hold their work
+// until a provider exists. A loop ticking through the wait would stack every
+// missed standup behind the hold and run the whole backlog the moment the
+// provider arrived, which is the replay the catchup window exists to refuse.
+func TestSchedulesWaitForTheCompanysFirstModel(t *testing.T) {
+	t.Parallel()
+	const noModels = `
+name: Acme
+roles:
+  - name: CTO
+    handle: cto
+    schedules:
+      - name: standup
+        cron: "30 9 * * *"
+        task: "Post the standup thread"
+`
+	e := scheduledEngine(t, parsedCompany(t, noModels))
+	if e.SchedulerRunning() {
+		t.Fatal("a company with no model provider armed its scheduler, so its " +
+			"fires pile up behind inboxes that cannot take a turn")
+	}
+
+	if _, _, err := e.Apply(t.Context(), scheduledCompany(t)); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !e.SchedulerRunning() {
+		t.Fatal("the apply that added a provider left the schedules idle until " +
+			"the process restarts")
+	}
+
+	// ...and removing every provider stops the loop again.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noModels)); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if e.SchedulerRunning() {
+		t.Fatal("a revision that removed every provider left the loop firing " +
+			"into inboxes that hold their work")
+	}
+}
+
 // STOPPING THE ENGINE STOPS THE LOOP. A tick that outlived its engine would
 // publish into a queue that is closing, and its ledger row would mean no peer
 // ever fires that run.
