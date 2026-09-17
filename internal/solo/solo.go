@@ -17,7 +17,7 @@
 // attempts with `context deadline exceeded` creating streams and KV buckets.
 //
 // The broker harness records the same thing from the other end — see
-// [jetstreamtest] `clusterStartAttempts`: "this harness passes in six seconds
+// [jetstreamtest] `ClusterStartAttempts`: "this harness passes in six seconds
 // on a loaded machine in isolation and timed out at a hundred and twenty
 // inside a full run." That retry is what kept internal/node and
 // internal/statelog green in the contended job before this package existed,
