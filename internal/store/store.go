@@ -317,7 +317,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if replicatedPath == path && !strings.HasPrefix(path, ":memory:") && path != "" {
 		return nil, fmt.Errorf("%w: %s", ErrOneFile, path)
 	}
-	db, err := openEstate(ctx, EstateNode, path, opts)
+	db, err := openEstate(ctx, EstateNode, path, opts, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -325,16 +325,13 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	// handle on one file and not the other is a node that would apply
 	// records into a database it has no checkpoint table in, and the
 	// caller has no way to ask which half it got.
-	replicated, err := openEstate(ctx, EstateReplicated, replicatedPath, opts)
+	// THE PROBE IS NOT REPEATED — see openEstate's own doc for why it is
+	// handed over rather than copied on afterwards.
+	replicated, err := openEstate(ctx, EstateReplicated, replicatedPath, opts, &db.caps)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	// THE PROBE IS NOT REPEATED. It answers a question about the DRIVER —
-	// one compiled-in library, in one process — so a second probe asks the
-	// same question of the same code and pays a binary search of prepared
-	// statements to hear the same answer.
-	replicated.caps = db.caps
 	db.replicated.Store(replicated)
 	db.opened = opts
 	return db, nil
@@ -353,7 +350,10 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 // copy of anything, and the only thing that ever notices is a table name the
 // two estates happen to share.
 func OpenEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
-	return openEstate(ctx, estate, path, opts)
+	// NIL, so this handle probes for itself. It has no sibling to inherit
+	// from, and a zero MaxVariables here is not a missing log line but a
+	// writer silently degraded to one statement per row.
+	return openEstate(ctx, estate, path, opts, nil)
 }
 
 // ReplicatedPath is where the replicated estate lives for a node whose own
@@ -383,7 +383,27 @@ const replicatedFileName = "crewlet-replicated.db"
 // openEstate opens one estate: its lock, its pool, its own migration
 // sequence, and — for the node estate, which goes first — the capability
 // probe both share.
-func openEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
+// openEstate opens one estate's file.
+//
+// inherited is the DRIVER-level probe a sibling estate already paid for, or
+// nil to probe this pool. It exists because the probe answers a question about
+// the DRIVER — one compiled-in library, in one process — so a node's second
+// estate would pay a binary search of prepared statements to hear the answer
+// its first one already has.
+//
+// IT IS A PARAMETER RATHER THAN AN ASSIGNMENT AFTER THE FACT, and that is the
+// whole of the fix it carries: the caps used to be copied onto the replicated
+// handle by [Open] AFTER openEstate had already written its `store_opened`
+// line, so every node boot logged `estate=replicated max_variables=0
+// vector_functions=false page_cache_kib=0` for a handle that in fact had all
+// three. Harmless while nothing read them — and then [InsertRows] landed,
+// which sizes every applier's statements from MaxVariables and reads 0 as
+// "one row per statement". An operator reading that line would conclude the
+// replicated estate writes the slow shape, and a standalone
+// [OpenEstate](EstateReplicated) handle genuinely DID, because nothing ever
+// assigned its caps at all.
+func openEstate(ctx context.Context, estate Estate, path string, opts Options,
+	inherited *Capabilities) (*DB, error) {
 	opts = opts.forEstate(estate)
 	// THE LOCK FIRST, before the native library and before the pool: both
 	// of those touch shared state on the way up, and taking them for a
@@ -425,7 +445,14 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 		_ = pool.Close()
 		return nil, err
 	}
-	if estate == EstateNode {
+	if inherited != nil {
+		// The driver's answers carry over; the PAGE CACHE does not. It is
+		// read from `PRAGMA cache_size` and `PRAGMA page_size`, which are a
+		// connection's setting and a FILE's geometry — so the sibling's
+		// number describes the sibling's file, not this one.
+		db.caps = *inherited
+		db.caps.PageCacheKiB = probePageCache(ctx, pool)
+	} else {
 		db.caps = probe(ctx, pool)
 	}
 

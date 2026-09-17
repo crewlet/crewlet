@@ -117,8 +117,16 @@ func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 // exec is already one round trip with its arguments, and the parse it saves is
 // not what the time is spent on. The shape that DOES pay is the multi-row
 // insert — 4 000 rows in 137 ms against 573 ms, four times faster — which is
-// [RowsPerInsert] and [Chunks], and BenchmarkLogApplyDrain is the record of
-// both numbers.
+// [RowsPerInsert] and [Chunks] behind [InsertRows], and BenchmarkLogApplyDrain
+// is the record of both numbers.
+//
+// THAT LAST SENTENCE WAS FALSE FOR THE WHOLE OF THIS PACKAGE'S LIFE UNTIL
+// [InsertRows] EXISTED. RowsPerInsert and Chunks had no callers outside their
+// own tests: every applier in the tree wrote its child rows one ExecContext
+// per row, so the shape this comment called the one that pays was measured by
+// a benchmark and shipped nowhere. It is worth recording because nothing
+// caught it — a doc comment naming two exported functions reads exactly like a
+// doc comment describing what the engine does.
 func (w *Writer) Conn() *sql.Conn { return w.conn }
 
 // Close releases the pinned connection back to the pool.

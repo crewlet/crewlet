@@ -142,11 +142,12 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return 0, fmt.Errorf("tracker: decode the record at %s: %w", rec.Position, err)
 	}
 	at := applyContext{
-		record:   record,
-		position: rec.Position,
-		packed:   rec.Position.Packed(),
-		brokerAt: opts.StoredAt,
-		epoch:    opts.Epoch,
+		record:       record,
+		position:     rec.Position,
+		packed:       rec.Position.Packed(),
+		brokerAt:     opts.StoredAt,
+		epoch:        opts.Epoch,
+		maxVariables: opts.MaxVariables,
 	}
 
 	switch ObjectKind(rec.Subject.Kind) {
@@ -197,6 +198,16 @@ type applyContext struct {
 	brokerAt time.Time
 
 	epoch map[string]any
+
+	// maxVariables is the estate's own parameter limit, and it is what
+	// bounds every multi-row insert this apply issues — see [insertMany].
+	//
+	// A PROPERTY OF THE ESTATE RATHER THAN OF THE RECORD, carried here only
+	// because this is the value already gathered once per apply. Zero means
+	// the framework did not probe one and degrades to a row per statement,
+	// which is the shape every applier had before [store.InsertRows]: slow,
+	// never wrong.
+	maxVariables int
 }
 
 // subject is the record's own subject.

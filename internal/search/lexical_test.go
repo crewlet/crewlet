@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -775,4 +776,109 @@ func TestAFusedHitCarriesNoScore(t *testing.T) {
 		t.Fatal("a ranked hit lost its Score, which is what a slice merge " +
 			"orders on")
 	}
+}
+
+// EVERY POSTING SURVIVES THE CHUNK BOUNDARY.
+//
+// A document's inverted list goes out as multi-row INSERTs — one statement per
+// chunk rather than one per unique term, which is what the hottest per-row loop
+// in the tree became. That is precisely the shape that can bind one row's term
+// against another row's frequency and still look correct on a fixture small
+// enough to fit in a single statement, so this one is deliberately WIDER than a
+// chunk and checks every row rather than counting them.
+//
+// The frequencies VARY BY POSITION for the same reason: a conversion that
+// shifted the rows against each other but kept the set of terms would pass a
+// membership check, and fail this one.
+func TestEveryPostingSurvivesTheChunkBoundary(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	// THE SAME ARITHMETIC THE WRITER USES, read from the live estate rather
+	// than assumed: the limit is probed at open and differs per engine, so a
+	// hardcoded fixture size would stop crossing a boundary the day it moved.
+	perStatement := store.RowsPerInsert(db.Caps().MaxVariables, 3)
+	want := map[string]int{}
+	var body strings.Builder
+	for i := range perStatement + 7 {
+		term := fmt.Sprintf("term%05d", i)
+		freq := i%9 + 1
+		want[term] = freq
+		for range freq {
+			body.WriteString(term)
+			body.WriteByte(' ')
+		}
+	}
+	if len(want) <= perStatement {
+		t.Fatalf("the fixture holds %d unique terms and one statement carries "+
+			"%d, so this test would never cross a chunk boundary",
+			len(want), perStatement)
+	}
+
+	// NO TITLE, so the indexer's triple-title repetition contributes no terms
+	// of its own and the expectation above is the whole of what it should
+	// write. Straight through Upsert rather than through a page fixture and a
+	// sweep: this is about what one document's postings ARE, not about how the
+	// walk finds it.
+	if err := x.Upsert(t.Context(), []search.Doc{{
+		Source: "page", ID: "chunky", Container: "handbook",
+		Body: body.String(), Version: 1,
+	}}); err != nil {
+		t.Fatalf("index the document: %v", err)
+	}
+
+	// "page:chunky" is the index's own source-qualified key for that document.
+	rows, err := db.SQL().QueryContext(t.Context(),
+		`SELECT term, freq FROM kb_postings WHERE doc_id = ?`, "page:chunky")
+	if err != nil {
+		t.Fatalf("read the postings back: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]int{}
+	for rows.Next() {
+		var term string
+		var freq int
+		if err := rows.Scan(&term, &freq); err != nil {
+			t.Fatalf("scan a posting: %v", err)
+		}
+		got[term] = freq
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the postings back: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the index holds %d postings, want %d; first disagreement: %s",
+			len(got), len(want), firstDisagreement(got, want))
+	}
+}
+
+// firstDisagreement names one term the two maps differ on, in term order, so a
+// failure over several hundred postings reads as one fact rather than as two
+// dumps.
+func firstDisagreement(got, want map[string]int) string {
+	terms := make([]string, 0, len(want))
+	for term := range want {
+		terms = append(terms, term)
+	}
+	for term := range got {
+		if _, ok := want[term]; !ok {
+			terms = append(terms, term)
+		}
+	}
+	sort.Strings(terms)
+	for _, term := range terms {
+		g, held := got[term]
+		w, wanted := want[term]
+		switch {
+		case held && wanted && g != w:
+			return fmt.Sprintf("%q has freq %d, want %d", term, g, w)
+		case !held:
+			return fmt.Sprintf("%q is missing, want freq %d", term, w)
+		case !wanted:
+			return fmt.Sprintf("%q was written with freq %d and should not "+
+				"be there at all", term, g)
+		}
+	}
+	return "none"
 }

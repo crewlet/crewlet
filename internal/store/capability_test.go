@@ -450,3 +450,47 @@ func packRaw(v []float32) []byte {
 	}
 	return out
 }
+
+// EVERY ESTATE REPORTS THE PROBED LIMIT, however it was opened.
+//
+// The replicated estate used to report a zero MaxVariables on its own handle
+// until [Open] copied the node's probe onto it — after openEstate had already
+// written its `store_opened` line — and a standalone
+// [store.OpenEstate](EstateReplicated) handle never got one at all. That was
+// invisible for as long as nothing read the field. [store.InsertRows] reads it
+// to size every applier's statements and treats 0 as "no room for even one
+// row", so a zero here is not a cosmetic log defect: it is every child-row
+// write silently back on one statement per row, with nothing to say so.
+func TestEveryEstateReportsTheProbedVariableLimit(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	node, err := store.Open(ctx, filepath.Join(t.TempDir(), "caps.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open a node: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	want := node.Caps().MaxVariables
+	if want <= 0 {
+		t.Fatalf("the node estate probed MaxVariables = %d, so this test can "+
+			"prove nothing about the peer", want)
+	}
+	if got := node.Replicated().Caps().MaxVariables; got != want {
+		t.Errorf("the replicated peer reports MaxVariables = %d, want the node's "+
+			"probed %d — every applier sizes its multi-row inserts from this, "+
+			"and a zero is one statement per row", got, want)
+	}
+
+	// The standalone shape a snapshot artefact and a backup member take.
+	alone, err := store.OpenEstate(ctx, store.EstateReplicated,
+		filepath.Join(t.TempDir(), "alone.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open a lone replicated estate: %v", err)
+	}
+	defer func() { _ = alone.Close() }()
+	if got := alone.Caps().MaxVariables; got <= 0 {
+		t.Errorf("a lone replicated estate reports MaxVariables = %d — it has no "+
+			"sibling to inherit a probe from, so it has to run its own", got)
+	}
+}

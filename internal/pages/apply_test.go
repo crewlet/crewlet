@@ -3,7 +3,9 @@ package pages_test
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,6 +27,12 @@ type harness struct {
 	db      *store.DB
 	applier *pages.Applier
 	seq     uint64
+
+	// maxVariables is what the framework hands the applier as the estate's
+	// probed bind-parameter limit, and it defaults to the real probe
+	// because that is what a running node applies at. A case that cares
+	// about the chunk boundary lowers it.
+	maxVariables int
 }
 
 func newHarness(t *testing.T, skills pages.SkillDetector) *harness {
@@ -39,7 +47,10 @@ func newHarness(t *testing.T, skills pages.SkillDetector) *harness {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	return &harness{t: t, db: db, applier: pages.NewApplier("node-a", skills, nil)}
+	return &harness{
+		t: t, db: db, applier: pages.NewApplier("node-a", skills, nil),
+		maxVariables: db.Replicated().Caps().MaxVariables,
+	}
 }
 
 var brokerAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
@@ -85,7 +96,10 @@ func (h *harness) applyAt(rec pages.MutationRecord, seq uint64) (
 			return nil
 		}
 		n, aErr := h.applier.Apply(h.t.Context(), tx, record,
-			statelog.ApplyOptions{Now: brokerAt, StoredAt: brokerAt})
+			statelog.ApplyOptions{
+				Now: brokerAt, StoredAt: brokerAt,
+				MaxVariables: h.maxVariables,
+			})
 		rows = n
 		return aErr
 	})
@@ -102,6 +116,30 @@ func (h *harness) count(table string) int {
 		h.t.Fatalf("count %s: %v", table, err)
 	}
 	return n
+}
+
+// column reads one column of every matching row, in the query's own order.
+func (h *harness) column(query string, args ...any) []string {
+	h.t.Helper()
+	var out []string
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(h.t.Context(), query, args...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var value string
+			if err := rows.Scan(&value); err != nil {
+				return err
+			}
+			out = append(out, value)
+		}
+		return rows.Err()
+	}); err != nil {
+		h.t.Fatalf("read %s: %v", query, err)
+	}
+	return out
 }
 
 func (h *harness) scalar(query string, args ...any) string {
@@ -564,5 +602,110 @@ func TestARenameOfAPurgedPageClaimsNothing(t *testing.T) {
 	}
 	if got := h.count("pages_history"); got != 0 {
 		t.Errorf("%d history rows survive a purge", got)
+	}
+}
+
+// TestAPagesChildSetsCrossAChunkBoundaryUnchanged.
+//
+// THE LABELS AND THE WATCHERS ARE THE TWO COLLECTIONS ON A PAGE WHOSE SIZE IS
+// THE FOUNDER'S rather than the engine's, and both are written as multi-row
+// INSERTs — so how many statements a set takes is a property of the ESTATE's
+// probed parameter limit rather than of the record. That limit is the one
+// input to an apply that two nodes can legitimately disagree about, and the
+// identity claim this whole domain rests on says their tables are still
+// byte-identical: so the same record is applied here at the probed limit and
+// at one small enough to force several statements for each set, and the rows
+// and the returned count have to match.
+//
+// It is also what a per-row loop could never stage: a set that spans a chunk
+// is the only place the ON CONFLICT clause has to hold WITHIN one statement.
+func TestAPagesChildSetsCrossAChunkBoundaryUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const members = 9
+	labels := make([]string, 0, members)
+	watchers := make([]string, 0, members)
+	for i := range members {
+		labels = append(labels, fmt.Sprintf("label-%d", i))
+		watchers = append(watchers, fmt.Sprintf("watcher-%d", i))
+	}
+	muted := []string{"watcher-1", "watcher-7"}
+
+	// Five parameters fits two label rows and one watcher row per
+	// statement, so each set takes five statements and nine — both sides
+	// of the boundary the probed limit never reaches at this size.
+	const tight = 5
+
+	type applied struct {
+		labels   []string
+		watchers []string
+		rows     int
+	}
+	write := func(limit int) applied {
+		h := newHarness(t, nil)
+		if limit > 0 {
+			h.maxVariables = limit
+		} else if h.maxVariables < members*3 {
+			// THE COMPARISON NEEDS THE TWO SIDES TO DIFFER. A probe
+			// that could not fit the whole set in one statement
+			// would make this a test of one chunk size against
+			// another copy of itself, which is a test that cannot
+			// fail.
+			t.Fatalf("the probed limit is %d, which does not fit %d "+
+				"three-column rows in one statement", h.maxVariables, members)
+		}
+		if _, _, err := h.apply(create("page-1", "ENG", "Runbook", "prose")); err != nil {
+			t.Fatalf("apply a create at limit %d: %v", h.maxVariables, err)
+		}
+		rows, gate, err := h.apply(record(pages.PageSubject("page-1"),
+			pages.OpPatch, "op-sets", pages.PagePatch{
+				V: pages.DocumentVersion, Labels: labels,
+				Watchers: watchers, Muted: muted,
+			}, pages.ScopeSet{Subject: true, Container: "ENG"}))
+		if err != nil || gate != "" {
+			t.Fatalf("apply the sets at limit %d: %v (gate %q)",
+				h.maxVariables, err, gate)
+		}
+		return applied{
+			labels: h.column(
+				`SELECT label FROM pages_labels WHERE page_id = ? ORDER BY label`,
+				"page-1"),
+			watchers: h.column(
+				`SELECT handle || ':' || muted FROM pages_watchers
+				 WHERE page_id = ? ORDER BY handle`, "page-1"),
+			rows: rows,
+		}
+	}
+
+	probed, chunked := write(0), write(tight)
+
+	if !slices.Equal(probed.labels, labels) {
+		t.Errorf("the probed limit wrote labels %v, want %v", probed.labels, labels)
+	}
+	wantWatchers := []string{
+		"watcher-0:0", "watcher-1:1", "watcher-2:0", "watcher-3:0",
+		"watcher-4:0", "watcher-5:0", "watcher-6:0", "watcher-7:1",
+		"watcher-8:0",
+	}
+	if !slices.Equal(probed.watchers, wantWatchers) {
+		t.Errorf("the probed limit wrote watchers %v, want %v",
+			probed.watchers, wantWatchers)
+	}
+	if !slices.Equal(chunked.labels, probed.labels) {
+		t.Errorf("a %d-parameter limit wrote labels %v and the probed limit "+
+			"wrote %v — two nodes probing different limits hold different "+
+			"tables, which is the identity claim gone",
+			tight, chunked.labels, probed.labels)
+	}
+	if !slices.Equal(chunked.watchers, probed.watchers) {
+		t.Errorf("a %d-parameter limit wrote watchers %v and the probed limit "+
+			"wrote %v — the mute flag is the one value a chunk boundary can "+
+			"shift onto the wrong handle", tight, chunked.watchers, probed.watchers)
+	}
+	if chunked.rows != probed.rows {
+		t.Errorf("the same record counted %d rows at a %d-parameter limit and "+
+			"%d at the probed one — the count is the apply transaction's "+
+			"budget input, so a limit that moves it moves where every node "+
+			"commits", chunked.rows, tight, probed.rows)
 	}
 }
