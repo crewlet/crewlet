@@ -90,6 +90,12 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // attempts identically and with nothing to say which of the two causes it was.
 func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n int) *cluster {
 	t.Helper()
+	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
+	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
+	// cost each is a product nobody declared, and on this package it was
+	// measured at 1077 seconds across three cases, 64% of the whole run,
+	// against a package timeout it came within 115 seconds of firing.
+	deadline := time.Now().Add(jetstreamtest.ClusterStartBudget)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
 		relays := mesh(t, n)
 		c, err := startMeshOnce(t, relays, n)
@@ -126,6 +132,14 @@ func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n
 			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
 				"cannot fix: %v (relays: %s)",
 				attempt, clusterStartAttempts, err, relays.Describe())
+		}
+		// CHECKED AFTER THE ATTEMPT AND BEFORE THE RETRY LINE, so an
+		// expired budget never costs a try already paid for and the
+		// last thing a reader sees names the bound.
+		if time.Now().After(deadline) {
+			t.Fatalf("no cluster came up within %s (%d of %d attempts), last: "+
+				"%v (relays: %s)", jetstreamtest.ClusterStartBudget, attempt,
+				clusterStartAttempts, err, relays.Describe())
 		}
 		t.Logf("cluster attempt %d/%d failed, retrying with a fresh mesh: %v "+
 			"(relays: %s)", attempt, clusterStartAttempts, err, relays.Describe())
@@ -219,12 +233,21 @@ func stopAll(stops [][]func()) {
 }
 
 // clusterStartAttempts is how many times a fleet is stood up before the case
-// gives up, and it is [jetstreamtest.clusterStartAttempts]'s reasoning applied
-// one layer up: the collision is with work this process does not coordinate
-// with, so a wider window does not help and noticing does — and each attempt
-// reserves its own mesh, which is the half that makes "trying again" mean
-// something. See [startMesh].
-const clusterStartAttempts = 3
+// gives up.
+//
+// [jetstreamtest.ClusterStartAttempts] ITSELF, not a second number applying
+// its reasoning. This used to say "it is [jetstreamtest.clusterStartAttempts]'s
+// reasoning applied one layer up" while carrying three where that one carried
+// four — one decision, two spellings, each comment asserting it matched the
+// other. That is the shape textcut, whsec and jsprovision were each written to
+// remove, and the fix is the same one: read the constant rather than restate
+// the argument.
+//
+// The reasoning it now simply defers to: the collision is with work this
+// process does not coordinate with, so a wider window does not help and
+// noticing does — and each attempt reserves its own mesh, which is the half
+// that makes "trying again" mean something. See [startMesh].
+const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 
 // startMember brings up one member of the fleet.
 //

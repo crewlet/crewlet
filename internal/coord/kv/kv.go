@@ -543,7 +543,21 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	// carrying this node's number would shrink it, which is the durability
 	// loss observeReplicas exists to refuse.
 	want.Replicas = facts.replicas
-	updated, err := js.UpdateKeyValue(ctx, want)
+	// ITS OWN BUDGET AND ITS OWN RE-ASK, because this is a replicated
+	// stream-configuration write against the same metadata group as every
+	// other create on this boot — and it was the last one on the path with
+	// neither, so it ran under nats.go's undeclared five-second default
+	// while its siblings had minutes.
+	writeCtx, cancelWrite := context.WithTimeout(ctx,
+		jsprovision.Clustered(cfg.Clustered).Budget())
+	defer cancelWrite()
+	var updated jetstream.KeyValue
+	err = jsprovision.Place(writeCtx, jsprovision.Clustered(cfg.Clustered).AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			updated, e = js.UpdateKeyValue(ctx, want)
+			return e
+		}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it can hold a "+
 			"duty lease for its full TTL: %w", name, facts.age, coord.MaxDutyTTL, err)

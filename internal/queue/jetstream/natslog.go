@@ -65,14 +65,29 @@ import (
 // which is what makes a non-exiting Fatalf safe rather than merely polite.
 type natsLogger struct{ log *slog.Logger }
 
-// newNATSLogger builds the bridge.
+// newNATSLogger builds the bridge, BOUND TO THE MEMBER IT SPEAKS FOR.
 //
 // It takes no verbosity of its own: whether nats-server calls Debugf at all
 // is [Config.Debug]'s answer, and whether a line that reaches here is
 // RECORDED is the sink's — [natsLogger.emit] asks it per line, so a level
 // raised after the server was built still takes effect.
-func newNATSLogger() natsLogger {
-	return natsLogger{log: logging.Get("queue.nats.server")}
+//
+// # Why the server name is not optional
+//
+// Because more than one broker can run in ONE process, and when that happens
+// every line here was indistinguishable. A fleet test stands up n engines each
+// embedding its own member, and both of them logged under one
+// `component=queue.nats.server` with nothing naming which — so "route
+// connection refused" and "has NO quorum, stalled" could not be attributed to
+// a member, and the one question a reader has about a fleet that did not form
+// is WHICH MEMBER. It costs one attribute per line and it is the difference
+// between a log and a transcript of two servers talking over each other.
+//
+// Empty is a legitimate value and rendered as such rather than omitted: a
+// solo embedded broker has no name to carry, and a blank attribute says "one
+// member" where a missing one would say "this build does not report it".
+func newNATSLogger(serverName string) natsLogger {
+	return natsLogger{log: logging.Get("queue.nats.server").With("server", serverName)}
 }
 
 // The event name is the same for every line and the severity rides on the

@@ -68,11 +68,26 @@ BIN := crewlet
 # does not merely flap — it cannot pass on a machine this speed, and the
 # failure reads as a hung test rather than as a budget nobody set.
 #
-# Thirty minutes is 2.3x the measured run, which is enough for a runner half
-# this fast, and still kills a real deadlock twelve times sooner than the CI
-# job's own limit. It applies to every package because the flag is per test
-# BINARY: a unit package that hangs now dies in thirty minutes rather than ten,
+# Thirty minutes is a hang detector sized against the worst LEGITIMATE run,
+# not against the worst run ever seen. On CI's own four-vCPU runners
+# internal/e2e completes in 303-404s green; the pathological 1684.497s that
+# once came within 115s of this wall was a run that lost nine cluster-start
+# attempts to unanswered broker metadata requests, which is a defect that has
+# been fixed rather than a duration to budget for (see internal/jsprovision's
+# Ask). Against the green figure this is 4.5x, which is room for a runner a
+# quarter this speed.
+#
+# It applies to every package because the flag is per test BINARY: a unit
+# package that hangs dies in thirty minutes rather than go's default ten,
 # which is the cost of having a gate that can pass at all.
+#
+# AND IT IS THE ONLY DEADLINE A HUNG TEST MEETS. ci.yml sets no
+# `timeout-minutes`, so the outer bound is GitHub's own per-job default of six
+# hours — this fires twelve times sooner, and it is the one that fires
+# usefully: `go test` hitting its own deadline prints a full goroutine dump
+# naming what is stuck, where a job killed by the runner prints nothing at all.
+# A ceiling in the workflow would have to sit ABOVE this one to keep that true,
+# which is most of the reason there is not one.
 #
 # TEST_TIMEOUT is ci.yml's value, and the two must not drift: the Makefile is
 # the same command CI runs or it is a lie. It is defined BEFORE GOTEST, and

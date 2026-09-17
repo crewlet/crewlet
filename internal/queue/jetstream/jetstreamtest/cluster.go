@@ -18,6 +18,7 @@ import (
 	"net"
 	"syscall"
 	"testing"
+	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
@@ -86,8 +87,16 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 	})
 }
 
-// clusterStartAttempts is how many times a cluster is stood up before the
+// ClusterStartAttempts is how many times a cluster is stood up before the
 // harness gives up.
+//
+// EXPORTED BECAUSE THERE ARE TWO LAYERS AND ONE DECISION. [internal/e2e]
+// retries a whole fleet of engines on the same reasoning — its own doc says so
+// in as many words, "applied one layer up" — and carried its own number while
+// saying it. Four here and three there is the drift this repository has
+// already paid for under three other names (textcut, whsec, jsprovision): two
+// spellings of one rule, each comment asserting it matched the other, with
+// nothing enforcing it. One constant, read by both.
 //
 // # Why a retry rather than a wider window
 //
@@ -102,7 +111,38 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 // problem: the collision is with a process this one does not coordinate with.
 // What DOES fix it is noticing — see [js.Server.ClusterPort] — and trying
 // again with different numbers.
-const clusterStartAttempts = 4
+const ClusterStartAttempts = 4
+
+// ClusterStartBudget bounds the WHOLE retry loop in wall clock, not just the
+// number of tries.
+//
+// # Why attempts alone were not a bound
+//
+// Because n attempts at an unbounded cost each is a PRODUCT nobody declared,
+// which is the lesson [jsprovision.SequenceBudget] already records one layer
+// down: "the real worst case was already the product rather than the term".
+// Measured on the engine's own CI: three cluster cases spent 438.93s, 324.11s
+// and 314.48s — 1077s, 64% of the package's whole run — on three attempts
+// each that were individually bounded and collectively not. The package
+// timeout came within 115 seconds of firing, which would have replaced three
+// legible test failures with one suite timeout naming nothing.
+//
+// # THREE MINUTES
+//
+// Above any legitimate bring-up by a wide margin: a healthy two-member fleet
+// in [internal/e2e] boots, asserts and tears down in about ten seconds on a
+// four-vCPU host, and the slowest cluster case there measures 63s END TO END
+// — of which the bring-up this bounds is a fraction.
+//
+// And below the point where retrying costs more than it can buy: six cluster
+// cases at this ceiling is eighteen minutes inside a thirty-minute package
+// timeout, so even a run that loses every one of them reports what failed
+// instead of being killed mid-test.
+//
+// It bounds the LOOP rather than an attempt, deliberately. What an attempt
+// should cost is the engine's question and [jsprovision] answers it; what a
+// harness may spend re-asking that question is this one.
+const ClusterStartBudget = 3 * time.Minute
 
 // errNotRetryable marks a start failure that a fresh set of ports cannot
 // change: the same input answering the same way every time.
@@ -157,7 +197,8 @@ func listenErr(err error) error {
 func withFreshPorts(t *testing.T, what string, start func() (*Cluster, error)) *Cluster {
 	t.Helper()
 	var last error
-	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
+	deadline := time.Now().Add(ClusterStartBudget)
+	for attempt := 1; attempt <= ClusterStartAttempts; attempt++ {
 		c, err := start()
 		if err == nil {
 			return c
@@ -171,14 +212,25 @@ func withFreshPorts(t *testing.T, what string, start func() (*Cluster, error)) *
 		}
 		if errors.Is(err, errNotRetryable) {
 			t.Fatalf("%s attempt %d/%d failed for a reason retrying "+
-				"cannot fix: %v", what, attempt, clusterStartAttempts, err)
+				"cannot fix: %v", what, attempt, ClusterStartAttempts, err)
+		}
+		// THE CEILING IS CHECKED AFTER THE ATTEMPT, so a budget that
+		// expires never costs a try that was already paid for — and
+		// before the log line, so the last thing a reader sees names
+		// the bound rather than a retry that never happened.
+		if time.Now().After(deadline) {
+			t.Fatalf("no %s came up within %s (%d of %d attempts): %v — the "+
+				"retry is bounded in wall clock as well as in tries, because "+
+				"n attempts at an unbounded cost each is a product nobody "+
+				"declared", what, ClusterStartBudget, attempt,
+				ClusterStartAttempts, last)
 		}
 		t.Logf("%s attempt %d/%d failed, retrying with fresh ports: %v",
-			what, attempt, clusterStartAttempts, err)
+			what, attempt, ClusterStartAttempts, err)
 	}
 	t.Fatalf("no %s came up in %d attempts: %v — which is what a "+
 		"machine running many brokers at once produces",
-		what, clusterStartAttempts, last)
+		what, ClusterStartAttempts, last)
 	return nil
 }
 

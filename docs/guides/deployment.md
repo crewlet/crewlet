@@ -349,14 +349,47 @@ different stream or bucket every time. A node that exhausts the budget fails
 to start rather than running against a group it cannot reach, and the error
 names the object it was creating.
 
+**A request the broker never answers is asked again, not waited on.** A
+clustered metadata request does not always come back late — sometimes the
+reply is never sent at all. nats-server drops a routed request outright in
+more than one ordinary situation during a bring-up: a member that is not the
+metadata leader and holds no assignment for the object returns without
+replying, and the routed API queue is discarded wholesale when it reaches its
+limit. A node waiting on one of those is waiting for something nobody will
+send, so a longer budget buys nothing — measured buying nothing, at two
+minutes a time, on a different object every attempt.
+
+So the engine now distinguishes three answers to "does this object exist",
+not two: it is there, it is *not* there, and **nobody said**. The first two
+are answers and are acted on; the third is silence, and silence is re-asked —
+at a new leader, or past a queue that has drained. An existence probe that
+goes unanswered for its whole term also simply falls through to the create,
+which settles the question either way: absent and it is made, present and it
+comes back as a peer having won the race. A node no longer fails to start
+because it could not hear.
+
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens fifteen buckets and several streams in a
+was otherwise silent — a node opens seventeen buckets and several streams in a
 row and logged nothing between them, so one that hung emitted nothing at all
 until its budget expired and the log could not say which object it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
-(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`).
+(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`),
+and so does the lookup that precedes it
+(`jetstream_stream_lookup_slow`, `jetstream_consumer_lookup_slow`) — that
+lookup is the first call to reach the metadata group, so a member stalled
+against a group that has not settled waits there, where nothing used to
+report it at all. A probe that went unanswered is named as such
+(`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
+`coord_kv_bucket_lookup_unanswered`) rather than failing the boot.
 One line per object, deliberately: whether more lines follow is what tells a
 slow bring-up from a wedged one.
+
+**Every broker line names the member that emitted it.** More than one
+embedded broker can run in one process — a fleet test does exactly that — and
+without the name every `queue.nats.server` line from either of them was
+indistinguishable, which is the one question a reader has about a fleet that
+did not form. Lines carry `server=` from `stream.cluster.name`'s member
+identity; a solo broker has no name to carry and the attribute is empty.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
