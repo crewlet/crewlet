@@ -5,11 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-
-	"github.com/crewlet/crewlet/internal/store"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Who is carrying how much, across every project at once.
@@ -226,14 +225,14 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	out.Rows = []WorkloadRow{}
 	for rows.Next() {
 		var row WorkloadRow
-		if err := rows.Scan(&row.Handle, &row.Open, &row.Points,
+		if err = rows.Scan(&row.Handle, &row.Open, &row.Points,
 			&row.EstimateMinutes, &row.Blocked, &row.Overdue,
 			&row.Unscheduled); err != nil {
 			return fmt.Errorf("tracker: scan a workload row: %w", err)
 		}
 		out.Rows = append(out.Rows, row)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return fmt.Errorf("tracker: walk the workload rows: %w", err)
 	}
 	if len(out.Rows) > MaxWorkloadHandles {
