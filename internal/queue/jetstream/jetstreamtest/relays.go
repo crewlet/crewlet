@@ -98,7 +98,15 @@ func startRelaysOnce(ctx context.Context, t *testing.T, n int) (*Relays, error) 
 	// fails and the route is retried, which is the ordinary case NATS
 	// already handles.
 	for _, f := range c.forwarders {
-		if err := f.start(ctx); err != nil {
+		// ON WithoutCancel: a forwarder is a LISTENER that serves for
+		// the whole case, while ctx ends when the bring-up does.
+		// Bound to the attempt it was torn down the instant the attempt
+		// succeeded, so every member came up into a mesh whose relays
+		// were already cut — measured as
+		// TestAPartitionedMemberIsSilentRatherThanSlow failing all four
+		// attempts on "routed to [] (want 1 peers)". The values are
+		// inherited; only the cancellation is not.
+		if err := f.start(context.WithoutCancel(ctx)); err != nil {
 			// RETURNED, NOT FATAL. A relay listener loses its port to
 			// the same race a member's does — this reserves n(n-1)+2n
 			// of them, so it loses MORE often — and the retry above
