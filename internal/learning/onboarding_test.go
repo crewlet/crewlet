@@ -676,99 +676,91 @@ func TestAClaimNeedsAPositiveTTL(t *testing.T) {
 	}
 }
 
-func TestWhyTheClaimIsOneStatement(t *testing.T) {
+func TestAReadThenWriteClaimIsSerialized(t *testing.T) {
 	t.Parallel()
-	// The measurement behind Claim's single conditional upsert.
+	// The measurement behind Claim's single conditional upsert: what the
+	// read-then-write it could have been does when two claimants race.
 	//
-	// The driver's BeginTx always issues a plain BEGIN, so two claimants
-	// doing read-then-write both take their snapshot before either writes,
-	// and the loser's write is REFUSED with "database snapshot is stale".
-	// [store.DB.Tx] retries that on a fresh snapshot, which is what turns
-	// the refusal into a correct answer rather than an error the caller
-	// cannot tell from an outage: the loser RE-READS, sees the lease the
-	// winner took, and declines. So the claim never goes to two seats.
-	//
-	// That recovery is why the upsert form is still the right shape rather
-	// than a redundant one. It survives the race in ONE statement with no
-	// re-decision, so it does not depend on fn being safe to run twice —
-	// and a body doing read-then-write must re-read inside fn, never cache
-	// the first read, or the retry rewrites the winner's lease with a
-	// decision taken against a snapshot that no longer exists.
+	// [store.DB.Tx] holds the database's write lock from its BEGIN, so the
+	// second claimant cannot even READ until the first has committed. It
+	// sees the winner's lease on its only read and declines: no refusal, no
+	// re-run, and no error a caller could mistake for an outage. (Under the
+	// driver's default BEGIN both used to read first, and the loser's write
+	// was refused with "database snapshot is stale".) The upsert is still the
+	// smaller shape for the same answer, as Claim's doc says.
 	_, db := onboarding(t)
-	if _, err := db.SQL().ExecContext(t.Context(),
+	ctx := t.Context()
+	if _, err := db.SQL().ExecContext(ctx,
 		`INSERT INTO agent_onboarding_markers (agent_id, chain_hash, created_at, updated_at)
 		 VALUES ('seat-1', '', 0, 0)`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	var (
-		mu      sync.Mutex
-		outcome []error
-		reads   atomic.Int64
-		read    sync.WaitGroup
-		done    sync.WaitGroup
+		reads    atomic.Int64
+		inWindow atomic.Int64
+		read     = make(chan struct{})
+		once     sync.Once
+		done     sync.WaitGroup
 	)
-	read.Add(2)
-	for i := range 2 {
-		done.Go(func() {
-			// ONCE, because Tx may run fn again on a stale snapshot and a
-			// second Done takes the counter negative. The barrier belongs
-			// to the goroutine, not to the attempt — it exists to make both
-			// claimants read before either writes, which is a fact about
-			// the FIRST pass through.
-			var barrier sync.Once
-			err := db.Tx(t.Context(), func(tx *sql.Tx) error {
-				var lease sql.NullInt64
-				if err := tx.QueryRowContext(t.Context(),
-					`SELECT in_progress_until FROM agent_onboarding_markers WHERE agent_id='seat-1'`).
-					Scan(&lease); err != nil {
-					return err
-				}
-				reads.Add(1)
-				// Both readers are through before either writes — which is
-				// the whole race, made deterministic.
-				barrier.Do(read.Done)
-				read.Wait()
-				if lease.Valid {
-					return nil
-				}
-				_, err := tx.ExecContext(t.Context(),
-					`UPDATE agent_onboarding_markers SET in_progress_until = ? WHERE agent_id='seat-1'`,
-					100+i)
+	claim := func(lease int, first bool) error {
+		return db.Tx(ctx, func(tx *sql.Tx) error {
+			var held sql.NullInt64
+			if err := tx.QueryRowContext(ctx,
+				`SELECT in_progress_until FROM agent_onboarding_markers WHERE agent_id='seat-1'`).
+				Scan(&held); err != nil {
 				return err
-			})
-			mu.Lock()
-			outcome = append(outcome, err)
-			mu.Unlock()
+			}
+			reads.Add(1)
+			if first {
+				// THE WINDOW: the other claimant is started now and
+				// given every chance to read before this one writes.
+				once.Do(func() { close(read) })
+				time.Sleep(200 * time.Millisecond)
+				inWindow.Store(reads.Load())
+			}
+			if held.Valid {
+				return nil
+			}
+			_, err := tx.ExecContext(ctx,
+				`UPDATE agent_onboarding_markers SET in_progress_until = ? WHERE agent_id='seat-1'`,
+				lease)
+			return err
 		})
 	}
+	errs := make(chan error, 2)
+	done.Go(func() { errs <- claim(100, true) })
+	<-read
+	done.Go(func() { errs <- claim(101, false) })
 	done.Wait()
+	close(errs)
 
-	for _, err := range outcome {
+	for err := range errs {
 		if err != nil {
-			t.Errorf("a claimant got an error it cannot tell from an outage: %v — "+
-				"the retry is what stops a lost race being reported as one", err)
+			t.Errorf("a claimant got an error it cannot tell from an outage: %v", err)
 		}
 	}
-	if got := reads.Load(); got != 3 {
-		// Two first reads plus the loser's re-read. Exactly three, because
-		// this is the property: the loser ran fn again, and it ran it after
-		// the winner had committed.
-		t.Errorf("fn read %d times, want 3 (two claimants, one retry) — "+
-			"with no retry the loser would surface the conflict as an error, "+
-			"and with more the race is not what this test set up", got)
+	if got := inWindow.Load(); got != 1 {
+		t.Errorf("%d reads happened while the first claimant held its "+
+			"transaction, want 1 (its own): the second claimant read a snapshot "+
+			"the first was about to advance, which is the race a write "+
+			"transaction holding the lock from its BEGIN rules out", got)
+	}
+	if got := reads.Load(); got != 2 {
+		t.Errorf("the claimants read %d times, want 2: one each, with no "+
+			"re-run of a body that lost a race", got)
 	}
 
-	// ONE LEASE, the winner's. The loser saw it on its re-read and declined,
-	// which is the answer a caller can act on.
+	// ONE LEASE, the first claimant's. The second saw it on its only read
+	// and declined, which is the answer a caller can act on.
 	var lease sql.NullInt64
-	if err := db.SQL().QueryRowContext(t.Context(),
+	if err := db.SQL().QueryRowContext(ctx,
 		`SELECT in_progress_until FROM agent_onboarding_markers WHERE agent_id='seat-1'`).
 		Scan(&lease); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if !lease.Valid || (lease.Int64 != 100 && lease.Int64 != 101) {
-		t.Errorf("lease = %v, want exactly one claimant's", lease)
+	if !lease.Valid || lease.Int64 != 100 {
+		t.Errorf("lease = %v, want the first claimant's (100)", lease)
 	}
 }
 

@@ -145,38 +145,34 @@ func BenchmarkLogApplyDrain(b *testing.B) {
 //
 // # Why it has to be measured
 //
-// The store's transactions are OPTIMISTIC — a write transaction can be
-// aborted at commit — and there are two possible granularities. Under
-// row-level detection the applier never collides with the audit log, the
-// diary or the config revisions, and its retry loop is dormant. Under
-// database-level detection, every event insert that commits during a
-// multi-second apply aborts it, eight times, and then the batch fails: the
-// applier would stop committing exactly when the fleet is busiest, and a
-// drain measured on an idle store would say nothing about it.
-//
-// The store's own TestTxRetriesAConflictedReadThenWrite cannot tell the two
-// apart, because a same-row conflict is a conflict under both.
+// The driver detects a write conflict per FILE rather than per row: a
+// transaction that read before it wrote is refused its first write if anything
+// at all committed to the file in between. The applier reads first (its
+// deferral probe), so under the driver's default BEGIN every commit that
+// landed in that window would abort a multi-second apply, eight times, and
+// then fail the batch: the applier would stop committing exactly when the
+// fleet is busiest, and a drain measured on an idle store would say nothing
+// about it. The store's write transactions take the lock at BEGIN for exactly
+// that reason (see writelock.go), and this is the measurement that they do.
 //
 // # The two arms, and what they are for
 //
 //   - same-file: the foreign commits land in a table in the applier's OWN
 //     database, which the applier never reads or writes. This is the
-//     granularity question, asked directly.
+//     granularity question, asked directly, and it is where the store's
+//     write queue decides who goes next.
 //   - other-estate: the foreign commits land in the NODE estate, which is
 //     where the audit log actually is. This is the shipped arrangement, and
 //     the arm exists to price it against the one above.
 //
-// Measured (tursogo v0.8.0-pre.8, 4 vCPU): zero aborts per transaction in
-// BOTH arms and zero refusals, so the granularity is not database-level — a
-// commit to a table the applier never touches does not abort it, whichever
-// file it is in.
-//
-// What the same-file arm shows instead is CONTENTION. Commits do land while
-// an applier transaction is open, but under a continuously applying writer
-// they land at a tiny fraction of the rate they manage against the other
-// estate: 0.56/s against 1 676/s, three thousand times fewer. That is what the two-file split buys, and it is a throughput fact
-// rather than a correctness one — which is exactly why the split is now
-// unconditional rather than a response to this number.
+// Measured (tursogo v0.8.0-pre.8, darwin/arm64, 8 cores, every commit an
+// F_FULLFSYNC): zero aborts per transaction in BOTH arms and zero refusals.
+// What the same-file arm shows instead is TURN-TAKING: the queue hands the lock
+// from the applier to the foreign writer and back one transaction at a time,
+// so the foreign writer commits once or twice per apply, 7.5/s against 80 to
+// 118/s against the other estate. That is what the two-file split buys, and it
+// is a throughput fact rather than a correctness one, which is exactly why the
+// split is unconditional rather than a response to this number.
 func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 	for _, arm := range []struct {
 		name string
@@ -216,12 +212,7 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 					}
 					// THE AUDIT LOG'S SHAPE: small, frequent, and
 					// touching nothing the applier reads.
-					err := writer.Tx(ctx, func(tx *sql.Tx) error {
-						_, err := tx.ExecContext(ctx,
-							`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
-						return err
-					})
-					if err == nil {
+					if err := commitForeign(ctx, writer); err == nil {
 						foreign.Add(1)
 					} else {
 						// COUNTED, NOT SWALLOWED. A foreign
@@ -241,15 +232,15 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 				b.StopTimer()
 				resetBench(ctx, b, w)
 				b.StartTimer()
-				// COUNTED BY ATTEMPTS. Writer.Tx retries a stale
-				// snapshot internally, so the abort count is how many
-				// times fn ran beyond the first — the number that
-				// decides whether the eight-attempt budget absorbs
-				// this load or is spent by it.
+				// COUNTED BY ATTEMPTS. Writer.Tx re-runs a body
+				// whose attempt failed transiently, so the abort
+				// count is how many times fn ran beyond the first,
+				// the number that decides whether the attempt budget
+				// is held in reserve or spent.
 				var attempts int
 				if err := w.Tx(ctx, func(tx *sql.Tx) error {
 					attempts++
-					return insertUnprepared(ctx, tx, items)
+					return applyShaped(ctx, tx, items)
 				}); err != nil {
 					b.Fatalf("apply under foreign commits: %v", err)
 				}
@@ -269,29 +260,148 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 }
 
 // A FOREIGN COMMIT NEVER ABORTS AN APPLIER TRANSACTION, which is the fact the
-// applier's whole occupancy model rests on and the one this repository could
-// not previously answer.
+// applier's whole occupancy model rests on.
 //
 // It is a test as well as a benchmark because the answer is an INVARIANT
-// rather than a magnitude: if a driver bump made this driver's conflict
-// detection database-level, every apply under load would burn its eight
-// attempts and fail the batch — and the symptom would be a fleet that stops
-// applying exactly when it is busiest, with nothing naming the cause.
+// rather than a magnitude: a driver whose conflict detection is per file, met
+// with a transaction that does not hold the lock from its BEGIN, aborts every
+// apply that a commit elsewhere in the file lands inside, and the symptom is a
+// fleet that stops applying exactly when it is busiest, with nothing naming
+// the cause.
 //
-// SLOWING IS NOT ABORTING, and the two are what this separates. A writer
-// sharing the applier's file still commits while the applier's transaction is
-// open — a hundred or so times, in the runs this logs — but far more slowly
-// than the same writer against the other estate, which the benchmark above
-// prices. The slowdown is what the two-file split removes; a RETRY is what
-// would have broken the design, and it does not happen.
+// # The window is staged rather than hoped for
+//
+// An abort can only come from one place: a commit landing between the
+// applier's first read and its first write. So the applier's body here reads
+// first, as the real one's deferral probe does, then asks a foreign writer to
+// commit to a table the applier never touches and gives it a full second to
+// land before writing anything.
+//
+// The version of this test that preceded it wrote first and ran a writer
+// beside the apply. Writing first, it could not see the abort at all: a first
+// statement that writes takes its snapshot and the lock together. What it did
+// measure was how the applier's polls for the lock lined up with the writer's
+// commits, which failed on macOS (where F_FULLFSYNC makes every commit hold
+// the lock for milliseconds) and passed on Linux, while the invariant it was
+// named for was broken on both.
+//
+// # Two foreign writers, because there are two ways to reach the file
+//
+//   - a store transaction, which queues behind the applier's;
+//   - a statement outside any transaction, which does not queue and meets
+//     only the driver's own lock.
+//
+// Either must wait for the applier rather than abort it. The second is the one
+// that proves the applier's transaction holds the lock from its BEGIN, rather
+// than merely being first in this process's queue.
 func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs a 4 000-row apply around a staged foreign commit")
+	}
+	t.Parallel()
+	for _, arm := range []struct {
+		name   string
+		commit func(context.Context, *store.DB) error
+	}{
+		{"a queued transaction", commitForeign},
+		{"a statement outside any transaction", func(ctx context.Context, db *store.DB) error {
+			_, err := db.SQL().ExecContext(ctx,
+				`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
+			return err
+		}},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			// A BUSY TIMEOUT PAST THE APPLY. The unqueued statement
+			// waits on the driver's lock for as long as the applier
+			// holds it, which is a second of staged window plus the
+			// apply itself, and a loaded runner must not turn that
+			// wait into a refusal this test would then report as a
+			// lost commit.
+			node, w := benchNodeWith(t, store.Options{
+				PinnedWriters: 1, BusyTimeout: time.Minute,
+			})
+			ctx := t.Context()
+			replicated := node.Replicated()
+			if err := replicated.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, foreignTable)
+				return err
+			}); err != nil {
+				t.Fatalf("create the foreign table: %v", err)
+			}
+
+			landed := make(chan error, 1)
+			var attempts int
+			inWindow := false
+			err := w.Tx(ctx, func(tx *sql.Tx) error {
+				attempts++
+				// THE APPLIER'S FIRST STATEMENT IS A READ, as
+				// its deferral probe is. This is what opens the
+				// window a per-file conflict aborts through.
+				if err := probeFirst(ctx, tx); err != nil {
+					return err
+				}
+				if attempts == 1 {
+					go func() { landed <- arm.commit(ctx, replicated) }()
+					select {
+					case err := <-landed:
+						inWindow = true
+						landed <- err
+					case <-time.After(time.Second):
+					}
+				}
+				return insertUnprepared(ctx, tx, benchItems(benchRows))
+			})
+			if err != nil {
+				t.Fatalf("the apply failed around a foreign commit to a table "+
+					"it never touches: %v", err)
+			}
+			if attempts != 1 {
+				t.Errorf("the applier's transaction ran %d times around a foreign "+
+					"commit to a table it never touches: a commit elsewhere in "+
+					"the file aborts it, and every apply under load will burn "+
+					"its retry budget", attempts)
+			}
+			// AND THE FOREIGN WRITER WAS DELAYED, NOT REFUSED. A test
+			// that only asked whether the applier survived would pass
+			// a store that protected it by failing everybody else.
+			select {
+			case err := <-landed:
+				if err != nil {
+					t.Errorf("the foreign commit was refused rather than "+
+						"delayed: %v", err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Error("the foreign commit never landed after the applier " +
+					"committed, so the applier's lock outlived its transaction")
+			}
+			t.Logf("the foreign commit landed inside the applier's window: %v",
+				inWindow)
+		})
+	}
+}
+
+// A WRITER COMMITTING BACK TO BACK CANNOT STARVE THE APPLIER, and the applier
+// cannot starve it: the shape the previous version of the test above was
+// really measuring, and on macOS losing.
+//
+// The driver's lock has no queue. A waiter polls on SQLite's schedule and wins
+// only when a poll lands between one commit's release and the next one's
+// acquire, and on macOS every commit is an F_FULLFSYNC that holds the lock
+// for milliseconds against a gap of microseconds: the applier's busy timeout
+// expired with the writer beside it having committed two thousand times, and
+// it retried until the budget ran out. The store's queue is what serves the
+// two in order. TestWritersBeginInTheOrderTheyAsked pins the order itself;
+// this is the scenario, end to end, asserting that both sides keep moving.
+func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs a 4 000-row apply against a concurrent writer")
 	}
 	t.Parallel()
 	node, w := benchNodeT(t)
 	ctx := t.Context()
-	if err := node.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	replicated := node.Replicated()
+	if err := replicated.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, foreignTable)
 		return err
 	}); err != nil {
@@ -300,7 +410,7 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	var foreign atomic.Int64
+	var foreign, refused atomic.Int64
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -310,12 +420,10 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 				return
 			default:
 			}
-			if err := node.Replicated().Tx(ctx, func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx,
-					`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
-				return err
-			}); err == nil {
+			if err := commitForeign(ctx, replicated); err == nil {
 				foreign.Add(1)
+			} else {
+				refused.Add(1)
 			}
 		}
 	}()
@@ -325,43 +433,83 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	settleForeign(t, &foreign)
 
 	var attempts int
-	var during int64
+	var committed int64
+	started := time.Now()
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
 		attempts++
-		before := foreign.Load()
-		insertErr := insertUnprepared(ctx, tx, benchItems(benchRows))
-		during = foreign.Load() - before
-		return insertErr
+		return applyShaped(ctx, tx, benchItems(benchRows))
 	})
+	elapsed := time.Since(started)
+	if err == nil {
+		committed = foreign.Load()
+		// THE OTHER DIRECTION: the queue hands the lock back, so the
+		// writer that waited behind the apply commits again after it.
+		settleAfter(t, &foreign, committed)
+	}
 	close(stop)
 	wg.Wait()
 	if err != nil {
-		t.Fatalf("the apply failed under a concurrent writer: %v", err)
+		t.Fatalf("the apply failed beside a writer committing back to back: %v", err)
 	}
 	if attempts != 1 {
-		t.Errorf("the applier's transaction ran %d times against a writer that "+
-			"committed %d times to a table it never touches: this driver aborts "+
-			"a write transaction because of commits elsewhere in the file, and "+
-			"every apply under load will burn its retry budget",
-			attempts, foreign.Load())
+		t.Errorf("the applier's transaction ran %d times beside a writer "+
+			"committing back to back", attempts)
 	}
-	t.Logf("%d foreign commit(s) in total, %d of them while the applier's "+
-		"transaction was open; %d attempt(s)", foreign.Load(), during, attempts)
+	if n := refused.Load(); n != 0 {
+		t.Errorf("the writer beside the apply was refused %d time(s): a writer "+
+			"queued behind the apply waits for it rather than failing", n)
+	}
+	t.Logf("%d foreign commit(s) in total; the apply took %v", foreign.Load(),
+		elapsed.Round(time.Millisecond))
+}
+
+// commitForeign is one small commit to the foreign table, the audit log's
+// shape, through the store's own write path.
+func commitForeign(ctx context.Context, db *store.DB) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
+		return err
+	})
+}
+
+// applyShaped is an apply transaction's body in the order the applier's is:
+// the deferral probe's read first, then the rows.
+func applyShaped(ctx context.Context, tx *sql.Tx, items []benchItem) error {
+	if err := probeFirst(ctx, tx); err != nil {
+		return err
+	}
+	return insertUnprepared(ctx, tx, items)
+}
+
+// probeFirst stands in for the deferral probe: a read of the applier's own
+// tables before anything is written, which is what gives a per-file conflict
+// a window to abort through.
+func probeFirst(ctx context.Context, tx *sql.Tx) error {
+	var n int
+	return tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM bench_items WHERE project = ?`, "proj-00").Scan(&n)
 }
 
 // settleForeign waits until the concurrent writer has committed at least once,
 // so a test that staged no contention says so rather than passing.
 func settleForeign(t *testing.T, foreign *atomic.Int64) {
 	t.Helper()
+	settleAfter(t, foreign, 0)
+}
+
+// settleAfter waits until the concurrent writer has committed past mark.
+func settleAfter(t *testing.T, foreign *atomic.Int64, mark int64) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if foreign.Load() > 0 {
+		if foreign.Load() > mark {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("the concurrent writer never committed, so this run staged no " +
-		"contention and its answer would be about an idle store")
+	t.Fatalf("the concurrent writer never committed past %d, so this run "+
+		"staged no contention and its answer would be about an idle store", mark)
 }
 
 // THE SHIPPED SHAPE COSTS ceil(rows/chunk) STATEMENTS AND NOT ONE PER ROW, and
@@ -627,7 +775,8 @@ func benchWriterT(t *testing.T) (*store.DB, *store.Writer) {
 // benchNode returns the NODE handle, so an arm can reach either estate.
 func benchNode(b *testing.B) (*store.DB, *store.Writer) {
 	b.Helper()
-	db, w := openApplierStore(b, filepath.Join(b.TempDir(), "drain.db"))
+	db, w := openApplierStore(b, filepath.Join(b.TempDir(), "drain.db"),
+		store.Options{PinnedWriters: 1})
 	b.Cleanup(func() { _ = w.Close() })
 	b.Cleanup(func() { _ = db.Close() })
 	return db, w
@@ -635,18 +784,25 @@ func benchNode(b *testing.B) (*store.DB, *store.Writer) {
 
 func benchNodeT(t *testing.T) (*store.DB, *store.Writer) {
 	t.Helper()
-	db, w := openApplierStore(t, filepath.Join(t.TempDir(), "drain.db"))
+	return benchNodeWith(t, store.Options{PinnedWriters: 1})
+}
+
+// benchNodeWith is benchNodeT on a store opened with opts, which must declare
+// the one pin the applier takes.
+func benchNodeWith(t *testing.T, opts store.Options) (*store.DB, *store.Writer) {
+	t.Helper()
+	db, w := openApplierStore(t, filepath.Join(t.TempDir(), "drain.db"), opts)
 	t.Cleanup(func() { _ = w.Close() })
 	t.Cleanup(func() { _ = db.Close() })
 	return db, w
 }
 
-// openApplierStore opens a node with one declared pin and the applier-shaped
-// tables in its REPLICATED estate, which is where an applier writes.
-func openApplierStore(tb testing.TB, path string) (*store.DB, *store.Writer) {
+// openApplierStore opens a node with the applier-shaped tables in its
+// REPLICATED estate, which is where an applier writes, and pins its writer.
+func openApplierStore(tb testing.TB, path string, opts store.Options) (*store.DB, *store.Writer) {
 	tb.Helper()
 	ctx := tb.Context()
-	db, err := store.Open(ctx, path, store.Options{PinnedWriters: 1})
+	db, err := store.Open(ctx, path, opts)
 	if err != nil {
 		tb.Fatalf("open: %v", err)
 	}

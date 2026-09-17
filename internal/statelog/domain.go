@@ -492,9 +492,9 @@ type Applier interface {
 	// Committed runs AFTER the transaction commits, for the consequences
 	// that are not rows.
 	//
-	// Separate because the transaction may run more than once: the
-	// store's transactions are optimistic and a conflicted one re-runs
-	// its body, so a side effect inside Apply would happen twice.
+	// Separate because the transaction may run more than once: the store
+	// re-runs the body of an attempt that failed transiently, so a side
+	// effect inside Apply would happen twice.
 	Committed(ctx context.Context)
 }
 

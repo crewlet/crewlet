@@ -2,17 +2,19 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
-// TestTheRetryClassifierCoversEveryTransientBeginFailure names the three
-// conditions a transaction may be retried on, and why each is transient.
+// TestTheRetryClassifierCoversEveryTransientFailure names the conditions a
+// transaction may be retried on, why each is transient, and the one it no
+// longer may be.
 //
 // The classifier is a TEXT match over the driver's own messages, which is
-// fragile by construction — so the cases are written out rather than left to a
+// fragile by construction, so the cases are written out rather than left to a
 // reader to infer, and a message the driver stops using shows up here as a case
 // that no longer describes anything.
-func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
+func TestTheRetryClassifierCoversEveryTransientFailure(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		err   error
@@ -20,19 +22,17 @@ func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 		why   string
 	}{
 		{
-			name:  "a stale snapshot",
-			err:   errors.New("turso: error: database snapshot is stale"),
+			name:  "a locked database",
+			err:   errors.New("turso: database is busy: database is locked"),
 			retry: true,
-			why: "the driver's BeginTx issues a plain BEGIN, so a read-then-write " +
-				"that loses a race fails immediately rather than waiting out a " +
-				"busy timeout — and without a retry that is a lost write on a " +
-				"database with no writer but this process",
+			why:   "a statement outside this process's queue holds the lock and will not for long",
 		},
 		{
-			name:  "a locked database",
-			err:   errors.New("turso: error: database is locked"),
+			name:  "a queue that did not drain in time",
+			err:   fmt.Errorf("store: begin: %w", errWritersQueued),
 			retry: true,
-			why:   "another writer holds it and will not for long",
+			why: "it is the same wait as a locked database, ended by the same " +
+				"busy timeout, and matched by identity rather than by text",
 		},
 		{
 			name: "a connection returned to the pool with a transaction open",
@@ -41,9 +41,18 @@ func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 			retry: true,
 			why: "the next attempt draws a DIFFERENT connection, and a clean one " +
 				"begins normally. Without this the caller that happened to draw " +
-				"the dirty one fails permanently — the projector's boot " +
+				"the dirty one fails permanently: the projector's boot " +
 				"reconcile restarted every two seconds for the life of the " +
 				"process and never hydrated",
+		},
+		{
+			name:  "a stale snapshot",
+			err:   errors.New("turso: error: database snapshot is stale, rollback and retry the transaction"),
+			retry: false,
+			why: "no transaction the store begins can meet one: a write holds " +
+				"the lock from its BEGIN and a read never upgrades, so the only " +
+				"way to reach it is a write inside DB.Read, and re-running that " +
+				"would repeat a write its caller declared to be a read",
 		},
 		{
 			name:  "a constraint violation",
@@ -66,8 +75,8 @@ func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := staleSnapshot(c.err); got != c.retry {
-				t.Fatalf("staleSnapshot(%v) = %v, want %v — %s", c.err, got,
+			if _, got := retryable(c.err); got != c.retry {
+				t.Fatalf("retryable(%v) = %v, want %v: %s", c.err, got,
 					c.retry, c.why)
 			}
 		})
