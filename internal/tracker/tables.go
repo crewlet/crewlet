@@ -49,10 +49,10 @@ var ReproducibleTables = []string{
 	"tracker_persons", "tracker_rank_orders", "tracker_log_generations",
 	"tracker_evictions",
 
-	// The fourteen exploded child tables. Each one exists because a FILTER
-	// reads it: a collection inside a document cannot be indexed, and a
-	// query that decodes every row's document is a full scan wearing an
-	// index's name.
+	// The fifteen exploded child tables. Each one exists because a FILTER
+	// or a FIGURE reads it: a collection inside a document cannot be
+	// indexed, and a query that decodes every row's document is a full
+	// scan wearing an index's name.
 	"tracker_task_closure", "tracker_task_sprints", "tracker_measure_spans",
 	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",

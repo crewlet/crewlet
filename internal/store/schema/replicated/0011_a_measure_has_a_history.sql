@@ -47,9 +47,12 @@
 -- # Swept with the task
 --
 -- No retention of its own: the spans belong to a task and go when it is
--- purged, which is why the table is in `tracker.CollectionTables` rather than
--- in `maintenance`'s job list. The per-task cap is `MaxMeasureSpans`, applied
--- on the document where the sprint stays' cap is applied.
+-- purged, so the purge deletes them with its other child rows and nothing in
+-- `maintenance`'s job list needs to know about them. The table joins
+-- `tracker.ReproducibleTables`, which is what puts it inside the domain's
+-- identity claim and out of every donated snapshot's machinery. The per-task
+-- cap is `MaxMeasureSpans`, applied on the document where the sprint stays'
+-- cap is applied.
 CREATE TABLE tracker_measure_spans (
     task_id      TEXT    NOT NULL,
     from_at      INTEGER NOT NULL,
