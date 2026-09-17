@@ -1,6 +1,17 @@
-The faces in this directory are redistributed under the SIL Open Font License,
-Version 1.1. They are unmodified `latin` and `latin-ext` subsets of the
-upstream variable fonts.
+This file travels with the Crewlet dashboard bundle because that bundle
+embeds the typefaces it covers. The faces themselves are emitted into
+assets/ by the build, from @crewlethq/tokens, which is what loads them:
+the dashboard used to self-host its own copies of the same two families
+beside this notice, and after the design system was adopted it was
+shipping both — two @font-face declarations for one family, from two
+URLs, over 176 KB of duplicate bytes in every binary.
+
+--------------------------------------------------------------------------
+
+The typefaces this bundle embeds — Inter and JetBrains Mono, as unmodified
+`latin` and `latin-ext` subsets of the upstream variable fonts — are
+redistributed under the SIL Open Font License, Version 1.1, whose text
+follows.
 
   Inter            — Copyright (c) 2016 The Inter Project Authors
                      https://github.com/rsms/inter
