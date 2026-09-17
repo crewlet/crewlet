@@ -166,6 +166,7 @@ type span struct {
 // closed sprint moved whenever somebody tidied an estimate months later.
 type burnTask struct {
 	measures []measureSpan
+	current  float64
 	stays    []stay
 	spans    []span
 }
@@ -344,7 +345,7 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 	// takes: a removal hides work, and a burndown that kept counting it
 	// would climb when somebody tidied up.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT m.task_id, m.from_at, m.to_at
+		SELECT m.task_id, m.from_at, m.to_at, `+measure.Column()+`
 		FROM tracker_task_sprints m
 		JOIN tracker_tasks t ON t.id = m.task_id
 		WHERE m.project_key = ? AND m.sprint = ? AND t.removed_at IS NULL`,
@@ -357,14 +358,21 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 	for rows.Next() {
 		var id string
 		var s stay
+		var current float64
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := rows.Scan(&id, &s.from, &s.to); err != nil {
+		if err := rows.Scan(&id, &s.from, &s.to, &current); err != nil {
 			return nil, fmt.Errorf("tracker: scan a stay of sprint %d of %s: %w",
 				number, project, err)
 		}
 		task, held := tasks[id]
 		if !held {
-			task = &burnTask{}
+			// THE CURRENT ROW IS THE FALLBACK, carried for the one
+			// case the size history cannot cover: a task applied
+			// before migration 0011 existed has no spans until the
+			// next record touches it, and that is every task in
+			// every running deployment on the day this ships. See
+			// where it is used below.
+			task = &burnTask{current: current}
 			tasks[id] = task
 		}
 		task.stays = append(task.stays, s)
@@ -459,6 +467,21 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 		sort.Slice(task.measures, func(i, j int) bool {
 			return task.measures[i].from < task.measures[j].from
 		})
+		// A TASK WITH NO HISTORY IS ASSUMED TO HAVE ALWAYS BEEN ITS
+		// CURRENT SIZE, which is the OLD behaviour and therefore the
+		// right thing to degrade to. Migration 0011 creates the span
+		// table empty, so on the day this ships every task in every
+		// running deployment has no spans until a record next touches
+		// it — and a series that read zero for all of them would
+		// replace a chart that was subtly wrong with one that says
+		// the company has never carried any work at all.
+		//
+		// Synthesised here rather than handled in the walk so that
+		// everything downstream sees one shape, and `measureNow`
+		// answers the current size for these tasks too.
+		if len(task.measures) == 0 {
+			task.measures = []measureSpan{{value: task.current}}
+		}
 	}
 	return tasks, nil
 }

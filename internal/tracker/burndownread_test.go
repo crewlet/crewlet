@@ -33,6 +33,56 @@ func (r *roundTrip) burndown(q tracker.BurndownQuery, now time.Time) tracker.Bur
 	return got
 }
 
+// A TASK WITH NO SIZE HISTORY IS WORTH WHAT IT IS WORTH NOW.
+//
+// THIS IS THE MIGRATION'S SAFETY, not a corner. Migration 0011 creates
+// `tracker_measure_spans` EMPTY, and a task only gets spans when a record
+// next touches it — so on the day this ships every task in every running
+// deployment has none. A series that read zero for a task with no history
+// would replace a chart that was subtly wrong with one reporting that the
+// company has never carried any work at all, and it would stay that way for
+// every sprint already closed, whose tasks nothing is going to touch again.
+//
+// So an absent history degrades to the OLD behaviour — the task's current
+// size, assumed to have held for its whole life — which is the one fallback
+// that cannot make an existing chart worse than it already was.
+func TestATaskWithNoSizeHistoryIsValuedAtItsCurrentSize(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	seedSprintWindow(t, r, 1, tracker.SprintActive, base.Add(-2*time.Hour),
+		base.Add(12*24*time.Hour), nil)
+	one := 1
+	pointedTask(t, r, "legacy", 8, &one, "ada")
+
+	// EVERY SPAN DELETED, which is exactly the state a task applied by an
+	// older build is in: its sprint stay and its points are there and its
+	// size history is not.
+	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM tracker_measure_spans`)
+		return err
+	}); err != nil {
+		t.Fatalf("clear the size history: %v", err)
+	}
+
+	got := r.burndown(tracker.BurndownQuery{Project: "ENG", Sprint: 1},
+		time.Now().UTC())
+	if len(got.Points) == 0 {
+		t.Fatal("the series is empty")
+	}
+	last := got.Points[len(got.Points)-1]
+	if last.Scope != 8 {
+		t.Errorf("scope with no size history is %v, want the task's current "+
+			"8 points — an absent history must read as the old behaviour "+
+			"rather than as an empty sprint", last.Scope)
+	}
+	// AND THE HONESTY PAIR AGREES: a task valued at 8 is not unestimated.
+	if got.Unestimated != 0 {
+		t.Errorf("unestimated is %d, want 0 — the task carries 8 points",
+			got.Unestimated)
+	}
+}
+
 // THE SERIES IS OVER THE SPRINT'S OWN MEMBERS, in the project's own measure.
 func TestABurndownScoresTheSprintsOwnMembers(t *testing.T) {
 	t.Parallel()

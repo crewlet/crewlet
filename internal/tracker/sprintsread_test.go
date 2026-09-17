@@ -67,6 +67,67 @@ func pointedTask(t *testing.T, r *roundTrip, id string, points float64,
 	r.drain()
 }
 
+// A RE-ESTIMATE DOES NOT MOVE WHAT THE SPRINT ALREADY TOOK ON.
+//
+// Every figure here summed the task's CURRENT size, so correcting a task from
+// 3 points to 8 rewrote what the sprint was already recorded as having taken
+// on — and it moved the burndown's matching point with it, so the panel and
+// the chart agreed only by being wrong together. A team's own record of their
+// commitment was changed by somebody tidying an estimate.
+//
+// `added` rather than `committed`, because every stay in this harness opens
+// after the window's start — see [TestASprintReportSeparatesCommittedFromAdded]
+// — and it is the stronger assertion anyway: `committed` is valued at one
+// bound instant, while `added` is valued at EACH STAY'S OWN arrival, so this
+// covers the per-row lookup rather than the fixed one.
+//
+// `remaining` is deliberately NOT historical, and is asserted so that stays
+// true: it is the work still to do NOW, so today's estimate is the honest
+// value and 8 is the right answer for the same task.
+func TestAReEstimateLeavesWhatTheSprintTookOn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	seedSprintWindow(t, r, 1, tracker.SprintActive, base.Add(-time.Hour),
+		base.Add(13*24*time.Hour), nil)
+	one := 1
+	pointedTask(t, r, "grew", 3, &one, "ada")
+
+	// AND THEN RE-ESTIMATED, which is the whole case.
+	grown := 8.0
+	if _, err := r.writer.UpdateTask(t.Context(), "op-grow", "grew", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Points: &grown},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("re-estimate the task: %v", err)
+	}
+	r.drain()
+
+	got := r.sprints(tracker.SprintQuery{Project: "ENG"}, time.Now().UTC()).Sprints[0]
+	if got.Figures.Added != 3 {
+		t.Errorf("added is %v, want the 3 points the task was worth when it "+
+			"arrived — a correction made afterwards did not arrive then",
+			got.Figures.Added)
+	}
+	if got.Figures.Remaining != 8 {
+		t.Errorf("remaining is %v, want 8 — what is still to do is worth "+
+			"what the task is worth now", got.Figures.Remaining)
+	}
+	// AND THE CHART AGREES WITH THE PANEL, which is why the figures and the
+	// series read one history rather than each their own. Nothing is
+	// delivered, so the last point's scope IS `remaining`.
+	series := r.burndown(tracker.BurndownQuery{Project: "ENG", Sprint: 1},
+		time.Now().UTC())
+	if len(series.Points) == 0 {
+		t.Fatal("the series is empty")
+	}
+	last := series.Points[len(series.Points)-1]
+	if last.Scope != got.Figures.Remaining {
+		t.Errorf("the chart ends at %v and the panel says %v is remaining — "+
+			"one screen disagreeing with itself about one number",
+			last.Scope, got.Figures.Remaining)
+	}
+}
+
 // EVERY SPRINT FIGURE IS DERIVED FROM THE STAYS, and none of them is stored.
 //
 // Committed is a statement about what the sprint held at its START; a counter

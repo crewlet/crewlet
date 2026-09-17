@@ -331,8 +331,27 @@ own window) and **remaining**, all in whichever of `points` and
 so a task can sit in a sprint the whole way through without finishing, or
 finish in one it joined an hour before the close.
 
+**Every figure is valued at the instant it is about.** A task's size has a
+history, so re-estimating it from 3 points to 8 on day five changes the sprint
+from day five onwards and leaves what came before as it was reported:
+`committed` stays the 3 points the team actually took on, `added` counts a task
+at what it was worth when it ARRIVED, `removed` at what it was worth when it
+LEFT, and `done` at the end of the sprint's own window — so a correction made
+after a sprint closed never raises what that sprint is recorded as having
+shipped, and never moves its velocity.
+
+`remaining` is the exception, deliberately: it is the work still to do **now**,
+so it is valued at today's estimate. `unestimated` is the same — it counts the
+tasks carrying no value today, which is what a reader would go and fix.
+
+A task the engine has no size history for is valued at its current size
+throughout, which is what a task applied by an older build reads as until
+something next touches it.
+
 A **burndown** is the same sprint scored at every instant of its window rather
-than at its two ends, and the dashboard draws it over the running sprint. Its
+than at its two ends, and the dashboard draws it over the running sprint. It
+reads the same size history, which is what makes its first point `committed`
+and its last point agree with the panel beside it. Its
 `remaining` is an **open status group** rather than "not delivered", which is
 the whole arithmetic: a task that was cancelled has stopped being work, so
 counting it as remaining makes a descoped sprint run flat and read as a team
