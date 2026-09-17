@@ -528,10 +528,6 @@ func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]
 	return chain, nil
 }
 
-// Containers is every container this node knows about.
-//
-// THE DOMAIN IS ITS SCOPE, because a container list is about all of them —
-// which is exactly what [ReadScope] returns for a read that names none.
 // ContainerListing is one container plus the figure a browser needs beside it.
 //
 // A DERIVED COUNT rather than a field on [Container], because the container
@@ -550,6 +546,10 @@ type ContainerListing struct {
 	Pages int `json:"pages"`
 }
 
+// Containers is every container this node knows about.
+//
+// THE DOMAIN IS ITS SCOPE, because a container list is about all of them —
+// which is exactly what [ReadScope] returns for a read that names none.
 func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 	[]ContainerListing, error) {
 
