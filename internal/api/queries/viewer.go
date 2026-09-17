@@ -120,3 +120,27 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 	// these records through the operator tool server in the first place.
 	return asked, nil
 }
+
+// viewerPins is the authority rule over the viewer a view STRIP is
+// personalised by.
+//
+// The same check as [Sources.viewerHandle] over a different ABSENCE, which is
+// why the named case delegates rather than restating it. A personal question
+// is ABOUT somebody, so naming nobody with no seat to fall back on has no
+// answer and [errNoSeat] says so. A view strip is about a CONTAINER and the
+// viewer only decides whose pins order it, so naming nobody is the SHARED
+// strip — a real answer, the documented meaning of an empty
+// [tracker.ViewQuery.Viewer], and the one an anonymous or unbound caller must
+// keep getting, because the sidebar and the board ask for exactly that.
+//
+// What is identical is the half that matters. `viewer` selected whose record
+// was read and nothing checked it, so a reader could walk the org chart and
+// page through every seat's pinned views by handle — the personal record
+// `work_person` is scoped for, on a surface `api.allow_anonymous_read` opens.
+// A scope rule three of the four personal questions follow is not a rule.
+func (s Sources) viewerPins(ctx context.Context, asked string) (string, error) {
+	if asked == "" {
+		return "", nil
+	}
+	return s.viewerHandle(ctx, asked)
+}

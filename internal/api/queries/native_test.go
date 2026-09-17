@@ -584,7 +584,10 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			w := &stubWork{}
-			if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+			// AS AN OPERATOR, because naming somebody else's
+			// handle is what the credential buys — see
+			// TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName.
+			if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
 				map[string]any{"container": tc.raw, "viewer": "ana"}); err != nil {
 				t.Fatalf("work_views: %v", err)
 			}
@@ -608,6 +611,63 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("container=%q answered %v, want a bad-parameter refusal", raw, err)
 		}
+	}
+}
+
+// A STRIP IS ONLY PERSONALISED BY A VIEWER THE CALLER MAY NAME.
+//
+// `viewer=` selects WHOSE pins and personal views order the strip, and nothing
+// checked it: on a node with `api.allow_anonymous_read` a reader could take
+// the handles out of `org` and page through every seat's pinned views. The
+// scope rule is the one the other personal questions take — your own, or an
+// operator credential for anybody else's.
+//
+// THE ABSENT CASE IS THE POINT OF THE SEPARATE RULE. A question ABOUT
+// somebody refuses when the caller names nobody and has no seat; a strip is
+// about a CONTAINER, so naming nobody is the shared strip, which is what the
+// sidebar and the board poll for. Refusing that would have taken the strip off
+// two screens for every reader whose token is not bound to a seat.
+func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
+	t.Parallel()
+
+	// SOMEBODY ELSE'S, with no credential: refused, and as an
+	// authorization failure rather than a bad parameter — the remedy is a
+	// different credential, not a different handle.
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); !errors.Is(
+		err, queries.ErrUnauthorized) {
+
+		t.Errorf("an anonymous caller naming another seat's handle answered %v, "+
+			"want an authorization refusal", err)
+	}
+	// AND THE READER WAS NEVER ASKED, which is the half a refusal
+	// returned after the read would not have bought.
+	if w.views.Viewer != "" {
+		t.Errorf("the refused handle reached the reader as %q", w.views.Viewer)
+	}
+
+	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
+	// these records in the first place.
+	w = &stubWork{}
+	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
+		t.Fatalf("an operator naming a seat's handle: %v", err)
+	}
+	if w.views.Viewer != "ada-okonkwo" {
+		t.Errorf("an operator's viewer reached the reader as %q, want ada-okonkwo",
+			w.views.Viewer)
+	}
+
+	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
+	// answer with an empty viewer, never a refusal.
+	w = &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace"}); err != nil {
+		t.Fatalf("the shared strip, asked anonymously: %v", err)
+	}
+	if w.views.Viewer != "" {
+		t.Errorf("an unnamed viewer reached the reader as %q, want empty", w.views.Viewer)
 	}
 }
 

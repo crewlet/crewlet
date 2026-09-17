@@ -268,19 +268,31 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 
 // workViews answers one container's view strip.
 //
-// # Why `viewer` is a parameter here and not the caller's own identity
+// # Why `viewer` is a parameter, and why naming somebody else needs a
+// credential
 //
 // A personal view is private to its OWNER, and the reader enforces that in
-// SQL. What `viewer=` selects is which person's strip to render — their
-// personal views and their pins — and it is safe to let a caller name one
-// because this whole surface is guarded: the caller already holds the
-// company's own credential and can read every task, comment and page in it.
-// The privacy a personal view has is from other COMPANY MEMBERS reading
-// through their own seats, which is a boundary the seat tools enforce and this
-// route is on the other side of.
+// SQL. What `viewer=` selects is WHOSE strip to render — their personal views
+// and their pins — so it has to be a parameter: a screen reaches this before
+// it knows who is looking, and `work_views` is asked for a container rather
+// than for a person.
 //
-// Absent is the SHARED strip: no pins and no personal views but the shared
-// ones, which is what a screen draws before it knows who is looking.
+// It used to be unchecked, on the reasoning that the whole surface is guarded
+// so the caller already holds the company's own credential and can read every
+// task, comment and page in it anyway. That reasoning has the same hole
+// [Sources.workPerson] records: `api.allow_anonymous_read` opens this surface,
+// and then `viewer=` is a free choice of whose record to read. Anybody could
+// walk the org chart — which `org` answers — and page through every seat's
+// pinned views by handle. So the parameter now takes the scope rule the other
+// personal questions take, through [Sources.viewerPins]: your own, or an
+// operator credential for anybody else's.
+//
+// Absent is still the SHARED strip: no pins and no personal views but the
+// shared ones, which is what a screen draws before it knows who is looking,
+// and what the sidebar and the board ask for on every poll. That is why the
+// rule is [Sources.viewerPins] rather than [Sources.viewerHandle] — the
+// refusal an absent handle earns on a question ABOUT somebody would refuse a
+// strip that has a perfectly good answer.
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -290,9 +302,13 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
+	if err != nil {
+		return nil, err
+	}
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
-		Viewer:    strings.TrimSpace(p.String("viewer")),
+		Viewer:    viewer,
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [freshness] and [Sources.workItems].
