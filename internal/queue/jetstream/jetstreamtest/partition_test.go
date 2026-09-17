@@ -266,7 +266,7 @@ func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
 	var startedPort, attempts int
 	freeOnRetry := false
 
-	c := withFreshPorts(t, "partial-teardown probe", func(ctx context.Context) (*Cluster, error) {
+	c := withFreshPorts(t.Context(), t, "partial-teardown probe", func(ctx context.Context) (*Cluster, error) {
 		attempts++
 		if attempts > 1 {
 			free, err := PortFree(ctx, "127.0.0.1", startedPort)

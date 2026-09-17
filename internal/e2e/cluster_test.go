@@ -88,7 +88,7 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // DIFFERENT NUMBERS." Retrying with the same numbers is retrying the question
 // somebody else already answered, so a genuinely lost port failed all three
 // attempts identically and with nothing to say which of the two causes it was.
-func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n int) *cluster {
+func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
 	t.Helper()
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
 	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
@@ -105,8 +105,16 @@ func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n
 	// observe is a comment rather than a bound.
 	deadline := time.Now().Add(jetstreamtest.ClusterStartBudget)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
-		relays := mesh(t, n)
+		// THE MESH IS BUILT INSIDE THE ATTEMPT, because reserving its
+		// ports and starting its relays is part of what the ceiling
+		// bounds. Built before the context existed it was counted
+		// against the budget and bounded by none of it, and
+		// [jetstreamtest.StartRelays] carried a second budget of its
+		// own: relay setup could spend the whole ceiling and leave the
+		// member start an already-expired context, so the loop reported
+		// "no cluster came up" having never started a member.
 		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(), deadline)
+		relays := mesh(attemptCtx, t, n)
 		c, err := startMeshOnce(attemptCtx, t, relays, n)
 		cancelAttempt()
 		if err == nil {
@@ -248,10 +256,9 @@ func stopAll(stops [][]func()) {
 // gives up.
 //
 // [jetstreamtest.ClusterStartAttempts] ITSELF, not a second number applying
-// its reasoning. This used to say "it is `jetstreamtest.clusterStartAttempts`'s
-// reasoning applied one layer up" while carrying three where that one carried
-// four — one decision, two spellings, each comment asserting it matched the
-// other. That is the shape textcut, whsec and jsprovision were each written to
+// its reasoning. This used to restate that constant's argument as its own
+// while carrying three where the constant carried four — one decision, two
+// spellings, each comment asserting it matched the other. That is the shape textcut, whsec and jsprovision were each written to
 // remove, and the fix is the same one: read the constant rather than restate
 // the argument.
 //

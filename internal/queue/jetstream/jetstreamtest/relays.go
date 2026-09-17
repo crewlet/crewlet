@@ -42,7 +42,10 @@ type Relays struct {
 // It reserves all three port sets TOGETHER, for the reason [freePorts] gives:
 // taking them one at a time can hand out the same number twice, and the
 // collision does not surface until a member silently forms no route.
-func StartRelays(t *testing.T, n int) *Relays {
+// ctx BOUNDS THE MESH START, and a caller inside its own retry loop passes
+// that loop's attempt context: see [withFreshPorts] for why a nested budget
+// must share the outer one rather than stack beside it.
+func StartRelays(ctx context.Context, t *testing.T, n int) *Relays {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("StartRelays(%d): a partition needs at least two members, or "+
@@ -60,7 +63,7 @@ func StartRelays(t *testing.T, n int) *Relays {
 	// The classification it needs lives at the bind itself now, in
 	// [listenErr], which is the only place that can tell those apart.
 	var mesh *Relays
-	withFreshPorts(t, "relay mesh", func(ctx context.Context) (*Cluster, error) {
+	withFreshPorts(ctx, t, "relay mesh", func(ctx context.Context) (*Cluster, error) {
 		r, err := startRelaysOnce(ctx, t, n)
 		mesh = r
 		return r.c, err
@@ -143,12 +146,13 @@ func startRelaysOnce(ctx context.Context, t *testing.T, n int) (*Relays, error) 
 //
 // So a case that partitions takes [StartRelays] and pays for it. Everything
 // else takes this.
-func StartDirectMesh(t *testing.T, n int) *Relays {
+// ctx bounds the port reservation, for [StartRelays]'s reason.
+func StartDirectMesh(ctx context.Context, t *testing.T, n int) *Relays {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("StartDirectMesh(%d): use one member's own config for a solo node", n)
 	}
-	return &Relays{ports: freePorts(t.Context(), t, n), direct: true}
+	return &Relays{ports: freePorts(ctx, t, n), direct: true}
 }
 
 // Stop releases everything this mesh holds — the relay listeners, and with

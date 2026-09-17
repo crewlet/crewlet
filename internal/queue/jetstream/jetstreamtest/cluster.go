@@ -51,7 +51,7 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
 	}
 
-	return withFreshPorts(t, "cluster", func(ctx context.Context) (*Cluster, error) {
+	return withFreshPorts(t.Context(), t, "cluster", func(ctx context.Context) (*Cluster, error) {
 		// Ports are reserved up front because every member's routes
 		// must name every other member, including ones not started
 		// yet, and the alternative — starting members one at a time
@@ -202,7 +202,14 @@ func listenErr(err error) error {
 // What the log must not do is call every one of them a port race. That was the
 // other half of the same defect — the one diagnostic a reader gets, naming a
 // cause the run had no evidence for.
-func withFreshPorts(t *testing.T, what string,
+// ctx IS THE PARENT EVERY ATTEMPT DERIVES FROM, so a caller that already
+// carries a budget keeps it: context.WithDeadline only ever shortens, and a
+// mesh start nested inside another retry loop must SHARE that loop's ceiling
+// rather than add a second one able to exhaust it. Derived from t.Context()
+// instead, the inner loop could spend the outer one's whole budget and hand
+// the outer loop's first real attempt an already-expired context — reported
+// as "no cluster came up" by a loop that had never started a member.
+func withFreshPorts(ctx context.Context, t *testing.T, what string,
 	start func(context.Context) (*Cluster, error)) *Cluster {
 
 	t.Helper()
@@ -217,7 +224,7 @@ func withFreshPorts(t *testing.T, what string,
 	// comment, not a bound.
 	deadline := time.Now().Add(ClusterStartBudget)
 	for attempt := 1; attempt <= ClusterStartAttempts; attempt++ {
-		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(), deadline)
+		attemptCtx, cancelAttempt := context.WithDeadline(ctx, deadline)
 		c, err := start(attemptCtx)
 		cancelAttempt()
 		if err == nil {
@@ -299,7 +306,7 @@ func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 			"two members, or there is no pair to cut", n)
 	}
 
-	return withFreshPorts(t, "partitionable cluster", func(ctx context.Context) (*Cluster, error) {
+	return withFreshPorts(t.Context(), t, "partitionable cluster", func(ctx context.Context) (*Cluster, error) {
 		return startPartitionable(ctx, t, n, base)
 	})
 }
