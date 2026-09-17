@@ -1,6 +1,7 @@
 package jetstreamtest
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -59,8 +60,8 @@ func StartRelays(t *testing.T, n int) *Relays {
 	// The classification it needs lives at the bind itself now, in
 	// [listenErr], which is the only place that can tell those apart.
 	var mesh *Relays
-	withFreshPorts(t, "relay mesh", func() (*Cluster, error) {
-		r, err := startRelaysOnce(t, n)
+	withFreshPorts(t, "relay mesh", func(ctx context.Context) (*Cluster, error) {
+		r, err := startRelaysOnce(ctx, t, n)
 		mesh = r
 		return r.c, err
 	})
@@ -73,9 +74,9 @@ func StartRelays(t *testing.T, n int) *Relays {
 // [StartCluster]'s factory gives: the relays that DID bind hold their
 // listeners until the test ends, and [withFreshPorts] is what takes them down
 // between attempts. Only the embedded cluster is meaningful on an error.
-func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
+func startRelaysOnce(ctx context.Context, t *testing.T, n int) (*Relays, error) {
 	t.Helper()
-	ports := freePorts(t, n+n*(n-1)+n)
+	ports := freePorts(ctx, t, n+n*(n-1)+n)
 	routePorts, relayPorts, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
 	c := &Cluster{}
@@ -97,7 +98,7 @@ func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 	// fails and the route is retried, which is the ordinary case NATS
 	// already handles.
 	for _, f := range c.forwarders {
-		if err := f.start(t.Context()); err != nil {
+		if err := f.start(ctx); err != nil {
 			// RETURNED, NOT FATAL. A relay listener loses its port to
 			// the same race a member's does — this reserves n(n-1)+2n
 			// of them, so it loses MORE often — and the retry above
@@ -139,7 +140,7 @@ func StartDirectMesh(t *testing.T, n int) *Relays {
 	if n < 2 {
 		t.Fatalf("StartDirectMesh(%d): use one member's own config for a solo node", n)
 	}
-	return &Relays{ports: freePorts(t, n), direct: true}
+	return &Relays{ports: freePorts(t.Context(), t, n), direct: true}
 }
 
 // Stop releases everything this mesh holds — the relay listeners, and with
@@ -150,7 +151,7 @@ func StartDirectMesh(t *testing.T, n int) *Relays {
 // A harness that RETRIES a cluster start has to reserve fresh ports for each
 // attempt, because the whole reason an attempt lost is that somebody else took
 // a number this one was given, and asking for the same number again is asking
-// for the same answer (see [clusterStartAttempts], whose remedy is explicitly
+// for the same answer (see [ClusterStartAttempts], whose remedy is explicitly
 // "trying again with different numbers"). A mesh per attempt means the failed
 // attempt's relays have to go down when that attempt does — `t.Cleanup` runs
 // when the TEST ends, which is after every attempt, so it is the wrong moment

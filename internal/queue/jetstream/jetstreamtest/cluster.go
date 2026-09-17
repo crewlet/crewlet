@@ -51,12 +51,12 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
 	}
 
-	return withFreshPorts(t, "cluster", func() (*Cluster, error) {
+	return withFreshPorts(t, "cluster", func(ctx context.Context) (*Cluster, error) {
 		// Ports are reserved up front because every member's routes
 		// must name every other member, including ones not started
 		// yet, and the alternative — starting members one at a time
 		// and rewriting routes — is a NATS reload per member.
-		ports := freePorts(t, n)
+		ports := freePorts(ctx, t, n)
 		routes := make([]string, n)
 		for i, p := range ports {
 			routes[i] = routeURL(p)
@@ -64,7 +64,7 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 
 		c := &Cluster{}
 		for i := range n {
-			if err := c.start(t, memberConfig(base, i, n, ports[i], routes), i); err != nil {
+			if err := c.start(ctx, t, memberConfig(base, i, n, ports[i], routes), i); err != nil {
 				// THE PARTIAL CLUSTER GOES BACK WITH THE ERROR, so
 				// [withFreshPorts] can take it down before retrying.
 				// Discarded, the members that DID start keep their
@@ -139,9 +139,17 @@ const ClusterStartAttempts = 4
 // timeout, so even a run that loses every one of them reports what failed
 // instead of being killed mid-test.
 //
-// It bounds the LOOP rather than an attempt, deliberately. What an attempt
-// should cost is the engine's question and [jsprovision] answers it; what a
-// harness may spend re-asking that question is this one.
+// It bounds the LOOP, and it does so by bounding each attempt within it: every
+// attempt is handed a context carrying what is LEFT of the budget, so a member
+// start that would otherwise wait out its own clustered accept budget is
+// interrupted instead. Consulted only between attempts — which is how this was
+// first written — it bounded how MANY were made and nothing about how long one
+// took, and a single sequential three-member attempt could outlast the whole
+// ceiling before the loop ever looked at it.
+//
+// What an attempt should cost when nothing is wrong is still the engine's
+// question and [jsprovision] answers it; this is the harness's ceiling on
+// re-asking it.
 const ClusterStartBudget = 3 * time.Minute
 
 // errNotRetryable marks a start failure that a fresh set of ports cannot
@@ -194,12 +202,24 @@ func listenErr(err error) error {
 // What the log must not do is call every one of them a port race. That was the
 // other half of the same defect — the one diagnostic a reader gets, naming a
 // cause the run had no evidence for.
-func withFreshPorts(t *testing.T, what string, start func() (*Cluster, error)) *Cluster {
+func withFreshPorts(t *testing.T, what string,
+	start func(context.Context) (*Cluster, error)) *Cluster {
+
 	t.Helper()
 	var last error
+	// THE DEADLINE IS HANDED TO THE ATTEMPT, not merely consulted after
+	// it. Checked only between attempts it bounded how many were made and
+	// nothing about how long one took: a member start reaching
+	// [js.StartServer] on an unbounded context waits its own clustered
+	// accept budget, and the members are started in sequence, so a single
+	// attempt could outlast this whole ceiling before the loop below ever
+	// looked at it. A budget the thing it bounds cannot observe is a
+	// comment, not a bound.
 	deadline := time.Now().Add(ClusterStartBudget)
 	for attempt := 1; attempt <= ClusterStartAttempts; attempt++ {
-		c, err := start()
+		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(), deadline)
+		c, err := start(attemptCtx)
+		cancelAttempt()
 		if err == nil {
 			return c
 		}
@@ -279,17 +299,17 @@ func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 			"two members, or there is no pair to cut", n)
 	}
 
-	return withFreshPorts(t, "partitionable cluster", func() (*Cluster, error) {
-		return startPartitionable(t, n, base)
+	return withFreshPorts(t, "partitionable cluster", func(ctx context.Context) (*Cluster, error) {
+		return startPartitionable(ctx, t, n, base)
 	})
 }
 
-func startPartitionable(t *testing.T, n int, base js.Config) (*Cluster, error) {
+func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config) (*Cluster, error) {
 	t.Helper()
 	// Three port sets, reserved together for the reason freePorts exists:
 	// the members' real route ports, one relay port per ordered pair, and
 	// one dead port per member for the address it advertises.
-	ports := freePorts(t, n+n*(n-1)+n)
+	ports := freePorts(ctx, t, n+n*(n-1)+n)
 	routePorts, relays, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
 	c := &Cluster{}
@@ -310,7 +330,7 @@ func startPartitionable(t *testing.T, n int, base js.Config) (*Cluster, error) {
 	// fails and the route is retried, which is the ordinary case NATS
 	// already handles.
 	for _, f := range c.forwarders {
-		if err := f.start(t.Context()); err != nil {
+		if err := f.start(ctx); err != nil {
 			// THROUGH [listenErr], because the retry above cannot tell a
 			// lost port from an unbindable address on its own — and the
 			// raw error told it everything was transient.
@@ -333,7 +353,7 @@ func startPartitionable(t *testing.T, n int, base js.Config) (*Cluster, error) {
 		// from outside the harness on a port a partition does not cut.
 		cfg.ClusterHost = "127.0.0.1"
 		cfg.ClusterAdvertise = hostPort(dead[i])
-		if err := c.start(t, cfg, i); err != nil {
+		if err := c.start(ctx, t, cfg, i); err != nil {
 			return c, err
 		}
 	}
@@ -382,7 +402,10 @@ func memberConfig(base js.Config, i, n, clusterPort int, routes []string) js.Con
 // is indistinguishable from a cluster that is slow to converge. That is how it
 // was found: a harness waiting out its whole budget for peers that could never
 // arrive, reporting only "routed to [], want 2".
-func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
+// ctx BOUNDS THIS MEMBER'S START, and is the attempt's rather than the test's:
+// see [withFreshPorts] for why a ceiling the start cannot observe bounds
+// nothing.
+func (c *Cluster) start(ctx context.Context, t *testing.T, cfg js.Config, i int) error {
 	t.Helper()
 	cfg.StoreDir = t.TempDir()
 	// PROBED IMMEDIATELY BEFORE THE SERVER BINDS IT, because the interval
@@ -392,7 +415,7 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	// can, short of never letting the port go — but it shortens the window
 	// from seconds to microseconds, and it turns the loss from a
 	// two-minute readiness timeout into an immediate retry.
-	switch free, err := PortFree(t.Context(), cfg.ClusterHost, cfg.ClusterPort); {
+	switch free, err := PortFree(ctx, cfg.ClusterHost, cfg.ClusterPort); {
 	case err != nil:
 		// NOT A RACE, so the retry above must not treat it as one: an
 		// address this host does not have, or a probe that never ran.
@@ -405,7 +428,7 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 			"this harness reserving it and the member starting",
 			i, js.ErrRoutePortTaken, cfg.ClusterPort)
 	}
-	srv, err := js.StartServer(t.Context(), cfg)
+	srv, err := js.StartServer(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("cluster member %d: %w", i, err)
 	}
@@ -460,7 +483,9 @@ func PortFree(ctx context.Context, host string, port int) (bool, error) {
 }
 
 // freePorts reserves n ports the OS is not using.
-func freePorts(t *testing.T, n int) []int {
+// ctx bounds the reservation, so an attempt whose wall-clock ceiling has
+// expired does not start by asking the kernel for ports it will not use.
+func freePorts(ctx context.Context, t *testing.T, n int) []int {
 	t.Helper()
 	// Held open together, then all released: taking and releasing one at a
 	// time can hand out the same port twice.
@@ -468,7 +493,7 @@ func freePorts(t *testing.T, n int) []int {
 	ports := make([]int, 0, n)
 	var lc net.ListenConfig
 	for range n {
-		l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+		l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("reserve a port: %v", err)
 		}
