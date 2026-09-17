@@ -1,12 +1,25 @@
 /**
  * The workspace sidebar: one workspace's tree, and nothing else.
  *
- * # Every row is a destination
+ * # Every row is a destination, and a destination is a path AND a query
  *
- * A row's `href` differs from the current page by its PATH. A row that
- * differed only by a query would be a tab wearing a sidebar row's clothes, and
- * the moment one exists the two levels stop meaning anything — see the grammar
- * in `app/nav.ts`, which `router.test.ts` asserts against these definitions.
+ * Most rows differ from the current page by their PATH, and this file used to
+ * say that was the rule — that a row differing only by a query would be "a tab
+ * wearing a sidebar row's clothes". One group does exactly that and is right
+ * to: Activity's seats are eight rows on `activity/turns` that differ only by
+ * `?seat=`, because a seat is a FILTER on one log rather than eight logs.
+ *
+ * The rule the doc stated and the rows it described disagreed, and selection
+ * believed the doc: it compared paths alone, so every seat matched at once.
+ * All eight drew the current-row tint and all eight carried
+ * `aria-current="page"` — a screen reader hearing eight current pages, and a
+ * reader seeing the accent spent on a whole list where the frame spends it
+ * exactly twice. It was invisible under a 10%-alpha tint on a grey page and
+ * obvious the moment the palette changed, which is how it was found.
+ *
+ * So selection compares BOTH, and a row with no query still matches a route
+ * that carries one — `activity/turns` stays current when a seat narrows it,
+ * because the seat row is the narrower answer and both are true.
  *
  * # Selection is derived, never held
  *
@@ -68,9 +81,26 @@ function matches(row: SidebarRow, needle: string): boolean {
   return (row.children ?? []).some((child) => matches(child, needle));
 }
 
+/**
+ * Whether this row IS the page being read.
+ *
+ * A row's query has to match for a group like Activity's seats, which are one
+ * path and eight queries. A row that carries NO query matches on path alone —
+ * `activity/turns` is still where you are when `?seat=` narrows it, and
+ * demanding an exact query there would leave a reader inside a filtered log
+ * with nothing in the tree marked at all.
+ */
+function isCurrent(row: SidebarRow, route: { path: string[]; query: URLSearchParams }): boolean {
+  if (!samePath(row.path, route.path)) return false;
+  for (const [key, value] of Object.entries(row.query ?? {})) {
+    if (route.query.get(key) !== value) return false;
+  }
+  return true;
+}
+
 function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: string }) {
   const route = useRoute();
-  const current = samePath(row.path, route.path);
+  const current = isCurrent(row, route);
   const onPath = containsRoute(row, route.path);
   const hasChildren = (row.children ?? []).length > 0;
   // OPEN BECAUSE THE READER IS INSIDE IT, or because they searched into it, or

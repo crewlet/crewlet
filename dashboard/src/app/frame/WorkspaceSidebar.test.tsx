@@ -16,7 +16,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { WorkspaceSidebar, type SidebarSection } from "./WorkspaceSidebar.tsx";
+import { WorkspaceSidebar, type SidebarRow, type SidebarSection } from "./WorkspaceSidebar.tsx";
 import { Router } from "~/app/router.tsx";
 
 const SECTIONS: SidebarSection[] = [
@@ -94,4 +94,47 @@ test("the twist still folds a branch the reader is standing in", () => {
   expect(screen.queryByText("Auth rewrite")).not.toBeNull();
   fireEvent.click(screen.getByLabelText("Collapse Apollo"));
   expect(screen.queryByText("Auth rewrite")).toBeNull();
+});
+
+// ONE ROW IS CURRENT, EVEN WHERE A GROUP IS ONE PATH AND MANY QUERIES.
+//
+// Activity's seats are eight rows on `activity/turns` differing only by
+// `?seat=`. Selection compared paths alone, so all eight matched: eight tinted
+// rows and eight `aria-current="page"`, which is what a screen reader reads out
+// as eight current pages. It was invisible under the old palette's 10%-alpha
+// tint and unmissable under a stronger one.
+test("a group that differs only by its query marks exactly one row", async () => {
+  location.hash = "#/activity/turns?seat=agent-cto";
+  const rows: SidebarRow[] = ["agent-ceo", "agent-cto", "agent-pm"].map((handle) => ({
+    key: handle,
+    label: handle,
+    path: ["activity", "turns"],
+    query: { seat: handle },
+  }));
+  render(
+    <Router>
+      <WorkspaceSidebar title="Activity" sections={[{ key: "seats", rows }]} />
+    </Router>,
+  );
+  const marked = await screen.findAllByRole("link", { current: "page" });
+  expect(marked.map((a) => a.textContent)).toEqual(["agent-cto"]);
+});
+
+// AND A ROW WITH NO QUERY STILL MATCHES A ROUTE THAT HAS ONE. Demanding an
+// exact query would leave a reader inside a filtered log with nothing in the
+// tree marked at all — the seat row is the narrower answer, not the only one.
+test("the unfiltered row stays current while a query narrows it", async () => {
+  location.hash = "#/activity/turns?seat=agent-cto";
+  render(
+    <Router>
+      <WorkspaceSidebar
+        title="Activity"
+        sections={[
+          { key: "fixed", rows: [{ key: "turns", label: "Turns", path: ["activity", "turns"] }] },
+        ]}
+      />
+    </Router>,
+  );
+  const marked = await screen.findAllByRole("link", { current: "page" });
+  expect(marked.map((a) => a.textContent)).toEqual(["Turns"]);
 });
