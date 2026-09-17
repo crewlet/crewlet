@@ -267,12 +267,12 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	offered := offeredTools(raw)
-	m.mu.Lock()
 	names := slices.Sorted(maps.Keys(offered))
-	m.offered = append(m.offered, strings.Join(names, "+"))
-	m.systems = append(m.systems, systemPrompt(raw))
-	m.bodies = append(m.bodies, raw)
-	m.mu.Unlock()
+	// ONE RECORD PER CALL, WRITTEN WHERE THE PHASE IS KNOWN — see
+	// [scriptedModel.sawCall] for what pairing them separately cost.
+	saw := func(phase string) {
+		m.sawCall(phase, strings.Join(names, "+"), systemPrompt(raw), raw)
+	}
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
 	// makes each one unambiguous. submit_* first, because those name one
@@ -286,14 +286,14 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		// appears in a review request too — matching on the whole body
 		// answered the reviewer with a work submission, which never
 		// submitted, which rescued into a second round.
-		m.saw("review")
+		saw("review")
 		reply = toolUse("submit_review", map[string]any{
 			"decision":       "done",
 			"final_artifact": "Three PRs merged, one incident, zero regressions.",
 		})
 	case offered["submit_work"]:
 		if query, ok := m.shouldSearch(); ok {
-			m.saw("execute")
+			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
 			break
 		}
@@ -302,11 +302,11 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			// the submitting round, because it is the same phase — what
 			// differs is that this turn leaves an observable trace, which
 			// is the condition every learning worker is gated on.
-			m.saw("execute")
+			saw("execute")
 			reply = toolUse("list_mcp_server_tools", map[string]any{})
 			break
 		}
-		m.saw("execute")
+		saw("execute")
 		reply = toolUse("submit_work", map[string]any{
 			// `delivered` with no cited call, which is honest here: this
 			// company registers no delivery tool and nobody is waiting on
@@ -320,7 +320,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		// A model that never marked would burn all ten rounds and retry
 		// next turn — correct behaviour, and thirty seconds of it in a
 		// test, which is how this case came to exist.
-		m.saw("onboarding")
+		saw("onboarding")
 		reply = toolUse("mark_onboarded", map[string]any{
 			"notes": "Read the team pages; deploys go out on Thursdays.",
 		})
@@ -331,10 +331,10 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		// made the phase list report work that never happened — and made
 		// "the first execute call" name a prompt the executor never saw.
 		pass := auxiliaryPass(raw)
-		m.saw("aux:" + pass)
+		saw("aux:" + pass)
 		reply = textReply(auxiliaryAnswer(pass))
 	default:
-		m.saw("execute")
+		saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -417,6 +417,42 @@ func offeredTools(raw []byte) map[string]bool {
 	return out
 }
 
+// sawCall records everything ONE model call is known by, in ONE critical
+// section: the phase it was, the tools it was offered, the system prompt it
+// was shown and its whole body.
+//
+// # Why they cannot be appended separately
+//
+// Because every reader PAIRS THEM BY INDEX — [executorPrompt] finds "execute"
+// in calls and reads systems at the same position — and that only holds if one
+// call appends to all of them without another getting in between. It did not.
+// serve appended the prompt, the tools and the body before the switch (it has
+// to: the phase is not known until the body is parsed), released the lock, and
+// saw appended the phase after. Two requests in flight — two seats, or a seat
+// and one of the prefetch's auxiliary passes, which is the ordinary case —
+// interleave between those two sections, and from then on calls[i] and
+// systems[i] are different calls.
+//
+// Measured: the end-to-end skills case read a prompt with no "## Tool skills"
+// section and failed on a section that was there all along, having been handed
+// an auxiliary pass's prompt where it asked for the executor's. Intermittent
+// by construction, and invisible under -race because both halves were locked
+// — it is a pairing bug, not a data race.
+//
+// So the phase is what the record is BUILT WITH rather than appended
+// alongside, which is the same rule the engine's own write authority states:
+// take one snapshot and decide inside it.
+func (m *scriptedModel) sawCall(phase, tools, system string, body []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, phase)
+	m.offered = append(m.offered, tools)
+	m.systems = append(m.systems, system)
+	m.bodies = append(m.bodies, body)
+}
+
+// saw records a phase alone, for a scripted endpoint that keeps no prompts —
+// see [newSandboxModel], whose handler never recorded them.
 func (m *scriptedModel) saw(phase string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

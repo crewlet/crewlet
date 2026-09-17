@@ -354,7 +354,7 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 // would turn a config mistake into a thirty-second hang with the same
 // message at the end.
 func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
-	return jsprovision.Place(ctx, func(ctx context.Context) error {
+	return jsprovision.Place(ctx, q.Clustered().AskTerm(), func(ctx context.Context) error {
 		// CREATE, NOT CreateOrUpdate, and the difference is the whole
 		// race guard above rather than a preference.
 		//
@@ -508,30 +508,68 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 func (q *Queue) createOrObserveStream(
 	ctx context.Context, spec streamSpec, config jetstream.StreamConfig,
 ) error {
-	// ITS OWN DEADLINE, because the client's default is not sized for this
-	// call. nats.go applies a five-second API timeout to a context with no
-	// deadline, which is right for an ordinary request and wrong for the
-	// one that provisions a REPLICATED stream: the engine has just waited
-	// up to a minute for the metadata group precisely because that group
-	// is slow to form, and then gave the call that depends on it five
-	// seconds. Measured: a three-member cluster under load fails here
-	// about one boot in six, reported as a bare "context deadline
-	// exceeded" with nothing to say which deadline.
+	// THE LOOKUP AND THE CREATE GET SEPARATE DEADLINES, because they are
+	// separate operations and only one of them is a raft round trip.
+	//
+	// Both had their own deadline before this — the client's default is
+	// five seconds for a context that carries none, and an engine boot's
+	// carries none — but they shared ONE, sized for the create. So a
+	// lookup that went unanswered spent the whole clustered budget and
+	// left nothing of it for the create it exists to inform. See
+	// [jsprovision.LookupBudget] for why a metadata read is sized by the
+	// server's own hold window instead.
 	//
 	// WithTimeout only ever shortens against the parent, so a caller with
 	// a tighter deadline of its own still wins — which is also what makes
-	// the sequence ceiling [Queue.ensureStreams] applies effective.
-	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
-	defer cancel()
-
-	info, err := q.js.Stream(createCtx, spec.name)
+	// the sequence ceiling [Queue.ensureStreams] applies effective, and
+	// what keeps two deadlines from costing more than the one they
+	// replaced.
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	// A BREADCRUMB ON THE LOOKUP TOO, and it is the one that was missing:
+	// this is the FIRST call to reach the metadata group for this stream,
+	// so a member stalled against a group that has not settled waits here
+	// — while the watcher around the create could not fire, because the
+	// create had not started.
+	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_stream_lookup_slow", "stream", spec.name,
+			"waited", after,
+			"detail", "still asking whether this stream already exists; on a "+
+				"fleet that is a metadata group that has not settled, and the "+
+				"create has not been attempted yet")
+	})
+	// THROUGH [jsprovision.Ask], so a request the group never answered is
+	// re-issued inside the ceiling above rather than being the whole of it.
+	var info jetstream.Stream
+	err := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			info, e = q.js.Stream(ctx, spec.name)
+			return e
+		}, nil)
+	stopLookup()
+	cancelLookup()
 	switch {
 	case err == nil:
 		return q.observeStream(spec, config, info)
-	case !errors.Is(err, jetstream.ErrStreamNotFound):
+	case errors.Is(err, jetstream.ErrStreamNotFound):
+		// TOLD it is absent. Create it below.
+	case jsprovision.Unanswered(ctx, err):
+		// TOLD NOTHING, which is not the same fact and must not be
+		// reported as one — see [jsprovision.Unanswered]. The create
+		// below covers both things this lookup failed to say, so the
+		// boot continues rather than failing on a question nobody
+		// answered.
+		q.log.WarnContext(ctx, "jetstream_stream_lookup_unanswered",
+			"stream", spec.name, "error", err.Error(),
+			"detail", "the broker did not say whether this stream exists, so "+
+				"the create below decides it: absent and it is made, present "+
+				"and it comes back as a peer's win and is compared")
+	default:
 		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
 	}
 
+	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
 	createErr := q.createStream(createCtx, config)
 	if createErr == nil {
 		return nil
@@ -861,16 +899,20 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	// Reporting whether THIS call created it is part of the contract, so
 	// look first rather than inferring from an upsert.
 	//
-	// ITS OWN DEADLINE, for the reason ensureDurableConsumer gives, and
-	// this is the call that reaches the metadata group FIRST. With no
-	// deadline of its own — an engine boot's context has none — it reached
-	// nats.go under the client's five-second default, so on a clustered
-	// boot the lookup expired before the create it precedes ever ran. A
-	// [context.DeadlineExceeded] is not [jetstream.ErrConsumerNotFound],
-	// so it does not fall through to the create either: it returns
-	// `inspect consumer …: context deadline exceeded` and fails the boot,
-	// which is the exact shape the budget below was added to remove.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisionBudget())
+	// ITS OWN DEADLINE, and it is a LOOKUP's rather than a create's — see
+	// [jsprovision.LookupBudget]. With no deadline of its own (an engine
+	// boot's context has none) this reached nats.go under the client's
+	// five-second default, so on a clustered boot the lookup expired
+	// before the create it precedes ever ran.
+	//
+	// THE BUDGET WAS NEVER THE WHOLE FIX, and saying it was is what left
+	// this path broken after it: a [context.DeadlineExceeded] is not
+	// [jetstream.ErrConsumerNotFound], so a longer deadline only bought a
+	// longer wait before the same `inspect consumer …: context deadline
+	// exceeded` failed the same boot. What removes the shape is reading an
+	// unanswered lookup as the third value it is and falling through to
+	// the create below.
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
 	defer cancelLookup()
 	// AND ITS BREADCRUMB, because a budget without one just moves where
 	// the silence is. This is the FIRST call to reach the metadata group
@@ -878,16 +920,33 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	// settled now waits here — and said nothing, while the watcher around
 	// the create below could not fire because the create had not started.
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
-		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
+		q.log.WarnContext(ctx, "jetstream_consumer_lookup_slow", "stream", stream,
 			"consumer", name, "waited", after,
 			"detail", "still asking whether this mailbox already exists; on a "+
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	_, getErr := q.js.Consumer(lookupCtx, stream, name)
+	getErr := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			_, e := q.js.Consumer(ctx, stream, name)
+			return e
+		}, nil)
 	stopLookup()
+	// EXISTED MEANS THIS NODE WAS TOLD IT WAS THERE, never merely "the
+	// lookup did not fail". An unanswered probe leaves it false and the
+	// create below decides: the returned bool is `!existed && won`, and
+	// won is the authority on which node's create actually made it.
 	existed := getErr == nil
-	if getErr != nil && !errors.Is(getErr, jetstream.ErrConsumerNotFound) {
+	switch {
+	case getErr == nil, errors.Is(getErr, jetstream.ErrConsumerNotFound):
+		// Told, either way.
+	case jsprovision.Unanswered(ctx, getErr):
+		q.log.WarnContext(ctx, "jetstream_consumer_lookup_unanswered",
+			"stream", stream, "consumer", name, "error", getErr.Error(),
+			"detail", "the broker did not say whether this mailbox exists, so "+
+				"the create below decides it rather than the boot failing on "+
+				"a question nobody answered")
+	default:
 		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
 	}
 
@@ -1054,7 +1113,7 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	// transient here — and without the retry the clustered budget above
 	// bought this call nothing, because the one condition it exists to
 	// wait out was the one condition this create did not wait on.
-	createErr := jsprovision.Place(createCtx, func(ctx context.Context) error {
+	createErr := jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
 		var e error
 		cons, e = q.js.CreateConsumer(ctx, stream, cfg)
 		return e

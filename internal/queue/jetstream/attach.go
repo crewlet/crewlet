@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -358,7 +359,52 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	if err != nil {
 		return err
 	}
-	cons, err := q.js.Consumer(ctx, stream, consumerName(topic, group))
+	// THE FIFTH SIBLING READ-BACK, and the one that kept the one-shot,
+	// unbudgeted form every other provisioning read has been given up.
+	//
+	// It sat on the boot's context, which carries no deadline, so nats.go
+	// applied its own five-second default — twenty-four times tighter than
+	// [jsprovision.Budget] and tighter than [jsprovision.SlowAfter], so
+	// the breadcrumb that would have named it could never fire. A
+	// clustered boot failed here as `open consumer
+	// crewlet.notifications.inbound/notify-inbound: context deadline
+	// exceeded` with nothing logged before it.
+	//
+	// TWO VERBS, because there are two hazards and one tool does not cover
+	// both. [jsprovision.Ask] re-issues a request the group never answered,
+	// under [jsprovision.LookupBudget] as its ceiling; [jsprovision.Settle]
+	// waits out the propagation window, and this read is inside one BY
+	// CONSTRUCTION — EnsureSubscription above has just created the
+	// consumer, so the member that made it can still be told it is not
+	// there. Silence and not-yet-visible are different answers with
+	// different remedies, which is why neither verb subsumes the other.
+	name := consumerName(topic, group)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_consumer_attach_slow", "stream", stream,
+			"consumer", name, "waited", after,
+			"detail", "still opening the mailbox this attachment consumes from; "+
+				"on a fleet that is a metadata group that has not settled")
+	})
+	var cons jetstream.Consumer
+	err = jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = q.js.Consumer(ctx, stream, name)
+			return e
+		}, nil)
+	stopLookup()
+	cancelLookup()
+	if jsprovision.NotYetVisible(err) {
+		// ON ctx, NOT lookupCtx, for the reason [jsprovision.Settle]
+		// gives: lookupCtx may be the deadline that just expired, and a
+		// read-back handed an expired context asks once and gives up.
+		err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+			var e error
+			cons, e = q.js.Consumer(ctx, stream, name)
+			return e
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("open consumer %s/%s: %w", topic, group, err)
 	}

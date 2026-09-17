@@ -422,7 +422,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// Trace is never enabled: it is a line per protocol message, and the
 	// engine publishes every event through here. Debug is the operator's
 	// own answer rather than the log level's — see [Config.Debug].
-	ns.SetLoggerV2(newNATSLogger(), cfg.Debug, false, false)
+	ns.SetLoggerV2(newNATSLogger(cfg.ServerName), cfg.Debug, false, false)
 	go ns.Start()
 
 	// THE WAIT IS CANCELLABLE, which is the whole reason this function takes

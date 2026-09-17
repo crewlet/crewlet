@@ -650,16 +650,18 @@ that matches the author.
 
 **This one is enforced**, unlike the subject conventions above.
 `scripts/check-signoff.sh` judges the commits a branch adds relative to its
-merge base with the base branch, and it runs in three places: `make check`
-locally, CI's `sign-off` job over the pull request, and CI's `sign-off (main)`
-job over what each push actually adds to `main`. A commit without a trailer
-fails the build.
+merge base with the base branch, and it runs in two places: `make check`
+locally, and CI's `sign-off` job over the pull request. A commit without a
+trailer fails the build.
 
-The third one is not redundant. The pull request job cannot see the commit the
-merge button *writes* — GitHub composes that message at merge time, after every
-check has reported, and it does not always carry the branch's trailers.
-`074e3a1` and `7d0e29e` on `main` are two commits that reached it this way,
-from branches whose own commits were properly signed.
+What neither one reaches is the commit the merge button *writes*. GitHub
+composes that message at merge time, after every check has reported, and it
+does not always carry the branch's trailers: `074e3a1` and `7d0e29e` on `main`
+are two commits that reached it this way, from branches whose own commits were
+properly signed. A `sign-off (main)` job used to report that after the fact and
+no longer runs, so nothing catches it happening again — what keeps the trailers
+is the repository's squash and merge commit-message settings, and those live in
+Settings, where a checkout cannot see them.
 
 Forgot on one you have already made? The repair rewrites the commits, which is
 free before a push and a force-push after:

@@ -155,7 +155,11 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// read-back and the alignment after it. Either way the line names a
 	// step this member is not on, which is the one thing it exists to get
 	// right.
-	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
+	//
+	// ON ctx rather than on either term, because the two halves it spans
+	// carry separate deadlines now and a watcher armed on one would stop
+	// reporting the moment that half gave up.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", name, "waited", after,
 			"detail", "this state-log consumer is still being provisioned — "+
@@ -163,14 +167,41 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 				"a metadata group that has not settled")
 	})
 
-	cons, err := q.js.Consumer(createCtx, stream, name)
+	// THE LOOKUP IS SIZED AS A READ AND RE-ASKED, like its three siblings —
+	// see [jsprovision.LookupBudget] and [jsprovision.Ask]. It shared the
+	// create's term, so a probe the metadata group never answered spent the
+	// whole clustered budget and left none of it for the create that would
+	// have settled the question.
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	var cons jetstream.Consumer
+	err := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = q.js.Consumer(ctx, stream, name)
+			return e
+		}, nil)
+	cancelLookup()
+	if jsprovision.Unanswered(ctx, err) {
+		// TOLD NOTHING, which is not "it is not there" — see
+		// [jsprovision.Unanswered]. The create below answers it either
+		// way, so a boot no longer fails on a question nobody got
+		// round to. Reported as not-found so the one create path
+		// handles both, which is exactly what it already does with a
+		// held create's timeout a few lines down.
+		q.log.WarnContext(ctx, "jetstream_consumer_lookup_unanswered",
+			"stream", stream, "consumer", name, "error", err.Error(),
+			"detail", "the broker did not say whether this state-log consumer "+
+				"exists, so the create below decides it: absent and it is "+
+				"made, present and it is read back and taken as it is")
+		err = jetstream.ErrConsumerNotFound
+	}
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
 		// gives: this consumer is placed by the same metadata group as
 		// the stream it reads, so "no suitable peers" is transient here
 		// too and the budget above is worth nothing without the retry.
-		err = jsprovision.Place(createCtx, func(ctx context.Context) error {
+		err = jsprovision.Place(createCtx, q.Clustered().AskTerm(), func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.CreateConsumer(ctx, stream, config)
 			return e
@@ -295,7 +326,27 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	// THE DELETE HAS LANDED, so from here the broker has no consumer and
 	// the handle must not go on naming one.
 	c.cons = nil
-	cons, err := c.q.js.CreateConsumer(ctx, c.stream, config)
+	// THROUGH [jsprovision.Place] like every other replicated create,
+	// which this one was not. A domain consumer is placed by the same
+	// metadata group as the durable consumers beside it, so it meets the
+	// same two transient conditions — a placement refusal while the group
+	// is short of members, and a request the group never answers — and it
+	// met them with no budget at all, which is nats.go's undeclared
+	// five-second default on whatever context the applier happened to hold.
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	defer cancelCreate()
+	var cons jetstream.Consumer
+	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = c.q.js.CreateConsumer(ctx, c.stream, config)
+			return e
+		}, func() {
+			c.q.log.Info("jetstream_domain_consumer_awaiting_peers",
+				"stream", c.stream, "consumer", c.name,
+				"detail", "the cluster has not yet seen enough members to place "+
+					"this consumer; retrying until the provisioning deadline")
+		})
 	if err != nil {
 		// `want` IS LEFT AS IT WAS, deliberately: the rebuild then
 		// restores the consumer at its PREVIOUS position rather than at
@@ -323,7 +374,18 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	if c.cons != nil {
 		return c.cons, nil
 	}
-	cons, err := c.q.js.CreateConsumer(ctx, c.stream, c.want)
+	// THE SAME BUDGET AND THE SAME RE-ASK as Reset's own create: this is
+	// the identical call, reached when that one failed, so it faces the
+	// identical transient conditions.
+	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisionBudget())
+	defer cancelCreate()
+	var cons jetstream.Consumer
+	err := jsprovision.Place(createCtx, c.q.Clustered().AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			cons, e = c.q.js.CreateConsumer(ctx, c.stream, c.want)
+			return e
+		}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: rebuild the domain consumer %s on "+
 			"%s after a reset that deleted it and could not create it again: %w",

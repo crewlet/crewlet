@@ -74,14 +74,6 @@ const positionsSuffix = "_statelog_positions"
 func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
-	// WithTimeout only ever shortens against the parent, so a caller that
-	// already set a tighter deadline keeps it — which is also what makes
-	// the sequence ceiling [OpenFleet] applies effective: each create here
-	// takes the lesser of its own budget and what is left of that one.
-	createCtx, cancel := context.WithTimeout(ctx,
-		jsprovision.Clustered(clustered).Budget())
-	defer cancel()
-
 	// A BREADCRUMB, because without one this is the silent step. A boot
 	// opens seventeen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
@@ -96,7 +88,11 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// across the replica observation after it, it reported one that had
 	// already finished. Either way it names a step the member is not on,
 	// which is the single thing this line exists to get right.
-	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
+	//
+	// ON ctx rather than on either term below, because the two halves it
+	// spans now carry separate deadlines and a watcher armed on one of them
+	// would stop reporting the moment that half gave up.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
 		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
 			"replicas", cfg.Replicas, "waited", after,
 			"detail", "this bucket is still being provisioned — looked up, "+
@@ -105,18 +101,54 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 				"says whether it got past it")
 	})
 
-	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
+	// THE LOOKUP IS SIZED AS A READ, not as the create it precedes — see
+	// [jsprovision.LookupBudget]. Sharing the create's term meant a lookup
+	// nobody answered spent the whole clustered budget and left none of it
+	// for the create that would have settled the question.
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	var bucket jetstream.KeyValue
+	err := jsprovision.Ask(lookupCtx, jsprovision.Clustered(clustered).AskTerm(),
+		func(ctx context.Context) error {
+			var e error
+			bucket, e = js.KeyValue(ctx, cfg.Bucket)
+			return e
+		}, nil)
+	cancelLookup()
+	switch {
 	case err == nil:
 		stop()
-		// ON ctx, NOT createCtx: a slow lookup can leave the per-create
+		// ON ctx, NOT lookupCtx: a slow lookup can leave its own
 		// deadline spent, and the observation would then fail on a
 		// bucket it had just found. observeReplicas owns its own term.
 		return bucket, observeReplicas(ctx, bucket, cfg)
-	case !errors.Is(err, jetstream.ErrBucketNotFound):
+	case errors.Is(err, jetstream.ErrBucketNotFound):
+		// TOLD it is absent. Create it below.
+	case jsprovision.Unanswered(ctx, err):
+		// TOLD NOTHING — the third value, and not the same fact as
+		// "not there". See [jsprovision.Unanswered]: the create below
+		// answers it either way, so a boot no longer fails on a
+		// question the broker never got round to.
+		log.WarnContext(ctx, "coord_kv_bucket_lookup_unanswered",
+			"bucket", cfg.Bucket, "error", err.Error(),
+			"detail", "the broker did not say whether this bucket exists, so "+
+				"the create below decides it: absent and it is made, present "+
+				"and it comes back as a peer's win and its replicas are read")
+	default:
 		stop()
 		return nil, err
 	}
-	bucket, createErr := createKeyValue(createCtx, js, cfg)
+	// WithTimeout only ever shortens against the parent, so a caller that
+	// already set a tighter deadline keeps it — which is also what makes
+	// the sequence ceiling [OpenFleet] applies effective: each create here
+	// takes the lesser of its own budget and what is left of that one.
+	createCtx, cancel := context.WithTimeout(ctx,
+		jsprovision.Clustered(clustered).Budget())
+	defer cancel()
+	// REASSIGNED rather than shadowed: the lookup above left bucket nil on
+	// every path that reaches here, and a second name would make the two
+	// halves read as different objects.
+	var createErr error
+	bucket, createErr = createKeyValue(createCtx, js, clustered, cfg)
 	stop()
 	if createErr == nil {
 		// THIS NODE MADE IT, at the count it asked for. Nothing to
@@ -146,7 +178,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// One lookup answers at an arbitrary instant inside that window and
 	// fails a boot over a bucket that exists. ON ctx AND NOT createCtx,
 	// because createCtx is the deadline that just expired.
-	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
+	err = jsprovision.Settle(ctx, func(ctx context.Context) error {
 		var e error
 		bucket, e = js.KeyValue(ctx, cfg.Bucket)
 		return e
@@ -237,11 +269,11 @@ func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 // re-running the lookup that preceded it would re-ask a question whose answer
 // cannot have changed. Written the other way round, the retry re-issued that
 // lookup every 250ms for the whole provisioning budget.
-func createKeyValue(ctx context.Context, js jetstream.JetStream,
+func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	var bucket jetstream.KeyValue
-	err := jsprovision.Place(ctx, func(ctx context.Context) error {
+	err := jsprovision.Place(ctx, jsprovision.Clustered(clustered).AskTerm(), func(ctx context.Context) error {
 		var e error
 		bucket, e = js.CreateKeyValue(ctx, cfg)
 		return e
