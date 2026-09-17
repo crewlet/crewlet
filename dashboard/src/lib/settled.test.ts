@@ -9,6 +9,7 @@
 
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
+import { SCREEN_SCROLL_ID } from "./scroller.ts";
 import { TOP_SLACK_PX, useSettled } from "./settled.ts";
 
 interface Row {
@@ -20,13 +21,15 @@ const keyOf = (row: Row) => row.id;
 /**
  * A scroller at a given offset.
  *
- * The hook reads `.screen` off the document, because the scroller is the shell's
- * and not any one screen's. Absent, it treats the reader as being at the top,
- * which is what a test that does not care about scrolling gets.
+ * The hook finds it by the shell's own id, because the scroller is the shell's
+ * and not any one screen's — see `./scroller.ts` for why that is the id rather
+ * than the class the stylesheet paints it with. Absent, the hook treats the
+ * reader as being at the top, which is what a test that does not care about
+ * scrolling gets.
  */
 function scroller(top: number): void {
   const el = document.createElement("div");
-  el.className = "screen";
+  el.id = SCREEN_SCROLL_ID;
   Object.defineProperty(el, "scrollTop", { value: top, writable: true });
   el.scrollTo = () => {};
   document.body.append(el);

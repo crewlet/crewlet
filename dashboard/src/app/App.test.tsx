@@ -12,6 +12,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
+import { screenScroller } from "~/lib/scroller.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { DESTINATIONS } from "./nav.ts";
@@ -422,7 +423,7 @@ describe("a turn watched to its end", () => {
     // the settled list admits everything anyway, so an assertion taken there
     // passes whether the rule holds or not.
     const { store, redraw } = seatView();
-    const scroller = document.querySelector(".screen");
+    const scroller = screenScroller();
     if (!scroller) throw new Error("no scroller to scroll: the shell's layout moved");
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     store.applyAgents([

@@ -25,6 +25,7 @@ import {
 import { DESTINATIONS, RAIL, workspaceOf, type Workspace } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { remember } from "~/lib/recents.ts";
+import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
@@ -348,7 +349,7 @@ export function Shell({ children }: { children: ReactNode }) {
               made. The chain it drives is in the stylesheet beside it, and it
               names nothing inside any screen: a screen says THAT it wants the
               height, never how the shell is built. */}
-          <div className="screen" id="screen-scroll" data-fill={filling || undefined}>
+          <div className="screen" id={SCREEN_SCROLL_ID} data-fill={filling || undefined}>
             <div className="screen-inner">
               <FillRequest.Provider value={setFilling}>
                 <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>

@@ -62,6 +62,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { screenScroller } from "~/lib/scroller.ts";
+
 export interface Route {
   /** Path segments, already decoded. `#/seats/pm` → `["seats", "pm"]`. */
   path: string[];
@@ -204,10 +206,6 @@ function adoptEntry(): void {
 // Navigation
 // ---------------------------------------------------------------------------
 
-function scrollTarget(): HTMLElement | null {
-  return document.getElementById("screen-scroll");
-}
-
 function go(hash: string, replace: boolean, agreed = false): void {
   // A PUSH IS A MOVE TO ANOTHER ENTRY, which a surface holding work may hold
   // until the reader agrees. A replace stays on the entry, and is never held.
@@ -216,7 +214,7 @@ function go(hash: string, replace: boolean, agreed = false): void {
   // File the outgoing position under the entry we are leaving, before the
   // entry changes.
   const from = stateKey();
-  const el = scrollTarget();
+  const el = screenScroller();
   if (from && el) positions.set(from, el.scrollTop);
 
   // THE PLACE IS THE ENTRY'S OWN. A screen can navigate in its first effect,
@@ -464,7 +462,7 @@ export function Router({ children }: { children: ReactNode }) {
   // lands short — and abandoned the moment the reader touches the page.
   useEffect(() => {
     const key = stateKey();
-    const el = scrollTarget();
+    const el = screenScroller();
     if (!el) return;
     if (!key) {
       stampKey();

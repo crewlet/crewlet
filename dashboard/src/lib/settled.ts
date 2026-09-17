@@ -30,6 +30,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { screenScroller } from "./scroller.ts";
+
 /** How near the top counts as "watching the feed". */
 export const TOP_SLACK_PX = 24;
 
@@ -76,7 +78,7 @@ export function useSettled<T>(
 
   const flush = useCallback(() => {
     for (const item of items) admitted.add(keyOf(item));
-    document.querySelector(".screen")?.scrollTo({ top: 0, behavior: "smooth" });
+    screenScroller()?.scrollTo({ top: 0, behavior: "smooth" });
     bump((n) => n + 1);
   }, [items, keyOf, admitted]);
 
@@ -85,7 +87,7 @@ export function useSettled<T>(
   // in the render body makes the result depend on how often React renders.
   useEffect(() => {
     if (held.length === 0) return;
-    const scroller = document.querySelector(".screen");
+    const scroller = screenScroller();
     const atTop = !scroller || scroller.scrollTop <= TOP_SLACK_PX;
     if (!atTop) return;
     for (const item of held) admitted.add(keyOf(item));
