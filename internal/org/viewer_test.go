@@ -22,7 +22,7 @@ func TestASeatIsFoundByTheTokenBoundToIt(t *testing.T) {
 	}
 	o.Normalize()
 
-	seat := o.SeatByOperatorID("founder")
+	seat := o.SeatByOperatorID("founder", nil)
 	if seat == nil {
 		t.Fatal("the seat naming this token id was not found")
 	}
@@ -32,17 +32,100 @@ func TestASeatIsFoundByTheTokenBoundToIt(t *testing.T) {
 
 	// TWO FILES, TWO CHANCES TO DISAGREE ABOUT CASE, which is the reason
 	// HumanContact's own doc gives for normalising the value.
-	if got := o.SeatByOperatorID("  FOUNDER "); got == nil || got.Name != "Ada Okonkwo" {
+	if got := o.SeatByOperatorID("  FOUNDER ", nil); got == nil || got.Name != "Ada Okonkwo" {
 		t.Fatalf("a differently-cased id did not resolve: %v", got)
 	}
 
 	// AN UNBOUND TOKEN IS AN ORDINARY STATE, not a misconfiguration — so it
 	// answers nobody rather than guessing at the first seat.
-	if got := o.SeatByOperatorID("someone-else"); got != nil {
+	if got := o.SeatByOperatorID("someone-else", nil); got != nil {
 		t.Fatalf("an unbound id resolved to %q", got.Name)
 	}
-	if got := o.SeatByOperatorID(""); got != nil {
+	if got := o.SeatByOperatorID("", nil); got != nil {
 		t.Fatalf("an empty id resolved to %q", got.Name)
+	}
+}
+
+// A `${VAR}` IS A POINTER, AND THE LOOKUP IS WHAT MAKES IT AN ANSWER.
+//
+// Tier B stores the reference verbatim — that is what a pointer IS — so this
+// compared the founder's token against the literal text `${FOUNDER_ID}` and
+// matched nothing. The symptom is the worst shape a bug can take: the dashboard
+// comes up bound to no seat, so the founder's own inbox, queue and pins are
+// empty, and nothing anywhere refuses or explains it.
+func TestAnOperatorIDHeldAsAReferenceResolvesToItsSeat(t *testing.T) {
+	o := &org.Organization{
+		Name: "Nimbus",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "${FOUNDER_ID}"}},
+			{Name: "CTO"},
+		},
+	}
+	o.Normalize()
+
+	env := func(name string) (string, bool) {
+		if name == "FOUNDER_ID" {
+			return "founder", true
+		}
+		return "", false
+	}
+
+	seat := o.SeatByOperatorID("founder", env)
+	if seat == nil || seat.Name != "Ada Okonkwo" {
+		t.Fatalf("a token id held as a reference did not resolve: %v", seat)
+	}
+
+	// The reference is resolved BEFORE the case fold, so the two-files rule
+	// covers what the variable holds as well as what the file says.
+	if got := o.SeatByOperatorID("  FOUNDER ", env); got == nil {
+		t.Fatal("a differently-cased id did not resolve through the reference")
+	}
+
+	// AND THE LITERAL TEXT IS NOT AN IDENTITY. Nobody presents `${FOUNDER_ID}`
+	// as a token id, but if this ever matched it would bind a dashboard to a
+	// seat on a string out of a config file.
+	if got := o.SeatByOperatorID("${FOUNDER_ID}", env); got != nil {
+		t.Fatalf("the unresolved reference itself matched %q", got.Name)
+	}
+}
+
+// AN UNRESOLVABLE SEAT DOES NOT TAKE THE LOOKUP DOWN WITH IT.
+//
+// Resolution is per seat, so one seat whose variable is unset must not stop the
+// walk or answer for anybody. The neighbour is the assertion that can fail:
+// a `return nil` where the code means `continue` reads identically at the call
+// site — the caller gets nil either way — and would unbind every operator in
+// the company behind one missing variable.
+//
+// The two "matches nothing" lines below are a floor rather than the point;
+// `TestAnOperatorIDHeldAsAReferenceResolvesToItsSeat` carries the case that
+// bites, which is that the raw `${VAR}` text is never itself an identity.
+func TestAnUnresolvedOperatorReferenceMatchesNothing(t *testing.T) {
+	o := &org.Organization{
+		Name: "Nimbus",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "${FOUNDER_ID}"}},
+			{Name: "Rui Santos", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "ops"}},
+		},
+	}
+	o.Normalize()
+
+	unset := func(string) (string, bool) { return "", false }
+	if got := o.SeatByOperatorID("founder", unset); got != nil {
+		t.Fatalf("an unset reference resolved to %q", got.Name)
+	}
+	// A variable set to nothing is the same fact arriving a different way.
+	blank := func(string) (string, bool) { return "   ", true }
+	if got := o.SeatByOperatorID("founder", blank); got != nil {
+		t.Fatalf("a reference resolving to whitespace matched %q", got.Name)
+	}
+	// The seat beside it still answers: one unresolvable seat does not take
+	// the lookup down with it.
+	if got := o.SeatByOperatorID("ops", unset); got == nil || got.Name != "Rui Santos" {
+		t.Fatalf("a literal id beside an unresolvable one did not resolve: %v", got)
 	}
 }
 

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Organization is the whole company: a flexible hierarchy of units, the
@@ -192,10 +195,33 @@ func (o *Organization) SeatByHandle(handle string) *Role {
 // here would be this lookup inventing a rule the config does not state.
 // Returns the FIRST match: two seats naming one token id is a configuration
 // mistake, and answering "both" would only move the decision to every caller.
-func (o *Organization) SeatByOperatorID(operatorID string) *Role {
+//
+// THE DECLARED VALUE IS A POINTER, NOT AN ANSWER, which is what `lookup` is
+// for. Tier B stores a `${VAR}` verbatim — that is the whole point of the
+// pointer — so a company writing `crewlet_operator_id: ${FOUNDER_ID}` had its
+// founder compared against the literal text `${FOUNDER_ID}`, matched nothing,
+// and got a dashboard silently bound to no seat: their own inbox, queue and
+// pins all empty, with no refusal anywhere to explain it. Every other consumer
+// of this field resolves it — [HumanContact.ResolvedIdentities] takes the same
+// lookup for the same reason — and this one did not.
+//
+// AN UNSET OR EMPTY VARIABLE MATCHES NOTHING, and the reason is what it must
+// NOT fall back to. Comparing the raw `${VAR}` text is the bug above wearing a
+// smaller hat: a token id is an operator-chosen string, so a company could
+// present one shaped like a reference and be bound to a seat by a line out of
+// a config file. Comparing the empty string instead is merely useless — an
+// empty `operatorID` is already refused above — but it is a seat this lookup
+// cannot speak for either way, exactly as it is for an identity.
+//
+// A nil lookup reads the process environment, matching
+// [HumanContact.ResolvedIdentities].
+func (o *Organization) SeatByOperatorID(operatorID string, lookup EnvLookup) *Role {
 	want := strings.ToLower(strings.TrimSpace(operatorID))
 	if want == "" {
 		return nil
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
 	}
 	for r := range o.AllRoles() {
 		// Contact is a POINTER and most seats have none: an agent seat
@@ -204,7 +230,21 @@ func (o *Organization) SeatByOperatorID(operatorID string) *Role {
 		if r == nil || r.Contact == nil {
 			continue
 		}
-		if strings.ToLower(strings.TrimSpace(r.Contact.CrewletOperatorID)) == want {
+		declared := strings.TrimSpace(r.Contact.CrewletOperatorID)
+		if declared == "" {
+			continue
+		}
+		if name, isRef := envref.Whole(declared); isRef {
+			v, ok := lookup(name)
+			if !ok {
+				continue
+			}
+			declared = strings.TrimSpace(v)
+			if declared == "" {
+				continue
+			}
+		}
+		if strings.ToLower(declared) == want {
 			return r
 		}
 	}

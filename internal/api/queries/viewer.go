@@ -78,7 +78,10 @@ func (s Sources) seatForOperator(operatorID string) *org.Role {
 	if err != nil {
 		return nil
 	}
-	return organization.SeatByOperatorID(operatorID)
+	// NIL LOOKUP, so the reference resolves against this process's own
+	// environment — which is where Tier B's `${VAR}` pointers are resolved
+	// everywhere else in the engine.
+	return organization.SeatByOperatorID(operatorID, nil)
 }
 
 // viewerHandle is the handle a personal question answers for when the caller
