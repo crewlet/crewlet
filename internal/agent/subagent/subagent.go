@@ -555,9 +555,23 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 					Error: ledger.Elide(err.Error(), errorLimit),
 				}
 			}
+			// THE CLOCK STARTS WHERE THE CAP DOES, and the two
+			// were a function call apart.
+			//
+			// [Result.Elapsed] was measured from inside run, which
+			// begins strictly AFTER the deadline below is created —
+			// so a worker that ran its whole cap reported LESS than
+			// the cap by however long the call took to get there.
+			// That is the one measurement an operator opens a
+			// fan-out to read, and on the timed-out path it was
+			// guaranteed wrong in the direction that hides the
+			// timeout. Stamping it here makes `Elapsed >=
+			// TaskTimeout` true of a timed-out worker by
+			// construction rather than by luck.
+			began := time.Now()
 			childCtx, cancel := context.WithTimeoutCause(taskCtx, cfg.Limits.TaskTimeout, errTaskDeadline)
 			defer cancel()
-			return run(childCtx, cfg, provider, key, meter, r, deps)
+			return run(childCtx, began, cfg, provider, key, meter, r, deps)
 		})
 
 	publishCall(ctx, cfg, tasks, results)
@@ -566,11 +580,13 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 
 // run drives one worker to completion and never returns anything but a
 // Result.
-func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
-	meter toolloop.BudgetMeter, task resolved, deps []Result,
+// began is when this task's wall-clock cap started, which is the caller's to
+// stamp: the deadline context is created there, and a clock started here would
+// run from a point strictly later than the one the cap is measured against.
+func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider,
+	key string, meter toolloop.BudgetMeter, task resolved, deps []Result,
 ) (res Result) {
 	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
-	began := time.Now()
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
 	// contains. Deferred FIRST so it runs LAST: the recovery below writes
