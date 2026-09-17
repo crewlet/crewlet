@@ -21,10 +21,7 @@ import (
 // mail. See [Watchdog].
 func (h *Host) heartbeatLoop(ctx context.Context) {
 	beat := h.beatInterval()
-	ticksPerPass := int((h.heartbeat + beat - 1) / beat)
-	if ticksPerPass < 1 {
-		ticksPerPass = 1
-	}
+	ticksPerPass := h.ticksPerPass()
 	ticker := time.NewTicker(beat)
 	defer ticker.Stop()
 
@@ -43,6 +40,50 @@ func (h *Host) heartbeatLoop(ctx context.Context) {
 		h.safely("seat_heartbeat_tick_failed", func() { h.Heartbeat(ctx) })
 		h.stampBeat()
 	}
+}
+
+// ticksPerPass is how many watchdog beats the heartbeat loop counts between
+// renew passes.
+//
+// A FUNCTION rather than three lines inside the loop, for the reason this
+// tree gives everywhere the arithmetic is the decision: a rule exercised only
+// by starting a goroutine and watching a clock is a rule nobody re-measures.
+// [TestAHealthyNodeNeverRefusesItsOwnSeat] calls this directly, over a range
+// of TTLs, in microseconds.
+//
+// ROUNDED DOWN, and that is the whole of it: the pass period must never
+// EXCEED the window [Host.MayStart] judges a renew by, because the two are
+// the same quantity read from opposite ends. MayStart refuses when
+// `elapsed > h.heartbeat`; the pass runs every ticksPerPass × beatInterval().
+// Rounding UP made that product larger than the heartbeat whenever the beat
+// did not divide it, and the difference is a window in EVERY cycle where a
+// healthy, renewing node refuses work it holds the lease for — measured at
+// 16.1 % of samples at a 3 s TTL, against the 16.7 % the arithmetic predicts.
+// internal/node defers such a delivery and quiesces that seat's consumer
+// until the next renew, so the cost is the rest of the cycle rather than the
+// width of the sample.
+//
+// Invisible at the shipped default for the same reason [Host.beatInterval]'s
+// ceiling was: 45 s gives a 15 s heartbeat and a 1 s beat, which divides
+// exactly. It bit 1 s, 3 s, 5 s and 10 s TTLs at a sixth of every cycle and
+// 20 s at a twentieth — the values somebody lowers to, which is exactly when
+// it matters.
+//
+// Down rather than up is safe in the direction that matters: it renews MORE
+// often than strictly needed, never less, so no lease is closer to lapsing
+// than it was. What it costs is one extra renew per pass at a TTL where the
+// beat does not divide the heartbeat, which is a store write measured in
+// microseconds against a window measured in seconds.
+func (h *Host) ticksPerPass() int {
+	ticks := int(h.heartbeat / h.beatInterval())
+	if ticks < 1 {
+		// beatInterval already caps the beat at the heartbeat, so this
+		// is unreachable through it — kept because a zero here would
+		// fire the pass on every tick, which is the one arithmetic
+		// mistake this loop cannot survive.
+		return 1
+	}
+	return ticks
 }
 
 // beatInterval is how often the heartbeat goroutine proves it is turning.

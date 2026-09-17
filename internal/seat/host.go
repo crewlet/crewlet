@@ -430,15 +430,22 @@ func (h *Host) EpochFor(handle string) (int64, bool) {
 //
 // Called by whoever acted on a MayStart refusal by DEFERRING a delivery —
 // which quiesces the attachment (see queue.OutcomeDefer). Without this the
-// seat is PERMANENTLY DEAF ON A PERFECTLY HEALTHY NODE, and it takes no
-// failure at all to get there: MayStart refuses once the last renew is older
-// than one heartbeat interval, and consecutive renews are exactly one
-// heartbeat apart PLUS the duration of the pass, so every cycle has a real
-// window where a healthy, renewing seat answers false. A batch landing in
-// that window defers, the queue quiesces, and nothing ever resumes it: the
-// admission signal is edge-triggered, the deferral never entered the set, so
-// the next successful renew reports "still admitted", short-circuits, and
-// never calls the resume hook.
+// seat is PERMANENTLY DEAF, and the deafness outlives whatever caused it: a
+// store blip, a pass that ran more than a beat late, anything that leaves
+// the last renew older than the admission window for one delivery. A batch
+// landing in that window defers, the queue quiesces, and nothing ever
+// resumes it: the admission signal is edge-triggered, the deferral never
+// entered the set, so the next successful renew reports "still admitted",
+// short-circuits, and never calls the resume hook.
+//
+// IT USED TO TAKE NO FAILURE AT ALL, and that is worth keeping here because
+// it is the reason this mechanism looks over-engineered. The renew pass was
+// scheduled by a beat count rounded UP, so consecutive renews were one
+// heartbeat apart PLUS the rounding, and every cycle had a window where a
+// healthy, renewing seat answered false — a sixth of every cycle at a three
+// second TTL. [Host.ticksPerPass] is what removed that. This is still
+// required, because the window is now reached by real lateness rather than
+// by arithmetic.
 //
 // Deliberately NOT inside MayStart. The in-turn fence calls that too, where
 // a refusal abandons a turn and stops no consumer — marking there would
