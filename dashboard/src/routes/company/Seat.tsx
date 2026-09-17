@@ -7,7 +7,13 @@
 
 import { useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
+import {
+  QueryState,
+  RECORD_MAX_HEIGHT,
+  SeatChip,
+  Section,
+  StateBadge,
+} from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
@@ -16,6 +22,7 @@ import {
   Button,
   Callout,
   Card,
+  CodeBlock,
   EmptyState,
   EmptyValue,
   InlineCode,
@@ -1953,7 +1960,22 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
         </Callout>
       )}
       {entry.completed_work && <p className="t-caption">{entry.completed_work}</p>}
-      {entry.tool_calls && <pre className="code">{entry.tool_calls}</pre>}
+      {/* A BLOCK, NOT A BARE `pre`. This was hand-written markup carrying the
+          block stylesheet's own class, which is `overflow: auto` under a
+          ceiling — so a long tool log was a scroll container with no tab stop
+          and no accessible name, reachable by pointer and by nothing else.
+          `focusWhenScrollable` measures the rendered box and names the ones
+          that scroll; `plain` drops the header, since the entry above already
+          says whose calls these are. */}
+      {entry.tool_calls && (
+        <CodeBlock
+          plain
+          maxHeight={RECORD_MAX_HEIGHT}
+          focusWhenScrollable
+          label="Tool calls in this turn"
+          code={entry.tool_calls}
+        />
+      )}
     </div>
   );
 }

@@ -283,7 +283,7 @@
 }
 
 /* PROSE. The model's reasoning and its speech are natural language, and were
-   set in the monospace `.code` block that tool JSON uses — 11px, tight
+   set in the monospace code block that tool JSON uses — 11px, tight
    leading, unbounded measure. That is a wall of text nobody reads. Here they
    get a proportional face, real leading and a bounded measure, while
    monospace stays where it means something. `pre-wrap` keeps the model's own

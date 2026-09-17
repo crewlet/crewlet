@@ -19,18 +19,25 @@
  *     the one thing the package cannot know — which of the SIX phase strings
  *     the engine emits map onto the three hues it publishes, and that the
  *     other three take neutral.
- *  3. FIVE CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
- *     written at its own definition: `Segmented` (its `SegmentedControl` has
- *     no way to stop the arrows committing), `Meter` (no unknown ceiling, no
- *     direction), `Code` (no focus without select-all), `CopyButton` (its
- *     `useClipboard` welds the write to a reset policy, and one half of that
- *     policy is a timer nothing can clear) and `DownloadButton` (no peer at
- *     all). The CHROME of the last two is the package's even where their
- *     contract is not.
+ *  3. FOUR CONTROLS THE PACKAGE CANNOT YET DRAW, each for a measured reason
+ *     written at its own definition: `Segmented` (its `SegmentedControl`
+ *     keeps the stop the arrows last pointed at, which is stale when the
+ *     value is changed from OUTSIDE the row), `Meter` (no unknown ceiling, no
+ *     direction), `CopyButton` (the package has the WRITE, which this now
+ *     takes, but its `useClipboard` settles a refusal back to offering its
+ *     action) and `DownloadButton` (no peer at all — there is a `CopyButton`
+ *     and a `Copyable`, and nothing that saves). The CHROME of the last two
+ *     is the package's even where their contract is not.
  *
  * Each of (3) names, at its definition, exactly what `@crewlethq/ui` would
  * have to grow for this file to lose it. That list is the point of keeping
  * them here rather than quietly reimplementing the package beside it.
+ *
+ * TWO LEFT when the package grew what they were waiting for, and the note is
+ * here because the list above is only honest if things come off it: `Code`
+ * went to `CodeBlock`'s `focusWhenScrollable`, which measures its own box
+ * rather than welding the tab stop to select-all, and the clipboard write
+ * went to the package's own `writeClipboard`.
  */
 
 import {
@@ -43,7 +50,14 @@ import {
   type ReactNode,
 } from "react";
 import { CheckGlyph, ContentCopyGlyph, ErrorGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Tag, cx, type TagVariant, type Tone as UiletTone } from "@crewlethq/ui";
+import {
+  Button,
+  Tag,
+  cx,
+  writeClipboard,
+  type TagVariant,
+  type Tone as UiletTone,
+} from "@crewlethq/ui";
 import { Mark, type MarkName } from "./glyph.tsx";
 
 // ---------------------------------------------------------------------------
@@ -545,134 +559,6 @@ export function Meter({
 }
 
 // ---------------------------------------------------------------------------
-// Record
-// ---------------------------------------------------------------------------
-
-/**
- * A block of preformatted text, optionally one that OWNS select-all.
- *
- * # Why this is not `@crewlethq/ui`'s `CodeBlock`
- *
- * `CodeBlock` is the better block wherever a block is selectable, and every
- * screen whose blocks are has already moved to it. What it cannot express is
- * the OTHER case: `selectable` is one boolean carrying three things —
- * `tabIndex={0}`, the `role="region"` with its required `label`, and the
- * Command/Control+A capture — and its type deliberately welds the label to the
- * flag, so a block cannot be focusable without also taking the key.
- *
- * That trade is wrong for a tool call's arguments, and measurably so. `.code`
- * is `overflow: auto` under a `max-height`, so ANY block past the cap is a
- * scroll container, and in Chrome and Safari a scroll container is only
- * reachable by keyboard if something makes it focusable — while a tab stop on
- * EVERY block would put one in front of each of a phase card's dozens of tool
- * arguments, most of them three lines that never overflow. So the stop is
- * given to the blocks that need it, which is a fact about the RENDERED BOX and
- * not about any prop: the same content overflows or does not depending on the
- * viewport.
- *
- * What `CodeBlock` would need is either a `focusWhenScrollable` prop that
- * measures its own box, or `selectable` split from label-and-focus so a block
- * can be a named region without owning ⌘A.
- *
- * # What `selectable` means here
- *
- * It makes the block focusable and gives ⌘A / Ctrl+A a local meaning while it
- * has focus: select this block, not the document. That is the one keyboard
- * gesture a reader brings to a screen whose point is a single record, and the
- * browser's own answer to it — the nav, the stat row, every phase card and the
- * record — is never what they wanted.
- *
- * INTERCEPTED ON THE ELEMENT, not on the document. A document-level handler
- * would have to guess which block the reader meant, and it would take the
- * gesture away from the rest of the page for as long as this screen is
- * mounted. Focus is the reader saying which one; everywhere else ⌘A keeps
- * meaning what it has always meant.
- */
-interface CodeProps {
-  children: ReactNode;
-  plain?: boolean;
-  /** Take ⌘A / Ctrl+A while focused. */
-  selectable?: boolean;
-  /**
-   * What this block is: "The turn record, as JSON".
-   *
-   * REQUIRED ON EVERY BLOCK, not only on a selectable one, because any block
-   * may turn out to scroll and a block that scrolls takes focus — see the
-   * note above. Taking focus without a name is a tab stop a screen reader
-   * announces as nothing, so the two arrive together or neither does.
-   */
-  label: string;
-}
-
-export function Code({ children, plain, selectable, label }: CodeProps) {
-  const box = useRef<HTMLPreElement>(null);
-  // WHETHER THIS BLOCK ACTUALLY SCROLLS, measured rather than assumed — the
-  // whole of why this is not `CodeBlock`, argued at the top. MEASURED because
-  // Firefox makes a scroll container focusable on its own and Chrome and
-  // Safari do not, so there is nothing to read the answer off.
-  const [scrolls, setScrolls] = useState(false);
-  useEffect(() => {
-    const node = box.current;
-    if (!node) return;
-    // BOTH AXES: `plain` sets `white-space: pre`, so a wide line scrolls
-    // sideways in a box that is not tall enough to scroll at all.
-    const measure = () =>
-      setScrolls(node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth);
-    measure();
-    // The box is resized by the window, by a disclosure opening above it and
-    // by its own content arriving on a streamed frame, and none of those is
-    // a render of THIS component. ResizeObserver is the only one of the
-    // three it can see.
-    if (typeof ResizeObserver === "undefined") return;
-    const watch = new ResizeObserver(measure);
-    watch.observe(node);
-    return () => watch.disconnect();
-  }, [children, plain]);
-
-  // Focusable when it owns ⌘A, and when it is a scroll container a reader
-  // would otherwise be unable to reach.
-  const focusable = Boolean(selectable) || scrolls;
-
-  const onKeyDown = (e: KeyboardEvent<HTMLPreElement>) => {
-    // THE PHYSICAL KEY FIRST. Browsers resolve select-all from the key's
-    // position, not from the character a layout maps it to, so matching only
-    // `e.key` misses on every non-Latin layout — where `"ф"` or `"α"` comes
-    // back, this handler declines, and the document-wide select-all it exists
-    // to replace happens instead. `e.key` stays as the fallback for anything
-    // that reports no `code`.
-    const isA = e.code === "KeyA" || (!e.code && e.key.toLowerCase() === "a");
-    // Shift and Alt make DIFFERENT chords, several of which the browser owns
-    // (Ctrl+Shift+A is Chrome's tab search). Swallowing them would take a
-    // shortcut away and put nothing in its place.
-    if (!isA || e.altKey || e.shiftKey || !(e.metaKey || e.ctrlKey)) return;
-    const node = box.current;
-    const selection = window.getSelection?.();
-    // No Selection API — the browser's own select-all is then strictly
-    // better than nothing, so this hands the key back rather than
-    // swallowing it.
-    if (!node || !selection) return;
-    e.preventDefault();
-    selection.removeAllRanges();
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    selection.addRange(range);
-  };
-
-  return (
-    <pre
-      ref={box}
-      className={cx("code", plain && "plain", selectable && "selectable")}
-      tabIndex={focusable ? 0 : undefined}
-      role={focusable ? "region" : undefined}
-      aria-label={focusable ? label : undefined}
-      onKeyDown={selectable ? onKeyDown : undefined}
-    >
-      {children}
-    </pre>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Hand-off
 // ---------------------------------------------------------------------------
 
@@ -878,31 +764,15 @@ function resolve(text: Text): string {
  *
  * # WHY THE WRITE IS STILL OURS, and what would retire it
  *
- * `@crewlethq/ui` publishes [useClipboard], which is the same two rules and
- * should be the only copy of them in the tree. It cannot be used here yet, and
- * the reason is not style: the hook does not expose the WRITE, only a write
- * welded to a reset policy, and that policy breaks two things this control is
- * measured on.
- *
- *  - A REFUSAL SETTLES BACK. `copy` arms `setState("idle")` for `resetMs`
- *    after BOTH outcomes, so a refused copy reverts to offering its action —
- *    which is indistinguishable from a button that was never pressed, and is
- *    the exact state [FeedbackButton] exists to leave. That half is
- *    survivable: the boolean `copy` returns is the same answer without the
- *    reset, and ignoring `state` recovers it.
- *  - THE TIMER IS ARMED AFTER THE AWAIT, WITH NO LIVENESS GUARD. The hook's
- *    only cleanup is an unmount effect that clears whatever timer exists AT
- *    that moment; a clipboard write held behind a permission prompt settles
- *    later, and the `setTimeout` it then arms is the one timer nothing can
- *    clear. That half is not survivable from outside the hook, and it is
- *    asserted here ("an answer that arrives after the screen is gone arms
- *    nothing") — measured, not theorised: the suite goes red on it.
- *
- * So what uilet would need is either a guard of its own (an unmount ref
- * checked after the await, exactly as below) or an exported `writeClipboard`,
- * so a caller that owns its own outcome can take the write without the
- * policy. With either, [copyToClipboard] and [execCommandCopy] below delete
- * and this becomes `const { copy } = useClipboard()`.
+ * `@crewlethq/ui` publishes [writeClipboard], and that is the whole of the
+ * copy now: the secure-context detection, the deprecated-but-only-working
+ * `execCommand` fallback and the focus restoration the fallback owes. What is
+ * NOT taken is `useClipboard` around it, and the distinction is the point —
+ * the hook welds the write to a reset policy that settles a REFUSAL back to
+ * offering its action, which is the exact state [FeedbackButton] exists to
+ * leave standing. So the write comes from the package and the policy stays
+ * here, which is the split the package's own note on `writeClipboard` asks
+ * for.
  */
 export function CopyButton({
   text,
@@ -917,7 +787,7 @@ export function CopyButton({
   variant?: "default" | "ghost";
   size?: "md" | "sm";
 }) {
-  const run = useCallback(() => copyToClipboard(resolve(text)), [text]);
+  const run = useCallback(() => writeClipboard(resolve(text)), [text]);
   return (
     <FeedbackButton
       run={run}
@@ -1004,50 +874,6 @@ export function DownloadButton({
       size={size}
     />
   );
-}
-
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // A denied permission and a non-secure origin both land here, and the
-    // fallback below is the answer to both.
-  }
-  return execCommandCopy(text);
-}
-
-/** The pre-Clipboard-API copy: a selected off-screen textarea. */
-function execCommandCopy(text: string): boolean {
-  if (typeof document.execCommand !== "function") return false;
-  const field = document.createElement("textarea");
-  field.value = text;
-  // Off-screen rather than hidden: a `display: none` field cannot be
-  // selected, and selecting it is the whole mechanism. `readOnly` stops a
-  // mobile keyboard appearing for the frame it exists.
-  field.setAttribute("readonly", "");
-  field.style.position = "fixed";
-  field.style.top = "-1000px";
-  field.style.opacity = "0";
-  // WHERE FOCUS WAS, because `select()` takes it and `remove()` drops it on
-  // the document body: after a fallback copy the reader's next Tab started
-  // from the top of the page rather than from the button they had just
-  // pressed, on exactly the plain-http origin this branch exists for. Read
-  // before the field is in the document and restored after it is gone —
-  // `isConnected` because the click may have unmounted whatever held it.
-  const held = document.activeElement;
-  document.body.appendChild(field);
-  try {
-    field.select();
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    field.remove();
-    if (held instanceof HTMLElement && held.isConnected) held.focus();
-  }
 }
 
 /**

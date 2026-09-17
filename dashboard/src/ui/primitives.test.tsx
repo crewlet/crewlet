@@ -18,10 +18,10 @@
  * build says so.
  */
 
-import { StrictMode, type ReactElement } from "react";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { Code, CopyButton, DownloadButton, PhaseTag } from "./primitives.tsx";
+import { CopyButton, DownloadButton, PhaseTag } from "./primitives.tsx";
 
 afterEach(() => {
   cleanup();
@@ -546,124 +546,6 @@ describe("DownloadButton", () => {
   });
 });
 
-describe("Code", () => {
-  test("a selectable block takes ⌘A / Ctrl+A for itself", () => {
-    render(
-      <div>
-        <p>page furniture nobody asked to select</p>
-        <Code selectable label="The turn record, as JSON">
-          {'{"turn_id":"t-1"}'}
-        </Code>
-      </div>,
-    );
-    const block = screen.getByRole("region", { name: "The turn record, as JSON" });
-
-    // A CYRILLIC LAYOUT: the physical A key reports `key: "ф"`. Browsers
-    // resolve select-all from the key's POSITION, so a handler matching only
-    // `e.key` declines here and the page-wide select-all it exists to
-    // replace happens instead.
-    const event = new KeyboardEvent("keydown", {
-      key: "ф",
-      code: "KeyA",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    block.dispatchEvent(event);
-
-    // Handled: the browser's document-wide select-all never runs.
-    expect(event.defaultPrevented).toBe(true);
-    const selection = window.getSelection();
-    expect(selection?.toString()).toBe('{"turn_id":"t-1"}');
-    // Scoped: the paragraph beside it is not in the range.
-    expect(selection?.toString()).not.toContain("page furniture");
-  });
-
-  test("plain ⌘A elsewhere in the block's own keys is left alone", () => {
-    render(
-      <Code selectable label="A block">
-        {"body"}
-      </Code>,
-    );
-    const block = screen.getByRole("region");
-
-    for (const init of [
-      { key: "a", code: "KeyA" }, // no modifier: typing, not selecting
-      { key: "a", code: "KeyA", ctrlKey: true, altKey: true }, // a different chord
-      // Ctrl+Shift+A is Chrome's tab search. Swallowing a chord the browser
-      // owns takes it away and puts nothing in its place.
-      { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true },
-      { key: "c", code: "KeyC", ctrlKey: true }, // copy, which the browser must keep
-    ]) {
-      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-      block.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(false);
-    }
-  });
-
-  test("a short block is not a tab stop and takes no keys", () => {
-    // The ordinary case — a tool call's arguments that fit in the box — must
-    // not become one. There are dozens of them on one phase card, and a
-    // keyboard reader would have to step through every one.
-    const { container } = render(<Code label="Arguments">{"body"}</Code>);
-    const block = container.querySelector("pre")!;
-    expect(block.getAttribute("tabindex")).toBeNull();
-    expect(block.getAttribute("role")).toBeNull();
-
-    const event = new KeyboardEvent("keydown", {
-      key: "a",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    block.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(false);
-  });
-
-  // A BLOCK THAT SCROLLS IS REACHABLE, WHETHER OR NOT IT OWNS ⌘A.
-  //
-  // `.code` is `overflow: auto` with a 460px cap, so any block taller than
-  // that is a scroll container — and in Chrome and Safari a scroll container
-  // with no tabindex cannot be scrolled by keyboard at all. The blocks that
-  // hit the cap are the ones that matter most: a phase card's verbatim system
-  // prompt runs to tens of kilobytes, and it was unreachable.
-  test("a block tall enough to scroll becomes a named, focusable region", () => {
-    const tall = overflowing(<Code label="The execute phase's system prompt">{"body"}</Code>);
-    expect(tall.getAttribute("tabindex")).toBe("0");
-    expect(tall.getAttribute("role")).toBe("region");
-    expect(tall.getAttribute("aria-label")).toBe("The execute phase's system prompt");
-  });
-
-  // BOTH AXES. `plain` sets `white-space: pre`, so a wide line scrolls
-  // sideways inside a box that is nowhere near tall enough to scroll down —
-  // measuring only the height leaves exactly the code blocks unreachable.
-  test("a block that only scrolls SIDEWAYS is reachable too", () => {
-    const wide = overflowing(
-      <Code plain label="Arguments">
-        {"{}"}
-      </Code>,
-      "width",
-    );
-    expect(wide.getAttribute("tabindex")).toBe("0");
-  });
-
-  // …AND A SCROLLING BLOCK STILL DOES NOT SWALLOW ⌘A unless it asked to. The
-  // focus is for scrolling; select-all is a separate opt-in, and taking the
-  // key on every tall block would change what ⌘A means on any screen with one.
-  test("a scrolling block that did not ask for select-all still declines it", () => {
-    const tall = overflowing(<Code label="Arguments">{"body"}</Code>);
-    const event = new KeyboardEvent("keydown", {
-      code: "KeyA",
-      key: "a",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    tall.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(false);
-  });
-});
-
 describe("PhaseTag", () => {
   // THE PREFIX IS THE WHOLE COMPONENT. uilet's `TagVariant` carries the phase
   // vocabulary under its own names, separated from the status hues so the two
@@ -712,34 +594,3 @@ describe("PhaseTag", () => {
     expect(container.textContent).toBe("execute");
   });
 });
-
-/**
- * Render a Code block whose box overflows, and hand back the `pre`.
- *
- * jsdom lays nothing out, so every scroll and client dimension it reports is
- * 0 and no block can ever overflow on its own. Overriding the pair the
- * component compares is what makes the branch reachable at all — and it is
- * the real branch: the same measurement a browser answers differently.
- */
-
-function overflowing(node: ReactElement, axis: "height" | "width" = "height"): HTMLElement {
-  const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";
-  const client = axis === "height" ? "clientHeight" : "clientWidth";
-  const original = {
-    scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, scroll),
-    client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, client),
-  };
-  Object.defineProperty(HTMLElement.prototype, scroll, { configurable: true, value: 4000 });
-  Object.defineProperty(HTMLElement.prototype, client, { configurable: true, value: 460 });
-  try {
-    const { container } = render(node);
-    return container.querySelector("pre")!;
-  } finally {
-    // Restored before the assertions run, so one case cannot leave every
-    // later one measuring a box jsdom never laid out.
-    if (original.scroll) Object.defineProperty(HTMLElement.prototype, scroll, original.scroll);
-    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[scroll];
-    if (original.client) Object.defineProperty(HTMLElement.prototype, client, original.client);
-    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[client];
-  }
-}

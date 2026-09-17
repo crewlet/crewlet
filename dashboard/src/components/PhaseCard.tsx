@@ -118,7 +118,7 @@ function ToolRow({
               theirs drops the header. Both are wanted — the block is bare in
               this design and arguments are aligned JSON — so it is `plain` for
               the header and `wrap={false}` for the columns. `maxHeight` is our
-              own `.code` ceiling, and it has to be stated: without one a
+              own `RECORD_MAX_HEIGHT`, and it has to be stated: without one a
               900-line record pushes the rest of the round off the screen. */}
           <CodeBlock
             plain

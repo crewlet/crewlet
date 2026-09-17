@@ -13,6 +13,7 @@ import { afterEach, expect, test } from "vitest";
 import type { ReactElement } from "react";
 
 import { Router } from "~/app/router.tsx";
+import { overflowing } from "~/testing.tsx";
 import { BridgeLog } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
 
@@ -105,4 +106,58 @@ test("a bridged run that genuinely made no calls still shows nothing", () => {
   // it twice in two different ways is how a reader learns to distrust both.
   render(<BridgeLog run={run({ bridge_calls: [], bridge_calls_elided: 0 })} />);
   expect(screen.queryByText("Tool calls")).toBeNull();
+});
+
+function longLog() {
+  return run({
+    bridge_calls: [
+      {
+        name: "read_file",
+        args: '{"path":"a.go"}',
+        output: "package a\n".repeat(400),
+        at: "2026-06-15T12:01:00Z",
+      },
+    ],
+  });
+}
+
+// A BLOCK THAT SCROLLS IS REACHABLE. Under a ceiling the block is
+// `overflow: auto`, and in Chrome and Safari a scroll container with no
+// tabindex cannot be scrolled by keyboard at all — so a bridged run's output,
+// which is the longest machine text this dashboard shows, was readable by
+// pointer and by nothing else.
+test("a tool block long enough to scroll is a named, focusable region", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog run={longLog()} />
+    </Router>,
+  );
+  const region = container.querySelector('[role="region"][tabindex="0"]');
+  expect(region).not.toBeNull();
+  expect(region?.getAttribute("aria-label")).toContain("read_file");
+});
+
+// …AND IT STILL DOES NOT SWALLOW ⌘A. `focusWhenScrollable` and `selectable`
+// are two different doors onto the same tab stop, and this screen goes
+// through the first: a bridged tool's arguments are not the record the screen
+// is about, so select-all keeps meaning what it means everywhere else.
+// Switching this call to `selectable` would keep every assertion above green
+// and silently change what the chord does on a screen with two hundred blocks
+// on it, which is why the refusal is asserted rather than assumed.
+test("a scrolling tool block leaves select-all to the browser", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog run={longLog()} />
+    </Router>,
+  );
+  const region = container.querySelector('[role="region"][tabindex="0"]')!;
+  const event = new KeyboardEvent("keydown", {
+    code: "KeyA",
+    key: "a",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  region.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
 });

@@ -22,11 +22,12 @@
 
 import { useCallback, useMemo } from "react";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import {
   Button,
   Callout,
   Card,
+  CodeBlock,
   Disclosure,
   EmptyState,
   IconButton,
@@ -35,13 +36,6 @@ import {
   StatGroup,
   Tag,
 } from "@crewlethq/ui";
-// OURS, AND IT IS THE ONE THING `CodeBlock` CANNOT DO. Their block takes a
-// tab stop and an accessible name only when `selectable` is set — the type
-// forbids `label` without it — while ours MEASURES whether the rendered box
-// scrolls and names the ones that do. A bridged tool result is arbitrarily
-// long and is not the screen's select-all subject, so theirs would leave a
-// scroll container no keyboard can reach. See the report.
-import { Code } from "~/ui/primitives.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Dash, DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
@@ -764,15 +758,42 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
                     into a shape the engine never wrote. */}
                 <div className="col gap-1">
                   <div className="t-label">Arguments</div>
-                  <Code plain label={`${call.name} arguments`}>
-                    {call.args || "(none)"}
-                  </Code>
+                  {/* `plain` DROPS THE HEADER, which is the opposite of what
+                      the word meant on the block this replaced — there it
+                      turned wrapping off, which is `wrap` here. The header
+                      goes because the disclosure above already carries the
+                      tool's name and its own copy control; the columns stay
+                      because arguments are aligned JSON.
+
+                      `focusWhenScrollable` rather than `selectable`: a
+                      bridged tool's arguments are not this screen's
+                      select-all subject, and a tab stop in front of each of
+                      two hundred three-line blocks is worse than none. The
+                      block measures its own box and takes the stop only when
+                      it actually scrolls, which is a fact about the viewport
+                      rather than about this call. */}
+                  <CodeBlock
+                    plain
+                    wrap={false}
+                    maxHeight={RECORD_MAX_HEIGHT}
+                    focusWhenScrollable
+                    label={`${call.name} arguments`}
+                    code={call.args || "(none)"}
+                  />
                 </div>
                 <div className="col gap-1">
                   <div className="t-label">{call.failed ? "Error" : "Result"}</div>
-                  <Code plain label={`${call.name} ${call.failed ? "error" : "result"}`}>
-                    {call.output || "(nothing returned)"}
-                  </Code>
+                  {/* WRAPS, unlike the arguments above and for the reason the
+                      phase card gives: a result is a message, a stack trace
+                      or a wall of prose, and a sideways scrollbar on one of
+                      those is a line nobody finds the end of. */}
+                  <CodeBlock
+                    plain
+                    maxHeight={RECORD_MAX_HEIGHT}
+                    focusWhenScrollable
+                    label={`${call.name} ${call.failed ? "error" : "result"}`}
+                    code={call.output || "(nothing returned)"}
+                  />
                 </div>
               </div>
             </Disclosure>

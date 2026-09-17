@@ -466,7 +466,7 @@ none of it:
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those |
-| `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has two and an agent seat has five — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `Tabs` in `ui/primitives.tsx`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
+| `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has two and an agent seat has five — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
 | `DetailRail` | the peek's chrome — resizable, a drawer under 1180 px |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells |
@@ -977,9 +977,14 @@ Four more controls that looked like something they were not:
   a secure context, so `navigator.clipboard` is simply undefined at the
   `http://<node-ip>:8000` anyone reads the dashboard of a machine that is not
   their laptop at. `navigator.clipboard?.writeText(x)` swallowed that. The
-  design system's `CopyButton` falls back to the deprecated `execCommand` path,
-  which is the only one that works there, and then says `Copied` or
-  `Copy failed` — announced as well as drawn.
+  design system's `writeClipboard` falls back to the deprecated `execCommand`
+  path, which is the only one that works there, and then says `Copied` or
+  `Copy failed` — announced as well as drawn. The WRITE is the package's and
+  the answer is this dashboard's, which is the split on purpose: the package's
+  `useClipboard` settles a refusal back to offering its action after a couple
+  of seconds, and a control that has quietly gone back to offering is
+  indistinguishable from one nobody ever pressed. A refusal here holds until
+  the next press.
 - **A download button says whether it downloaded, and refuses rather than
   navigating.** The same invisible outcome with a worse failure available to
   it: an `<a>` whose `download` attribute the browser ignores does not save
@@ -1032,12 +1037,19 @@ not, which is the class of defect that never shows up in a screenshot:
   reachable by keyboard only if something makes it focusable. A `selectable`
   block is, because select-all needs it; the rest were not, and they are the
   tall ones: a phase card's verbatim system prompt runs to tens of kilobytes
-  and could not be scrolled from the keyboard at all. A block that actually
-  overflows, on both axes, since `plain` sets `white-space: pre` and scrolls
-  sideways, is a named `region` with a tab stop. Measured rather than
-  assumed, because a stop on every block would put one in front of each of a
-  round's tool arguments, and `label` is what such a block takes focus under:
-  taking focus without a name is the other half of the same trade.
+  and could not be scrolled from the keyboard at all. `focusWhenScrollable` is
+  the second door onto the same tab stop, and the two are separate because
+  they answer different questions: `selectable` is an INTENT only the screen
+  has (this block is the record the page is about), while the stop a scrollbar
+  owes is an OBLIGATION the block discharges for itself. A bridged run's tool
+  log and a seat's thread take the second — they scroll, so they are named
+  regions with a tab stop, and ⌘A goes on meaning what it means everywhere
+  else. Measured rather than assumed, and on both axes since `wrap={false}`
+  scrolls a block sideways in a box that is nowhere near tall enough to scroll
+  down: a stop on every block would put one in front of each of a round's tool
+  arguments, most of them three lines. `label` is what such a block takes
+  focus under, from either door — taking focus without a name is the other
+  half of the same trade.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not

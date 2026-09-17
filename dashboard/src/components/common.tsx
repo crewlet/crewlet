@@ -43,14 +43,17 @@ import type { Attention } from "~/lib/attention.ts";
 /**
  * How tall a block of machine text grows before it scrolls itself, in px.
  *
- * 460px, which is `.code`'s own ceiling in components.css and therefore the
+ * 460px, which was the block stylesheet's own `max-height` and therefore the
  * height every one of these blocks has had since they were written — not a new
- * number. It has to be STATED at each call because uilet's CodeBlock is
- * unbounded unless a caller says otherwise, and unbounded is wrong for every
- * record this dashboard shows: a phase's verbatim system prompt runs to tens
- * of kilobytes, an event payload and a whole configuration to hundreds of
- * lines, and one of them at nine hundred lines pushes everything under it off
- * the screen.
+ * number. That rule is gone with the block it dressed, so this constant is now
+ * the only place the ceiling is written down at all, which is where it belongs:
+ * a height a caller passes cannot also be a height a stylesheet imposes, and
+ * the two would drift. It has to be STATED at each call because uilet's
+ * CodeBlock is unbounded unless a caller says otherwise, and unbounded is
+ * wrong for every record this dashboard shows: a phase's verbatim system
+ * prompt runs to tens of kilobytes, an event payload and a whole configuration
+ * to hundreds of lines, and one of them at nine hundred lines pushes
+ * everything under it off the screen.
  *
  * ONE CONSTANT, because it was five: a named one on the phase card and the
  * bare literal `460` at four call sites on the event and turn screens, which

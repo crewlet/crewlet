@@ -25,6 +25,7 @@ import { afterEach, expect, test } from "vitest";
 
 import { CounterpartyRow, ThreadTurn, counterpartyKey } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
+import { overflowing } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -174,4 +175,21 @@ test("an undelivered turn is marked, and a delivered one is not", () => {
   );
   expect(screen.getByText(/Nothing was delivered/i)).toBeTruthy();
   expect(screen.getByText(/Filed LEAD-1\./)).toBeTruthy();
+});
+
+// A TURN'S TOOL LOG IS A BLOCK, NOT A BARE `pre`. It was hand-written markup
+// carrying the block stylesheet's own class, which put it under a ceiling with
+// `overflow: auto` — so a long log was a scroll container with no tab stop and
+// no accessible name, and in Chrome and Safari a scroll container with no
+// tabindex cannot be scrolled by keyboard at all. This is the one panel where
+// the whole record of what a turn DID is in that box.
+test("a long tool log is a named, focusable region rather than an unreachable box", () => {
+  const container = overflowing(
+    <Router>
+      <ThreadTurn entry={{ turn_id: "t-3", at: seen, tool_calls: "read_file\n".repeat(400) }} />
+    </Router>,
+  );
+  const region = container.querySelector('[role="region"][tabindex="0"]');
+  expect(region).not.toBeNull();
+  expect(region?.getAttribute("aria-label")).toBe("Tool calls in this turn");
 });
