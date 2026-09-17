@@ -405,15 +405,21 @@ export function Segmented<T extends string>({
  * dashboard ships today.
  *
  *  1. THERE IS NO WAY TO SAY "NO CEILING". `Meter` draws `role="meter"`
- *     unconditionally with `aria-valuemax={max}`, and `aria-valuemax` defaults
- *     to 100 when it is absent or NOT GREATER than the minimum — so a company
- *     with no token budget, which reaches this component as `max={0}`,
- *     announces "0 out of 100": a confident claim that nothing has been spent,
- *     where the truth is that nobody has said what the limit is. What it would
- *     need is an `unbounded` prop, or the rule below — a non-positive `max`
- *     draws the bar as decoration and leaves the legend to carry what IS
- *     known. Its `aria-valuenow` is unclamped too, which is the second half of
- *     the ARIA note further down.
+ *     unconditionally with `aria-valuemax={max}`, and a company with no token
+ *     budget reaches this component as `max={0}` — which states a range of
+ *     ZERO WIDTH. The fraction a reader is offered is 0 of 0, and any value
+ *     but zero breaches the role's own normative rule (WAI-ARIA 1.2: "the
+ *     value of aria-valuenow MUST NOT fall below or exceed the computed
+ *     values of aria-valuemin and aria-valuemax").
+ *
+ *     AND THE OBVIOUS ESCAPE IS THE WORSE ONE, which is what makes this a gap
+ *     in the role rather than in the call: leaving `aria-valuemax` off to mean
+ *     "no ceiling" is exactly when the spec fabricates one — it "defaults to
+ *     100" when the attribute is missing or not a number. So `role="meter"`
+ *     has no way to say that nobody set a limit, and the only honest move is
+ *     to stop being a meter: a non-positive `max` draws the bar as decoration
+ *     and leaves the legend to carry what IS known. Its `aria-valuenow` is
+ *     unclamped too, which is the second half of the ARIA note further down.
  *
  *  2. `meterTone` HAS THE "SPENT" POLARITY WELDED IN — `>= 100` is `danger`,
  *     `>= 75` is `warning` — so a bar measuring PROGRESS reads a finished goal
@@ -515,12 +521,13 @@ export function Meter({
       )}
       <div
         className="meter-track"
-        // NO SCALE, NO METER. `aria-valuemax` defaults to 100 when it is
-        // absent or not greater than the minimum, so a meter with an
-        // unknown ceiling would announce "0 out of 100" — a confident claim
-        // that nothing has been spent, where the truth is that nobody has
-        // said what the limit is. Drawn as decoration instead; the legend
-        // beside it carries whatever is actually known.
+        // NO SCALE, NO METER. A non-positive `max` states a range of zero
+        // width, so the fraction on offer is 0 of 0 — and the escape is
+        // worse than the problem: `aria-valuemax` "defaults to 100" when it
+        // is missing or not a number, so omitting it to mean "no ceiling" is
+        // the one case that fabricates a confident one. The role cannot say
+        // that nobody set a limit, so this stops being a meter and the
+        // legend beside it carries whatever is actually known.
         role={scaled ? "meter" : undefined}
         aria-label={scaled ? ariaLabel : undefined}
         aria-valuenow={scaled ? Math.max(0, Math.min(used, max)) : undefined}
