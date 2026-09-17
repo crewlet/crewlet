@@ -508,7 +508,7 @@ func TestATurnNamesEveryTraceItTouchedEvenOnesTheCapDropped(t *testing.T) {
 
 	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
 		map[string]any{"turn_id": "resumed"}))
-	traces := strings_(t, got["trace_ids"])
+	traces := stringList(t, got["trace_ids"])
 	// IN FIRST-APPEARANCE ORDER, which is the order a reader follows them
 	// in: the trace the turn started under comes first.
 	want := []string{"trace-first", "trace-resumed", "trace-third"}
@@ -542,14 +542,16 @@ func TestATurnWithNoTracesAnswersAnEmptyList(t *testing.T) {
 		// field should not have to guard the field as well.
 		t.Fatal("trace_ids is null on a turn whose events carry no trace")
 	}
-	if traces := strings_(t, got["trace_ids"]); len(traces) != 0 {
+	if traces := stringList(t, got["trace_ids"]); len(traces) != 0 {
 		t.Errorf("trace_ids = %v on a turn whose events carry none", traces)
 	}
 }
 
-// strings_ reads a JSON list of strings off an answer, since the helper above
+// stringList reads a JSON list of strings off an answer, since the helper above
 // round-trips through the wire — which is the shape a client actually sees.
-func strings_(t *testing.T, v any) []string {
+//
+// Not `strings`, which is the standard package this file also uses.
+func stringList(t *testing.T, v any) []string {
 	t.Helper()
 	list, ok := v.([]any)
 	if !ok {

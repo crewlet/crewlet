@@ -79,11 +79,13 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// case is a missing caution badge rather than a missing screen.
 	truncated := false
 	if len(records) >= store.MaxTurnEvents {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		total, err := s.Events.TurnEventCount(ctx, id)
 		switch {
 		case err != nil:
 			log.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", err)
 		case total > len(records):
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
 			if err != nil {
 				log.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", err)
@@ -241,18 +243,6 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 // DefaultPhasePage is one screenful of phase records.
 const DefaultPhasePage = 30
 
-// a2aChannels answers who has been asking whom.
-//
-// The channel is an AUTHORIZATION RECORD, not a transport — nothing queues on
-// it, and both the brief and the reply travel over the durable seat inbox — so
-// what is answered is the record: the pair, the count, and the window. The
-// message CONTENT is not here and is not missing: it is published as ordinary
-// events, which the event log already serves and already indexes by channel.
-//
-// `available` is the load-bearing field. A node that cannot reach the
-// coordination store must not answer an empty list, because "no channels have
-// been opened" and "this node could not look" are different facts and only one
-// of them is a measurement.
 // MaxA2AChannels bounds one page of the channel record.
 //
 // TWO HUNDRED, which is the activity feed's own order of magnitude and far
@@ -272,6 +262,18 @@ var a2aChannelStates = map[string]func(coord.Channel) bool{
 	"all":    func(coord.Channel) bool { return true },
 }
 
+// a2aChannels answers who has been asking whom.
+//
+// The channel is an AUTHORIZATION RECORD, not a transport — nothing queues on
+// it, and both the brief and the reply travel over the durable seat inbox — so
+// what is answered is the record: the pair, the count, and the window. The
+// message CONTENT is not here and is not missing: it is published as ordinary
+// events, which the event log already serves and already indexes by channel.
+//
+// `available` is the load-bearing field. A node that cannot reach the
+// coordination store must not answer an empty list, because "no channels have
+// been opened" and "this node could not look" are different facts and only one
+// of them is a measurement.
 func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 	// OPEN BY DEFAULT, which is what already shipped and what a screen
 	// watching a working company is for.

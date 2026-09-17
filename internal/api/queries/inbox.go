@@ -69,6 +69,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		// carrying generation 0 sorts below every position on a stream
 		// that has been reanchored — and the resume that was meant to skip
 		// what somebody read re-delivers all of it instead.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		at, err := tracker.ParseLogPosition(since)
 		if err != nil {
 			return nil, badParams("since", since, nil)
