@@ -26,6 +26,7 @@ import (
 // week is 10,080 points nobody can read.
 type Interval string
 
+// The intervals, finest first.
 const (
 	IntervalHour Interval = "hour"
 	IntervalDay  Interval = "day"
@@ -74,6 +75,7 @@ func (i Interval) Start(t time.Time) time.Time {
 // join the event never recorded.
 type Group string
 
+// The dimensions a breakdown may be grouped by.
 const (
 	GroupPhase  Group = "phase"
 	GroupModel  Group = "model"
