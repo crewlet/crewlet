@@ -32,9 +32,13 @@ func (probe) EventType() string { return "test.probe" }
 
 func init() { events.Register[probe]() }
 
-func newQueue(t *testing.T) *Queue {
+func newQueue(t *testing.T) *Queue { return newQueueWith(t, Config{}) }
+
+// newQueueWith is newQueue for a case that needs one knob turned down — see
+// [Config]'s own fields for why each of them is overridable.
+func newQueueWith(t *testing.T, cfg Config) *Queue {
 	t.Helper()
-	q, err := Open(t.Context(), Config{})
+	q, err := Open(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

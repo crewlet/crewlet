@@ -172,7 +172,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// create's term, so a probe the metadata group never answered spent the
 	// whole clustered budget and left none of it for the create that would
 	// have settled the question.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
 	var cons jetstream.Consumer
 	err := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
 		func(ctx context.Context) error {

@@ -5,15 +5,18 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// stallingJS answers the first n existence probes with the error a broker that
-// never replied produces, and passes everything else through.
+// stallingJS answers EVERY existence probe with the error a broker that never
+// replied produces, until it is told to stop, and passes everything else
+// through.
 //
 // EMBEDDED rather than hand-written, because [jetstream.JetStream] is a wide
 // interface and a stub of the whole thing would be a second broker to keep
@@ -24,34 +27,51 @@ import (
 // [context.DeadlineExceeded] from nats.go's own request path when the metadata
 // group holds a request past the deadline — see [jsprovision.Unanswered] for
 // why the client's error set is what it is.
+//
+// EVERY attempt, not the first. Stalling one and letting the next through is
+// what made this file's own case pass with the branch it protects deleted:
+// [jsprovision.Ask] re-asks, the second attempt reached the real broker and
+// answered "not found", and the caller took the ordinary absent path. The
+// probe has to go unanswered until its whole ceiling is spent, which is what
+// [Config.LookupBudget] exists to make affordable.
 type stallingJS struct {
 	jetstream.JetStream
 
-	mu      sync.Mutex
-	streams int // how many more Stream lookups to leave unanswered
-	consume int // how many more Consumer lookups to leave unanswered
-	err     error
+	mu     sync.Mutex
+	silent bool
+	asks   int
+	err    error
 }
 
-func (s *stallingJS) take(n *int) bool {
+// speak stops stalling and reports how many times it was asked, which is the
+// other half of the claim: the fall-through is reached by EXHAUSTION, so more
+// than one request must have been sent.
+func (s *stallingJS) speak() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if *n <= 0 {
+	s.silent = false
+	return s.asks
+}
+
+func (s *stallingJS) stall() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.silent {
 		return false
 	}
-	*n--
+	s.asks++
 	return true
 }
 
 func (s *stallingJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
-	if s.take(&s.streams) {
+	if s.stall() {
 		return nil, s.err
 	}
 	return s.JetStream.Stream(ctx, name)
 }
 
 func (s *stallingJS) Consumer(ctx context.Context, stream, name string) (jetstream.Consumer, error) {
-	if s.take(&s.consume) {
+	if s.stall() {
 		return nil, s.err
 	}
 	return s.JetStream.Consumer(ctx, stream, name)
@@ -84,7 +104,23 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 		nats.ErrNoResponders,
 	} {
 		t.Run(unanswered.Error(), func(t *testing.T) {
-			q := newQueue(t)
+			// A SHORT CEILING, because the branch under test is
+			// only reached once a probe has spent its WHOLE one —
+			// see [Config.LookupBudget]. At the shipped thirty
+			// seconds this case would cost thirty seconds to
+			// prove; here it costs a couple, and proves the same
+			// thing, because what is exercised is the EXHAUSTION
+			// rather than the duration.
+			//
+			// DERIVED FROM [jsprovision.ReAsk] rather than a
+			// number of its own: the ceiling has to outlast the
+			// gap between attempts or only one attempt fits, and a
+			// literal here would silently stop testing the re-ask
+			// the day that gap changed. Room for two gaps and the
+			// attempts around them.
+			q := newQueueWith(t, Config{
+				LookupBudget: 2*jsprovision.ReAsk + 500*time.Millisecond,
+			})
 			ctx := t.Context()
 
 			topic := topics.AgentInbox("unanswered-" + sanitizeName(unanswered.Error()))
@@ -94,7 +130,8 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 			// both: EnsureSubscription looks the consumer up and
 			// streamFor may look the stream up on the way.
 			real := q.js
-			q.js = &stallingJS{JetStream: real, streams: 1, consume: 1, err: unanswered}
+			stalled := &stallingJS{JetStream: real, silent: true, err: unanswered}
+			q.js = stalled
 
 			created, err := q.EnsureSubscription(ctx, topic, group)
 			if err != nil {
@@ -106,6 +143,16 @@ func TestAnUnansweredExistenceProbeStillProvisions(t *testing.T) {
 				t.Error("EnsureSubscription reported it did not create the " +
 					"mailbox, but nothing had made one: an unanswered probe " +
 					"must leave `existed` false and let the create decide")
+			}
+
+			// THE PROBE WAS EXHAUSTED, not answered. More than one
+			// request had to go out, or [jsprovision.Ask] did not
+			// re-ask and this case is measuring a single timeout
+			// rather than the ceiling.
+			if asks := stalled.speak(); asks < 2 {
+				t.Errorf("the probe was sent %d time(s) before the boot carried "+
+					"on; the ceiling is meant to hold several attempts, and one "+
+					"means Ask did not re-ask", asks)
 			}
 
 			// AND IT REALLY IS THERE. The point is a provisioned
@@ -131,8 +178,7 @@ func TestAnAnsweredFailureStillFailsTheProbe(t *testing.T) {
 	ctx := t.Context()
 
 	refused := errors.New("nats: authorization violation")
-	real := q.js
-	q.js = &stallingJS{JetStream: real, consume: 1, err: refused}
+	q.js = &stallingJS{JetStream: q.js, silent: true, err: refused}
 
 	topic, group := topics.AgentInbox("refused"), topics.AgentInboxGroup("refused")
 	if _, err := q.EnsureSubscription(ctx, topic, group); !errors.Is(err, refused) {
