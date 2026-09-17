@@ -35,7 +35,12 @@ afterEach(() => {
 });
 
 function serving(answers: Partial<Record<QueryName, unknown>>) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  // BOTH PARAMETERS, matching `socket.query(what, params)`: the cases below
+  // read the params off the call, and a one-argument mock makes that a type
+  // error rather than a missing assertion.
+  const query = vi.fn(
+    async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
+  );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({ name: "Acme", roles: [] } as never);
