@@ -156,10 +156,29 @@ type span struct {
 }
 
 // burnTask is everything the walk needs about one task.
+//
+// `measures` is a HISTORY rather than a number, which is the whole of this
+// chart's correctness: the walk asks what each member was worth AT EACH
+// INSTANT, and a single value read before the walk made a chart of change in
+// time out of a quantity that had none. A task re-estimated from 3 to 8 on day
+// 5 was drawn as 8 on day 1, so a sprint that delivered exactly what it took
+// on rendered as one handed more work and finished it — and the shape of a
+// closed sprint moved whenever somebody tidied an estimate months later.
 type burnTask struct {
-	measure float64
-	stays   []stay
-	spans   []span
+	measures []measureSpan
+	stays    []stay
+	spans    []span
+}
+
+// measureSpan is one span of a task's size, in the project's own measure.
+//
+// ONE VALUE RATHER THAN BOTH, because the read already knows which measure the
+// project scores in and selecting it in SQL keeps the choice in one place —
+// see [SprintMeasure.SpanColumn].
+type measureSpan struct {
+	from  int64
+	to    sql.NullInt64
+	value float64
 }
 
 // Burndown answers one sprint's series.
@@ -240,7 +259,14 @@ func (r *Reader) Burndown(ctx context.Context, q BurndownQuery, now time.Time) (
 		}
 		b.Tasks = len(tasks)
 		for _, task := range tasks {
-			if task.measure == 0 {
+			// THE OPEN SPAN, because this figure is present tense.
+			// It is the honesty pair on the chart as a whole — "this
+			// many of these tasks carry no value, so the series
+			// understates" — and what a reader would go and fix is
+			// the estimate the task has NOW. Valuing it at the
+			// sprint's start instead would report a task estimated
+			// on day 2 as unestimated for ever.
+			if measureNow(task.measures) == 0 {
 				b.Unestimated++
 			}
 		}
@@ -318,7 +344,7 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 	// takes: a removal hides work, and a burndown that kept counting it
 	// would climb when somebody tidied up.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT m.task_id, m.from_at, m.to_at, `+measure.Column()+`
+		SELECT m.task_id, m.from_at, m.to_at
 		FROM tracker_task_sprints m
 		JOIN tracker_tasks t ON t.id = m.task_id
 		WHERE m.project_key = ? AND m.sprint = ? AND t.removed_at IS NULL`,
@@ -331,15 +357,14 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 	for rows.Next() {
 		var id string
 		var s stay
-		var value float64
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := rows.Scan(&id, &s.from, &s.to, &value); err != nil {
+		if err := rows.Scan(&id, &s.from, &s.to); err != nil {
 			return nil, fmt.Errorf("tracker: scan a stay of sprint %d of %s: %w",
 				number, project, err)
 		}
 		task, held := tasks[id]
 		if !held {
-			task = &burnTask{measure: value}
+			task = &burnTask{}
 			tasks[id] = task
 		}
 		task.stays = append(task.stays, s)
@@ -351,6 +376,46 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 	}
 	if len(tasks) == 0 {
 		return tasks, nil
+	}
+
+	// THE SIZE HISTORY, one row per span, for the same set of tasks. Read
+	// separately rather than joined onto the stays because the two are
+	// independent intervals over one task — a re-estimate inside a stay
+	// makes two measure spans and one stay, and a carry-over makes two
+	// stays and one measure span — so a join would multiply them out and
+	// the walk would count the product.
+	values, err := tx.QueryContext(ctx, `
+		SELECT v.task_id, v.from_at, v.to_at, `+measure.SpanColumn()+`
+		FROM tracker_measure_spans v
+		WHERE v.task_id IN (
+			SELECT m.task_id FROM tracker_task_sprints m
+			JOIN tracker_tasks t ON t.id = m.task_id
+			WHERE m.project_key = ? AND m.sprint = ? AND t.removed_at IS NULL)`,
+		project, number)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read the sizes of sprint %d of %s: %w",
+			number, project, err)
+	}
+	for values.Next() {
+		var id string
+		var v measureSpan
+		if err = values.Scan(&id, &v.from, &v.to, &v.value); err != nil {
+			_ = values.Close()
+			return nil, fmt.Errorf("tracker: scan a size of sprint %d of %s: %w",
+				number, project, err)
+		}
+		if task, held := tasks[id]; held {
+			task.measures = append(task.measures, v)
+		}
+	}
+	if err = values.Err(); err != nil {
+		_ = values.Close()
+		return nil, fmt.Errorf("tracker: read the sizes of sprint %d of %s: %w",
+			number, project, err)
+	}
+	if err = values.Close(); err != nil {
+		return nil, fmt.Errorf("tracker: close the sizes of sprint %d of %s: %w",
+			number, project, err)
 	}
 
 	spans, err := tx.QueryContext(ctx, `
@@ -387,6 +452,12 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 	for _, task := range tasks {
 		sort.Slice(task.spans, func(i, j int) bool {
 			return task.spans[i].entered < task.spans[j].entered
+		})
+		// OLDEST FIRST, which is what [measureAt]'s fallback to the
+		// first span depends on: SQL returned these in no order the
+		// read asked for.
+		sort.Slice(task.measures, func(i, j int) bool {
+			return task.measures[i].from < task.measures[j].from
 		})
 	}
 	return tasks, nil
@@ -454,7 +525,12 @@ func burndownSeries(tasks map[string]*burnTask, instants []time.Time) []Burndown
 			if !inSprintAt(task.stays, t) {
 				continue
 			}
-			point.Scope += task.measure
+			// WHAT IT WAS WORTH THEN, which is the point of the
+			// series: a re-estimate moves this instant's scope and
+			// every one after it, and leaves the instants before it
+			// as they were reported.
+			value := measureAt(task.measures, t)
+			point.Scope += value
 			status, group, known := statusAt(task.spans, t)
 			switch {
 			case !known || !group.Finished():
@@ -464,9 +540,9 @@ func burndownSeries(tasks map[string]*burnTask, instants []time.Time) []Burndown
 				// history is "still to do": the alternative silently
 				// burns work down for a record this build could not
 				// read, which is the one direction that flatters.
-				point.Remaining += task.measure
+				point.Remaining += value
 			case Delivered(status):
-				point.Delivered += task.measure
+				point.Delivered += value
 			}
 		}
 		out = append(out, point)
@@ -486,6 +562,48 @@ func inSprintAt(stays []stay, at int64) bool {
 		}
 	}
 	return false
+}
+
+// measureAt is what a task was worth at one instant.
+//
+// THE SPAN COVERING IT, and before the first span the FIRST span's value
+// rather than zero — the same rule [MeasureAt] takes on the document, and for
+// the same reason. A sprint's start can be older than the history the per-task
+// cap kept, and answering zero there would say the task was unestimated when
+// what is true is that this node no longer knows what it was worth. The oldest
+// value it does know is the honest answer, and it degrades towards the old
+// behaviour rather than towards a burndown that starts below its own scope.
+//
+// Deliberately NOT the `known` three-valued shape [statusAt] takes. A status
+// this build cannot read has a real consequence — it decides which band the
+// work counts in — so inventing `todo` there would be inventing a fact. A
+// size has no bands: an unknown one is a quantity, and the quantity nearest
+// to true is the one it last held.
+func measureAt(spans []measureSpan, at int64) float64 {
+	if len(spans) == 0 {
+		return 0
+	}
+	value := spans[0].value
+	for _, v := range spans {
+		if v.from <= at {
+			value = v.value
+			continue
+		}
+		break
+	}
+	return value
+}
+
+// measureNow is what a task is worth today: the value of its OPEN span.
+//
+// The spans are oldest-first and at most one is open, so it is the last —
+// which is also what a task with a capped history still answers correctly,
+// since the cap only ever drops closed spans.
+func measureNow(spans []measureSpan) float64 {
+	if len(spans) == 0 {
+		return 0
+	}
+	return spans[len(spans)-1].value
 }
 
 // statusAt is the status a task held at one instant, and whether it held one.

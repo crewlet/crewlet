@@ -29,6 +29,22 @@ func closedStay(from, to int) stay {
 	return stay{from: stamp(from), to: sql.NullInt64{Int64: stamp(to), Valid: true}}
 }
 
+// sized is a task that has been worth one value its whole life, which is what
+// every case not about re-estimation wants: one span, open from day zero.
+func sized(value float64) []measureSpan {
+	return []measureSpan{{from: stamp(0), value: value}}
+}
+
+// resized is a task re-estimated mid-sprint: worth `was` until `day`, `now`
+// from then on. The cases that use it are the ones the single-value read got
+// wrong.
+func resized(was float64, day int, now float64) []measureSpan {
+	return []measureSpan{
+		{from: stamp(0), to: sql.NullInt64{Int64: stamp(day), Valid: true}, value: was},
+		{from: stamp(day), value: now},
+	}
+}
+
 func inStatus(status Status, from int) span {
 	return span{status: status, group: status.Group(), entered: stamp(from)}
 }
@@ -138,16 +154,16 @@ func TestCancelledWorkLeavesRemainingWithoutBeingDelivered(t *testing.T) {
 	t.Parallel()
 	tasks := map[string]*burnTask{
 		"done": {
-			measure: 5,
-			stays:   []stay{open(0)},
+			measures: sized(5),
+			stays:    []stay{open(0)},
 			spans: []span{
 				inStatusUntil(StatusInProgress, 0, 2),
 				inStatus(StatusDone, 2),
 			},
 		},
 		"dropped": {
-			measure: 3,
-			stays:   []stay{open(0)},
+			measures: sized(3),
+			stays:    []stay{open(0)},
 			spans: []span{
 				inStatusUntil(StatusTodo, 0, 2),
 				inStatus(StatusCancelled, 2),
@@ -183,8 +199,8 @@ func TestCancelledWorkLeavesRemainingWithoutBeingDelivered(t *testing.T) {
 func TestWorkThatArrivesLateStepsScopeUp(t *testing.T) {
 	t.Parallel()
 	tasks := map[string]*burnTask{
-		"early": {measure: 5, stays: []stay{open(0)}, spans: []span{inStatus(StatusTodo, 0)}},
-		"late":  {measure: 8, stays: []stay{open(2)}, spans: []span{inStatus(StatusTodo, 2)}},
+		"early": {measures: sized(5), stays: []stay{open(0)}, spans: []span{inStatus(StatusTodo, 0)}},
+		"late":  {measures: sized(8), stays: []stay{open(2)}, spans: []span{inStatus(StatusTodo, 2)}},
 	}
 	got := burndownSeries(tasks, []time.Time{at(0), at(3)})
 	if got[0].Scope != 5 {
@@ -198,6 +214,75 @@ func TestWorkThatArrivesLateStepsScopeUp(t *testing.T) {
 	}
 }
 
+// A RE-ESTIMATE MOVES THE INSTANTS AFTER IT AND LEAVES THE ONES BEFORE.
+//
+// This is the case the series was drawn wrong for. The measure was read ONCE
+// per task before the walk, from the task's CURRENT row, so a task
+// re-estimated from 3 to 8 on day 5 was worth 8 on day 1 as well: the chart
+// of a sprint that delivered exactly what it took on became one that had been
+// handed more work and finished it, and the shape of a CLOSED sprint moved
+// whenever somebody tidied an estimate months later. A chart whose whole
+// subject is change in time was drawn from a quantity that had none.
+//
+// The rise is the same shape as work ARRIVING late — see the case above — and
+// telling the two apart is not this series' job: both are scope going up, and
+// the activity feed says which happened.
+func TestAReEstimateMovesScopeFromThatInstantOn(t *testing.T) {
+	t.Parallel()
+	tasks := map[string]*burnTask{
+		"grew": {
+			measures: resized(3, 5, 8),
+			stays:    []stay{open(0)},
+			spans:    []span{inStatus(StatusTodo, 0)},
+		},
+	}
+	got := burndownSeries(tasks, []time.Time{at(0), at(4), at(6)})
+	if got[0].Scope != 3 || got[0].Remaining != 3 {
+		t.Errorf("day 0 reads %+v, want 3 of 3 — what the team actually took "+
+			"on, not what the task was later found to be worth", got[0])
+	}
+	if got[1].Scope != 3 {
+		t.Errorf("day 4 scope is %v, want 3 — the re-estimate had not "+
+			"happened yet", got[1].Scope)
+	}
+	if got[2].Scope != 8 || got[2].Remaining != 8 {
+		t.Errorf("day 6 reads %+v, want 8 of 8 — the re-estimate lands here "+
+			"and here only", got[2])
+	}
+}
+
+// AND A RE-ESTIMATE OF DELIVERED WORK DOES NOT REWRITE THE VELOCITY BEFORE IT.
+//
+// The delivered band is valued the same way, which is what stops a correction
+// made after a sprint closed from changing what that sprint is recorded as
+// having shipped.
+func TestAReEstimateAfterDeliveryLeavesTheDeliveredBand(t *testing.T) {
+	t.Parallel()
+	tasks := map[string]*burnTask{
+		"shipped": {
+			measures: resized(5, 6, 13),
+			stays:    []stay{open(0)},
+			spans: []span{
+				inStatusUntil(StatusInProgress, 0, 2),
+				inStatus(StatusDone, 2),
+			},
+		},
+	}
+	got := burndownSeries(tasks, []time.Time{at(3), at(7)})
+	if got[0].Delivered != 5 {
+		t.Errorf("delivery on day 3 is %v, want the 5 points it was worth "+
+			"when it shipped", got[0].Delivered)
+	}
+	if got[1].Delivered != 13 {
+		// NOT A CONTRADICTION: the task IS worth 13 from day 6, and the
+		// series reports each instant as it stood. What the fix buys is
+		// that day 3 no longer says 13 — a closed sprint's own window
+		// ends before the correction, so its velocity is unmoved.
+		t.Errorf("delivery on day 7 is %v, want 13 — the correction is in "+
+			"effect by then", got[1].Delivered)
+	}
+}
+
 // WORK CARRIED OUT OF THE SPRINT LEAVES IT, and the scope falls: a rollover
 // moves the task to the next sprint, and counting it here for ever would make
 // every carried-over point permanent debt on the sprint it started in.
@@ -205,9 +290,9 @@ func TestWorkCarriedOutLeavesTheScope(t *testing.T) {
 	t.Parallel()
 	tasks := map[string]*burnTask{
 		"carried": {
-			measure: 4,
-			stays:   []stay{closedStay(0, 3)},
-			spans:   []span{inStatus(StatusTodo, 0)},
+			measures: sized(4),
+			stays:    []stay{closedStay(0, 3)},
+			spans:    []span{inStatus(StatusTodo, 0)},
 		},
 	}
 	got := burndownSeries(tasks, []time.Time{at(0), at(4)})
@@ -228,7 +313,7 @@ func TestWorkCarriedOutLeavesTheScope(t *testing.T) {
 func TestATaskWithNoSpansCountsAsStillToDo(t *testing.T) {
 	t.Parallel()
 	tasks := map[string]*burnTask{
-		"opaque": {measure: 7, stays: []stay{open(0)}},
+		"opaque": {measures: sized(7), stays: []stay{open(0)}},
 	}
 	got := burndownSeries(tasks, []time.Time{at(1)})
 	if got[0].Remaining != 7 || got[0].Delivered != 0 {
