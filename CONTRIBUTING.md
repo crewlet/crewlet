@@ -94,9 +94,20 @@ JetStream quorum inside the 30s stream-provisioning budget, and fail every
 cluster-start attempt with `context deadline exceeded`. Alone on a runner the
 same cases pass.
 
-So those packages run in `make test-solo` and in CI's `end-to-end gates` job,
-and `make test` leaves them out. A contention split, not a coverage one —
+So those packages run in `make test-solo` and in CI's `end-to-end gates`, and
+`make test` leaves them out. A contention split, not a coverage one —
 `make check` depends on both targets.
+
+CI spends that budget differently from your machine, on the same guarantee.
+`make test-solo` runs them at `-p 1`, one after another in one invocation; CI
+runs **one job per package**, each on its own runner, via `make test-solo-one
+PKG=…`. Either way no two solo packages run at once. What the split buys is
+that a package which overruns no longer takes the others with it — sharing one
+job's wall clock, a package that hung killed the three that had not started,
+and the run reported nothing about them. The matrix is generated from the same
+declaration everything else reads, so it is never written down: the
+`end-to-end gates` check is an aggregate over the legs, and it is the only
+name branch protection needs to require.
 
 **Which packages those are is computed, not listed.** A package declares it by
 importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
@@ -299,8 +310,12 @@ replays the frames its socket produced through the dashboard's own
 there and nowhere else, so it needs node too:
 
 ```bash
-make test-solo   # internal/e2e, and every other package that runs alone
+make test-solo                 # internal/e2e, and every other package that runs alone
+make test-solo-one PKG=github.com/crewlet/crewlet/internal/e2e   # just one of them
 ```
+
+`test-solo-one` is what each of CI's matrix legs runs, so it is the way to
+reproduce exactly what one leg did.
 
 ## Project conventions
 
