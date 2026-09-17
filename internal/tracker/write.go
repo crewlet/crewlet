@@ -465,13 +465,51 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			}
 			// AND A SPRINT THE PROJECT ACTUALLY MINTED, on the home
 			// the patch is landing on rather than the one it left.
-			if patch.Sprint != nil {
+			//
+			// THE EFFECTIVE SPRINT, checked whenever the sprint moves
+			// OR THE PROJECT DOES. A sprint number is minted by one
+			// project and means nothing in another, so a patch that
+			// re-homes a task carries a number the destination has
+			// almost certainly never minted — and gating the check on
+			// `patch.Sprint != nil` made the one gesture that always
+			// invalidates the number the one gesture that skipped the
+			// check. The task landed pointing at a membership the
+			// destination does not have: gone from the old project's
+			// burndown because it is no longer in it, absent from the
+			// new one's because that sprint is not there, and refused
+			// by `sprint_report` with [ErrNoSprint].
+			//
+			// A MOVE TO THE SAME PROJECT IS NOT A MOVE. Comparing
+			// against `current.Project` rather than taking any
+			// non-nil `Project` as a change is what stops an edit
+			// that re-states the home being refused over a sprint
+			// that was archived in the meantime — the sprint did not
+			// move, and this patch is not the place to complain about
+			// it.
+			moved := patch.Project != nil && *patch.Project != current.Project
+			if sprint := patch.Sprint; sprint != nil || moved {
 				home := current.Project
 				if patch.Project != nil {
 					home = *patch.Project
 				}
+				if sprint == nil {
+					sprint = current.Sprint
+				}
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := mintedSprint(ctx, tx, home, patch.Sprint); err != nil {
+				if err := mintedSprint(ctx, tx, home, sprint); err != nil {
+					if patch.Sprint == nil {
+						// THE REMEDY IS THE ONE THE CALLER CAN
+						// REACH. They did not name a sprint, so
+						// being told to check the destination's
+						// list names nothing they typed: what
+						// they have to do is decide this task's
+						// sprint in the same edit.
+						return statelog.Decision{}, fmt.Errorf("tracker: moving "+
+							"task %s to %s would carry sprint %d, which %s has "+
+							"not minted: %w; patch `sprint` in the same edit — 0 "+
+							"takes it out of its sprint", id, home, *sprint,
+							home, err)
+					}
 					return statelog.Decision{}, err
 				}
 			}

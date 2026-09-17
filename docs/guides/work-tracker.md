@@ -289,6 +289,15 @@ value meaning "this seat no longer has one". `sprints.point_scale` is the
 sibling knob — the estimates this project allows, as a list of numbers, empty
 meaning any.
 
+A task's sprint is refused unless the project it is **landing on** has minted
+it, and that includes a **move**: a sprint number belongs to the project that
+minted it and means nothing in another, so re-homing a task carrying sprint 1
+into a project with no sprint 1 is refused rather than filed. Patch `sprint` in
+the same edit — `0` takes the task out of its sprint — and the refusal names
+both the number and the destination. Without that check the task landed in no
+burndown at all: out of the old project's because it had left, absent from the
+new one's because the sprint was not there.
+
 Membership is a **stay**: the pair of instants a task was in one sprint for,
 recorded by the engine rather than carried by whoever moved it. That is what
 lets `sprint=` mean more than a number. It takes:
