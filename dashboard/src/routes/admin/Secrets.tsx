@@ -25,7 +25,7 @@
  * and the two the engine already retired had both drifted into bugs.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
@@ -150,29 +150,62 @@ function useCredentials(enabled = true): Credentials {
   const [references, setReferences] = useState<ConfigReference[] | null>(null);
   const [unknown, setUnknown] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  // THE ANSWER THAT LANDS IS NOT ALWAYS AN ANSWER ANYBODY IS STILL WAITING
+  // FOR, and this screen wrote every one of them into state unconditionally.
+  //
+  // Three things start a read — mount, a token arriving, and the reader
+  // pressing refresh — so two can be in flight at once, and nothing here
+  // polls: whichever landed last was what the screen held. The same
+  // generation counter [Integrations] uses for exactly this covers both
+  // halves, because "superseded" and "unmounted" are one question to a read
+  // still in flight.
+  //
+  // Unmounted is the half that was actually failing. A read outliving its
+  // screen set state against a torn-down document, and in a test run that is
+  // an unhandled `ReferenceError: window is not defined` from React's own
+  // dispatch — every case passing and the run still exiting non-zero. It is
+  // timing, so it appeared on CI and not here, which is exactly the kind of
+  // leak a guard has to close rather than a rerun.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      // An unmounted screen has no state to write into, and a stale
+      // generation is what says so to a read still in flight.
+      generation.current++;
+    },
+    [],
+  );
+
+  const load = useCallback(async (mine: number) => {
     setLoading(true);
     try {
       const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
+      if (generation.current !== mine) return;
       setRows(body?.secrets ?? []);
       setError(null);
     } catch (err) {
+      if (generation.current !== mine) return;
       // The last good list stays on screen. A refusal to refresh is not a
       // reason to tell an operator the company holds no credentials.
       setError(refusalCode(err));
     } finally {
-      setLoading(false);
+      // ANSWERED, not answered WELL: a refusal is a state this screen
+      // renders honestly, and waiting is not. Guarded like the rest — a
+      // `finally` runs on the superseded path too.
+      if (generation.current === mine) setLoading(false);
     }
   }, []);
 
-  const loadReferences = useCallback(async () => {
+  const loadReferences = useCallback(async (mine: number) => {
     try {
       const body = (await rest.get("/config/references")) as {
         references?: ConfigReference[];
       } | null;
+      if (generation.current !== mine) return;
       setReferences(body?.references ?? []);
       setUnknown(null);
     } catch (err) {
+      if (generation.current !== mine) return;
       // A 404 IS AN ANSWER. A deployment before its first config import has
       // no active document, so nothing can be pointing at anything, and
       // treating that as a failed check would put a warning in front of
@@ -187,8 +220,13 @@ function useCredentials(enabled = true): Credentials {
     }
   }, []);
 
+  // ONE GENERATION FOR THE PAIR, taken here rather than inside each loader:
+  // the two reads are one refresh, and giving them a generation each would
+  // let the second supersede the first half of the same gesture.
   const reload = useCallback(async () => {
-    await Promise.all([load(), loadReferences()]);
+    generation.current++;
+    const mine = generation.current;
+    await Promise.all([load(mine), loadReferences(mine)]);
   }, [load, loadReferences]);
 
   useEffect(() => {

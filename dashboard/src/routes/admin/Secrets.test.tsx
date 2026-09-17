@@ -15,11 +15,12 @@
  * as "nothing points at it".
  */
 
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
+import { storeToken } from "~/protocol/index.ts";
 
 /**
  * A screen renders inside the Router.
@@ -336,4 +337,73 @@ test("editing a secret asks for a new value and never receives the old one", asy
   for (const [input] of spy.mock.calls) {
     expect(String(input)).not.toContain("reveal");
   }
+});
+
+/**
+ * AN ANSWER NOBODY IS WAITING FOR ANY MORE WRITES NOTHING.
+ *
+ * Three things start a read here — mount, a token arriving, and a store or a
+ * removal finishing — and nothing polls, so two are routinely in flight at
+ * once. Every answer was written into state unconditionally, which makes the
+ * screen hold whichever LANDED last rather than whichever was ASKED last: a
+ * refresh started after a slow read finishes second and is overwritten by the
+ * list it was meant to replace.
+ *
+ * The other half of the same guard is what was actually failing, and it is
+ * not observable from here. A read that outlives its SCREEN set state against
+ * a torn-down document — in a test run, an unhandled `ReferenceError: window
+ * is not defined` out of React's own dispatch, every case passing and the run
+ * still exiting non-zero. It cannot be asserted in jsdom, where React simply
+ * drops an update to an unmounted component and `window` is still there; the
+ * failure needs the environment itself to be gone. So this case exercises the
+ * generation guard through the half that IS observable, and the unmount half
+ * rides the identical `generation.current !== mine` check.
+ */
+test("a read that answers after a newer one began does not overwrite it", async () => {
+  const stale = {
+    secrets: [{ ...body.secrets[0], name: "STALE_ANSWER", key_id: "k0" }],
+  };
+  // THE FIRST READ IS HELD until the second has answered, which is the
+  // ordering the guard exists for and the one a slow route produces.
+  let releaseFirst: (() => void) | undefined;
+  let reads = 0;
+  const held = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  Object.defineProperty(globalThis, "fetch", {
+    writable: true,
+    value: vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      if (path === "/config/references") return ok(references);
+      if (path !== "/secrets") return ok({});
+      reads += 1;
+      if (reads === 1) {
+        await held;
+        return ok(stale);
+      }
+      return ok(body);
+    }),
+  });
+
+  render(<Secrets />);
+  // A TOKEN ARRIVING starts the second read, which is one of the three real
+  // triggers rather than a lever invented for this case.
+  storeToken("operator-token-2");
+  expect(await screen.findByText("GITHUB_TOKEN")).toBeTruthy();
+
+  // NOW the first read answers, and the screen must ignore it.
+  //
+  // FLUSHED INSIDE `act`, because the assertion below is an ABSENCE and an
+  // absence asserted too early passes for the wrong reason. Waiting on the
+  // fetch COUNT is exactly that mistake — it counts requests STARTED, so it
+  // was already 2 before the held answer had been handled at all, and this
+  // case passed with every guard deleted. Releasing and then letting React
+  // process the resolution is what makes the absence mean something.
+  await act(async () => {
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(reads).toBe(2);
+  expect(screen.queryByText("STALE_ANSWER")).toBeNull();
+  expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
 });
