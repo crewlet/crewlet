@@ -300,8 +300,16 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	return e.answer(withOperator(ctx, operatorID), p)
 }
 
-// RequiresOperator reports whether a question needs one, for a REST route that
-// has to make the same decision before it calls the answer.
+// RequiresOperator reports whether a question needs one.
+//
+// THE REGISTRY'S DECLARED POSTURE, readable without running the answer —
+// which is what a gate asserting the posture needs and the only caller there
+// is. Nothing enforces with it: [Registry.AnswerWith] makes the decision for
+// both transports, and each maps the refusal its own way (the socket to
+// `unauthorized`, a REST route to a 401 carrying the same code). It said it
+// was "for a REST route that has to make the same decision before it calls the
+// answer"; no route does, and a second enforcement point is exactly what
+// AnswerWith's own comment says must not exist.
 func (r *Registry) RequiresOperator(what string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

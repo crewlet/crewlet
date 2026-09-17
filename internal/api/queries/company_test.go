@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -431,6 +432,53 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 	if len(names) != 2 {
 		t.Fatalf("unmanned = %v, want ingress and workers", names)
+	}
+}
+
+// EVERY ANSWER THE ADMIN WORKSPACE DRAWS NEEDS AN OPERATOR CREDENTIAL.
+//
+// The dashboard's rail marks all five Admin destinations `guarded: true`: it
+// draws a lock on the row and its palette says "needs a token". That flag is
+// presentation — the only thing that actually refuses is this registry — and
+// `fleet` was registered public while its siblings were operator-only, so the
+// client promised a guard the server did not keep. On a node with
+// `api.allow_anonymous_read` an anonymous GET read the node ids, which node
+// held which seat, the lease epochs and the rollout's progress.
+//
+// The two here are the two this registry gates by these sources;
+// Configuration's four are [TestTheConfigQueryIsOperatorOnly] and Credentials
+// is `/secrets`, a prefix guarded whole. Named rather than derived, because
+// the mapping from a screen to the question it asks lives in each screen's own
+// `useQuery` call and no gate can see across the two languages — so the
+// registration check below is what stops this list going quiet: a name nothing
+// registers fails rather than passing as "gated".
+func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{
+		Coord:   coordmemory.New(),
+		NodeID:  "node-a",
+		Company: func() *config.Company { return cfg },
+	})
+	for _, what := range []string{"fleet", "integrations"} {
+		// REGISTERED AT ALL, first. A question this registry does not
+		// hold answers ErrUnknown to everybody, which is not the same
+		// fact and would make the assertion below vacuous.
+		if !slices.Contains(r.Names(), what) {
+			t.Errorf("%s is not registered, so this case asserts nothing about it", what)
+			continue
+		}
+		if !r.RequiresOperator(what) {
+			t.Errorf("%s is an Admin answer the rail locks, but the registry "+
+				"serves it to any caller", what)
+		}
+		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(
+			err, queries.ErrUnauthorized) {
+
+			t.Errorf("%s answered %v without a credential, want an "+
+				"authorization refusal", what, err)
+		}
 	}
 }
 

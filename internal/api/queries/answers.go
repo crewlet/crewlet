@@ -322,7 +322,17 @@ func Register(r *Registry, s Sources) {
 		r.Register("stream", s.stream)
 	}
 	if s.Coord != nil {
-		r.Register("fleet", s.fleet)
+		// OPERATOR-ONLY, like every other answer the Admin workspace
+		// draws. It reports the node ids, which node holds which seat,
+		// the lease epochs and how far a config rollout has reached —
+		// the shape of the deployment rather than the company's work.
+		// The dashboard already locks the row and its palette entry
+		// says "needs a token", and its own sidebar asks this beside
+		// `integrations`, which has always been operator-only. So this
+		// was the one destination of the five where the client claimed
+		// a guard the server did not keep, and on a node with
+		// `api.allow_anonymous_read` an anonymous GET read all of it.
+		r.RegisterOperator("fleet", s.fleet)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to
