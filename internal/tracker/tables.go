@@ -53,7 +53,8 @@ var ReproducibleTables = []string{
 	// reads it: a collection inside a document cannot be indexed, and a
 	// query that decodes every row's document is a full scan wearing an
 	// index's name.
-	"tracker_task_closure", "tracker_task_sprints", "tracker_collaborators",
+	"tracker_task_closure", "tracker_task_sprints", "tracker_measure_spans",
+	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",
 	"tracker_relations", "tracker_task_deps", "tracker_task_dependents",
 	"tracker_references", "tracker_checklist_items", "tracker_goal_owners",

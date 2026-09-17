@@ -86,6 +86,17 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 
+	// AND SO IS THE SIZE HISTORY, which every sprint figure about a past
+	// instant is valued from. Stamped after the sprint stay rather than
+	// before, so a record that moves both writes the measure span the
+	// NEW stay opens against — the two share one effective instant, so
+	// the order does not change a value, only which comment a reader
+	// meets first.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := stampMeasure(&next, current, held, c); err != nil {
+		return 0, err
+	}
+
 	document, err := json.Marshal(next)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
@@ -352,6 +363,121 @@ func capStays(stays []SprintStay, dropped int) ([]SprintStay, int) {
 		dropped++
 	}
 	return stays, dropped
+}
+
+// stampMeasure records a task's SIZE changing, as one span per value.
+//
+// # Why the measure needs a history at all
+//
+// Every sprint figure is a statement about a past instant — `committed` is
+// what was in the sprint when it STARTED, `added` what arrived after — and
+// each of them summed the task's CURRENT `points` or `estimate_min`. So
+// re-estimating a task from 3 to 8 on day 5 moved what day 1 had already
+// reported: `committed` rose by five points nobody committed. The burndown
+// was worse, because change in time is its whole subject: it read each
+// member's measure ONCE before walking the sprint's instants, so a sprint
+// that delivered exactly what it took on drew as one handed more work.
+//
+// # Derived here, like the sprint stay above, and for one of the same reasons
+//
+// A span is a pair of INSTANTS, and an instant this engine derives comes from
+// the broker (see [effectiveOf]) rather than from whoever wrote the record.
+//
+// It does NOT share the stay's other reason — a writer genuinely could carry
+// its own size, since it is setting it. What a writer cannot do is close the
+// PREVIOUS span: that needs the value the task held before this record, read
+// in the same transaction the new one is written in, which is exactly what an
+// applier has and a writer does not.
+//
+// Deliberately not recomputed from `tracker_history` the way the status spans
+// are, although the symmetry is inviting. A history row's `fields_json`
+// carries what a PERSON reads — `points` as "8", `estimate` as "90m", an
+// empty string for unset — and a number parsed back out of display text is
+// not the number this engine stored; and [MaxDeltas] trims a record carrying
+// more than thirty-two field changes, so a large patch can drop the points
+// delta outright. A figure cannot rest on a row allowed to omit it.
+//
+// # The shape
+//
+// One span per value, closed when either measure moves. A task's FIRST apply
+// opens one even when nothing is estimated, because a zero is a real size
+// here — it is what "nobody has estimated this" is stored as and what
+// `unestimated` counts — so a sprint that committed an unestimated task has a
+// span to value it at rather than a gap.
+func stampMeasure(next *Task, current Task, held bool, c applyContext) error {
+	if held && current.Points == next.Points &&
+		current.EstimateMinutes == next.EstimateMinutes &&
+		len(next.MeasureHistory) > 0 {
+
+		return nil
+	}
+	at, err := effectiveOf(c)
+	if err != nil {
+		return err
+	}
+	spans := slices.Clone(next.MeasureHistory)
+	// CLOSE WHATEVER IS OPEN, and there is at most one: a task has one
+	// size at a time, unlike its sprints. A span already closed at this
+	// instant is left alone, which is what makes a redelivery a no-op.
+	for i := range spans {
+		if spans[i].To == nil {
+			spans[i].To = &at
+		}
+	}
+	spans = append(spans, MeasureStay{
+		From: at, Points: next.Points, EstimateMin: next.EstimateMinutes,
+	})
+	next.MeasureHistory, next.MeasureSpansDropped = capMeasureSpans(spans,
+		next.MeasureSpansDropped)
+	return nil
+}
+
+// capMeasureSpans drops the oldest CLOSED spans past [MaxMeasureSpans].
+//
+// The same rule as [capStays] and the same reason for it: the open span is the
+// task's size NOW, so dropping it would make the current measure unreadable
+// from the history. Order is preserved, so the history stays oldest-first and
+// "the measure at instant T" is a walk from the end.
+func capMeasureSpans(spans []MeasureStay, dropped int) ([]MeasureStay, int) {
+	for len(spans) > MaxMeasureSpans {
+		cut := -1
+		for i := range spans {
+			if spans[i].To != nil {
+				cut = i
+				break
+			}
+		}
+		if cut < 0 {
+			break
+		}
+		spans = append(spans[:cut], spans[cut+1:]...)
+		dropped++
+	}
+	return spans, dropped
+}
+
+// MeasureAt is what a task was worth at one instant, in both measures.
+//
+// THE SPAN COVERING IT, and before the first span the FIRST span's value
+// rather than zero: a report may ask about an instant older than the history
+// the cap kept, and answering zero there would say the task was unestimated
+// when what is true is that this node no longer knows. The oldest value it
+// does know is the honest answer, and it is also the one that makes a capped
+// history degrade towards the old behaviour rather than towards a lie.
+//
+// A task with no history at all answers zeros, which is what a task carries
+// before its first apply under this build.
+func MeasureAt(spans []MeasureStay, at time.Time) (points float64, estimateMin int) {
+	if len(spans) == 0 {
+		return 0, 0
+	}
+	best := 0
+	for i := range spans {
+		if !spans[i].From.After(at) {
+			best = i
+		}
+	}
+	return spans[best].Points, spans[best].EstimateMin
 }
 
 // effectiveOf is the instant a stamp derived from this record takes.
@@ -724,6 +850,26 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 					return []any{task.ID, v.Sprint, task.Project,
 						store.EncodeTime(v.From), nullableTime(v.To),
 						nullableInt(v.RolledTo)}
+				})
+		}},
+		{"tracker_measure_spans", func() (int, error) {
+			// ONE ROW PER SPAN of the task's size, which is what every
+			// sprint figure about a past instant is valued from. The
+			// document's own history exploded, rebuilt on every apply
+			// like every other collection here, so a reprocess
+			// converges rather than accumulating.
+			return insertMany(ctx, tx, c.maxVariables, `
+				INSERT INTO tracker_measure_spans
+					(task_id, from_at, to_at, points, estimate_min)
+				VALUES`,
+				`(?,?,?,?,?)`,
+				`ON CONFLICT (task_id, from_at) DO UPDATE SET
+					to_at = excluded.to_at,
+					points = excluded.points,
+					estimate_min = excluded.estimate_min`,
+				task.MeasureHistory, func(v MeasureStay) []any {
+					return []any{task.ID, store.EncodeTime(v.From),
+						nullableTime(v.To), v.Points, v.EstimateMin}
 				})
 		}},
 		{"tracker_relations", func() (int, error) {
@@ -1147,6 +1293,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_sprints WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_measure_spans WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},

@@ -110,6 +110,19 @@ const (
 	// many it is not showing.
 	MaxSprintStays = 16
 
+	// MaxMeasureSpans bounds a task's SIZE history, dropped oldest-closed
+	// first like the sprint stays above.
+	//
+	// SIXTY-FOUR, which is four times the sprint cap and deliberately so:
+	// a task is re-estimated far more often than it changes sprint, and
+	// the span the figures need is the one covering an instant a REPORT
+	// asks about. Dropping the oldest closed span makes the measure
+	// before it unreadable, and the oldest instant any reader asks about
+	// is a sprint's start — so the history has to outlive the stays that
+	// point into it, not merely match them. At 64 a task re-estimated
+	// once a working day keeps a quarter of them.
+	MaxMeasureSpans = 64
+
 	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
 	// every former key also has an alias row, and the applier never
 	// deletes one on a task apply.
@@ -237,6 +250,25 @@ type SprintStay struct {
 	RolledTo *int       `json:"rolled_to,omitempty"`
 }
 
+// MeasureStay is what a task was WORTH over one span of its life: the pair of
+// instants a size held for, and the size itself in both measures.
+//
+// BOTH MEASURES ON ONE SPAN, because a project's measure is `points` or
+// `estimate_min` and a company may change which. One span per change to
+// EITHER means the boundaries are the same set whichever measure is read, so
+// switching a project's measure re-reads the same history rather than
+// revealing a differently-shaped one.
+//
+// A ZERO IS A REAL SIZE HERE — it is what "nobody has estimated this" is
+// stored as, and `unestimated` counts it — so the span for a task created
+// without an estimate exists and carries zeros rather than being absent.
+type MeasureStay struct {
+	From        time.Time  `json:"from"`
+	To          *time.Time `json:"to,omitempty"`
+	Points      float64    `json:"points,omitempty"`
+	EstimateMin int        `json:"estimate_min,omitempty"`
+}
+
 // RelationKind is what one task is to another.
 type RelationKind string
 
@@ -341,6 +373,14 @@ type Task struct {
 	Sprint             *int         `json:"sprint,omitempty"`
 	SprintHistory      []SprintStay `json:"sprint_history,omitempty"`
 	SprintStaysDropped int          `json:"sprint_stays_dropped,omitempty"`
+
+	// MeasureHistory is what this task was WORTH over each span of its
+	// life, and every sprint figure about a past instant reads it rather
+	// than the current `Points`/`EstimateMinutes` above. Derived by the
+	// applier beside the sprint stays and for the same reason — see
+	// [stampMeasure].
+	MeasureHistory      []MeasureStay `json:"measure_history,omitempty"`
+	MeasureSpansDropped int           `json:"measure_spans_dropped,omitempty"`
 
 	// Parent and Depth: Depth is a HINT. The applier derives the real
 	// depth from the closure and enforces the cap against the subtree's
@@ -716,16 +756,17 @@ type TaskPatch struct {
 	Depend *DependentIntent `json:"-"`
 
 	// The collections, carried WHOLE when touched.
-	Collaborators *[]string                   `json:"collaborators,omitempty"`
-	Watchers      *[]string                   `json:"watchers,omitempty"`
-	Muted         *[]string                   `json:"muted,omitempty"`
-	Tags          *[]string                   `json:"tags,omitempty"`
-	Fields        *map[string]json.RawMessage `json:"fields,omitempty"`
-	Relations     *[]Relation                 `json:"relations,omitempty"`
-	Dependents    *[]string                   `json:"dependents,omitempty"`
-	Checklists    *[]Checklist                `json:"checklists,omitempty"`
-	SprintHistory *[]SprintStay               `json:"sprint_history,omitempty"`
-	FormerKeys    *[]string                   `json:"former_keys,omitempty"`
+	Collaborators  *[]string                   `json:"collaborators,omitempty"`
+	Watchers       *[]string                   `json:"watchers,omitempty"`
+	Muted          *[]string                   `json:"muted,omitempty"`
+	Tags           *[]string                   `json:"tags,omitempty"`
+	Fields         *map[string]json.RawMessage `json:"fields,omitempty"`
+	Relations      *[]Relation                 `json:"relations,omitempty"`
+	Dependents     *[]string                   `json:"dependents,omitempty"`
+	Checklists     *[]Checklist                `json:"checklists,omitempty"`
+	SprintHistory  *[]SprintStay               `json:"sprint_history,omitempty"`
+	MeasureHistory *[]MeasureStay              `json:"measure_history,omitempty"`
+	FormerKeys     *[]string                   `json:"former_keys,omitempty"`
 
 	// Comment rides a task write, because a comment is a mutation of the
 	// task and shares its arbitration.
@@ -1151,6 +1192,21 @@ func (m SprintMeasure) Column() string {
 		return "t.estimate_min"
 	}
 	return "t.points"
+}
+
+// SpanColumn is the same measure on a task's SIZE HISTORY rather than on its
+// current row — `tracker_measure_spans`, aliased `v`.
+//
+// Beside [SprintMeasure.Column] rather than anywhere near its callers,
+// because the pair has to name the same measure and there is nothing else
+// that would notice if it stopped: a figure valued from `points` at one
+// instant and `estimate_min` at another is not a number anybody could read,
+// and both spellings are strings a compiler never sees.
+func (m SprintMeasure) SpanColumn() string {
+	if m.Or() == MeasureEstimate {
+		return "v.estimate_min"
+	}
+	return "v.points"
 }
 
 // Capacity is one person's sprint capacity.
