@@ -27,6 +27,18 @@
 // it names no client at all: [Transport] is what such a wrapper's base must
 // be, not http.DefaultTransport. internal/mcp's per-server identity tripper
 // is the one in this tree.
+//
+// IN A TEST the base is neither of those: it is the httptest.Server's own
+// transport, and [github.com/crewlet/crewlet/internal/httpx/httpxtest] is
+// where that rule and its reason live. The reason is not performance —
+// httptest.Server.Close ends by sweeping http.DefaultTransport's idle
+// connections for every server in the binary rather than its own, so on the
+// shared pool a parallel neighbour's cleanup can fail a request the server
+// already answered. internal/sandbox lost a CI run to it.
+//
+// processpool_guard_test.go is what keeps all three halves true: written down
+// and checked by nobody, this rule had four prose copies and seven packages
+// violating it.
 package httpx
 
 import (
