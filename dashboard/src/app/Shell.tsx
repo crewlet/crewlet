@@ -241,9 +241,24 @@ export function Shell({ children }: { children: ReactNode }) {
   const goTo = useCallback((path: string[]) => nav.to(path), [nav]);
   useWorkspaceChords(goTo);
 
-  // Close the drawer whenever the route changes — a drawer left open over the
-  // screen you just navigated to is the classic mobile-nav bug.
-  useEffect(() => setDrawer(false), [route.hash]);
+  // Close the drawer AND THE PALETTE whenever the route changes — either one
+  // left open over the screen you just navigated to is the classic mobile-nav
+  // bug, and the palette had it too.
+  //
+  // Picking a palette row closes it on the way out, so the case this covers is
+  // every OTHER way the route moves while it is open: the browser's Back and
+  // Forward buttons, a phone's back gesture, a restored history entry. The
+  // palette that survived one of those was still offering the objects it had
+  // ranked for the screen the reader had just left.
+  //
+  // NOT THE TOKEN DIALOG, which is deliberately not in here: a credential
+  // prompt is about the reader's access rather than about where they are, and
+  // dismissing it on a navigation would lose the one thing the socket asked
+  // for.
+  useEffect(() => {
+    setDrawer(false);
+    setPaletteOpen(false);
+  }, [route.hash]);
 
   const workspace = workspaceOf(route.path);
   const sections = useSidebar(workspace);

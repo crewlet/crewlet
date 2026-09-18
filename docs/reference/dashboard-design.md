@@ -788,6 +788,14 @@ A `>` command that would change nothing is not offered: the list omits the
 theme and the density already in use, because a control that says "switch to
 dark" while the page is already dark does not know what it is looking at.
 
+**And it closes when the route changes**, the way the workspace drawer does.
+Picking a row closes it on the way out, so what this covers is every other way
+the route can move while it is open — Back, Forward, a phone's back gesture, a
+restored history entry. A palette that survives one of those is left ranking
+the objects of the screen the reader just left, over a screen it knows nothing
+about. The token dialog is deliberately not in that rule: a credential prompt
+is about the reader's access rather than about where they are.
+
 ---
 
 ## A cron expression is read, not printed

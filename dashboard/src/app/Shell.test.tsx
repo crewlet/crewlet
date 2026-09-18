@@ -62,6 +62,9 @@ const INCOMPLETE: CoverageFacts = {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // jsdom implements no scrolling at all, and the palette keeps its cursor row
+  // in view — same stub as `CommandPalette.test.tsx`, for the same reason.
+  Element.prototype.scrollIntoView = () => {};
   location.hash = "#/";
 });
 
@@ -261,5 +264,38 @@ describe("the Inbox rail badge", () => {
       await Promise.resolve();
     });
     expect(document.querySelector(".rail-badge")).toBeNull();
+  });
+});
+
+// A MODAL DOES NOT OUTLIVE THE SCREEN IT WAS OPENED ON.
+//
+// `Shell` is mounted once for the life of the tab, so what it holds open stays
+// open across every route change unless something takes it back. The drawer
+// already did; the palette did not — press `Ctrl-K`, then Back, and it was
+// still there over a different screen, still offering the objects it had
+// ranked for the one the reader had just left.
+//
+// Picking a palette row closes it on the way out, so what this covers is every
+// OTHER way the route moves while it is open: Back, Forward, a phone's back
+// gesture, a restored history entry.
+describe("what the frame holds open", () => {
+  test("a route change closes the palette, the way it already closed the drawer", async () => {
+    frame(<Bare />);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+    });
+    expect(
+      screen.queryByRole("dialog"),
+      "ctrl-k did not open the palette, so this test proves nothing",
+    ).not.toBeNull();
+
+    await act(async () => {
+      location.hash = "#/company";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(
+      screen.queryByRole("dialog"),
+      "the palette survived a route change and is now over a screen it knows nothing about",
+    ).toBeNull();
   });
 });
