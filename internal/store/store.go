@@ -590,6 +590,31 @@ func (d *DB) Close() error {
 	return errors.Join(err, peer)
 }
 
+// open reports whether this handle can issue a statement at all.
+//
+// IT IS CHECKED AT THE DOOR, by every exported method a late caller can
+// reach — [DB.Read], [DB.Tx], [DB.Writer] — and not only at the innermost
+// point they share. That distinction is the whole of a CI failure on main
+// (run 35312291605) and of the incident before it, which are the same crash
+// one frame apart.
+//
+// The first time, six call sites took `Replicated().SQL()` and issued on a
+// nil `*sql.DB`; the fix routed all six through Read and Tx, "which answer
+// ErrNoEstate", and store/estate_test.go guards the tree against taking that
+// pool again. But the guard it routed them to sat in [DB.txOpts], and Read
+// and Tx each build their retry budget from `d.busy` BEFORE calling it. So a
+// nil handle still died — in `store.(*DB).Read(0x0, …)` rather than in
+// `database/sql.(*DB).conn(0x0, …)`, under the identical stack: the trim's
+// tick, tracker.Evictions, `(*retention).tombstones`. The caller had a
+// branch for ErrNoEstate the whole time and never got to run it.
+//
+// A guard one frame in from the door is not a guard; it is a guard plus a
+// promise that nobody puts a field read in front of it. f8f9078 put one in
+// front of both, in the same change and for an unrelated reason: it replaced
+// `retryStale(ctx, fn)` with `retryTransient(ctx, pooled(d.busy), fn)`, and
+// an argument is evaluated before the call it is an argument to.
+func (d *DB) open() bool { return d != nil && d.sql != nil }
+
 // Replicated is the handle on the estate a state log's appliers write.
 //
 // Nil on a handle that IS the replicated estate, which is what makes the
@@ -621,6 +646,14 @@ func (d *DB) Path() string { return d.path }
 // file — the artefact is a copy of it alone — and it should not have to know
 // whether it is holding the node handle or the replicated one to ask.
 func (d *DB) ReplicatedPath() string {
+	// NIL-SAFE, because this is the door callers are sent to INSTEAD of
+	// `Replicated().Path()` — and being sent somewhere safer is worth
+	// nothing if the destination has the same hole. "" is the meaningful
+	// zero here (there is no file), which os.Stat reports as an error at
+	// both call sites that measure one.
+	if d == nil {
+		return ""
+	}
 	if d.estate == EstateReplicated {
 		return d.path
 	}
@@ -806,6 +839,9 @@ func (c *connector) Driver() driver.Driver { return c.drv }
 // is what the caller needs, and replacing it with "rollback failed" would hide
 // the reason the rollback was necessary.
 func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
+	if !d.open() {
+		return ErrNoEstate
+	}
 	// A CONFLICTED TRANSACTION IS RETRIED, and fn may therefore run more
 	// than once. That is safe by construction: the driver reports the
 	// conflict on a statement inside the transaction, everything the
@@ -1072,7 +1108,7 @@ func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 // would put the read-then-write abort back on whichever path forgot to ask.
 // Only [DB.Read] passes anything else.
 func (d *DB) txOpts(ctx context.Context, opts *sql.TxOptions, fn func(*sql.Tx) error) (err error) {
-	if d == nil || d.sql == nil {
+	if !d.open() {
 		return ErrNoEstate
 	}
 	tx, err := d.sql.BeginTx(ctx, opts)

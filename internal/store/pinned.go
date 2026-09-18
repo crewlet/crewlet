@@ -47,6 +47,9 @@ type Writer struct {
 // is a reader's connection taken with nothing reporting the loss, and the
 // symptom (a dashboard that queues) appears nowhere near the cause.
 func (d *DB) Writer(ctx context.Context) (*Writer, error) {
+	if !d.open() {
+		return nil, ErrNoEstate
+	}
 	d.pins.mu.Lock()
 	if d.pins.held >= d.pins.declared {
 		declared := d.pins.declared
@@ -164,6 +167,9 @@ func (w *Writer) Close() error {
 // race too, and a reader that surfaced "database snapshot is stale" to a
 // dashboard would be reporting the store's internals as the answer.
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	if !d.open() {
+		return ErrNoEstate
+	}
 	return retryTransient(ctx, pooled(d.busy), func() error {
 		return d.txOpts(ctx, readTx, func(tx *sql.Tx) error { return fn(tx) })
 	})
