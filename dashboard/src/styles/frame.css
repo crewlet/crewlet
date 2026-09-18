@@ -162,8 +162,15 @@
   color: var(--text);
 }
 
+/* THE INK, NOT THE FILL. `--accent` is a fill — it is what a primary button
+   and a meter bar are painted WITH — and `--accent-ink` is the same hue moved
+   to where it can be read as text, which is why every anchor in `base.css`
+   already takes it. Spent as text on the soft ground this row also carries, the
+   fill measures 3.09:1 in dark and 3.81 in light, under the 4.5 small text
+   needs; the ink is 5.96 and 7.34. The rail's current row is the one piece of
+   chrome that says where the reader IS. */
 .rail-row.active {
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 
@@ -218,8 +225,22 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* AN INK GOES ON THE SOFT, NEVER ON THE FILL. The three rungs are a set:
+   `--caution` is what a thing is painted WITH, `--caution-soft` is the ground
+   it tints, and `--caution-ink` is the one of the three that is a TEXT colour.
+   This badge took the fill as its ground and the ink on top of it, which is the
+   one pairing of the three the design system does not offer: 1.72:1, measured
+   in the browser, on a 9px semibold digit. The count was a dot.
+
+   It is the only place in this tree that puts text on a solid feedback fill —
+   everything else spending `--caution` is a status dot or a meter bar, which
+   carry none. So there is no ink published for that ground, and nothing else
+   to keep consistent with; the badge's own resting state is already a tinted
+   ground with a border and a muted digit, and this is that shape in amber.
+   11.79:1 in dark and 14.72 in light, with the fill kept as the RING so the
+   badge still reads as attention from the corner of an eye. */
 .rail-badge.attention {
-  background: var(--caution);
+  background: var(--caution-soft);
   border-color: var(--caution);
   color: var(--caution-ink);
 }
@@ -349,7 +370,7 @@
 
 .side-row.current > .side-link {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-weight: var(--fw-medium);
 }
 
@@ -889,7 +910,7 @@
   grid-column: 1 / -1;
   padding: var(--space-1) var(--space-3);
   font-size: var(--fs-3xs);
-  color: var(--accent);
+  color: var(--accent-ink);
   cursor: pointer;
   text-align: left;
 }

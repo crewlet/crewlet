@@ -230,7 +230,7 @@
    place a reader looks to answer "where is it now". */
 .round.live .round-node {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 .round.live .round-node::before {
@@ -992,7 +992,7 @@
 }
 .new-rows:hover {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 /* HEADER SPACING. A turn head, the phase head nested inside it and the

@@ -2269,6 +2269,17 @@ to.
 16. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.
+16b. **Text takes the ink, never the fill.** Every status family is three
+    rungs: the base is what a thing is painted *with* — a primary button, a
+    status dot, a meter bar — the `-soft` is the ground it tints, and the
+    `-ink` is the one of the three that is a text colour. The design system
+    measures the pairs it publishes; nothing but `styles/rungs.test.ts`
+    measures which rung this application spends where, and both mistakes are
+    silent. Spending `--accent` as text gives 3.09:1 on its own soft ground and
+    3.71 on the page, against the 4.5 small text needs; the ink gives 5.96 and
+    7.15. Putting an `-ink` **on** its family's solid fill is the one pairing
+    of the three that was never measured — the rail's attention badge did it,
+    at 1.72:1 on a 9px digit, so the unread count rendered as a dot.
 17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.
 18. **Everything the page runs or loads is its own bundle.** The engine serves
