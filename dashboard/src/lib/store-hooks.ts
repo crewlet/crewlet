@@ -106,6 +106,32 @@ export function useTokens() {
   return useSlice(["tokens"], (s) => s.tokens);
 }
 
+/**
+ * The company's resolved schedules, as the handshake and every config apply
+ * push them.
+ *
+ * THE SLICE HAD NO ACCESSOR. `Store` declares it, lists it, fills it from the
+ * snapshot AND from the push, and emits on it — and nothing could read it, so
+ * the one screen that wanted schedules asked the engine instead and paid a
+ * round trip for rows this client already held, kept fresh on every apply.
+ *
+ * These are the RESOLVED rows, which is the distinction that matters against
+ * the other way to get a seat's schedules: `lib/seats.ts`'s `schedulesOf`
+ * reads the `schedules:` a seat AUTHORED out of the company document, so it
+ * is operator-gated and carries name, cron and task. A row here carries the
+ * effective timezone, the engine's own `next_run`, the `runners` a fire
+ * actually reaches, and `problem` when a cron or a zone cannot be read — and
+ * it is pushed to every reader, token or not.
+ *
+ * WHAT IT DOES NOT CARRY is the run ledger. `recent_runs` arrives only on the
+ * `schedules` QUESTION, so `routes/activity/Schedules.tsx` polls that
+ * deliberately and must not be moved onto this hook: it would silently lose
+ * the fires. This is for a reader that wants the schedules and nothing else.
+ */
+export function useSchedules() {
+  return useSlice(["schedules"], (s) => s.schedules ?? []);
+}
+
 export function useOrgBudget() {
   return useSlice(["budget"], (s) => s.budget);
 }

@@ -14,6 +14,14 @@ import {
   Section,
   StateBadge,
 } from "~/components/common.tsx";
+// THE TRACKER'S OWN ROW AND THE PERSON'S OWN BLOCKS, imported rather than
+// redrawn. `components/work.tsx` states the rule this follows — one renderer,
+// screens pick the density — and a per-seat list that drew its own columns is
+// exactly how the board came to know a task could be blocked while the
+// personal page did not.
+import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
+import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { Asks, Checklist, TaskBlock } from "~/routes/me/MyWork.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
@@ -66,7 +74,14 @@ import { phaseColor } from "~/ui/charts.tsx";
 // ONE PHASE PILL for this screen and the Model screen alike — it is uilet's
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
+import {
+  useAgents,
+  useOrg,
+  usePhaseEvents,
+  useSandboxes,
+  useSchedules,
+  useTokens,
+} from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
@@ -74,7 +89,6 @@ import {
   indexOrg,
   llmChain,
   mcpEnvOf,
-  schedulesOf,
   seatPath,
   seatSettings,
   statusLine,
@@ -119,13 +133,36 @@ import {
 import { useTab } from "~/app/frame/tabs.ts";
 
 // THE KIND DECIDES THE SET, and the set decides what a `tab=` may resolve to.
-// Model activity, Conversations, Memory and Cost are properties of a RUNTIME
-// and a human seat has none — it is addressable and never spawned — so the
-// two lists are declared here and handed to `useTab`, which is what makes a
+// Turns, Conversations, Memory and Cost are properties of a RUNTIME and a
+// human seat has none — it is addressable and never spawned — so the two
+// lists are declared here and handed to `useTab`, which is what makes a
 // `tab=` naming the other kind's tab land on Overview instead of on a strip
 // with nothing selected and nothing below it.
-const AGENT_TABS = ["overview", "model", "threads", "memory", "cost", "access"] as const;
-const HUMAN_TABS = ["overview", "access"] as const;
+//
+// WORK IS ON BOTH, and it is the one tab that is. A human teammate has tasks
+// assigned to them, questions waiting on them and checklist items on other
+// people's tasks — that is the whole of what this product asks a person to
+// do — so a seat page without it made the human half of the roster a
+// directory entry with a contact card. It is what takes the human set to the
+// three the design calls for.
+//
+// `turns` WAS `model`, and the rename is the panel catching up with what it
+// draws: the phase history and the transcript are a record of TURNS, and
+// "Model activity" was the old flat screen's name for a list that has since
+// become `#/activity/turns`. A `?tab=model` bookmark resolves to Overview
+// through `useTab`'s own fallback rather than to a blank strip, and no tag
+// has ever shipped the parameter.
+const AGENT_TABS = [
+  "overview",
+  "work",
+  "turns",
+  "threads",
+  "memory",
+  "cost",
+  "access",
+  "schedules",
+] as const;
+const HUMAN_TABS = ["overview", "work", "access"] as const;
 type Tab = (typeof AGENT_TABS)[number];
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
@@ -357,6 +394,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   const phaseEvents = usePhaseEvents();
 
   const index = useMemo(() => indexOrg(org), [org]);
+  // A HANDLE IS NOT A NAME. The tracker's rows carry handles and a reader
+  // knows people by name, so every row renderer takes the resolution rather
+  // than each one doing its own lookup.
+  const chrome: RowChrome = useMemo(
+    () => ({ seatName: (h: string) => index.byHandle.get(h)?.name ?? h }),
+    [index],
+  );
   const seat = findSeat(index, handle);
 
   const human = seat?.kind === "human";
@@ -384,7 +428,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const history = useQuery(
     "agent",
     { id: handle },
-    { enabled: tab === "overview" || tab === "model" },
+    { enabled: tab === "overview" || tab === "turns" },
   );
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
   // WHAT THIS SEAT HAS SAID ON A SURFACE THE ENGINE DOES NOT OWN. The ledger
@@ -415,6 +459,34 @@ export function SeatScreen({ handle }: { handle: string }) {
     { handle },
     { enabled: tab === "overview" && seat?.kind === "human" && mayReadPerson, pollMs: 60_000 },
   );
+  // WHAT IS ON THIS SEAT'S PLATE. The ungated `work_items` list is the floor
+  // every reader gets; the scoped blocks below are the extra a person reading
+  // their own seat, or an operator, is entitled to.
+  const items = useQuery(
+    "work_items",
+    { assignee: handle, status_group: "not_started,active", sort: "-priority,updated", limit: 50 },
+    { enabled: tab === "work", pollMs: 30_000 },
+  );
+  // THE SEVEN CLAIMS, and only where the reader may have them. `work_my_work`
+  // is scoped by the engine to the seat the caller's own credential is bound
+  // to — the same rule `work_person` above follows — so asking for somebody
+  // else's without an operator token puts a refusal where the honest answer
+  // is that this is their queue. The guard is the one already derived for the
+  // person record rather than a second copy of the rule.
+  const mine = useQuery(
+    "work_my_work",
+    { handle },
+    { enabled: tab === "work" && mayReadPerson, pollMs: 30_000 },
+  );
+  // THE TURN LIST ABOVE THE TRANSCRIPT. `turns` is keyed on the ROLE NAME
+  // rather than the handle — a phase record carries the role, which is why
+  // `role` is derived above — and a seat whose handle resolves to no role
+  // would otherwise ask for every turn in the company.
+  const turnList = useQuery(
+    "turns",
+    { role, limit: 50 },
+    { enabled: tab === "turns" && role !== "" },
+  );
   const spend = useQuery(
     "tokens",
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
@@ -444,7 +516,34 @@ export function SeatScreen({ handle }: { handle: string }) {
   );
   /** The seat's configured cap. 0 or absent is unlimited; no document at all is unknown. */
   const budget = configured?.token_budget ?? 0;
-  const schedules = useMemo(() => (settings ? schedulesOf(settings) : []), [settings]);
+  // THIS SEAT'S RECURRING WORK, FROM THE RESOLVED ROWS.
+  //
+  // It was `schedulesOf(settings)`, which reads the `schedules:` a seat
+  // AUTHORED out of the company document. Three things were wrong with that,
+  // and the third is the one a reader would never guess:
+  //
+  //  - The document is an operator read, so a reader without a token saw no
+  //    recurring work at all rather than a seat that has none.
+  //  - A `ScheduleSpec` carries name, cron and task. The engine's own answer
+  //    carries the EFFECTIVE timezone, the `next_run` it worked out, and
+  //    `problem` when a cron or a zone cannot be read — so a schedule that
+  //    can never fire looked exactly like one that fires tomorrow.
+  //  - It only ever found schedules this seat DECLARED. A unit schedule
+  //    reaches every seat in the unit, and `runners` is the engine's resolved
+  //    answer to whose day it lands in — so the rows that actually wake this
+  //    seat were the ones it could not see.
+  //
+  // The rows are already here: the handshake and every config apply push them
+  // onto the store, which is what `useSchedules` reads.
+  const pushed = useSchedules();
+  const schedules = useMemo(
+    () =>
+      pushed.filter(
+        (row) =>
+          (row.scope_type === "role" && row.scope_id === handle) || row.runners.includes(handle),
+      ),
+    [pushed, handle],
+  );
 
   const phases = useMemo<PhaseRecord[]>(() => {
     const stored = (history.data?.llm_history ?? [])
@@ -612,15 +711,22 @@ export function SeatScreen({ handle }: { handle: string }) {
           human
             ? [
                 { value: "overview", label: "Overview", icon: <PersonGlyph size="sm" /> },
+                { value: "work", label: "Work", icon: <LayersGlyph size="sm" /> },
                 { value: "access", label: "Access", icon: <KeyGlyph size="sm" /> },
               ]
             : [
                 { value: "overview", label: "Overview", icon: <PersonGlyph size="sm" /> },
-                { value: "model", label: "Model activity", icon: <NeurologyGlyph size="sm" /> },
+                { value: "work", label: "Work", icon: <LayersGlyph size="sm" /> },
+                { value: "turns", label: "Turns", icon: <NeurologyGlyph size="sm" /> },
                 { value: "threads", label: "Conversations", icon: <ChatGlyph size="sm" /> },
                 { value: "memory", label: "Memory", icon: <DatabaseGlyph size="sm" /> },
                 { value: "cost", label: "Cost", icon: <TokenGlyph size="sm" /> },
                 { value: "access", label: "Access", icon: <KeyGlyph size="sm" /> },
+                {
+                  value: "schedules",
+                  label: "Schedules",
+                  icon: <CalendarTodayGlyph size="sm" />,
+                },
               ]
         }
       />
@@ -961,21 +1067,46 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </div>
               </Section>
             )}
+          </>
+        )}
 
-            {schedules.length > 0 && (
+        {/* RECURRING WORK, ON ITS OWN TAB. It was a card at the foot of the
+            overview, under everything else a seat is — which is the wrong
+            altitude for the one thing on this page that will wake the seat
+            again without anybody asking. */}
+        {tab === "schedules" && (
+          <>
+            {schedules.length === 0 ? (
+              <EmptyState
+                size="compact"
+                icon={<CalendarTodayGlyph size={28} />}
+                title="Nothing recurring reaches them"
+                description="A schedule wakes a seat on a cron, scoped to a role or to a unit. This seat declares none and is named by none."
+              />
+            ) : (
               <Card padding="none">
-                <Card.Header icon={<CalendarTodayGlyph size="sm" />} count={schedules.length}>
+                <Card.Header
+                  icon={<CalendarTodayGlyph size="sm" />}
+                  count={schedules.length}
+                  subtitle="Their own, and every unit schedule a fire actually reaches them through."
+                >
                   <Card.Title>Recurring work</Card.Title>
                 </Card.Header>
                 <DataGrid
                   rows={schedules}
-                  rowKey={(s) => s.name}
+                  rowKey={(row) => [row.scope_type, row.scope_id, row.name].join("/")}
+                  rowHref={(row) =>
+                    peekHref({
+                      kind: "schedule",
+                      id: [row.scope_type, row.scope_id, row.name].join("/"),
+                    })
+                  }
                   columns={[
                     {
                       key: "name",
                       header: "Name",
-                      cell: (s) => <TextCell icon="calendar_today">{s.name}</TextCell>,
-                      sortValue: (s) => s.name,
+                      cell: (row) => <TextCell icon="calendar_today">{row.name}</TextCell>,
+                      sortValue: (row) => row.name,
                     },
                     {
                       // NOT A KEY CELL. A cron expression is a five-field
@@ -985,12 +1116,49 @@ export function SeatScreen({ handle }: { handle: string }) {
                       key: "cron",
                       header: "Cron",
                       shrink: true,
-                      cell: (s) => <code className="inline">{s.cron}</code>,
+                      cell: (row) => <code className="inline nowrap">{row.cron}</code>,
+                    },
+                    {
+                      // WHOSE SCHEDULE IT IS, which is the column the authored
+                      // read could not have: a unit schedule is not this
+                      // seat's and still lands in its day.
+                      key: "scope",
+                      header: "Scope",
+                      shrink: true,
+                      cell: (row) =>
+                        row.scope_type === "role" ? (
+                          <span className="muted">theirs</span>
+                        ) : (
+                          <TextCell icon="apartment">{row.scope_id}</TextCell>
+                        ),
+                      sortValue: (row) => `${row.scope_type}/${row.scope_id}`,
+                    },
+                    {
+                      // THE ENGINE'S OWN ANSWER, and the REASON where it has
+                      // none. A disabled schedule and one whose timezone was
+                      // renamed both have an empty `next_run`; only the second
+                      // is a defect, and the row says which in `problem`.
+                      key: "next",
+                      header: "Next",
+                      shrink: true,
+                      sortValue: (row) => tsKey(row.next_run),
+                      cell: (row) =>
+                        row.problem ? (
+                          <Tag variant="danger" title={row.problem}>
+                            cannot fire
+                          </Tag>
+                        ) : !row.enabled ? (
+                          <Tag appearance="outline">disabled</Tag>
+                        ) : row.next_run ? (
+                          <DateCell at={row.next_run} now={now} />
+                        ) : (
+                          <Dash />
+                        ),
                     },
                     {
                       key: "task",
                       header: "Task",
-                      cell: (s) => <TextCell>{s.task}</TextCell>,
+                      cell: (row) => <TextCell>{row.task}</TextCell>,
                     },
                   ]}
                 />
@@ -999,8 +1167,168 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "model" && (
+        {/* WHAT IS ON THIS SEAT'S PLATE.
+            TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is
+            `work_items {assignee}`, which is ungated — every reader of this
+            page gets it, and it is the floor. The blocks under it are
+            `work_my_work`, which the engine scopes to the caller's own seat,
+            so they arrive for a person reading their own page and for an
+            operator and for nobody else. Rendered as one tab because the
+            question a reader has is "what is this seat doing", and the answer
+            is simply fuller when they are entitled to more of it. */}
+        {tab === "work" && (
+          <div className="col gap-4">
+            <Coverage answer={items.data} />
+            {items.loading && !items.data && (
+              <Skeleton variant="text" rows={4} rowHeight={44} label="Loading this seat's work" />
+            )}
+            <QueryState
+              error={items.error}
+              loading={items.loading}
+              empty={
+                items.data && !(items.data.items ?? []).length
+                  ? {
+                      title: "Nothing open is assigned to them",
+                      hint: "Work reaches a seat by assignment, and closed work is not counted here. Their turns and the tracker's own activity say what they have been doing.",
+                    }
+                  : undefined
+              }
+            >
+              <Card padding="none">
+                <Card.Header count={(items.data?.items ?? []).length}>
+                  <Card.Title>Assigned and open</Card.Title>
+                </Card.Header>
+                <RowList
+                  rows={items.data?.items ?? []}
+                  now={now}
+                  chrome={chrome}
+                  hrefOf={(row) => href(["work", row.key])}
+                />
+              </Card>
+            </QueryState>
+
+            {/* THE SCOPED HALF, and its absence is a sentence rather than a
+                gap: a reader without the credential is not missing a feature,
+                they are reading somebody else's queue. */}
+            {mayReadPerson ? (
+              <>
+                <Asks rows={mine.data?.asked_of_me ?? []} now={now} chrome={chrome} />
+                <TaskBlock
+                  title="What they mean to do first"
+                  hint="Their own order, as they set it."
+                  rows={mine.data?.priorities ?? []}
+                  now={now}
+                  chrome={chrome}
+                />
+                <TaskBlock
+                  title="Collaborating"
+                  hint="Tasks they are named on without owning."
+                  rows={mine.data?.collaborating ?? []}
+                  now={now}
+                  chrome={chrome}
+                />
+                <Checklist rows={mine.data?.checklist_items ?? []} />
+              </>
+            ) : (
+              <p className="t-caption">
+                Their own queue — what they mean to do first, the questions put to them and their
+                checklist items on other seats&apos; tasks — is theirs to read. An operator
+                credential, or their own, shows it here.
+              </p>
+            )}
+          </div>
+        )}
+
+        {tab === "turns" && (
           <>
+            {/* THE SETTLED RECORD, ABOVE THE TRANSCRIPT. The panel below is
+                this seat's phase history merged with what the projection is
+                pushing right now, which is the right shape for reading one
+                turn and the wrong one for finding a turn: it holds what the
+                event store answered for this seat and nothing older. The
+                `turns` question is the paged, sortable record — keyed on the
+                ROLE, which is what a phase record carries — so a reader
+                looking for the turn that failed last Tuesday has a list to
+                look in, and each row opens that turn in the rail. */}
+            {(turnList.data?.turns ?? []).length > 0 && (
+              <Card padding="none">
+                <Card.Header
+                  icon={<NeurologyGlyph size="sm" />}
+                  count={(turnList.data?.turns ?? []).length}
+                  subtitle="Every turn the event store holds for this seat, newest first."
+                >
+                  <Card.Title>Turns</Card.Title>
+                </Card.Header>
+                <DataGrid
+                  rows={turnList.data?.turns ?? []}
+                  rowKey={(t) => t.turn_id}
+                  rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
+                  columns={[
+                    {
+                      key: "started",
+                      header: "Started",
+                      shrink: true,
+                      sortValue: (t) => tsKey(t.started_at),
+                      cell: (t) => <DateCell at={t.started_at} now={now} />,
+                    },
+                    {
+                      key: "summary",
+                      header: "What it did",
+                      sortValue: (t) => t.summary ?? "",
+                      cell: (t) => (
+                        <span className="row gap-1">
+                          <span className="truncate">
+                            {t.summary || <span className="muted">no summary recorded</span>}
+                          </span>
+                          {t.task_id && (
+                            <span
+                              className="mono t-caption"
+                              title="the work item this turn was about"
+                            >
+                              {t.task_id}
+                            </span>
+                          )}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "rounds",
+                      header: "Rounds",
+                      shrink: true,
+                      sortValue: (t) => t.rounds,
+                      cell: (t) => <NumberCell value={t.rounds} />,
+                    },
+                    {
+                      key: "tokens",
+                      header: "Tokens",
+                      shrink: true,
+                      sortValue: (t) => t.total_tokens,
+                      cell: (t) => <TokenCell value={t.total_tokens} />,
+                    },
+                    {
+                      key: "state",
+                      header: "",
+                      shrink: true,
+                      cell: (t) => (
+                        <span className="row gap-1">
+                          {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE.
+                              `duration_ms` is 0 until a completion record
+                              exists, and `complete` is what tells a turn in
+                              flight from one that died mid-flight. */}
+                          {!t.complete && (
+                            <Tag variant="info" title="no completion record — running, or it died">
+                              running
+                            </Tag>
+                          )}
+                          {t.failed && <Tag variant="danger">failed</Tag>}
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              </Card>
+            )}
+            {turnList.error && <QueryState error={turnList.error} loading={turnList.loading} />}
             {history.loading && !turns.length && (
               <Skeleton variant="text" rows={4} rowHeight={44} label="Loading this seat's turns" />
             )}

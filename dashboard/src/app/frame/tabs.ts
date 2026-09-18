@@ -16,8 +16,8 @@
  * # What was genuinely missing
  *
  * WHICH TAB IS REAL. `tab=` is a string off a URL and the tab set is a
- * property of the OBJECT: a human seat has two tabs and an agent seat has
- * five, a company has two lenses, the configuration has three. Every one of
+ * property of the OBJECT: a human seat has three tabs and an agent seat has
+ * eight, a company has three lenses, the configuration has four. Every one of
  * those screens cast the parameter straight to its own union and rendered
  * `{tab === "overview" && …}` down the page, so a value naming no tab
  * selected nothing and matched no branch: the header, the strip and then

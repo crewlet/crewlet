@@ -361,7 +361,7 @@ describe("a turn watched to its end", () => {
   });
 
   function seatView() {
-    location.hash = "#/company/people/ceo?tab=model";
+    location.hash = "#/company/people/ceo?tab=turns";
     const { store, view } = mount();
     store.applyOrg(seat);
     const redraw = () =>
