@@ -54,6 +54,7 @@ import { Integrations } from "~/routes/admin/Integrations.tsx";
 import { Tools } from "~/routes/admin/Tools.tsx";
 import { ConfigScreen } from "~/routes/admin/Config.tsx";
 import { Secrets } from "~/routes/admin/Secrets.tsx";
+import { Audit } from "~/routes/admin/Audit.tsx";
 import { EventScreen } from "~/routes/activity/Event.tsx";
 import { TurnScreen } from "~/routes/activity/Turn.tsx";
 import { TraceScreen } from "~/routes/activity/Trace.tsx";
@@ -179,6 +180,13 @@ function AdminRoutes({ rest }: { rest: string[] }) {
     }
     case "credentials":
       return <Secrets key={tail[0] ?? ""} name={tail[0]} />;
+    case "audit":
+      // NO TAIL. Every row here has a page of its own somewhere else — a task,
+      // a wiki page, a config revision — so a detail under this address would
+      // be a second page for an object that already has one, reachable by two
+      // routes that would then have to agree about it.
+      if (tail.length > 0) return <NotFound what={`“${tail.join("/")}” under Audit`} />;
+      return <Audit />;
     default:
       return <NotFound what={`“${first}” under Admin`} />;
   }

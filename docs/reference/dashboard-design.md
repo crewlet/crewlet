@@ -282,6 +282,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/admin/tools` · `#/admin/tools/{tool}` · `#/admin/tools/servers/{name}` | **Tools** *(operator)* | `q=` · `origin=` |
 | `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
 | `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |
+| `#/admin/audit` | **Audit** — every write a person or a token made, across all four subsystems that record one: the tracker, the knowledge base, the configuration history and the credential store *(operator)*. NO DETAIL ROUTE — every row already has a page of its own somewhere else | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
 
 **There is no redirect table.** There was one, and it was always a liability: a
 redirect whose old path is now a live route sends every reader of that route
@@ -1541,6 +1542,15 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   says `durable: false` when the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
   a company with no seats says roles come from the configuration.
+- **Everything in the window** vs **everything that arrived.** Where a screen
+  narrows client-side it says so, naming the SOURCE rather than hedging the
+  whole answer. **Audit** is the case that made this a rule: it composes four
+  subsystems and only one of them — the tracker's feed — takes a wall-clock
+  window, so the other three are asked for their newest page and narrowed on
+  the client. A page that fills up before it reaches the start of the window is
+  older rows the screen never saw, and a caption reading "some of this may be
+  missing" is one nobody can act on where "Knowledge answered one page" says
+  where to look.
 
 Every empty state names what would fill it.
 

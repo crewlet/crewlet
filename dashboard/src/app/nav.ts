@@ -197,6 +197,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "tools",
   "config",
   "credentials",
+  "audit",
   "me",
 ];
 
@@ -401,6 +402,15 @@ export const DESTINATIONS: Destination[] = [
     icon: "key",
     path: ["admin", "credentials"],
     hint: "The company's credentials — names and provenance, never values",
+    guarded: true,
+  },
+  {
+    key: "audit",
+    workspace: "admin",
+    label: "Audit",
+    icon: "description",
+    path: ["admin", "audit"],
+    hint: "Every write a person or a token made, across all four subsystems",
     guarded: true,
   },
 ];

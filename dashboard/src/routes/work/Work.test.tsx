@@ -781,9 +781,11 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   // NO LINK. The task is gone, so an anchor would lead to a NotFound on every
   // row — and the key is the entry's own, because there is no task row left to
   // resolve one from.
-  const key = [...band.querySelectorAll("span")].find((el) => el.textContent === "ENG-11");
-  expect(key).toBeTruthy();
-  expect(key?.closest("a")).toBeNull();
+  // BY ROLE, not by walking up from a span: a wrapper element's own
+  // `closest("a")` is null whether or not the anchor is INSIDE it, which is an
+  // assertion that passes either way.
+  expect(within(band).getByText("ENG-11")).toBeTruthy();
+  expect(within(band).queryByRole("link", { name: "ENG-11" })).toBeNull();
   // AND AN EMPTY TRASH IS NOT "NOTHING MATCHES": the band above IS the answer
   // on a company whose removals have all been purged.
   expect(screen.queryByText("Nothing matches")).toBeNull();
