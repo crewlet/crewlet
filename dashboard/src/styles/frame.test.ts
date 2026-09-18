@@ -150,6 +150,33 @@ describe("the frame's layout", () => {
     expect(block(sheet("screens.css"), ".crewlet-card--flush")).toMatch(/overflow:\s*clip/);
   });
 
+  // A SCREEN THAT ASKED FOR THE HEIGHT IS GIVEN ONE.
+  //
+  // `data-fill` is the shell's answer to `useFillScreen`, and it set
+  // `overflow-y: hidden` on the scroller and `flex: 1 1 auto` on the column
+  // inside it — but `.screen` is a BLOCK container, so the flex shorthand on
+  // its child meant nothing and the column kept taking its height from its
+  // content. The org builder's canvas lens therefore rendered its toolbar and
+  // then a chart 2px tall, on a company the chart lens draws as six seats in
+  // three units: every card was in the DOM, laid out in a world of zero height
+  // inside a viewport of zero height.
+  //
+  // The rule this replaced put the request on `.screen-inner`, which was the
+  // flex container already — so moving it onto the scroller moved the
+  // container with it, and this declaration did not follow.
+  test("a screen that asked for the height is a column that can give it one", () => {
+    const css = sheet("shell.css");
+    const fill = block(css, ".screen[data-fill]");
+    expect(fill).toMatch(/display:\s*flex/);
+    expect(fill).toMatch(/flex-direction:\s*column/);
+    expect(fill).toMatch(/overflow-y:\s*hidden/);
+    // AND THE COLUMN STILL ASKS FOR WHAT IS LEFT. Either half alone is a
+    // scroller that does not scroll and a canvas with nothing to fill.
+    const inner = block(css, ".screen[data-fill] > .screen-inner");
+    expect(inner).toMatch(/flex:\s*1 1 auto/);
+    expect(inner).toMatch(/min-height:\s*0/);
+  });
+
   // NOTHING IN THE CHROME SITS OUTSIDE A PHONE'S VIEWPORT.
   //
   // The page bar is one non-wrapping row whose middle — a screen's own control

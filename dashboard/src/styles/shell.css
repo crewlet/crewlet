@@ -45,6 +45,22 @@
    what is left of the window. The bottom padding goes with it — it is landing
    room under a page that ends, and there is no end to scroll to here. */
 .screen[data-fill] {
+  /* AND IT BECOMES A COLUMN, which is the half that was missing and the half
+     the `flex` below is worthless without: `.screen` is a BLOCK container, so
+     a flex shorthand on its child means nothing at all and `.screen-inner`
+     kept taking its height from its content. Measured against a running
+     engine — the builder's canvas lens rendered its toolbar and then a chart
+     2px tall, on a company the chart lens draws as six seats in three units:
+     every card was there, laid out in a world of zero height inside a
+     viewport of zero height inside a column that had nothing to fill.
+
+     The rule this replaced was `.screen-inner:has(.org-builder-body.fill)`,
+     which named a class in another package's file — and `.screen-inner` was
+     itself the flex container then, so nothing had to be said about the
+     scroller. Moving the request onto the scroller moved the container with
+     it, and the declaration did not follow. */
+  display: flex;
+  flex-direction: column;
   overflow-y: hidden;
 }
 .screen[data-fill] > .screen-inner {
