@@ -46,6 +46,7 @@ type stubWork struct {
 	burndown      tracker.Burndown
 	workload      tracker.WorkloadAnswer
 
+	expandViewer  tracker.Viewer
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
 	myWorkQuery   tracker.MyWorkQuery
@@ -114,8 +115,12 @@ func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewLi
 }
 
 func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
 
+	// RECORDED, because the viewer is the one input to this call that the
+	// parsed query does not carry: it is a property of the surface rather
+	// than a filter, so a handler that dropped it would still return rows.
+	s.expandViewer = viewer
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
@@ -1042,5 +1047,61 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 				t.Errorf("%s took min_position=4711, answering %v", tc.what, err)
 			}
 		})
+	}
+}
+
+// THE VIEWER IS A PROPERTY OF THE SURFACE, NOT A FILTER THE TRACKER PARSES.
+//
+// `workItems` read the viewer out of the parameters to build `tracker.Viewer`
+// and then handed the WHOLE bag — `viewer` still in it — to `ExpandedQuery`,
+// whose `ParseQuery` runs `checkKeys` over the merged map. `viewer` is not in
+// `tracker.QueryKeys`, and `checkKeys` refuses a key nothing parses rather
+// than ignoring it, so every `work_items` call that named a viewer came back
+// `bad_params`.
+//
+// Two things that made it invisible. The refusal is a 400 with a message about
+// an unknown parameter, which reads like the caller's fault; and the one
+// surface that sends a viewer — the board's view strip — is also the one whose
+// handler comment asserts the opposite, so the code documented the behaviour it
+// did not have.
+//
+// It also made `preset=my_queue` unreachable here, which is the case below:
+// the preset expands from `viewer.Handle` (internal/tracker/expand.go), so it
+// is answerable only on a surface that HAS a viewer, and this was the surface.
+func TestABoardMayNameItsViewer(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+		"viewer": "ada", "assignee": "ada",
+	}); err != nil {
+		t.Fatalf("work_items naming a viewer: %v", err)
+	}
+	// AND THE VIEWER STILL REACHED THE EXPANSION. Dropping the key is only
+	// correct if the value survives as what it is — otherwise the fix would
+	// be the bug's mirror, with `me` and every preset resolving to nobody.
+	if got := w.query.Assignee; len(got) != 1 || got[0] != "ada" {
+		t.Errorf("assignee = %v, want [ada]", got)
+	}
+}
+
+// AND THE VIEWER STILL ARRIVES AS A VIEWER, which is the half a test on the
+// refusal alone cannot see. Dropping the key is only correct if the value
+// survives as what it is — the expansion resolves `f.<slug>=me` and every
+// personal preset from `Viewer.Handle`, and a fix that deleted the key without
+// threading the value would have made those resolve to nobody, which is a
+// quieter wrong answer than the refusal it replaced.
+//
+// ASSERTED ON WHAT THE HANDLER PASSED rather than on a resolved `me`: `me` is
+// a custom-field operator (`resolveViewerKeys` only substitutes `f.`-prefixed
+// keys) and its resolution is the tracker's own, covered in that package. Here
+// the question is whether this surface hands the viewer over at all.
+func TestAViewerNamedByTheSurfaceReachesTheExpansion(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+		"viewer": "ada",
+	}); err != nil {
+		t.Fatalf("work_items naming a viewer: %v", err)
+	}
+	if got := w.expandViewer.Handle; got != "ada" {
+		t.Errorf("expansion viewer = %q, want ada", got)
 	}
 }

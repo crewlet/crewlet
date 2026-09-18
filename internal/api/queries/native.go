@@ -148,9 +148,23 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// THE VIEWER'S OWN PROJECT comes from the chart, because
 	// `preset=my_queue` asks what is unclaimed in THEIR container and an
 	// unscoped second arm offers every unassigned task in the company.
-	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
-		Handle:  strings.TrimSpace(p.String("viewer")),
-		Project: s.projectOf(strings.TrimSpace(p.String("viewer"))),
+	//
+	// AND IT IS TAKEN OUT OF THE BAG, which is the whole of why it is read
+	// into a variable first. `viewer` is a property of the SURFACE — its
+	// credential, its turn's seat — and not of the grammar: it is absent
+	// from [tracker.QueryKeys], and `checkKeys` refuses a key nothing
+	// parses rather than ignoring it. Handed on inside the map it made
+	// every call that named a viewer a `bad_params` refusal, and took
+	// `preset=my_queue` with it — the preset expands from `viewer.Handle`,
+	// so it is answerable only on a surface that HAS a viewer, and this is
+	// that surface. The comment above described the behaviour this call did
+	// not have.
+	values := p.Values()
+	viewer := strings.TrimSpace(p.String("viewer"))
+	delete(values, "viewer")
+	q, err := s.Work.ExpandedQuery(ctx, values, tracker.Viewer{
+		Handle:  viewer,
+		Project: s.projectOf(viewer),
 	}, now, time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
