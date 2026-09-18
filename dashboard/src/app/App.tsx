@@ -49,6 +49,7 @@ import { Knowledge } from "~/routes/knowledge/Knowledge.tsx";
 import { Spend } from "~/routes/cost/Spend.tsx";
 import { Budgets } from "~/routes/cost/Budgets.tsx";
 import { Fleet } from "~/routes/admin/Fleet.tsx";
+import { DomainScreen } from "~/routes/admin/Domain.tsx";
 import { Integrations } from "~/routes/admin/Integrations.tsx";
 import { Tools } from "~/routes/admin/Tools.tsx";
 import { ConfigScreen } from "~/routes/admin/Config.tsx";
@@ -122,8 +123,24 @@ function AdminRoutes({ rest }: { rest: string[] }) {
   // looking at the machine and the nodes are the machine.
   if (!first) return <Fleet />;
   switch (first) {
-    case "fleet":
+    case "fleet": {
+      // TWO SHAPES UNDER ONE SEGMENT, discriminated on the tail's LENGTH for
+      // the reason the `tools` arm below gives: a node id is an OPERATOR's
+      // string and `domains` is a legal one, so reading `tail[0] === "domains"`
+      // would take the page away from a node actually called that.
+      //
+      // It used to take any tail at all and keep only the first segment, so
+      // `#/admin/fleet/domains/tracker` drew the node screen for a node named
+      // `domains` with `tracker` silently dropped — a plausible answer to a
+      // question nobody asked, under a breadcrumb that read
+      // "Infrastructure / domains/tracker".
+      const domain = tail.length === 2 && tail[0] === "domains" ? tail[1] : undefined;
+      if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
+      if (tail.length > 1) {
+        return <NotFound what={`“${tail.join("/")}” under Infrastructure`} />;
+      }
       return <Fleet key={tail[0] ?? ""} node={tail[0]} />;
+    }
     case "integrations":
       return <Integrations key={tail[0] ?? ""} kind={tail[0]} />;
     case "tools": {

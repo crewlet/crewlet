@@ -147,7 +147,7 @@ function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
   const knowledge = useKnowledgeSidebar();
   const activity = useActivitySidebar();
   const cost = useCostSidebar();
-  const admin = useAdminSidebar();
+  const admin = useAdminSidebar(workspace === "admin");
   // WHAT THIS READER KEPT AND OPENED, appended to whichever tree is shown, so
   // every workspace has them and none of the six implements them.
   const kept = useKeptSections(workspace);

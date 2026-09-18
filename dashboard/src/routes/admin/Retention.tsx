@@ -519,7 +519,15 @@ export function NodePositions({ node }: { node: RetentionNode }) {
 }
 
 /** DomainBlock is one registered domain: its window, its floor, and its six terms. */
-function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
+/**
+ * One domain's whole state, drawn once.
+ *
+ * EXPORTED so the domain's own page and the fleet card draw the same thing: a
+ * domain is recognised by its floor, its six terms and what is blocking it,
+ * and two renderings of that would let the card and the page disagree about
+ * whether a log is advancing.
+ */
+export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
   return (
     <div className="col gap-2">
       <div className="row wrap gap-2 baseline">

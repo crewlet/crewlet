@@ -191,19 +191,37 @@ function adminCrumbs(rest: string[], labels: Labels): Crumb[] {
   const [first = "", ...tail] = rest;
   const known = destinationLabel("admin", first) ?? first;
   if (tail.length === 0) return [{ label: known }];
+  // A TRAIL NEVER ENDS IN NOTHING. Each of these branches ended in
+  // `named(labels, tail[1] ?? "")`, which is the empty string when the id
+  // segment is absent — and both two-segment forms are live addresses
+  // (`#/admin/config/revisions` routes, and `#/admin/tools/servers` is the
+  // page of a tool that happens to be called that). Each drew a blank final
+  // crumb, and `Shell` titles the tab from the trail, so the browser tab read
+  // " · Crewlet".
   if (first === "config" && tail[0] === "revisions") {
+    const trail: Crumb[] = [{ label: known, path: ["admin", "config"] }];
+    if (!tail[1]) return [...trail, { label: "Revisions" }];
     return [
-      { label: known, path: ["admin", "config"] },
-      { label: "Revisions" },
-      { label: named(labels, tail[1] ?? ""), mono: true },
+      ...trail,
+      { label: "Revisions", path: ["admin", "config", "revisions"] },
+      { label: named(labels, tail[1]), mono: true },
+    ];
+  }
+  // TWO SEGMENTS ONLY, because that is what the route discriminates on: one
+  // segment under Infrastructure is a NODE, whatever it is called, and a node
+  // may legally be called `domains`. A trail that read "Infrastructure /
+  // Domains" over the node screen would name a place the reader is not at.
+  if (first === "fleet" && tail[0] === "domains" && tail[1]) {
+    return [
+      { label: known, path: ["admin", "fleet"] },
+      { label: "Domains" },
+      { label: named(labels, tail[1]), mono: true },
     ];
   }
   if (first === "tools" && tail[0] === "servers") {
-    return [
-      { label: known, path: ["admin", "tools"] },
-      { label: "Servers" },
-      { label: named(labels, tail[1] ?? ""), mono: true },
-    ];
+    const trail: Crumb[] = [{ label: known, path: ["admin", "tools"] }];
+    if (!tail[1]) return [...trail, { label: "Servers" }];
+    return [...trail, { label: "Servers" }, { label: named(labels, tail[1]), mono: true }];
   }
   const id = tail.join("/");
   return [

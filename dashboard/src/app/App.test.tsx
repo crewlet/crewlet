@@ -457,3 +457,44 @@ describe("a turn watched to its end", () => {
     expect(screen.getAllByTitle(/^turn t1/).length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A NODE ID IS AN OPERATOR'S STRING, and `domains` is a legal one.
+ *
+ * The fleet arm was `node={tail[0]}` and took any tail at all, so every
+ * address under Infrastructure that is not a node rendered the NODE screen
+ * for a node named after its first segment, with everything after it silently
+ * dropped: `#/admin/fleet/domains/tracker` drew "No node called “domains”
+ * holds a lease" under a breadcrumb reading "Infrastructure / domains/tracker".
+ * A reader saw a plausible answer to a question they did not ask.
+ *
+ * The neighbouring `tools` and `config` arms each carry a long comment about
+ * exactly this class of bug and each discriminate on the tail's LENGTH. This
+ * one did not, which is also why a node genuinely called `domains` is the
+ * case below: node ids are operator-chosen and lowercase-legal
+ * (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`), so reading the WORD would take the
+ * page away from it.
+ */
+test("a node named `domains` keeps its page, and the domains route keeps its", () => {
+  location.hash = "#/admin/fleet/domains";
+  const one = mount();
+  // ONE SEGMENT IS A NODE, whatever it is called — the node screen offers
+  // "All nodes" back to the list, where the domain page offers Infrastructure.
+  expect(one.view.container.textContent).toContain("All nodes");
+  expect(one.view.container.textContent).not.toContain("there is no such screen");
+  one.view.unmount();
+  cleanup();
+
+  // TWO SEGMENTS IS THE DOMAIN, and it is not a node read.
+  location.hash = "#/admin/fleet/domains/tracker";
+  const two = mount();
+  expect(two.view.container.textContent).not.toContain("All nodes");
+  expect(two.view.container.textContent).not.toContain("holds a lease");
+  two.view.unmount();
+  cleanup();
+
+  // AND A TAIL THAT NAMES NEITHER SAYS SO, rather than dropping segments.
+  location.hash = "#/admin/fleet/domains/tracker/extra";
+  mount();
+  expect(screen.getByText(/there is no such screen/)).toBeDefined();
+});

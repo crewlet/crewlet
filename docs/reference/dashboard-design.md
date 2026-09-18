@@ -271,9 +271,9 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
 | `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
-| `#/admin/fleet` · `#/admin/fleet/{node}` | **Infrastructure** — nodes, leases, duties, replication *(operator)* | |
+| `#/admin/fleet` · `#/admin/fleet/{node}` · `#/admin/fleet/domains/{domain}` | **Infrastructure** — nodes, leases, duties, replication, and one state-log domain with every node's position in it *(operator)*. ONE tail segment is a node and two are a domain, discriminated on the tail's LENGTH rather than on the word, because a node id is operator-chosen and `domains` is a legal one | |
 | `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** — the catalogue, and one tool with what has actually been arriving on each of its surfaces *(operator)* | |
-| `#/admin/tools` | **Tools** *(operator)* | `q=` · `origin=` |
+| `#/admin/tools` · `#/admin/tools/{tool}` · `#/admin/tools/servers/{name}` | **Tools** *(operator)* | `q=` · `origin=` |
 | `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
 | `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |
 

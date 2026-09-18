@@ -243,9 +243,23 @@ export function useCostSidebar(): SidebarSection[] {
 }
 
 /** Admin: the estates, each expanding to what it holds. */
-export function useAdminSidebar(): SidebarSection[] {
-  const fleet = useQuery("fleet", undefined, { pollMs: 30_000 });
-  const integrations = useQuery("integrations", undefined, { pollMs: 120_000 });
+/**
+ * The Admin tree.
+ *
+ * SCOPED TO READERS WHO ARE IN ADMIN, which is the one thing a sidebar hook
+ * has to do for itself. Every one of them runs on every screen — React's rules
+ * make that unavoidable, and `useSidebar` says why — so a hook that polls
+ * unconditionally polls for readers who will never see its rows. Both answers
+ * here are registered operator-only, so for everybody else that was a refusal
+ * every thirty seconds, for the whole life of the tab, on screens that do not
+ * have this tree.
+ */
+export function useAdminSidebar(here: boolean): SidebarSection[] {
+  const fleet = useQuery("fleet", undefined, { enabled: here, pollMs: 30_000 });
+  const integrations = useQuery("integrations", undefined, { enabled: here, pollMs: 120_000 });
+  // THE STATE-LOG DOMAINS, from the document the Infrastructure page already
+  // reads. Slow, because a domain's floor moves on the trim's own tick.
+  const retention = useQuery("retention", undefined, { enabled: here, pollMs: 60_000 });
 
   return useMemo(() => {
     const nodes: SidebarRow[] = (fleet.data?.nodes ?? []).map((n) => ({
@@ -264,15 +278,26 @@ export function useAdminSidebar(): SidebarSection[] {
       path: ["admin", "integrations", i.key],
       tone: i.configured ? ("positive" as const) : undefined,
     }));
+    // THE NODES, THEN THE DOMAINS. A node is a machine and a domain is a log,
+    // and the trim's floor is the minimum across every node's position in one
+    // domain — so the two belong under Infrastructure together and neither is
+    // a filter on the other. The tone is STATE, never identity: a domain
+    // draws a mark only when something is holding it.
+    const domains: SidebarRow[] = (retention.data?.domains ?? []).map((d) => ({
+      key: `domain-${d.domain}`,
+      label: d.domain,
+      path: ["admin", "fleet", "domains", d.domain],
+      tone: d.blocked_by ? ("caution" as const) : undefined,
+    }));
     const rows = fixed("admin").map((row) =>
       row.key === "fleet"
-        ? { ...row, children: nodes }
+        ? { ...row, children: [...nodes, ...domains] }
         : row.key === "integrations"
           ? { ...row, children: kinds }
           : row,
     );
     return [{ key: "fixed", rows }];
-  }, [fleet.data, integrations.data]);
+  }, [fleet.data, integrations.data, retention.data]);
 }
 
 /** The seat tone vocabulary, as the sidebar's one-word dot. */

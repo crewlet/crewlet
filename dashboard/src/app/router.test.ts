@@ -199,10 +199,23 @@ describe("the breadcrumb", () => {
       ["knowledge", "ENG", "Deploy runbook"],
       ["activity", "turns", "t-1"],
       ["admin", "config", "revisions", "r-1"],
+      ["admin", "fleet", "domains", "tracker"],
+      // THE TWO-SEGMENT FORMS, which are live addresses and were the ones
+      // with the blank crumb: `#/admin/config/revisions` routes, and
+      // `#/admin/tools/servers` is the page of a tool called `servers`.
+      ["admin", "config", "revisions"],
+      ["admin", "tools", "servers"],
     ]) {
       const crumbs = crumbsFor(path);
       expect(crumbs.length, `#/${path.join("/")} has no crumbs`).toBeGreaterThan(0);
       expect(crumbs[crumbs.length - 1]?.path, `#/${path.join("/")}`).toBeUndefined();
+      // AND IT IS NOT BLANK. The trail is what `Shell` titles the browser tab
+      // from, so an empty final crumb showed as " · Crewlet" — a tab a reader
+      // with four of them open cannot tell from any other.
+      expect(
+        String(crumbs[crumbs.length - 1]?.label ?? "").trim(),
+        `#/${path.join("/")} ends in an empty crumb`,
+      ).not.toBe("");
     }
   });
 
