@@ -156,6 +156,26 @@ type Config struct {
 	// redeliveries minutes apart.
 	NakCeiling time.Duration
 
+	// LookupBudget overrides the ceiling on one existence probe — the
+	// "does this object already exist" read that decides
+	// create-versus-observe, including however many times
+	// [jsprovision.Ask] re-issues it. Zero takes [jsprovision.LookupBudget].
+	//
+	// IT EXISTS SO THE EXHAUSTED PROBE IS TESTABLE, which is the same
+	// reason the four knobs above it exist and is not a lesser one. The
+	// fall-through that keeps a boot alive when the broker says nothing
+	// only runs once a probe has spent its WHOLE ceiling; at the shipped
+	// thirty seconds a case proving it costs thirty seconds, so the case
+	// written for it stalled one attempt instead — and [jsprovision.Ask]
+	// re-asked, got a real answer, and left the branch unexercised. The
+	// test passed with the branch deleted, which is the one thing a test
+	// must never do.
+	//
+	// Nothing in the engine sets it. A deployment that wanted a different
+	// ceiling would be arguing with the server's own timing, which is
+	// where the number comes from.
+	LookupBudget time.Duration
+
 	// Debug hands nats-server its own debug flag, which is what unlocks
 	// the broker's internal `Debugf` population.
 	//
@@ -388,6 +408,15 @@ func (q *Queue) provisionBudget() time.Duration {
 	return q.Clustered().Budget()
 }
 
+// lookupBudget is the ceiling on one existence probe on this queue — see
+// [Config.LookupBudget] for why it is overridable at all.
+func (q *Queue) lookupBudget() time.Duration {
+	if q.cfg.LookupBudget > 0 {
+		return q.cfg.LookupBudget
+	}
+	return jsprovision.LookupBudget
+}
+
 // Clustered is whether this queue's broker has peers, which is the fact every
 // provisioning budget branches on.
 //
@@ -524,7 +553,7 @@ func (q *Queue) createOrObserveStream(
 	// the sequence ceiling [Queue.ensureStreams] applies effective, and
 	// what keeps two deadlines from costing more than the one they
 	// replaced.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
 	// A BREADCRUMB ON THE LOOKUP TOO, and it is the one that was missing:
 	// this is the FIRST call to reach the metadata group for this stream,
 	// so a member stalled against a group that has not settled waits here
@@ -912,7 +941,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	// exceeded` failed the same boot. What removes the shape is reading an
 	// unanswered lookup as the third value it is and falling through to
 	// the create below.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
 	defer cancelLookup()
 	// AND ITS BREADCRUMB, because a budget without one just moves where
 	// the silence is. This is the FIRST call to reach the metadata group

@@ -55,7 +55,7 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 			} else {
 				system = fmt.Sprintf("ordinary round #%d", i)
 			}
-			post(t, srv.URL, system)
+			post(t, srv, system)
 		}()
 	}
 	wg.Wait()
@@ -78,10 +78,14 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 
 // post sends one request carrying the given system prompt and no tools, which
 // is the shape both branches under test take.
-func post(t *testing.T, url, system string) {
+// IT TAKES THE SERVER, not its URL: sixty goroutines post concurrently here
+// and the pool must be this server's own, never the process-global one every
+// httptest cleanup in the binary sweeps — see
+// [github.com/crewlet/crewlet/internal/httpx/httpxtest].
+func post(t *testing.T, srv *httptest.Server, system string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"system":%q,"messages":[]}`, system)
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	resp, err := srv.Client().Post(srv.URL, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Errorf("post: %v", err)
 		return

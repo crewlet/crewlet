@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -270,39 +271,12 @@ func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server
 
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "e2b_secret", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: &toStub{target: server.URL, seen: stub}},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return provider, server
-}
-
-// toStub sends every request to the stub, remembering the host the client
-// derived so a test can assert it.
-type toStub struct {
-	target string
-	seen   *e2bStub
-
-	mu    sync.Mutex
-	hosts []string
-}
-
-func (r *toStub) RoundTrip(req *http.Request) (*http.Response, error) {
-	r.mu.Lock()
-	r.hosts = append(r.hosts, req.URL.Scheme+"://"+req.URL.Host)
-	r.mu.Unlock()
-
-	routed := req.Clone(req.Context())
-	target := strings.TrimPrefix(r.target, "http://")
-	routed.URL.Scheme, routed.URL.Host, routed.Host = "http", target, target
-	return http.DefaultTransport.RoundTrip(routed)
-}
-
-func (r *toStub) sawHost(want string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Contains(r.hosts, want)
 }
 
 // A KEYLESS PROVIDER IS REFUSED AT CONSTRUCTION, so an apply fails rather
@@ -393,7 +367,7 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 			t.Cleanup(server.Close)
 			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 				APIKey: "k", Domain: "test.invalid", Template: tc.company,
-				HTTP: &http.Client{Transport: &toStub{target: server.URL, seen: stub}},
+				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -422,7 +396,7 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	stub.frames = []any{startEvent(41), endEvent(0)}
 	server := httptest.NewServer(stub)
 	t.Cleanup(server.Close)
-	transport := &toStub{target: server.URL, seen: stub}
+	transport := httpxtest.Rewrite(t, server)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
 		HTTP: &http.Client{Transport: transport},
@@ -438,11 +412,11 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	if _, err := box.Exec(context.Background(), "true", sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if !transport.sawHost("https://api.test.invalid") {
-		t.Errorf("the control plane was not addressed as api.<domain>: %v", transport.hosts)
+	if !transport.SawHost("https://api.test.invalid") {
+		t.Errorf("the control plane was not addressed as api.<domain>: %v", transport.Hosts())
 	}
-	if !transport.sawHost("https://49983-sbx1-cl1.test.invalid") {
-		t.Errorf("the box was not addressed on its own hostname: %v", transport.hosts)
+	if !transport.SawHost("https://49983-sbx1-cl1.test.invalid") {
+		t.Errorf("the box was not addressed on its own hostname: %v", transport.Hosts())
 	}
 
 	// A BOX WITH NO CLIENT ID takes the short hostname. Building the long
@@ -456,9 +430,9 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	if _, err := short.Exec(context.Background(), "true", sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if !transport.sawHost("https://49983-sbx1.test.invalid") {
+	if !transport.SawHost("https://49983-sbx1.test.invalid") {
 		t.Errorf("a box with no client id got a hostname with a trailing "+
-			"dash: %v", transport.hosts)
+			"dash: %v", transport.Hosts())
 	}
 }
 
@@ -472,7 +446,7 @@ func TestE2BNormalisesTheDomain(t *testing.T) {
 		stub := newE2BStub()
 		server := httptest.NewServer(stub)
 		t.Cleanup(server.Close)
-		transport := &toStub{target: server.URL, seen: stub}
+		transport := httpxtest.Rewrite(t, server)
 		provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 			APIKey: "k", Domain: domain,
 			HTTP: &http.Client{Transport: transport},
@@ -483,8 +457,8 @@ func TestE2BNormalisesTheDomain(t *testing.T) {
 		if _, err := provider.Create(context.Background(), sandbox.Spec{}); err != nil {
 			t.Fatalf("%s: %v", domain, err)
 		}
-		if !transport.sawHost("https://api.test.invalid") {
-			t.Errorf("domain %q addressed %v", domain, transport.hosts)
+		if !transport.SawHost("https://api.test.invalid") {
+			t.Errorf("domain %q addressed %v", domain, transport.Hosts())
 		}
 	}
 }
@@ -630,7 +604,7 @@ func TestE2BRefusesAnImpossibleFrameLength(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: &toStub{target: server.URL}},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -819,7 +793,7 @@ func TestE2BConnectToAVanishedBoxFails(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: &toStub{target: server.URL}},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -839,7 +813,7 @@ func TestE2BCreateWithoutAnIDIsRefused(t *testing.T) {
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: &toStub{target: server.URL}},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -922,7 +896,7 @@ func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 		// still well inside the stream above.
 		HTTP: &http.Client{
 			Timeout:   time.Second,
-			Transport: &toStub{target: server.URL},
+			Transport: httpxtest.Rewrite(t, server),
 		},
 	})
 	if err != nil {

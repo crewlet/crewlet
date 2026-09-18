@@ -179,16 +179,31 @@ func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 // deploy that restarted the holder left the duty dark for its whole TTL. A
 // setup hold under the same prefix is different: it belongs to a pass that may
 // still be running, and giving it back would let a second writer in mid-pass.
-// BACKENDS THE TEST OWNS, which is what makes the assertions after the stop
-// observable at all. The coordination KV rides the broker's own connection,
-// and an engine that OPENED its backends closes them as the last act of
-// teardown — taking the embedded NATS server with them. Read through those,
-// every lease read after the stop is racing a teardown that is removing the
-// store it reads: it answers "definitively not held" whichever the truth was,
-// so the duty assertion passes for the wrong reason and the hold assertion
-// fails whenever the close wins. Supplied, their lifetime is this test's, and
-// both reads are observations rather than a race — see [engine.Options] on
-// Backends and the ownership rule in [engine.New].
+// BACKENDS THE TEST OWNS, and what that buys is narrower than this comment
+// once claimed. It used to say that reading through engine-owned backends
+// makes every post-stop lease read answer "definitively not held" whichever
+// the truth was. That is false in both topologies this test can run in, and
+// it is worth saying why, because it asserted the exact thing
+// [internal/coord] exists to deny — that an unreachable store reads as an
+// empty one.
+//
+// Under the default coordination type the store is coordmem, which
+// [engine.Backends.Close] does not touch at all: Close takes down the queue,
+// the connection, the embedded server and the SQL store, and Coord is not
+// among them. Under embedded-kv a post-close read is coord.ErrUnavailable,
+// never (nil, nil) — kv's readOne answers (nil, nil) for a missing KEY and
+// wraps every other failure. So neither configuration produces the race the
+// old rationale was written against.
+//
+// What supplying them actually buys is a lifetime this test controls, which
+// matters only if this case is ever moved onto embedded-kv: then an
+// engine-owned Close would make both reads ERROR rather than observe, and an
+// assertion reading only the error would call that a pass. Keeping the shape
+// is cheap; keeping the old explanation was not, because a wrong WHY in a
+// test is the next reader's wrong diagnosis.
+//
+// The reason the assertions below are observable is the HOLD NAME, and that
+// reason is stated where it belongs, at the hold itself.
 func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

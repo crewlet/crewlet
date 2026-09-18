@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -194,7 +195,15 @@ func dial(t *testing.T, url string) *mcp.ClientSession {
 	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: url}, nil)
+	// HTTPClient IS NOT OPTIONAL HERE. Left unset the SDK reaches for
+	// http.DefaultClient, and every httptest.Server.Close in this binary
+	// ends by sweeping that pool — see
+	// [github.com/crewlet/crewlet/internal/httpx/httpxtest]. This helper
+	// holds a URL rather than a server, so it owns a pool instead of
+	// borrowing one.
+	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: url, HTTPClient: httpxtest.Pool(t),
+	}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -252,7 +261,7 @@ func TestOnlyAMintedTokenReachesASession(t *testing.T) {
 		{"absent", "", http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := http.Post(f.server.URL+mcpbridge.PathPrefix+tc.token,
+			res, err := f.server.Client().Post(f.server.URL+mcpbridge.PathPrefix+tc.token,
 				"application/json", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 			if err != nil {
 				t.Fatalf("post: %v", err)
@@ -284,7 +293,7 @@ func TestATokenForAFinishedRunIsRefused(t *testing.T) {
 	if f.bridge.Live() != 0 {
 		t.Fatalf("%d sessions after a close", f.bridge.Live())
 	}
-	res, err := http.Post(url, "application/json",
+	res, err := f.server.Client().Post(url, "application/json",
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -347,7 +356,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	url := f.bridge.Open(f.session)
 
 	clock = clock.Add(2 * time.Minute)
-	res, err := http.Post(url, "application/json",
+	res, err := f.server.Client().Post(url, "application/json",
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -663,7 +672,7 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 	if fresh == stale {
 		t.Fatal("the relaunched run was handed the superseded box's own URL")
 	}
-	res, err := http.Post(stale, "application/json",
+	res, err := f.server.Client().Post(stale, "application/json",
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 	if err != nil {
 		t.Fatalf("post: %v", err)

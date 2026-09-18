@@ -77,7 +77,7 @@ func run(t *testing.T, ws *workspace, mutate func(*slack.Options)) (*slack.Resul
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := slack.NewAdmin(rewriting(ws.URL))
+	admin := slack.NewAdmin(rewriting(t, ws))
 	opts := slack.Options{
 		Admin: admin, Seats: plans(), Ledger: ledger, LedgerPath: path,
 		Sink: newSink(), BaseURL: "https://engine.example.com",
@@ -165,7 +165,7 @@ func TestARerunSkipsAnUnchangedManifest(t *testing.T) {
 	before := ws.called("apps.manifest.update")
 
 	res, err := slack.Reconcile(context.Background(), slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
 		Ledger: ledger, LedgerPath: path, Sink: newSink(),
 		BaseURL: "https://engine.example.com",
 	})
@@ -196,7 +196,7 @@ func TestAChangedManifestIsPushed(t *testing.T) {
 	}
 	// A different public base changes every request URL in the manifest.
 	res, err := slack.Reconcile(context.Background(), slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
 		Ledger: ledger, LedgerPath: path, Sink: newSink(),
 		BaseURL: "https://moved.example.com",
 	})
@@ -251,7 +251,7 @@ func TestAValidConfigTokenIsNotRotatedAgain(t *testing.T) {
 	rotations := ws.called("tooling.tokens.rotate")
 
 	if _, err := slack.Reconcile(context.Background(), slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
 		Ledger: ledger, LedgerPath: path, Sink: newSink(),
 		BaseURL: "https://engine.example.com",
 	}); err != nil {
@@ -365,7 +365,7 @@ func TestARerunDoesNotReinstallAWorkingSeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := slack.Reconcile(context.Background(), slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
 		Ledger: ledger, LedgerPath: path, Sink: recorder,
 		BaseURL: "https://engine.example.com", Install: installer,
 	}); err != nil {
@@ -554,7 +554,7 @@ func TestOneSeatsFailureDoesNotCostTheOthers(t *testing.T) {
 	}
 
 	res, err := slack.Reconcile(context.Background(), slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: slack.PlanFor(o),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: slack.PlanFor(o),
 		Ledger: ledger, LedgerPath: path, Sink: recorder,
 		BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",
 		Install: func(_ context.Context, handle, _ string) (string, error) {
@@ -610,7 +610,7 @@ func TestNarrowingTheRunSkipsEveryOtherSeat(t *testing.T) {
 	}
 
 	res, err := slack.Reconcile(context.Background(), slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: slack.PlanFor(o),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: slack.PlanFor(o),
 		Ledger: ledger, LedgerPath: path, Sink: newSink(),
 		BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",
 		Only: []string{"qa"},
@@ -995,7 +995,7 @@ func runWith(t *testing.T, ws *workspace, ledger *slack.Ledger,
 	t.Helper()
 	path := filepath.Join(t.TempDir(), slack.LedgerName)
 	opts := slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
 		Ledger: ledger, LedgerPath: path, Sink: newSink(),
 		BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",
 	}
@@ -1014,7 +1014,7 @@ func validateOptions(t *testing.T, ws *workspace, mutate func(*slack.Options)) s
 		t.Fatal(err)
 	}
 	opts := slack.Options{
-		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
 		Ledger: ledger, LedgerPath: path,
 		BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",
 	}

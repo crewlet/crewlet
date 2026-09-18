@@ -622,7 +622,7 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 // dashboard does.
 func (n *codingNode) board(t *testing.T) []map[string]any {
 	t.Helper()
-	res, err := http.Get(n.server.URL + "/query/sandbox_runs")
+	res, err := n.server.Client().Get(n.server.URL + "/query/sandbox_runs")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

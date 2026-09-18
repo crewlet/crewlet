@@ -347,9 +347,10 @@ func (s *chatServer) issue(userID, token string) {
 // chatClient stands the fake up and points a client at it.
 //
 // THE SERVER'S OWN CLIENT, whose transport belongs to this server and dies
-// with it. A client over http.DefaultTransport shares one connection pool
-// with every other parallel test, so one server's Close breaks a request in
-// flight against another.
+// with it, for the reason
+// [github.com/crewlet/crewlet/internal/httpx/httpxtest] states once for the
+// whole tree: the process-global pool is swept by every other parallel test's
+// Close.
 func chatClient(t *testing.T, srv *chatServer) *mattermost.Client {
 	t.Helper()
 	return chatClientAs(t, srv, adminToken)

@@ -379,7 +379,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// there. Silence and not-yet-visible are different answers with
 	// different remedies, which is why neither verb subsumes the other.
 	name := consumerName(topic, group)
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.lookupBudget())
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_attach_slow", "stream", stream,
 			"consumer", name, "waited", after,

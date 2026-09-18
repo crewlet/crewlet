@@ -328,7 +328,7 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	}
 	defer func() { _ = pool.Close() }()
 
-	db := &DB{sql: pool, path: path, estate: estate}
+	db := &DB{sql: pool, path: path, estate: estate, busy: opts.busyTimeout()}
 	if out.Applied, err = db.appliedVersions(ctx); err != nil {
 		// A database that has never been migrated has no
 		// schema_migrations table, and that is the ordinary state of a

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -550,13 +551,12 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 
 	// The client is pointed at the fake by rewriting the host on the way
 	// out: the endpoint is built from the SITE, which is the whole point
-	// of the region check. Over the SERVER'S OWN transport rather than the
-	// shared default, so the connection pool dies with the server.
+	// of the region check. Through [httpxtest.Rewrite], which is where the
+	// reason this uses the SERVER'S own pool rather than the shared default
+	// is now written down once for the whole tree.
 	client, err := datadog.NewClient(datadog.ClientOptions{
 		Site: cfg.Provisioning.Site,
-		HTTP: &http.Client{Transport: rewriteHost{
-			to: srv.Listener.Addr().String(), next: srv.Client().Transport,
-		}},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(tb, srv)},
 	})
 	if err != nil {
 		tb.Fatalf("NewClient: %v", err)

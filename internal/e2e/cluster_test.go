@@ -81,24 +81,42 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // A FACTORY rather than a built mesh, and that is the fix rather than a
 // refactor. This took the mesh ready-made and reused its port numbers for
 // every attempt, while claiming in its own comment to be applying
-// [jetstreamtest.clusterStartAttempts]'s reasoning — which says the opposite
+// [jetstreamtest.ClusterStartAttempts]'s reasoning — which says the opposite
 // in as many words: "A wider reservation window would not help, because the
 // window is not the problem: the collision is with a process this one does not
 // coordinate with. What DOES fix it is noticing and trying again with
 // DIFFERENT NUMBERS." Retrying with the same numbers is retrying the question
 // somebody else already answered, so a genuinely lost port failed all three
 // attempts identically and with nothing to say which of the two causes it was.
-func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n int) *cluster {
+func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
 	t.Helper()
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
 	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
 	// cost each is a product nobody declared, and on this package it was
 	// measured at 1077 seconds across three cases, 64% of the whole run,
 	// against a package timeout it came within 115 seconds of firing.
+	//
+	// AND THE DEADLINE IS HANDED TO THE ATTEMPT rather than only consulted
+	// after it. Checked between attempts alone it bounded how MANY were
+	// made and nothing about how long one took: buildMember reaches
+	// engine.New on the test's own context, whose bring-up may spend
+	// [jsprovision.SequenceBudget], so one attempt could outlast this whole
+	// ceiling before the loop looked at it. A budget the work cannot
+	// observe is a comment rather than a bound.
 	deadline := time.Now().Add(jetstreamtest.ClusterStartBudget)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
-		relays := mesh(t, n)
-		c, err := startMeshOnce(t, relays, n)
+		// THE MESH IS BUILT INSIDE THE ATTEMPT, because reserving its
+		// ports and starting its relays is part of what the ceiling
+		// bounds. Built before the context existed it was counted
+		// against the budget and bounded by none of it, and
+		// [jetstreamtest.StartRelays] carried a second budget of its
+		// own: relay setup could spend the whole ceiling and leave the
+		// member start an already-expired context, so the loop reported
+		// "no cluster came up" having never started a member.
+		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(), deadline)
+		relays := mesh(attemptCtx, t, n)
+		c, err := startMeshOnce(attemptCtx, t, relays, n)
+		cancelAttempt()
 		if err == nil {
 			return c
 		}
@@ -157,7 +175,9 @@ func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n
 // burden is on proving a failure repeats, not on proving it might not.
 var errNotRetryable = errors.New("not fixable by another attempt")
 
-func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
+// ctx BOUNDS THIS ATTEMPT, and is not the test's own: see [startMesh] for why
+// a ceiling the member starts cannot observe bounds nothing.
+func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
@@ -179,7 +199,7 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster,
 			// failure is carried back rather than raised here — a
 			// FailNow from another goroutine ends that goroutine and
 			// leaves the test running with a nil member.
-			c.nodes[i], stops[i], errs[i] = buildMember(t, relays, i, n)
+			c.nodes[i], stops[i], errs[i] = buildMember(ctx, t, relays, i, n)
 		}()
 	}
 	wg.Wait()
@@ -236,10 +256,9 @@ func stopAll(stops [][]func()) {
 // gives up.
 //
 // [jetstreamtest.ClusterStartAttempts] ITSELF, not a second number applying
-// its reasoning. This used to say "it is [jetstreamtest.clusterStartAttempts]'s
-// reasoning applied one layer up" while carrying three where that one carried
-// four — one decision, two spellings, each comment asserting it matched the
-// other. That is the shape textcut, whsec and jsprovision were each written to
+// its reasoning. This used to restate that constant's argument as its own
+// while carrying three where the constant carried four — one decision, two
+// spellings, each comment asserting it matched the other. That is the shape textcut, whsec and jsprovision were each written to
 // remove, and the fix is the same one: read the constant rather than restate
 // the argument.
 //
@@ -262,7 +281,9 @@ const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 // wildcard bind.
 const clusterHost = "127.0.0.1"
 
-func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
+// ctx is the ATTEMPT's, so the retry loop's wall-clock ceiling can interrupt a
+// bring-up rather than only refuse the next one — see [startMesh].
+func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	*node, []func(), error) {
 
 	// THE TEARDOWN IS RETURNED, NOT REGISTERED WITH t.Cleanup, because an
@@ -300,7 +321,7 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	//
 	// THE SAME HOST THE MEMBER BINDS, set below — a probe against a
 	// different address answers about a port the server never asks for.
-	switch free, err := jetstreamtest.PortFree(t.Context(), clusterHost, port); {
+	switch free, err := jetstreamtest.PortFree(ctx, clusterHost, port); {
 	case err != nil:
 		// NOT A RACE: an address this host does not have, or a probe
 		// that never ran. Retrying it would spend every attempt on a
@@ -332,16 +353,26 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
 
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
+	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
 	if err != nil {
 		return fail(fmt.Errorf("engine.New: %w", err))
 	}
-	stops = append(stops, func() { e.Stop(context.Background()) })
-	if err := e.Start(t.Context()); err != nil {
+	// ON WithoutCancel, like every teardown here: the attempt's context is
+	// cancelled the moment the attempt ends, and a stop that inherited it
+	// would be handed a dead context exactly when it has work to do — the
+	// rule internal/engine states for a rollback, applied to a harness.
+	stops = append(stops, func() { e.Stop(context.WithoutCancel(ctx)) })
+	if err := e.Start(ctx); err != nil {
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 
-	app := api.New(api.Options{
+	// THE SUPPRESSION BELOW: api.New is a CONSTRUCTOR and takes no
+	// context; the loops it builds take theirs from app.Start below, which
+	// this call site hands context.WithoutCancel(ctx) deliberately because
+	// the API outlives the attempt. Threading a context into New to satisfy
+	// the linter would change a production signature for a test's benefit,
+	// and would hand those loops the one context that must not stop them.
+	app := api.New(api.Options{ //nolint:contextcheck // see above
 		Bootstrap:    &boot,
 		QueueBackend: e.Backends().Queue.Backend(),
 		Sources: queries.Sources{
@@ -351,14 +382,18 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 		HealthInterval: tickInterval,
 	})
 	app.SetConfigured(true)
-	app.Start(t.Context())
+	// THESE OUTLIVE THE ATTEMPT and so must not take its cancellation: the
+	// API and the projector serve for the whole case, while ctx ends when
+	// the bring-up does. WithoutCancel keeps the values and drops the
+	// deadline, which is exactly the difference wanted.
+	app.Start(context.WithoutCancel(ctx))
 	stops = append(stops, app.Stop)
 
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
-	if err := projector.Start(t.Context()); err != nil {
+	if err := projector.Start(context.WithoutCancel(ctx)); err != nil {
 		return fail(fmt.Errorf("projector: %w", err))
 	}
-	stops = append(stops, func() { projector.Stop(context.Background()) })
+	stops = append(stops, func() { projector.Stop(context.WithoutCancel(ctx)) })
 
 	srv := httptest.NewServer(app)
 	stops = append(stops, srv.Close)

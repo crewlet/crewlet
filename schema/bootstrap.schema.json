@@ -255,7 +255,7 @@
       "additionalProperties": false,
       "properties": {
         "busy_timeout_seconds": {
-          "description": "Lock wait before a statement fails; 0 takes the store default.",
+          "description": "Lock wait before a write gives up, and the anchor for the one retry it then gets; 0 takes the store default.",
           "minimum": 0,
           "type": "number"
         },

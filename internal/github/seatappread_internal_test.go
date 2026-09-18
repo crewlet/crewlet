@@ -88,8 +88,15 @@ func TestAClientTimeoutIsNotReadAsATornDownPass(t *testing.T) {
 
 	client := &AppClient{
 		base: server.URL, appID: 11, pem: key,
-		http: &http.Client{Timeout: slowGitHubTimeout},
-		now:  func() time.Time { return time.Now().UTC() },
+		// The SERVER'S OWN transport. This request is parked rather than
+		// idle, so it is not the bodyless-response hazard
+		// [github.com/crewlet/crewlet/internal/httpx/httpxtest] is about
+		// — but a nil Transport is still the process-global pool, and
+		// one spelling of the rule is what keeps it true here.
+		http: &http.Client{
+			Transport: server.Client().Transport, Timeout: slowGitHubTimeout,
+		},
+		now: func() time.Time { return time.Now().UTC() },
 	}
 
 	// THE PREMISE, ASSERTED RATHER THAN ASSUMED. Everything below is about
