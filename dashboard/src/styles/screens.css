@@ -1007,6 +1007,33 @@
   padding-block: var(--space-2);
 }
 
+/* A FLUSH CARD CLIPS RATHER THAN HIDES, which is the difference between a
+   sticky column head that works and one that cannot.
+
+   uilet's recipe says what the declaration is for: "the slots reach the
+   card's edges, and the clip is what makes the header's hairline and a
+   table's own corners follow the radius instead of crossing it". That is
+   `clip`'s job exactly. `hidden` also makes the card a SCROLL CONTAINER, and
+   a sticky box is confined to its nearest scrollport — a flush card has no
+   height constraint, so it grows to its content, its scroll offset is
+   permanently 0, and `top` is never applied to anything inside it.
+
+   Measured against a running engine: every `DataGrid` in a flush card had a
+   dead sticky head — the audit's 84 rows and the cost breakdown's 50 scrolled
+   their column names off the top of the window, so the reader was left
+   matching values to headers they could no longer see. This is the SAME
+   correction `.grid-wrap` already carries in frame.css, for the same reason
+   and against the same property.
+
+   `clip` gives up programmatic scrolling, which is all `hidden` ever offered
+   here: a card the reader cannot scroll and nothing scrolls for them. What it
+   keeps is the rounding, which is the whole of what the recipe asked for.
+   What uilet needs is `overflow: clip` upstream, after which this rule
+   goes. */
+.crewlet-card--flush {
+  overflow: clip;
+}
+
 /* A CARD TITLE ELLIPSES RATHER THAN CLIPPING, which is the one thing uilet's
    own head cannot do for us. `.crewlet-card__title` is `white-space: nowrap`
    inside a `.crewlet-card__header-main` that hides its overflow, and it is

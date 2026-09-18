@@ -533,6 +533,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-card--flush",
+    why: "uilet's Card writes it for `padding=\"none\"` content that reaches the card's edges. styles/screens.css turns its `overflow: hidden` into `clip`, which is what the recipe's own comment asks for — `hidden` also makes the card a scroll container, and a sticky box confined to a scrollport that can never scroll never has `top` applied, so every DataGrid inside a flush card had a dead column head. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-disclosure__trigger",
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",

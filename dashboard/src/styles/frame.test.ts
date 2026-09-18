@@ -137,6 +137,17 @@ describe("the frame's layout", () => {
     expect(block(css, ".grid-band-head")).toMatch(
       /top:\s*calc\(var\(--sticky-top\) \+ var\(--row-h\)\)/,
     );
+
+    // NOR MAY THE CARD A GRID SITS IN. The rule is about the whole chain
+    // between a sticky head and `.screen`, and uilet's flush card broke it one
+    // level up: `overflow: hidden` for a clip its own comment describes as
+    // rounding, which also makes the card a scroll container — and a flush
+    // card grows to its content, so its offset is permanently 0. Measured
+    // against a running engine, every `DataGrid` in one had a dead head: the
+    // audit's 84 rows and the cost breakdown's 50 scrolled their column names
+    // off the top of the window. `clip` rounds without scrolling, which is the
+    // same correction `.grid-wrap` above already carries.
+    expect(block(sheet("screens.css"), ".crewlet-card--flush")).toMatch(/overflow:\s*clip/);
   });
 
   // THE PANEL TITLE'S CAP IS GONE WITH THE PANEL, deliberately and not by
