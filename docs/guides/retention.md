@@ -60,7 +60,12 @@ A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
 this domain does not **have** — a compacted domain has no wake feed — is
-`n/a` rather than zero, which is a different thing again.
+`n/a` rather than zero, which is a different thing again. And a term that was
+read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
+no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
+engine its value is the largest there is, because it is the identity for the
+minimum the trim takes across the six; that is a number chosen to lose a
+comparison, not a position, so the screen and the API say the word instead.
 
 ### `min_age` is a floor on trimming, and therefore a *lower bound* on retention
 

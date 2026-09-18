@@ -2145,7 +2145,7 @@ is three per-node facts attributed to a fleet.
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
       "prose": "Nothing is being trimmed on tracker: ...",
-      "terms": [{"name": "applied", "state": "known", "seq": 918279004, "detail": "..."}]
+      "terms": [{"name": "applied", "state": "ok", "seq": 918279004, "detail": "..."}]
     }
   ],
   "nodes": [...],
@@ -2155,6 +2155,15 @@ is three per-node facts attributed to a fleet.
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
 }
 ```
+
+A term's `state` is one of four, and `seq` is an answer in exactly one of them:
+`ok` carries the sequence the term permits, `unknown` is a term that could not
+be evaluated (which blocks), `n/a` is one this domain does not have, and
+`unbounded` is one that was read and binds nothing — no hold pins the log, or a
+solo fleet takes no snapshots. `seq` is `0` in the other three rather than
+absent, so a term permitting nothing *yet* — the state that holds a young
+fleet's trim, and the one worth reading — is distinguishable from a term with
+no sequence to give.
 
 `register_readable` is the field that keeps an empty `nodes` block honest: "this
 fleet has no nodes" cannot happen, and "coordination could not be listed"

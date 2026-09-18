@@ -1193,13 +1193,24 @@ export interface RetentionDomain {
   snapshot_blocked_by?: string;
 }
 
-/** A term's third value made explicit: read, unreadable, or not applicable. */
-export type RetentionTermState = "ok" | "unknown" | "n/a";
+/**
+ * A term's value made explicit: read, unreadable, not applicable, or read and
+ * binding nothing.
+ *
+ * `unbounded` is the one that is not about readability. A term permitting
+ * everything — no hold pins the log, a solo fleet takes no snapshots — has a
+ * sequence of 2^64-1 inside the engine, which is the identity for the minimum
+ * the trim takes and not a position at all. It used to arrive here as `ok`
+ * with that number on it, and the screen printed `18446744073709552000` beside
+ * the term's own prose saying nothing was pinning anything — not even the
+ * right digits, since a JSON number is a float64.
+ */
+export type RetentionTermState = "ok" | "unknown" | "n/a" | "unbounded";
 
 export interface RetentionTerm {
   name: string;
   state: RetentionTermState;
-  /** Meaningless unless `state` is "ok". */
+  /** Meaningless unless `state` is "ok", and zero in every other state. */
   seq?: number;
   detail?: string;
   /** On EVERY term rather than the blocking one: an operator watching a term

@@ -593,7 +593,14 @@ export function Terms({
                 {/* `n/a` RATHER THAN `0` for a term this domain does not
                     have, and `unknown` rather than a number for one that
                     could not be read — a term permitting zero and a term
-                    nobody could evaluate are different things to do. */}
+                    nobody could evaluate are different things to do. And
+                    `unbounded` for one that binds nothing: its sequence
+                    inside the engine is 2^64-1, the identity for the
+                    minimum the trim takes, which this cell printed as
+                    `18446744073709552000` next to the term's own prose
+                    saying nothing was pinning the log. Every state but
+                    `ok` is a word, because in every one of them the
+                    number is not an answer. */}
                 {t.state === "ok" ? (
                   <span className="t-num t-caption">{t.seq ?? 0}</span>
                 ) : (
