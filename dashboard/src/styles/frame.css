@@ -407,6 +407,19 @@
   min-width: 0;
 }
 
+/* THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out.
+   Every part shrank proportionally, so a page bar holding a long final crumb
+   — a turn's uuid, a page title, an item's summary — starved the ancestors
+   with it: `#/activity/turns/{id}` rendered its trail as `A… / T… / 3c98da…`,
+   with six hundred pixels of free space to the right of the bar. The reader
+   knows which object they are on, because the header below says so in 24px;
+   what they cannot reconstruct from anywhere else is the two links out of it.
+   So the ancestors keep their width and the last part is the one that
+   ellipsises. */
+.crumb-part:not(:last-child) {
+  flex: 0 0 auto;
+}
+
 .crumb-sep {
   color: var(--text-faint);
   padding: 0 2px;
@@ -431,6 +444,14 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* AND IT NEVER COLLAPSES TO NOTHING. It is the part that absorbs the
+     shrinking, and a page bar carrying eight actions — the turn page does —
+     leaves the trail little enough that "absorbs" became "disappears": the
+     crumb measured zero pixels wide, so the trail ended at a separator with
+     nothing after it. A floor of a few characters keeps an ellipsised stub,
+     which is what `text-overflow` is for and what tells a reader the trail
+     has a last part at all. */
+  min-width: 5ch;
 }
 
 .page-actions {
