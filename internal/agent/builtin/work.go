@@ -1434,11 +1434,30 @@ func handles(all ...string) []string {
 //
 // DERIVED FROM THE TURN AND THE OBJECT rather than minted fresh, so a re-run
 // turn — which the engine's redelivery guarantees make ordinary — writes ONCE.
-// Outside a turn there is nothing to be idempotent against and the object's own
-// id is enough to make it unique.
+//
+// OUTSIDE A TURN IT IS FRESH PER CALL, and that is the whole of the second
+// branch: there is nothing to be idempotent against, because nothing is going
+// to redeliver an operator's tool call. It used to return `verb + "-" + object`
+// here on the reasoning that "the object's own id is enough to make it unique"
+// — which is true of two DIFFERENT objects and false of the same one twice, so
+// the id was stable for the life of the deployment and the operation ledger
+// collapsed every write after the first as a redelivery.
+//
+// Measured through `/operator/mcp`, which is the ONLY write path the dashboard
+// offers and what an operator's own assistant connects to: a work item could
+// be updated exactly once. The second update, and every one after it, wrote
+// nothing and answered `outcome: "applied"` with the FIRST write's position —
+// the worst shape a write surface has, because the caller is told it worked.
+// The same held for a dependency change, a re-removal after a restore, a
+// merge, and (through [callKey]) a priority list, a pin set, an inbox mark and
+// a sprint start.
+//
+// [commentID] three hundred lines below has always had this right, and is
+// where the shape comes from: the turn's key where there is one, a fresh uuid
+// where there is not.
 func opIDFor(actor Actor, verb, object string) string {
 	if actor.TurnID == "" {
-		return verb + "-" + object
+		return verb + "-" + object + "-" + uuid.NewString()
 	}
 	return actor.TurnID + "-" + verb + "-" + object
 }

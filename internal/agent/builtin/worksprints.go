@@ -153,7 +153,7 @@ func (t *manageSprint) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	writer := t.deps.SprintWriter(actor)
 	action := strings.TrimSpace(argString(args, "action"))
 	opID := fmt.Sprintf("sprint-%s-%s-%d-%s", action, project, number,
-		turnKeyOr(turn))
+		callKey(turn))
 
 	switch action {
 	case "start":
