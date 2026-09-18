@@ -30,6 +30,7 @@ import {
   Callout,
   Card,
   EmptyState,
+  EmptyValue,
   InlineCode,
   Skeleton,
   Tag,
@@ -49,7 +50,6 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
-  Dash,
   DateCell,
   DurationCell,
   KeyCell,
@@ -1977,7 +1977,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                     // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
                     // provider sends an id of its own, and a blank cell and an
                     // id nobody sent are different facts.
-                    <Dash title="this provider sent no delivery id" />
+                    <EmptyValue label="This provider sent no delivery id" />
                   ),
               },
             ]}
@@ -2687,7 +2687,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
       {row ? (
         <DateCell at={row.timestamp} now={now} />
       ) : (
-        <Dash title="no delivery is recorded for this surface" />
+        <EmptyValue label="No delivery is recorded for this surface" />
       )}
     </li>
   );

@@ -77,7 +77,7 @@ import { CalendarTodayGlyph, InboxGlyph, TimelineGlyph } from "@crewlethq/icons/
 import { Meter } from "~/ui/primitives.tsx";
 import { TimeSeries } from "~/ui/charts.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
+import { NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -1113,7 +1113,7 @@ export function SprintPanel({
               // decision and a bar three-eighths full is an impression.
               cell: (a) =>
                 a.capacity === undefined ? (
-                  <Dash title="this project's sprint policy declares no capacity for this assignee" />
+                  <EmptyValue label="This project's sprint policy declares no capacity for this assignee" />
                 ) : (
                   <span style={{ minWidth: 120, display: "block" }}>
                     <Meter

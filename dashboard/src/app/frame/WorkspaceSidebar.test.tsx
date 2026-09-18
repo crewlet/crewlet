@@ -120,9 +120,10 @@ test("a group that differs only by its query marks exactly one row", async () =>
   expect(marked.map((a) => a.textContent)).toEqual(["agent-cto"]);
 });
 
-// AND A ROW WITH NO QUERY STILL MATCHES A ROUTE THAT HAS ONE. Demanding an
-// exact query would leave a reader inside a filtered log with nothing in the
-// tree marked at all — the seat row is the narrower answer, not the only one.
+// AND A ROW WITH NO QUERY STILL WINS WHERE NOTHING NARROWER IS DRAWN. A `?seat=`
+// for a handle the roster no longer has has no seat row, and demanding an exact
+// query would leave a reader inside a filtered log with nothing in the tree
+// marked at all.
 test("the unfiltered row stays current while a query narrows it", async () => {
   location.hash = "#/activity/turns?seat=agent-cto";
   render(
@@ -137,4 +138,112 @@ test("the unfiltered row stays current while a query narrows it", async () => {
   );
   const marked = await screen.findAllByRole("link", { current: "page" });
   expect(marked.map((a) => a.textContent)).toEqual(["Turns"]);
+});
+
+// ONE DESTINATION IN TWO SECTIONS IS STILL ONE PAGE.
+//
+// Starred and Recent repeat the tree's own rows on purpose. Selection was a
+// predicate each row answered about itself, so both answered yes: two rows in
+// the accent and two links reading out as the current page, on every screen the
+// reader had opened before.
+test("a destination listed in two sections marks exactly one row", async () => {
+  location.hash = "#/work/ENG";
+  render(
+    <Router>
+      <WorkspaceSidebar
+        title="Work"
+        sections={[
+          {
+            key: "projects",
+            label: "Projects",
+            rows: [{ key: "ENG", label: "Engineering", path: ["work", "ENG"] }],
+          },
+          {
+            key: "recents",
+            label: "Recent",
+            rows: [{ key: "recent-work/ENG", label: "ENG", path: ["work", "ENG"] }],
+          },
+        ]}
+      />
+    </Router>,
+  );
+  // THE TREE'S ROW, not the shortcut: the tree is the address and it is drawn
+  // first, which is the tie-break.
+  const marked = await screen.findAllByRole("link", { current: "page" });
+  expect(marked.map((a) => a.textContent)).toEqual(["Engineering"]);
+  // AND BOTH ROWS ARE STILL DRAWN — the two-sided half. Deduping the sections
+  // would satisfy the line above and delete the reason to star anything.
+  expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual(["Engineering", "ENG"]);
+});
+
+// `Turns` carries no query, so it is compatible with every `?seat=`. Rendered
+// together — which is exactly how the Activity sidebar ships — the fixed row and
+// the seat row were both marked.
+test("the seat row wins over the list it narrows", async () => {
+  location.hash = "#/activity/turns?seat=agent-cto";
+  render(
+    <Router>
+      <WorkspaceSidebar
+        title="Activity"
+        sections={[
+          { key: "fixed", rows: [{ key: "turns", label: "Turns", path: ["activity", "turns"] }] },
+          {
+            key: "seats",
+            label: "Seats",
+            rows: ["agent-ceo", "agent-cto"].map((handle) => ({
+              key: handle,
+              label: handle,
+              path: ["activity", "turns"],
+              query: { seat: handle },
+            })),
+          },
+        ]}
+      />
+    </Router>,
+  );
+  const marked = await screen.findAllByRole("link", { current: "page" });
+  expect(marked.map((a) => a.textContent)).toEqual(["agent-cto"]);
+});
+
+// ---------------------------------------------------------------------------
+// The count beside a row
+// ---------------------------------------------------------------------------
+
+/**
+ * A NUMBER BESIDE A NAME SAYS WHAT IT COUNTS, or it says something false.
+ *
+ * This rail drew "Leadership 5" — the unit's whole subtree — while the org
+ * chart's block for the same unit read "2 seats" and the roster's group head a
+ * third figure. The count and its explanation were two fields, `count` and an
+ * optional `countTitle`, and the optional one is the half that went missing.
+ * One field cannot be half-given.
+ */
+test("a row's count carries what it counted, or there is no count", () => {
+  render(
+    <Router>
+      <WorkspaceSidebar
+        title="Company"
+        sections={[
+          {
+            key: "units",
+            rows: [
+              {
+                key: "leadership",
+                label: "Leadership",
+                path: ["company", "units", "Leadership"],
+                count: { value: 5, of: "seats in this unit and everything under it" },
+              },
+              { key: "bare", label: "Nothing counted", path: ["company", "units", "Bare"] },
+            ],
+          },
+        ]}
+      />
+    </Router>,
+  );
+  const badge = screen.getByText("5");
+  expect(badge.getAttribute("title")).toBe("seats in this unit and everything under it");
+  // THE CONTROL: a row with no count draws no badge at all, or this would pass
+  // on a rail that put a title on every row in the tree.
+  const bare = screen.getByText("Nothing counted").closest("a")!;
+  expect(bare.querySelector(".side-count")).toBeNull();
 });

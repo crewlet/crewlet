@@ -60,7 +60,14 @@ test("no JSX guard is a bare number", () => {
     /\{\s*\(?[^}<>=!]*?\.(length|count|calls|rounds|seats|total|used|unread|primary)\s*(\)\s*)?&&/g;
   const offenders: string[] = [];
   for (const { path, text } of sources()) {
-    const lines = text.split("\n");
+    // COMMENTS BLANKED, LINE NUMBERS KEPT. A comment quoting the bad shape in
+    // order to explain why the line beneath it avoids one is not the bad shape
+    // — and this gate caught exactly that, so the only way to keep the rule was
+    // to stop writing down what it is for.
+    const lines = text
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + " ".repeat(m.length - lead.length))
+      .split("\n");
     lines.forEach((line, i) => {
       guard.lastIndex = 0;
       if (!guard.test(line)) return;
@@ -177,4 +184,98 @@ test("something in the tree is actually exempted, so the rule is not dead weight
     exempted.length,
     "nothing writes a document pointer any more — delete documentPointer and read the `path:` spelling straight",
   ).toBeGreaterThan(0);
+});
+
+/**
+ * Every `<Tag …/>` element's own source text, tag to closing `/>`.
+ *
+ * BRACE-COUNTED rather than line-matched, because the captions this exists for
+ * are multi-line ternaries: a per-line scan reads `sub={` and `.join(` as
+ * unrelated lines and reports none of them.
+ */
+function elements(text: string, tag: string): { at: number; text: string }[] {
+  const out: { at: number; text: string }[] = [];
+  let i = 0;
+  while ((i = text.indexOf(`<${tag}`, i)) >= 0) {
+    // `<StatCardish` is not `<StatCard`.
+    if (!/[\s/>]/.test(text[i + tag.length + 1] ?? "")) {
+      i += 1;
+      continue;
+    }
+    let depth = 0;
+    let j = i + tag.length + 1;
+    for (; j < text.length; j++) {
+      const c = text[j];
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (depth === 0 && c === "/" && text[j + 1] === ">") {
+        j += 2;
+        break;
+      } else if (depth === 0 && c === ">") {
+        j += 1;
+        break;
+      }
+    }
+    out.push({ at: i, text: text.slice(i, j) });
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * A STAT TILE'S CAPTION QUALIFIES ITS NUMBER; IT NEVER LISTS.
+ *
+ * `StatCard`'s `sub` is ONE line — the design system draws it `white-space:
+ * nowrap` with `text-overflow: ellipsis` — so what goes there has to be short by
+ * CONSTRUCTION, not short in today's data. Four tiles joined names a founder
+ * writes: the goals screen's at-risk tile, both of the schedules screen's, and
+ * Live now's "working now". The goals one shipped reading "Console reads
+ * honestly under uncertainty, Console reads hon…" — cut mid-word, naming a goal
+ * that does not exist, beside neighbours reading "not archived" and "across
+ * every goal on screen".
+ *
+ * BOUNDING THE COUNT IS THE WRONG FIX and is why this is a gate rather than four
+ * corrected lines: a goal name is bounded at 256 characters
+ * (`tracker.MaxGoalName`), so ONE of them overflows a third-of-a-column tile and
+ * "first two, +N more" keeps the same cut. The caption has to be a derived
+ * qualifier — a split, a relative time, a pointer at the list that does hold the
+ * names — which is what the other fifty-odd tiles in this tree write.
+ */
+test("no stat tile builds its caption by joining a list", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "StatCard")) {
+      seen++;
+      if (!el.text.includes(".join(")) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line} — ${el.text.split("\n")[2]?.trim() ?? ""}`);
+    }
+  }
+  expect(
+    offenders,
+    "a `sub` is one ellipsized line: say what the number counts, not which rows are in it",
+  ).toEqual([]);
+  // THE OTHER SIDE. A renamed component or a broken scan makes this rule vacuous
+  // while still reporting a pass — the failure `skipgate` exists to stop
+  // elsewhere. Fifty-odd tiles today; a runaway parse collapses to one per file
+  // and a rename to zero, so thirty separates both from reality.
+  expect(
+    seen,
+    "nothing here reads as a StatCard any more — this rule covers nothing",
+  ).toBeGreaterThan(30);
+});
+
+/*
+ * AND THE SCANNER ACTUALLY READS THE SHAPE THE RULE IS FOR. A gate that only
+ * ever saw single-line props would pass a reverted multi-line ternary — which is
+ * three of the four captions above.
+ */
+test("the element scanner reads a multi-line prop", () => {
+  const src =
+    '<StatCard\n  label="x"\n  sub={\n    a.length ? a.map((x) => x.n).join(", ") : "none"\n  }\n/>\n<StatCard label="y" sub="fixed" />';
+  const found = elements(src, "StatCard");
+  expect(found.length).toBe(2);
+  expect(found[0]?.text.includes(".join(")).toBe(true);
+  expect(found[1]?.text.includes(".join(")).toBe(false);
 });

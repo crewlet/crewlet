@@ -7,8 +7,9 @@
  * labelled from the wrong end, a zero where nobody has written anything.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   RemovedNote,
   itemFlags,
@@ -16,6 +17,7 @@ import {
   ItemLinks,
   ItemPeek,
   ItemProps,
+  Routing,
   Subtasks,
   WorkItem as WorkItemPage,
   linkHeading,
@@ -38,6 +40,7 @@ afterEach(() => {
 });
 
 const NOW = Date.parse("2031-04-16T12:00:00Z");
+const NOW_ISO = "2031-04-16T12:00:00Z";
 
 const task = (over: Partial<WorkItem> = {}): WorkItem => ({
   id: "t-1",
@@ -127,11 +130,11 @@ test("a value whose declaration was archived is marked as such", () => {
   expect(screen.getByText("archived")).toBeTruthy();
 });
 
-// AN ABSENT VALUE IS AN EM DASH, never a zero: zero is a measurement, and an
-// unestimated task is one nobody has sized.
-test("an unestimated task shows a dash rather than a zero", () => {
+// AN ABSENT VALUE IS A MARKED ABSENCE, never a zero: zero is a measurement,
+// and an unestimated task is one nobody has sized.
+test("an unestimated task shows a marked absence rather than a zero", () => {
   const { container } = render(<ItemProps detail={detail()} chrome={{}} project={project()} />);
-  expect(container.textContent).toContain("—");
+  expect(container.textContent).toContain(EMPTY_VALUE);
   expect(container.textContent).not.toContain("0m");
 });
 
@@ -527,4 +530,108 @@ test("a task removed alongside its parent names the parent", () => {
     />,
   );
   expect(screen.getByText("ENG-1")).toBeTruthy();
+});
+
+// THE ACCENT SAYS WHERE THE READER IS, and this panel is about other people.
+//
+// `variant="brand"` resolves to `--color-brand-accent-soft` under
+// `--color-brand-accent-ink`, which is the pair a pressed FilterChip takes — so
+// a brand pill here drew the ground of a switched-on filter, beside a list that
+// really is a selection. Whether a notice ASKED is a fact about the notice: it
+// gets the caution tone and a word of its own.
+test("the Woke panel spends no accent, and 'asks' is its own mark", () => {
+  const { container } = render(
+    <Routing
+      answer={{
+        record_id: "r-1",
+        held: true,
+        notified: true,
+        delivery: "reached",
+        addressed: 1,
+        fallback: 0,
+        recipients: [
+          { handle: "fe", reason: "assignee", addressed: true },
+          { handle: "pm", reason: "reporter", addressed: false },
+        ],
+      }}
+      chrome={{}}
+    />,
+  );
+  expect(container.querySelectorAll(".crewlet-tag--brand")).toHaveLength(0);
+  // The fact the tint carried is still on the screen, in a word.
+  expect(screen.getAllByText("asks")).toHaveLength(1);
+  expect(screen.getByText("1 asked")).toBeTruthy();
+  // Both reasons read the same: the word is the reason, the obligation is the
+  // mark beside it.
+  for (const reason of ["assignee", "reporter"]) {
+    const pill = screen.getByText(reason).closest(".crewlet-tag");
+    expect(pill?.className, reason).toContain("crewlet-tag--outline");
+    expect(pill?.className, reason).not.toContain("crewlet-tag--brand");
+  }
+});
+
+// THE HISTORY DRAWS A MARK PER KIND AND NEVER REPRINTS THE THREAD.
+//
+// All eight rows drew the same timeline glyph — pixel-identical across every one
+// — so a comment and a field change were visually the same event. And only the
+// twelve task fields `TaskDeltas` compares produce deltas, so every other kind
+// fell through to the change's EXCERPT, which for the whole comment family is
+// the comment body: the History tab printed the Thread tab back, one clipped
+// line per comment, and the row never said what the change WAS.
+test("the history draws a mark per kind and never reprints the thread", async () => {
+  serving({ work_items: { items: [], complete: true } });
+  const { container } = render(
+    <Router>
+      <ItemBody
+        detail={detail({
+          history: [
+            {
+              id: "h1",
+              kind: "comment",
+              at: NOW_ISO,
+              log_seq: 1,
+              excerpt: "the login race is a double-submit",
+            },
+            {
+              id: "h2",
+              kind: "status",
+              at: NOW_ISO,
+              log_seq: 2,
+              fields: { status: { from: "todo", to: "done" } },
+            },
+            { id: "h3", kind: "watchers", at: NOW_ISO, log_seq: 3 },
+            {
+              id: "h4",
+              kind: "assignee",
+              at: NOW_ISO,
+              log_seq: 4,
+              turn_id: "turn-7",
+              fields: { assignee: { from: "", to: "ada" } },
+            },
+          ],
+        })}
+        chrome={{}}
+        now={NOW}
+      />
+    </Router>,
+  );
+  fireEvent.click(await screen.findByRole("tab", { name: /History/ }));
+
+  // FOUR KINDS, FOUR DRAWINGS. Today every row renders the same `timeline`
+  // path, so this set has one member.
+  const drawings = new Set(
+    [...container.querySelectorAll(".work-hist-row > svg path")].map((p) => p.getAttribute("d")),
+  );
+  expect(drawings.size).toBe(4);
+
+  // THE COMMENT ROW SAYS WHAT THE CHANGE WAS, not what was said.
+  expect(screen.queryByText(/double-submit/)).toBeNull();
+  expect(screen.getByText(/commented/)).toBeTruthy();
+  // AND A KIND WITH NO DELTAS IS A SENTENCE, not a bare noun after a name.
+  expect(screen.getByText(/changed the watchers/)).toBeTruthy();
+
+  // THE CONTROL IS OUT OF THE TRUNCATING CELL, so an entry long enough to fill
+  // the track cannot eat it.
+  expect(container.querySelector(".work-hist-what a")).toBeNull();
+  expect(container.querySelector(".work-hist-tail a")).toBeTruthy();
 });

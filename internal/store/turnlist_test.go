@@ -167,9 +167,9 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 		t.Errorf("total tokens = %d, want 110 + 220", one.TotalTokens)
 	case one.InputTokens != 300:
 		t.Errorf("input tokens = %d", one.InputTokens)
-	case one.Rounds != 2:
-		t.Errorf("rounds = %d, want the highest iteration any phase reached",
-			one.Rounds)
+	case one.Iterations != 2:
+		t.Errorf("iterations = %d, want the highest iteration any phase reached — "+
+			"self-iterate rounds, not a phase's tool rounds", one.Iterations)
 	}
 	// EVERY MODEL AND NOTHING ELSE, because a turn routinely uses two — a
 	// cheap one for the extension judge and the seat's own for the work —

@@ -13,6 +13,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import { GateDialog, GateOutcome } from "./GateDialog.tsx";
 import { MaintenanceBanner, NodePositions, ServedLevelBanner, Terms } from "./Retention.tsx";
 import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
@@ -30,9 +31,12 @@ const node = (over: Partial<RetentionNode> = {}): RetentionNode => ({
 // for very different lengths of time, and a 0 in the position column is a
 // claim that this node has applied nothing — which is the opposite of "we do
 // not know yet".
-test("a node with no published position renders an em-dash, never a zero", () => {
+test("a node with no published position renders a marked absence, never a zero", () => {
   render(<NodePositions node={node()} />);
-  expect(screen.getByText("—")).toBeTruthy();
+  // The mark AND the sentence. `EmptyValue` puts the reason in the accessible
+  // name rather than in a hover `title`, so it is assertable here at all.
+  expect(screen.getByText(EMPTY_VALUE)).toBeTruthy();
+  expect(screen.getByText("This node has published no position for any domain")).toBeTruthy();
   expect(screen.queryByText("0")).toBeNull();
 });
 

@@ -20,13 +20,13 @@
  * instead of leaving the screen.
  */
 
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { People } from "./People.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -48,9 +48,10 @@ afterEach(() => {
   location.hash = "";
 });
 
-function mount() {
+function mount(org?: OrgProjection) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
+  if (org) store.applyOrg(org);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -120,4 +121,63 @@ test("a digit past the end of the views changes nothing", async () => {
   await settle();
 
   expect(params()).toEqual({ view: "seats", group: "state" });
+});
+
+// ---------------------------------------------------------------------------
+// What a group head's number counts
+// ---------------------------------------------------------------------------
+
+/** Two units, one with two seats and one with one. */
+const ORG = {
+  name: "Acme",
+  roles: [],
+  units: [
+    { name: "Engineering", roles: [{ name: "Dev A" }, { name: "Dev B" }] },
+    { name: "Design", roles: [{ name: "Dee" }] },
+  ],
+  derived: {
+    seats: [
+      { handle: "dev-a", name: "Dev A", kind: "agent" },
+      { handle: "dev-b", name: "Dev B", kind: "agent" },
+      { handle: "dee", name: "Dee", kind: "agent" },
+    ],
+    units: [
+      { name: "Engineering", seats: ["dev-a", "dev-b"] },
+      { name: "Design", seats: ["dee"] },
+    ],
+  },
+} as unknown as OrgProjection;
+
+// A BARE NUMBER BESIDE A UNIT'S NAME IS THE THIRD FIGURE THE SAME UNIT
+// CARRIED. The workspace rail drew its whole subtree, the org chart's block
+// drew its own members, and this drew `rows.length` — none of them saying
+// which. A roster group can only ever be the direct members, because a seat
+// sits in exactly one group.
+test("a unit group head says the number is the unit's own members", async () => {
+  mount(ORG);
+  await settle();
+  await act(async () => {
+    location.hash = "#/company/people?group=unit";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  await settle();
+
+  expect(screen.getByText("2 seats directly in it")).toBeTruthy();
+  expect(screen.getByText("1 seat directly in it")).toBeTruthy();
+});
+
+// AND A FILTER OUTRANKS IT. With one on, every count on the screen is over
+// what MATCHED — "2 seats directly in it" above a single card is the same lie
+// in the other direction.
+test("a filtered group head counts what matched, not what the unit holds", async () => {
+  mount(ORG);
+  await settle();
+  await act(async () => {
+    location.hash = "#/company/people?group=unit&q=dev-a";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  await settle();
+
+  expect(screen.getByText("1 seat matching")).toBeTruthy();
+  expect(screen.queryByText(/directly in it/)).toBeNull();
 });

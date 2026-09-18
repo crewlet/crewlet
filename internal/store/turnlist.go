@@ -69,11 +69,17 @@ type Turn struct {
 	// list says for certain.
 	Complete bool `json:"complete"`
 
-	// Phases counts the phase completions, and Rounds is the highest
-	// iteration any of them reached — which is the number a reader means
-	// by "how many rounds did this take".
-	Phases int `json:"phases"`
-	Rounds int `json:"rounds"`
+	// Phases counts the phase completions, and Iterations is the highest
+	// iteration any of them reached: SELF-ITERATE rounds, the executor →
+	// reviewer → executor loop.
+	//
+	// NOT the tool rounds a phase used — that is `rounds_used`, on each
+	// phase's own record, and it is a per-phase figure this aggregate has
+	// no column for. Both were called "rounds": a one-iteration turn listed
+	// "Rounds 1" directly above phase rows reading "3r" and "1r" for the
+	// same turn, and the word was the whole of the contradiction.
+	Phases     int `json:"phases"`
+	Iterations int `json:"iterations"`
 
 	// Failed is whether ANY event of this turn was a failure, which is a
 	// different question from the outcome: a turn can recover from a
@@ -259,7 +265,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 			duration          sql.NullInt64
 		)
 		if err := rows.Scan(&t.TurnID, &agentID, &role, &started, &ended,
-			&t.Phases, &t.Rounds, &failed, &in, &outTok, &total, &models,
+			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total, &models,
 			&complete, &duration, &summary, &taskID, &trigger); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)

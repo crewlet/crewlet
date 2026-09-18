@@ -26,7 +26,7 @@
  * with that one key changed rather than a locked query.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -34,7 +34,7 @@ import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
-import { Button, EmptyState, Tag } from "@crewlethq/ui";
+import { Button, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
 import { ArrowForwardGlyph, DashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -52,6 +52,49 @@ import type { WorkView } from "~/protocol/index.ts";
  */
 function containerRef(view: WorkView): string {
   return view.container.id ? `${view.container.kind}:${view.container.id}` : view.container.kind;
+}
+
+/**
+ * The three marks a view can carry, in one spelling.
+ *
+ * ONE SPELLING, for the reason [containerRef] above is one: the grid's cell and
+ * the facts block each drew these three tags, and they had already drifted — the
+ * grid's carried the sentence saying what each mark MEANS and the facts' did
+ * not, so hovering `protected` on the inventory explained it and hovering the
+ * same word on the view's own page explained nothing.
+ *
+ * A LIST RATHER THAN A RENDERED CELL, because the two callers owe the same
+ * absence different answers: a grid column has a heading over every row and has
+ * to fill it, and [FactLine] DROPS a fact whose value is empty. Only the caller
+ * knows which it is, so this returns what there is to draw and decides nothing
+ * about there being nothing.
+ */
+function viewMarks(view: WorkView): ReactNode[] {
+  const marks: ReactNode[] = [];
+  if (view.default) {
+    marks.push(
+      <Tag key="default" appearance="outline" title="the container's landing tab">
+        default
+      </Tag>,
+    );
+  }
+  if (view.protected) {
+    marks.push(
+      <Tag key="protected" appearance="outline" title="only its owner may change it">
+        protected
+      </Tag>,
+    );
+  }
+  // THE BRAND TONE SAYS "YOURS" — a pin is this reader's own, where the other
+  // two are facts about the view itself.
+  if (view.pinned) {
+    marks.push(
+      <Tag key="pinned" variant="brand" title="pinned by you — pins are per reader">
+        pinned
+      </Tag>,
+    );
+  }
+  return marks;
 }
 
 export function SavedViews({ id }: { id?: string }) {
@@ -217,25 +260,24 @@ export function SavedViews({ id }: { id?: string }) {
             {
               key: "marks",
               header: "Marks",
-              cell: (v) => (
-                <span className="row gap-1">
-                  {v.default && (
-                    <Tag appearance="outline" title="the container's landing tab">
-                      default
-                    </Tag>
-                  )}
-                  {v.protected && (
-                    <Tag appearance="outline" title="only its owner may change it">
-                      protected
-                    </Tag>
-                  )}
-                  {v.pinned && (
-                    <Tag variant="brand" title="pinned by you — pins are per reader">
-                      pinned
-                    </Tag>
-                  )}
-                </span>
-              ),
+              // A HEADED COLUMN ANSWERS ON EVERY ROW. None of the three marks is
+              // set on a view somebody just saved, so this cell drew an empty
+              // span for most rows — and in a company where nobody has pinned or
+              // protected anything, for ALL of them: a column headed "Marks"
+              // blank the whole way down reads as a screen that failed to load
+              // its own data rather than as three settings nobody has turned on.
+              // `cells.tsx`'s rule is that an absence renders a mark saying
+              // WHICH absence it is, and the dash names all three rather than
+              // saying "no marks", because "none of the three" is the only form
+              // of it a reader can act on.
+              cell: (v) => {
+                const marks = viewMarks(v);
+                return marks.length > 0 ? (
+                  <span className="row gap-1">{marks}</span>
+                ) : (
+                  <EmptyValue label="Not the default, not protected, not pinned by you" />
+                );
+              },
             },
           ]}
           loadedNote={`${saved.length} saved`}
@@ -254,6 +296,7 @@ export function SavedViews({ id }: { id?: string }) {
  * parameters the view actually carries.
  */
 function viewFacts(view: WorkView, ownerName?: string): Fact[] {
+  const marks = viewMarks(view);
   return [
     { label: "Shape", value: view.type },
     {
@@ -269,19 +312,13 @@ function viewFacts(view: WorkView, ownerName?: string): Fact[] {
     },
     { label: "Container", value: <KeyCell value={containerRef(view)} /> },
     {
+      // NO DASH HERE, which is the opposite of the grid's answer to the same
+      // absence and is exactly why [viewMarks] decides neither: [FactLine] drops
+      // a fact whose value is empty, so an unmarked view says three things about
+      // itself instead of four — where the grid's column has a heading standing
+      // over the row and has to fill it.
       label: "Marks",
-      value:
-        view.default || view.protected || view.pinned ? (
-          <span className="row gap-1">
-            {view.default && <Tag appearance="outline">default</Tag>}
-            {view.protected && <Tag appearance="outline">protected</Tag>}
-            {/* THE BRAND TONE SAYS "YOURS" — a pin is this reader's own, where
-                the other two are facts about the view itself. */}
-            {view.pinned && <Tag variant="brand">pinned</Tag>}
-          </span>
-        ) : (
-          ""
-        ),
+      value: marks.length > 0 ? <span className="row gap-1">{marks}</span> : "",
     },
   ];
 }

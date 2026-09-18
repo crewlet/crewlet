@@ -9,12 +9,17 @@
  */
 
 import { describe, expect, test } from "vitest";
+// THE ONE MARK, from the design system rather than re-spelled here. A test
+// holding its own copy of the glyph is how a second one gets into the product
+// unnoticed: it goes green on whatever is written, not on what is correct.
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
   formatPhaseLLM,
   fmtCount,
+  fmtDate,
   fmtDuration,
   fmtPct,
   humanize,
@@ -97,8 +102,28 @@ describe("relative time", () => {
   });
 
   test("a missing stamp is an em dash, not the epoch", () => {
-    expect(relTime(undefined, now)).toBe("—");
-    expect(inTime("", now)).toBe("—");
+    expect(relTime(undefined, now)).toBe(EMPTY_VALUE);
+    expect(inTime("", now)).toBe(EMPTY_VALUE);
+  });
+
+  // A DISTANT FUTURE INSTANT REACHES A DATE, exactly as a distant past one does.
+  //
+  // `inTime`'s own doc said "the same rules, forward" and it was one rule short:
+  // backwards, a relative reading stops at thirty days and prints the date;
+  // forwards, it counted days for ever. "in 341d" is a number nobody converts
+  // back into a month, and it is why a goal due next quarter had no date
+  // anywhere on its screen.
+  test("a distant future instant reaches a DATE, exactly as a distant past one does", () => {
+    const far = "2027-01-01T12:00:00Z";
+    expect(inTime(far, now)).not.toMatch(/^in \d+d$/);
+    expect(inTime(far, now)).toBe(fmtDate(far));
+    expect(relTime(far, now)).toBe(fmtDate(far));
+    // THE TERMINUS IS THE SAME THIRTY DAYS, and the steps below it are untouched
+    // — a forward clock and a backward one changing shape at different points
+    // would be two clocks on one screen.
+    expect(inTime("2026-01-20T12:00:00Z", now)).toBe("in 19d");
+    expect(inTime("2026-01-31T11:00:00Z", now)).toBe("in 29d");
+    expect(inTime("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
   });
 });
 
@@ -113,17 +138,17 @@ describe("numbers", () => {
 
   test("an absent number is an em dash rather than a zero", () => {
     // Zero is a measurement. "Nobody looked" is not.
-    expect(fmtCount(null)).toBe("—");
-    expect(fmtCount(Number.NaN)).toBe("—");
-    expect(fmtPct(1, 0)).toBe("—");
+    expect(fmtCount(null)).toBe(EMPTY_VALUE);
+    expect(fmtCount(Number.NaN)).toBe(EMPTY_VALUE);
+    expect(fmtPct(1, 0)).toBe(EMPTY_VALUE);
   });
 
   test("durations pick the shortest honest unit", () => {
     expect(fmtDuration(420)).toBe("420 ms");
     expect(fmtDuration(4_200)).toBe("4.2 s");
     expect(fmtDuration(95_000)).toBe("1m 35s");
-    expect(fmtDuration(null)).toBe("—");
-    expect(fmtDuration(-1)).toBe("—");
+    expect(fmtDuration(null)).toBe(EMPTY_VALUE);
+    expect(fmtDuration(-1)).toBe(EMPTY_VALUE);
   });
 
   test("elapsed needs both ends", () => {
@@ -193,9 +218,9 @@ describe("a live counter reads as a clock, not as a glitch", () => {
   });
 
   test("a missing span is a dash, not a zero", () => {
-    expect(fmtElapsed(null)).toBe("—");
-    expect(fmtElapsed(undefined)).toBe("—");
-    expect(fmtElapsed(NaN)).toBe("—");
+    expect(fmtElapsed(null)).toBe(EMPTY_VALUE);
+    expect(fmtElapsed(undefined)).toBe(EMPTY_VALUE);
+    expect(fmtElapsed(NaN)).toBe(EMPTY_VALUE);
   });
 });
 

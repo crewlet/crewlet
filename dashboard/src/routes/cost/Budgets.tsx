@@ -22,10 +22,10 @@ import { useMemo } from "react";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import { MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Callout, Card, Skeleton } from "@crewlethq/ui";
+import { Callout, Card, EmptyValue, Skeleton } from "@crewlethq/ui";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtExact } from "~/lib/format.ts";
@@ -158,7 +158,7 @@ export function Budgets() {
                   // — the fleet's own total is one column to the left.
                   cell: (s) =>
                     s.live_used === null || s.live_used === undefined ? (
-                      <Dash title="this node holds no live meter for this seat" />
+                      <EmptyValue label="This node holds no live meter for this seat" />
                     ) : (
                       <TokenCell value={s.live_used} />
                     ),

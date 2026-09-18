@@ -40,17 +40,18 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { DescriptionGlyph, ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -253,7 +254,10 @@ export function Audit() {
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
         ...workSubject(record),
-        detail: record.excerpt ?? "",
+        // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
+        // It also keeps a body's newlines out of a CSV field, where they are
+        // legal inside quotes and unreadable in every spreadsheet.
+        detail: plainText(record.excerpt ?? ""),
       });
     }
     for (const change of list(knowledge.data?.changes)) {
@@ -269,7 +273,7 @@ export function Audit() {
           change.container && change.title
             ? ["knowledge", change.container, change.title]
             : undefined,
-        detail: change.excerpt ?? "",
+        detail: plainText(change.excerpt ?? ""),
       });
     }
     for (const revision of list(config.data)) {
@@ -410,7 +414,7 @@ export function Audit() {
           row.detail ? (
             <span className="truncate">{row.detail}</span>
           ) : (
-            <Dash title="none recorded" />
+            <EmptyValue label="None recorded" />
           ),
       },
     ],

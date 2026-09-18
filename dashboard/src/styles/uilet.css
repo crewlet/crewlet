@@ -112,7 +112,18 @@
      the `topbar` ramp, not the `subtle`/`muted` one, whose dark values are
      translucent overlays meant to sit on top of a background rather than to
      be one. Mapping panels onto those would make every panel in dark mode a
-     5%-white wash over black, and the page would read as one flat field. */
+     5%-white wash over black, and the page would read as one flat field.
+
+     THE RAMP STEPS OFF THE PAGE, NOT OFF A CARD, and that is the one thing to
+     know before spending a rung. `color-surface-topbar-lift` and
+     `color-surface-subtle` carry the SAME value in every state of the cascade —
+     #f4f4f5 light, #1c1e24 dark — and `color-surface-subtle` is what every Card
+     paints. So inside a card `surface-2` and `bg-sunken` are the card's own
+     colour: the declaration parses, applies, and shows nothing. `surface-3` is
+     the first rung a card can show, and `surface-1` the first below it. The
+     calendar's neighbouring-month cells were `surface-2` for their whole life
+     and drew a uniform grid; `styles/surfaces.test.ts` is what now measures the
+     claim in this paragraph rather than restating it. */
   --bg: var(--color-surface-background);
   --bg-sunken: var(--color-surface-subtle);
   --surface-1: var(--color-surface-topbar);

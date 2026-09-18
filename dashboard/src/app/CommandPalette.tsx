@@ -21,6 +21,9 @@ import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
+// PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
+// `MarkName` `typeIcon` returns.
+import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
 import { QueryState } from "~/components/common.tsx";
 import { markByName, type MarkName } from "~/ui/glyph.tsx";
 
@@ -219,9 +222,29 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           {
             id: `work-${item.key}`,
             group: "Work",
-            icon: "check",
+            // THE ITEM'S OWN TYPE, from the one table that says which drawing a
+            // type wears. A hardcoded tick made a bug, an epic and a milestone
+            // one mark in a list that also holds the DESTINATION rows from
+            // `nav.ts` — where a tick legitimately names the Work workspace.
+            // Eight rows, one glyph, and no way to tell an item from a screen.
+            icon: typeIcon(item.type),
             label: `${item.key} — ${item.title}`,
-            hint: [item.status, item.assignee && `@${item.assignee}`].filter(Boolean).join(" · "),
+            // AND THE WORD, because `HitGlyph` draws every hit's mark with no
+            // `title`: that is right where the LABEL is the word, which it is
+            // for a destination and a seat, and wrong here — the label is a key
+            // and a title, so the type appears nowhere else on the row. The
+            // status goes through `statusLabel` for the reason that function
+            // exists: this line printed the raw slug, so the palette said
+            // `in_progress` where every other surface says "In progress". No
+            // project defs, for the same reason the search screen gives — the
+            // answer spans projects.
+            hint: [
+              typeName(item.type),
+              statusLabel(item.status),
+              item.assignee && `@${item.assignee}`,
+            ]
+              .filter(Boolean)
+              .join(" · "),
             go: () => nav.to(["work", item.key]),
           },
           i,

@@ -267,11 +267,14 @@ export function LiveNow() {
           icon={<BoltGlyph size="xs" />}
           label="Working now"
           value={live.length}
-          sub={
-            live.length
-              ? live.map(({ seat }) => seat.name).join(", ")
-              : `${plural(idle, "seat")} idle and waiting for work`
-          }
+          // THE OTHER HALF OF THE SAME COUNT, not a list of who. `sub` is one
+          // ellipsized line and a seat's name is founder prose, so the join was
+          // cut mid-word and named a seat nobody configured. WHO is working is
+          // the Live seats card immediately below, which draws one tile per seat
+          // — so the caption spends its line on the fact that card does not
+          // carry, and does it on one branch rather than two that differ by a
+          // suffix and drift.
+          sub={`${plural(idle, "seat")} idle and waiting for work`}
         />
         <StatCard
           icon={<TerminalGlyph size="xs" />}

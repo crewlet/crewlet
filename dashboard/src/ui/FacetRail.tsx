@@ -19,6 +19,15 @@
  * the set is derived from the rows, where its absence is all there is to say.
  * The caller decides by what it passes.
  *
+ * THE NOTE IS A CAPTION ON THE NUMBERS, so it is drawn only where a number is.
+ * Printed unconditionally it sat beside the Inbox's unread/all/snoozed control
+ * — three scopes ASKED OF THE ENGINE, whose rows this page does not hold and
+ * therefore cannot count — and told a reader that counts they could not see
+ * were over rows that did not carry them. That control is a `Segmented` now,
+ * which is what it always was. What stays here is the rule that let it in: a
+ * dimension with nothing to count is not a facet rail, and `count: null` means
+ * the answer has NOT LANDED YET, never "this rail has no counts".
+ *
  * THE CHIPS ARE uilet's, the scope note is ours: a row of filters that says
  * what its counts are counts OF has no peer, and it is the sentence this
  * component exists for.
@@ -31,7 +40,9 @@ export interface Facet {
   /** What the filter is set to. Empty is the "all" chip and never appears here. */
   value: string;
   label: string;
-  /** How many rows carry it, or null where the caller genuinely cannot say. */
+  /** How many rows carry it, or null while the answer is still in flight —
+      never "this rail does not count". A rail whose dimension cannot be
+      counted at all is a `Segmented`, not this. */
   count: number | null;
   /** Said on hover — why a value with no rows is still offered, say. */
   title?: string;
@@ -54,7 +65,6 @@ export function FacetRail({
   facets,
   onChange,
   over,
-  allLabel = "All",
 }: {
   /** The dimension, for the group's label: "Category", "Reason". */
   name: string;
@@ -63,9 +73,14 @@ export function FacetRail({
   facets: Facet[];
   onChange: (next: string) => void;
   over: FacetScope;
-  allLabel?: string;
 }) {
   if (facets.length === 0) return null;
+  // OVER THE FACETS, never over `over`: a counting rail whose answer has not
+  // landed draws no numbers yet, and the sentence arrives with them rather than
+  // sitting above an empty row hedging figures nobody can see. It can only ever
+  // wrap itself — the chips come first and their widths do not change — so
+  // nothing a reader is reaching for moves.
+  const counted = facets.some((f) => f.count !== null);
   return (
     <div className="facet-row">
       {/*
@@ -88,7 +103,7 @@ export function FacetRail({
       */}
       <FilterChipGroup label={name} hideLabel>
         <FilterChip pressed={!value} onPressedChange={() => onChange("")}>
-          {allLabel}
+          All
         </FilterChip>
         {facets.map((f) => (
           <FilterChip
@@ -108,7 +123,7 @@ export function FacetRail({
           </FilterChip>
         ))}
       </FilterChipGroup>
-      <span className="t-caption">{SCOPE_NOTE[over]}</span>
+      {counted && <span className="t-caption">{SCOPE_NOTE[over]}</span>}
     </div>
   );
 }

@@ -26,7 +26,7 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { QueryState } from "~/components/common.tsx";
-import { awaitingPerson, indexOrg, runState, type Seat } from "~/lib/seats.ts";
+import { awaitingPerson, indexOrg, runState, unitDirectLabel, type Seat } from "~/lib/seats.ts";
 import { capacityText, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -221,8 +221,12 @@ export function People() {
 
   const index = useMemo(() => indexOrg(org), [org]);
 
+  // HOISTED OUT OF THE MEMO, because two things need to know whether a filter
+  // is on: the filter itself, and every count on the screen that is now over
+  // what matched rather than over the company.
+  const needle = q.trim().toLowerCase();
+
   const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
     return (
       index.seats
         .filter(
@@ -237,7 +241,7 @@ export function People() {
         // By NAME. Never by a field that a live push moves.
         .sort((a, b) => a.seat.name.localeCompare(b.seat.name))
     );
-  }, [index.seats, agents, q]);
+  }, [index.seats, agents, needle]);
 
   const groups = useMemo(() => {
     if (group === "flat") return [{ key: "all", label: "", rows }];
@@ -257,6 +261,31 @@ export function People() {
       rows: rows.filter((r) => bucketOf(r.seat, r.agent, sandboxes) === b.key),
     })).filter((g) => g.rows.length > 0);
   }, [rows, group, sandboxes]);
+
+  /**
+   * WHAT THE NUMBER BESIDE A GROUP HEAD COUNTS.
+   *
+   * It was a bare `g.rows.length` — the third unqualified figure the same unit
+   * carried across this product, beside "Leadership 5" in the workspace rail
+   * (the whole subtree) and "2 seats" on the org chart's block (its own
+   * members). None of them said which, so a reader comparing two screens
+   * concluded their company had changed shape.
+   *
+   * A UNIT GROUP HERE IS ITS DIRECT MEMBERS and can never be anything else: a
+   * seat sits in exactly one group, so nothing under a unit is in it. That is
+   * `unitDirectLabel`'s whole subject, and it lives in `lib/seats.ts` so
+   * "directly" is one word across the product.
+   *
+   * AND A FILTER OUTRANKS BOTH, because with one on, every count on the screen
+   * is over what matched — saying "3 seats directly in it" about a unit of
+   * eleven while showing three is the same lie in the other direction.
+   */
+  const groupHint = (n: number) =>
+    needle
+      ? `${plural(n, "seat")} matching`
+      : group === "unit"
+        ? unitDirectLabel(n)
+        : plural(n, "seat");
 
   const agentSeats = index.seats.filter((s) => s.kind === "agent").length;
 
@@ -383,7 +412,7 @@ export function People() {
       {view === "seats" &&
         groups.map((g) =>
           g.label ? (
-            <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
+            <Section key={g.key} title={g.label} hint={groupHint(g.rows.length)}>
               <div className="seat-grid">{g.rows.map(card)}</div>
             </Section>
           ) : (

@@ -105,10 +105,15 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { plainText } from "~/lib/markdown.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   anyFilter,
   bucketByDay,
+  countedLabel,
+  dayLabel,
+  pageCount,
+  pageNote,
   buildItemsParams,
   CALENDAR_CELL_CHIPS,
   calendarWeeks,
@@ -119,7 +124,7 @@ import {
   GROUP_AXES,
   gridRange,
   groupLabel,
-  monthOf,
+  monthOrNow,
   monthLabel,
   PRIORITIES,
   projectKeys,
@@ -143,6 +148,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
   WorkActiveSprint,
+  WorkActivityAnswer,
   WorkActivityRecord,
   WorkGroup,
   WorkProjectDetail,
@@ -300,7 +306,7 @@ export function Work({ project = "" }: { project?: string }) {
     overdue: overdue === "true",
   };
 
-  const thisMonth = month || monthOf(now);
+  const thisMonth = monthOrNow(month, now);
   const todayKey = dayKey(new Date(now).toISOString());
   const weeks = useMemo(
     () => (shape === "calendar" ? calendarWeeks(thisMonth, todayKey) : []),
@@ -330,7 +336,7 @@ export function Work({ project = "" }: { project?: string }) {
   // AND WHAT HAPPENED, which is a different question from what is there: the
   // feed is ordered by the LOG rather than by anything this board sorts on,
   // so a change that moved nothing on screen is still visible.
-  const feed = useQuery("work_activity", { container, limit: 20 }, { pollMs: 60_000 });
+  const feed = useQuery("work_activity", { container, limit: FEED_PAGE.board }, { pollMs: 60_000 });
 
   // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
   // The row says a task is removed; WHO removed it, WHEN, and whether the
@@ -349,7 +355,7 @@ export function Work({ project = "" }: { project?: string }) {
   const inTrash = params.removed === "true" || params.removed === true;
   const tombstones = useQuery(
     "work_activity",
-    inTrash ? { container, kinds: "removed,restored,purged", limit: 100 } : undefined,
+    inTrash ? { container, kinds: "removed,restored,purged", limit: FEED_PAGE.trash } : undefined,
     { enabled: inTrash, pollMs: 60_000 },
   );
   const tombRecords = useMemo(() => tombstones.data?.records ?? [], [tombstones.data]);
@@ -488,199 +494,230 @@ export function Work({ project = "" }: { project?: string }) {
           />
         )}
 
-        <div className="work-filters">
-          <div className="work-filters-search">
-            {/* THEIR FIELD, WITH THE GLYPH IN ITS LEADING SLOT — which is
+        {/* `toolbar` FIRST, and it is not decoration: `.screen:has(.toolbar)`
+            is what publishes `--sticky-top`, and every other thing that
+            sticks in this scroller — the grid's column heads, a group head,
+            the peek — offsets itself by it. Hand-rolled, this bar was a
+            byte-for-byte copy of `.toolbar` minus that one class, so the
+            property stayed at its 0px default and the table's own header
+            parked underneath an opaque band at `--z-sticky`. */}
+        <div className="toolbar work-filters">
+          {/* THREE GROUPS, not one wrapping row of controls. What the bar
+              draws varies by shape — the type, sprint, group-by and sort
+              pickers each appear on some tabs and not others — and in a single
+              wrap context that moved the scope control from x≈345 on List to
+              x≈1338 on Board and x≈1155 on Calendar, the same control in three
+              places on three tabs. Worse, `.work-summary`'s `margin-left: auto`
+              is measured against whatever line it lands on: when the Overdue
+              chip wrapped, the chip sat at x≈345 with ~1,200px of nothing
+              between it and the count. Grouped, a wrap breaks BETWEEN groups,
+              and the switches are positioned from the right edge — so their
+              place depends on the two chips beside them rather than on six
+              conditional pickers to their left. */}
+          <div className="work-filters-ask">
+            <div className="work-filters-search">
+              {/* THEIR FIELD, WITH THE GLYPH IN ITS LEADING SLOT — which is
                 what our own `SearchInput` was: an input, a mark and a name. */}
-            <Input
-              type="search"
-              width="full"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              aria-label="Find an item by key or title"
-              leading={<SearchGlyph size="sm" />}
-              placeholder="Key or title"
-            />
-          </div>
-          {/* EVERY "ANY" ROW IS AN OPTION RATHER THAN A PLACEHOLDER. Their
+              <Input
+                type="search"
+                width="full"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                aria-label="Find an item by key or title"
+                leading={<SearchGlyph size="sm" />}
+                placeholder="Key or title"
+              />
+            </div>
+            {/* EVERY "ANY" ROW IS AN OPTION RATHER THAN A PLACEHOLDER. Their
               `placeholder` only labels an empty trigger, and a reader who has
               chosen needs a row to choose their way back out of. */}
-          <Select
-            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
-            // `width: 100%` unless told otherwise, and its own doc says why that
-            // is wrong here: "a filter row of full-width selects is one question
-            // per line, which is not what a filter bar is".
-            width="auto"
-            value={status}
-            onChange={(value) => setStatus(String(value))}
-            ariaLabel="Status"
-            active={status !== ""}
-            options={[
-              { value: "", label: "Any status" },
-              ...STATUSES.map((s) => ({
-                value: s.value,
-                label: statusLabel(s.value, detail?.statuses),
-              })),
-            ]}
-          />
-          {(catalogue.data?.types ?? []).length > 0 && (
             <Select
               // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
               // `width: 100%` unless told otherwise, and its own doc says why that
               // is wrong here: "a filter row of full-width selects is one question
               // per line, which is not what a filter bar is".
               width="auto"
-              value={type}
-              onChange={(value) => setType(String(value))}
-              ariaLabel="Type"
-              active={type !== ""}
+              value={status}
+              onChange={(value) => setStatus(String(value))}
+              ariaLabel="Status"
+              active={status !== ""}
               options={[
-                { value: "", label: "Any type" },
-                ...(catalogue.data?.types ?? [])
-                  .filter((t) => !t.archived)
-                  .map((t) => ({ value: t.slug, label: t.name })),
-              ]}
-            />
-          )}
-          <Select
-            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
-            // `width: 100%` unless told otherwise, and its own doc says why that
-            // is wrong here: "a filter row of full-width selects is one question
-            // per line, which is not what a filter bar is".
-            width="auto"
-            value={priority}
-            onChange={(value) => setPriority(String(value))}
-            ariaLabel="Priority"
-            active={priority !== ""}
-            options={[
-              { value: "", label: "Any priority" },
-              ...PRIORITIES.map((p) => ({ value: p, label: p })),
-            ]}
-          />
-          <Select
-            // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
-            // `width: 100%` unless told otherwise, and its own doc says why that
-            // is wrong here: "a filter row of full-width selects is one question
-            // per line, which is not what a filter bar is".
-            width="auto"
-            value={assignee}
-            onChange={(value) => setAssignee(String(value))}
-            ariaLabel="Assignee"
-            active={assignee !== ""}
-            options={[
-              { value: "", label: "Anybody" },
-              // UNASSIGNED IS A VALUE, not a missing filter — it is the one
-              // question a lead actually opens a board to ask.
-              { value: "none", label: "Unassigned" },
-              ...index.seats.map((s) => ({ value: s.handle, label: s.name })),
-            ]}
-          />
-          {project && detail?.sprints && (
-            <Select
-              // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
-              // `width: 100%` unless told otherwise, and its own doc says why that
-              // is wrong here: "a filter row of full-width selects is one question
-              // per line, which is not what a filter bar is".
-              width="auto"
-              value={sprint}
-              onChange={(value) => setSprint(String(value))}
-              ariaLabel="Sprint"
-              active={sprint !== ""}
-              options={[
-                { value: "", label: "Any sprint" },
-                { value: "active", label: "Active sprint" },
-                { value: "next", label: "Next sprint" },
-                { value: "none", label: "Backlog" },
-                ...(detail.recent_sprints ?? []).map((s) => ({
-                  value: String(s.number),
-                  label: `${s.number} · ${s.name}`,
+                { value: "", label: "Any status" },
+                ...STATUSES.map((s) => ({
+                  value: s.value,
+                  label: statusLabel(s.value, detail?.statuses),
                 })),
               ]}
             />
-          )}
-          {shape !== "calendar" && (
+            {(catalogue.data?.types ?? []).length > 0 && (
+              <Select
+                // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+                // `width: 100%` unless told otherwise, and its own doc says why that
+                // is wrong here: "a filter row of full-width selects is one question
+                // per line, which is not what a filter bar is".
+                width="auto"
+                value={type}
+                onChange={(value) => setType(String(value))}
+                ariaLabel="Type"
+                active={type !== ""}
+                options={[
+                  { value: "", label: "Any type" },
+                  ...(catalogue.data?.types ?? [])
+                    .filter((t) => !t.archived)
+                    .map((t) => ({ value: t.slug, label: t.name })),
+                ]}
+              />
+            )}
             <Select
               // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
               // `width: 100%` unless told otherwise, and its own doc says why that
               // is wrong here: "a filter row of full-width selects is one question
               // per line, which is not what a filter bar is".
               width="auto"
-              value={groupBy}
-              onChange={(value) => {
-                setGroupBy(String(value));
-                // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the
-                // axis changes it narrows the board to a key the new axis
-                // has never heard of, which answers nothing.
-                setGroup("");
-              }}
-              ariaLabel="Group by"
-              active={groupBy !== ""}
+              value={priority}
+              onChange={(value) => setPriority(String(value))}
+              ariaLabel="Priority"
+              active={priority !== ""}
               options={[
-                { value: "", label: shape === "board" ? "By status" : "No grouping" },
-                ...GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
-                  value: a.value,
-                  label: a.label,
-                })),
+                { value: "", label: "Any priority" },
+                ...PRIORITIES.map((p) => ({ value: p, label: p })),
               ]}
             />
-          )}
-          {shape === "list" && (
             <Select
               // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
               // `width: 100%` unless told otherwise, and its own doc says why that
               // is wrong here: "a filter row of full-width selects is one question
               // per line, which is not what a filter bar is".
               width="auto"
-              value={sort}
-              onChange={(value) => setSort(String(value))}
-              ariaLabel="Sort"
-              active={sort !== ""}
-              options={[{ value: "", label: "Default order" }, ...SORTS]}
+              value={assignee}
+              onChange={(value) => setAssignee(String(value))}
+              ariaLabel="Assignee"
+              active={assignee !== ""}
+              options={[
+                { value: "", label: "Anybody" },
+                // UNASSIGNED IS A VALUE, not a missing filter — it is the one
+                // question a lead actually opens a board to ask.
+                { value: "none", label: "Unassigned" },
+                ...index.seats.map((s) => ({ value: s.handle, label: s.name })),
+              ]}
             />
-          )}
-          {/* THREE SEGMENTS, not a checkbox: "open", "closed" and
+            {project && detail?.sprints && (
+              <Select
+                // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+                // `width: 100%` unless told otherwise, and its own doc says why that
+                // is wrong here: "a filter row of full-width selects is one question
+                // per line, which is not what a filter bar is".
+                width="auto"
+                value={sprint}
+                onChange={(value) => setSprint(String(value))}
+                ariaLabel="Sprint"
+                active={sprint !== ""}
+                options={[
+                  { value: "", label: "Any sprint" },
+                  { value: "active", label: "Active sprint" },
+                  { value: "next", label: "Next sprint" },
+                  { value: "none", label: "Backlog" },
+                  ...(detail.recent_sprints ?? []).map((s) => ({
+                    value: String(s.number),
+                    label: `${s.number} · ${s.name}`,
+                  })),
+                ]}
+              />
+            )}
+            {shape !== "calendar" && (
+              <Select
+                // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+                // `width: 100%` unless told otherwise, and its own doc says why that
+                // is wrong here: "a filter row of full-width selects is one question
+                // per line, which is not what a filter bar is".
+                width="auto"
+                value={groupBy}
+                onChange={(value) => {
+                  setGroupBy(String(value));
+                  // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the
+                  // axis changes it narrows the board to a key the new axis
+                  // has never heard of, which answers nothing.
+                  setGroup("");
+                }}
+                ariaLabel="Group by"
+                active={groupBy !== ""}
+                options={[
+                  { value: "", label: shape === "board" ? "By status" : "No grouping" },
+                  ...GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
+                    value: a.value,
+                    label: a.label,
+                  })),
+                ]}
+              />
+            )}
+            {shape === "list" && (
+              <Select
+                // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
+                // `width: 100%` unless told otherwise, and its own doc says why that
+                // is wrong here: "a filter row of full-width selects is one question
+                // per line, which is not what a filter bar is".
+                width="auto"
+                value={sort}
+                onChange={(value) => setSort(String(value))}
+                ariaLabel="Sort"
+                active={sort !== ""}
+                options={[{ value: "", label: "Default order" }, ...SORTS]}
+              />
+            )}
+          </div>
+          <div className="work-filters-switches">
+            {/* THREE SEGMENTS, not a checkbox: "open", "closed" and
                 "everything" are three real questions, and a two-state control
                 would make the third unreachable — which is how a board that
                 can never show a closed item ships. */}
-          <Segmented
-            value={scope}
-            onChange={setScope}
-            ariaLabel="Open or closed"
-            options={[
-              { value: "open", label: "Open" },
-              { value: "closed", label: "Closed" },
-              { value: "", label: "All" },
-            ]}
-          />
-          <FilterChip
-            pressed={filters.blocked}
-            onClick={() => setBlocked(filters.blocked ? "" : "true")}
-            title="Only work that cannot move"
-          >
-            Blocked
-          </FilterChip>
-          <FilterChip
-            pressed={filters.overdue}
-            onClick={() => setOverdue(filters.overdue ? "" : "true")}
-            title="Only open work past its due date"
-          >
-            Overdue
-          </FilterChip>
-          {anyFilter(filters) && (
-            <Button
-              size="small"
-              variant="tertiary"
-              leadingIcon={<CloseGlyph size="sm" />}
-              onClick={clearFilters}
+            <Segmented
+              value={scope}
+              onChange={setScope}
+              ariaLabel="Open or closed"
+              options={[
+                { value: "open", label: "Open" },
+                { value: "closed", label: "Closed" },
+                { value: "", label: "All" },
+              ]}
+            />
+            <FilterChip
+              pressed={filters.blocked}
+              onClick={() => setBlocked(filters.blocked ? "" : "true")}
+              title="Only work that cannot move"
             >
-              Clear
-            </Button>
-          )}
+              Blocked
+            </FilterChip>
+            {/* NOT ON THE CALENDAR, for the same reason Group by is not: the
+              grammar has ONE `due` key and that shape's own axis is already
+              spending it on the grid's window, so this chip could be pressed and
+              answer nothing at all. Overdue work inside the window is tinted in
+              place, and the list is where the question is asked of the whole
+              backlog. */}
+            {shape !== "calendar" && (
+              <FilterChip
+                pressed={filters.overdue}
+                onClick={() => setOverdue(filters.overdue ? "" : "true")}
+                title="Only open work past its due date"
+              >
+                Overdue
+              </FilterChip>
+            )}
+            {anyFilter(filters) && (
+              <Button
+                size="small"
+                variant="tertiary"
+                leadingIcon={<CloseGlyph size="sm" />}
+                onClick={clearFilters}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
           <span className="work-summary">
             <Coverage answer={data} />
             {!loading && !error && (
               <span>
-                {plural(shown.length, "item")}{" "}
+                {countedLabel(shown.length, params)}{" "}
                 {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
               </span>
             )}
@@ -821,8 +858,15 @@ export function Work({ project = "" }: { project?: string }) {
               )}
             </QueryState>
 
-            {inTrash && <PurgeBand records={purges} now={now} />}
-            <ActivityFeed records={feed.data?.records ?? []} now={now} />
+            {inTrash && (
+              <PurgeBand records={purges} answer={tombstones.data ?? undefined} now={now} />
+            )}
+            <ActivityFeed
+              records={feed.data?.records ?? []}
+              answer={feed.data ?? undefined}
+              now={now}
+              chrome={chrome}
+            />
           </div>
         </div>
 
@@ -909,7 +953,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
   // feed is ordered by the LOG, so a change that moved nothing still shows.
   const feed = useQuery(
     "work_activity",
-    { container: `project:${projectKey}`, limit: 8 },
+    { container: `project:${projectKey}`, limit: FEED_PAGE.rail },
     { enabled: projectKey !== "", pollMs: 60_000 },
   );
 
@@ -1009,7 +1053,14 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                   // A NULL COUNT IS NO COUNT, which is the read still being in
                   // flight rather than a feed with nothing in it. Theirs takes
                   // `undefined` for that, so the null is converted here.
-                  count={feed.data ? records.length : undefined}
+                  //
+                  // AND A COUNT THAT ANSWERED IS A COUNT OF THIS PAGE: the rail
+                  // asks for FEED_PAGE.rail commits, so the bare length was that
+                  // constant on every project busier than it. See [pageCount].
+                  count={feed.data ? pageCount(records.length, !!feed.data.next_cursor) : undefined}
+                  subtitle={
+                    pageNote(records.length, !!feed.data?.next_cursor, "change") || undefined
+                  }
                 >
                   <Card.Title>Recent activity</Card.Title>
                 </Card.Header>
@@ -1036,7 +1087,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                               </span>
                             </div>
                             <span className="t-caption truncate">
-                              {describeChange(record)} · {record.actor || "the engine"}
+                              {describeChange(record, chrome)} · {record.actor || "the engine"}
                             </span>
                           </div>
                         ))}
@@ -1628,7 +1679,6 @@ export function CalendarView({
   onToday: () => void;
 }) {
   const buckets = useMemo(() => bucketByDay(rows), [rows]);
-  const undated = rows.length - [...buckets.values()].flat().length;
   return (
     <Card padding="none">
       <div className="work-cal">
@@ -1670,7 +1720,16 @@ export function CalendarView({
                 className={`work-cal-cell${cell.inMonth ? "" : " out"}${cell.today ? " today" : ""}`}
                 key={cell.key}
               >
-                <span className="work-cal-day">{cell.day}</span>
+                {/* THE SAME FACT THE TINT CARRIES, IN WORDS. Which month a
+                    cell belongs to is a ground and an ink, and two cells of one
+                    grid can hold the same numeral — April 2031 runs 31 March to
+                    4 May, so `1` and `4` each appear twice — so the date is
+                    spoken in full and the numeral is left to the eye. `sr-only`
+                    is out of flow, so it adds no gap to the column. */}
+                <span className="sr-only">{dayLabel(cell.key)}</span>
+                <span className="work-cal-day" aria-hidden="true">
+                  {cell.day}
+                </span>
                 {shownChips.map((row) => (
                   <a
                     key={row.id}
@@ -1705,10 +1764,22 @@ export function CalendarView({
         {/* THERE IS NO `due=null` IN THE GRAMMAR, so the count of undated work
             is what this answer happens to carry rather than the company's. It
             is said all the same: a reader who cannot see the omission reads
-            the month as the whole backlog. */}
+            the month as the whole backlog.
+
+            WHAT THIS GRID IS NOT SHOWING IS TWO SETS rather than one:
+            [buildItemsParams] bounds the fetch to these days, so work due
+            OUTSIDE them is missing as well as work with no due date at all.
+            Stated unconditionally, because neither count is ours to give —
+            `due=range:` compiles to `due_at IS NOT NULL AND due_at >= ? AND
+            due_at < ?`, so neither set is in this answer and the grammar has no
+            `due=null` to ask for one. This counted the undated rows ON THE PAGE
+            and printed the number when it was positive: it never was, and never
+            could be, so the sentence a reader needed was the one that never
+            rendered. The toolbar's count says the same thing from the other end
+            — see [countedLabel]. */}
         <div className="work-cal-note">
-          Only work with a due date appears here — the list shows the rest.
-          {undated > 0 ? ` ${undated} of the items on this page carry no due date.` : ""}
+          Only work due in this window appears here. Work with no due date, and work due outside
+          these days, is on the list.
         </div>
       </div>
     </Card>
@@ -1742,14 +1813,33 @@ export function CalendarView({
  * whatever the entry itself holds: a purged task has no row for the feed to
  * resolve a key against, which is exactly the point.
  */
-function PurgeBand({ records, now }: { records: WorkActivityRecord[]; now: number }) {
+/**
+ * `records` are the purges; `answer` is the page they were filtered OUT of.
+ * Both, because the cap is the answer's: a tombstone page spent on removals and
+ * restores can end before the older purges do, and a band counting only its own
+ * subset would report that page boundary as the number of purges this company
+ * has ever made.
+ */
+function PurgeBand({
+  records,
+  answer,
+  now,
+}: {
+  records: WorkActivityRecord[];
+  answer?: WorkActivityAnswer;
+  now: number;
+}) {
   if (records.length === 0) return null;
+  const more = !!answer?.next_cursor;
   return (
     <Card padding="none">
       <Card.Header
         icon={<DeleteGlyph size="sm" />}
-        count={records.length}
-        subtitle="A purge destroys the rows. These cannot be restored — what survives is that it happened, to which key, by whom, and the reason the operator gave."
+        count={pageCount(records.length, more)}
+        subtitle={
+          "A purge destroys the rows. These cannot be restored — what survives is that it happened, to which key, by whom, and the reason the operator gave." +
+          (more ? " Older purges exist beyond this page of the history." : "")
+        }
       >
         <Card.Title>Purged</Card.Title>
       </Card.Header>
@@ -1769,7 +1859,15 @@ function PurgeBand({ records, now }: { records: WorkActivityRecord[]; now: numbe
                 because there is no task row left to resolve one from. */}
             {record.subject_key || <EmptyValue label="No key recorded" />}
           </span>
-          <span className="work-feed-what truncate">{record.excerpt || "purged"}</span>
+          {/* FLATTENED LIKE THE FEED'S. The same record reaches both this band
+              and the activity feed below it, and an excerpt rendered two ways on
+              one screen is the drift a shared helper exists to stop. The
+              operator's own reason is free text, so it can carry markdown too;
+              one that is only a rule or whitespace flattens to "" and falls
+              through to the word rather than drawing an empty cell. */}
+          <span className="work-feed-what truncate">
+            {plainText(record.excerpt ?? "") || "purged"}
+          </span>
           <span className="work-feed-who">{record.actor || "the engine"}</span>
         </div>
       ))}
@@ -1777,11 +1875,87 @@ function PurgeBand({ records, now }: { records: WorkActivityRecord[]; now: numbe
   );
 }
 
-export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; now: number }) {
+/**
+ * How much of the log each activity read on this screen asks for.
+ *
+ * NAMED, WITH REASONS, because a page size is what a count MEANS here: these
+ * cards draw `records.length`, so on any company busier than these numbers the
+ * figure a reader sees is this constant. That is honest only because the count
+ * now says `+` when the page was capped — see [pageCount].
+ *
+ * The engine's own maximum for one page is 200 (`tracker.MaxActivityRows`) and
+ * the audit screen takes all of it, because that screen IS the record. Two of
+ * these are companions to something else on the page and are sized to the room
+ * they have; the third is not decoration at all.
+ *
+ *  - `board` — the last block on a scrolling board: a screenful of one-line
+ *    rows, re-read once a minute. A board is read, not watched.
+ *  - `rail` — above the fold in a project's rail, beside a census and three
+ *    other cards: a glance, not a page.
+ *  - `trash` — THE ENGINE'S MAXIMUM, and load-bearing. The trash grid asks for
+ *    100 rows (`buildItemsParams`) and resolves each row's "Removed" and
+ *    "Removed by" out of THIS page, so a restore or a purge on it is budget
+ *    spent on a row the grid is not showing. At 100 the page could not cover a
+ *    full grid page even in principle, and the surplus rows drew "its removal is
+ *    older than the loaded history" on an ordinary, recent trash. 200 is the
+ *    most one read can ask for and still cannot guarantee it — which is why that
+ *    dash stays, and why the band's count carries the `+`.
+ */
+const FEED_PAGE = { board: 20, rail: 8, trash: 200 } as const;
+
+/**
+ * THE WHOLE ANSWER, not its rows. The count, the note and the coverage line are
+ * three readings of one read, and a component handed only `records` can state
+ * none of them — which is how this card came to draw its own page size as though
+ * it were the company's history.
+ */
+export function ActivityFeed({
+  records,
+  answer,
+  now,
+  chrome = {},
+}: {
+  records: WorkActivityRecord[];
+  /** The answer those rows came out of, where the caller holds one. */
+  answer?: WorkActivityAnswer;
+  now: number;
+  /** The company's own words for a status, a type, a tag and a handle. A feed
+   *  row's delta is stored as the LOG's text — `in_review`, a bare handle, a
+   *  whole RFC3339 instant — and this is what turns it into what the rest of the
+   *  product says. */
+  chrome?: RowChrome;
+}) {
   if (records.length === 0) return null;
   return (
     <Card padding="none">
-      <Card.Header icon={<TimelineGlyph size="sm" />} count={records.length}>
+      <Card.Header
+        icon={<TimelineGlyph size="sm" />}
+        // A NON-EMPTY CURSOR IS THE ENGINE'S OWN "there is at least one more":
+        // `readActivity` asks for limit+1 rows and mints a cursor only when the
+        // extra one came back. Never derived from `records.length === limit`,
+        // which is wrong on the boundary in both directions.
+        count={pageCount(records.length, !!answer?.next_cursor)}
+        // TWO DIFFERENT FACTS, and never one figure. `next_cursor` is a page
+        // boundary, which a reader resolves by looking further back. `complete`
+        // is the state-log read's COVERAGE verdict — this node holds records it
+        // cannot DECODE covering this feed — which a reader resolves with a build
+        // that can read them. Folded into the count, a decode gap would be
+        // reported as "there are more rows" and send somebody scrolling for
+        // commits that are not missing.
+        //
+        // `|| undefined`, never `""`: an empty subtitle still renders its own
+        // element.
+        subtitle={
+          [
+            pageNote(records.length, !!answer?.next_cursor, "change"),
+            answer?.complete === false
+              ? "This node holds records it cannot read, so changes may be missing from this list."
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
+      >
         <Card.Title>Recent activity</Card.Title>
       </Card.Header>
       {records.map((record) => (
@@ -1801,7 +1975,7 @@ export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; 
               <EmptyValue label="No work item" />
             )}
           </span>
-          <span className="work-feed-what truncate">{describeChange(record)}</span>
+          <span className="work-feed-what truncate">{describeChange(record, chrome)}</span>
           <span className="work-feed-who">{record.actor || "the engine"}</span>
         </div>
       ))}

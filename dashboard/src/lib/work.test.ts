@@ -9,6 +9,9 @@
  */
 
 import { expect, test } from "vitest";
+// THE ONE MARK, from the design system rather than re-spelled here: a test
+// carrying its own copy of the glyph goes green on whatever is written.
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   TYPE_ICON,
   totalHint,
@@ -36,6 +39,12 @@ import {
   statusLabel,
   typeIcon,
   typeName,
+  type LabelContext,
+  countedLabel,
+  dayLabel,
+  monthOrNow,
+  pageCount,
+  pageNote,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -128,8 +137,8 @@ test("a type takes the company's own name for it", () => {
 // unsized task is one nobody has sized, which is the difference a sprint
 // report spends a whole column on.
 test("an absent estimate is a dash and a present one reads in hours", () => {
-  expect(fmtMinutes(undefined)).toBe("—");
-  expect(fmtMinutes(0)).toBe("—");
+  expect(fmtMinutes(undefined)).toBe(EMPTY_VALUE);
+  expect(fmtMinutes(0)).toBe(EMPTY_VALUE);
   expect(fmtMinutes(45)).toBe("45m");
   expect(fmtMinutes(90)).toBe("1h 30m");
   expect(fmtMinutes(480)).toBe("8h");
@@ -179,22 +188,109 @@ const record = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => (
 });
 
 test("a feed change renders its deltas, then its excerpt, then its kind", () => {
-  expect(describeChange(record({ fields: { status: { from: "todo", to: "in_progress" } } }))).toBe(
-    "status: todo → in_progress",
+  expect(
+    describeChange(record({ fields: { status: { from: "todo", to: "in_progress" } } }), {}),
+  ).toBe("Status: To do → In progress");
+  expect(describeChange(record({ kind: "comment", excerpt: "rolled back" }), {})).toBe(
+    "rolled back",
   );
-  expect(describeChange(record({ kind: "comment", excerpt: "rolled back" }))).toBe("rolled back");
-  expect(describeChange(record({ kind: "comment_resolved" }))).toBe("comment resolved");
+  expect(describeChange(record({ kind: "comment_resolved" }), {})).toBe("comment resolved");
 });
 
-// AN EMPTY SIDE IS A DASH on either end: "assignee:  → ada" reads as a
-// rendering bug, where "assignee: — → ada" reads as an assignment.
+// AN EMPTY SIDE IS A DASH on either end: "Assignee:  → ada" reads as a
+// rendering bug, where `Assignee: ${EMPTY_VALUE} → ada` reads as an assignment.
 test("an empty side of a feed delta renders as a dash", () => {
-  expect(describeChange(record({ fields: { assignee: { from: "", to: "ada" } } }))).toBe(
-    "assignee: — → ada",
+  expect(describeChange(record({ fields: { assignee: { from: "", to: "ada" } } }), {})).toBe(
+    `Assignee: ${EMPTY_VALUE} → ada`,
   );
-  expect(describeChange(record({ fields: { assignee: { from: "ada", to: "" } } }))).toBe(
-    "assignee: ada → —",
+  expect(describeChange(record({ fields: { assignee: { from: "ada", to: "" } } }), {})).toBe(
+    `Assignee: ada → ${EMPTY_VALUE}`,
   );
+});
+
+// AN EXCERPT IS A CUT OF A MARKDOWN BODY, and this string is drawn in a one-line
+// cell. Returned raw it printed the source: "## Understanding the work This task
+// is to interview…", hashes and all.
+test("a change's excerpt is the prose it renders to, not its markdown", () => {
+  expect(
+    describeChange(
+      record({
+        kind: "created",
+        excerpt: "## Understanding the work\n\nInterview three **desks**.",
+      }),
+      {},
+    ),
+  ).toBe("Understanding the work Interview three desks.");
+  expect(
+    describeChange(record({ kind: "comment", excerpt: "see [the guide](https://x.example)" }), {}),
+  ).toBe("see the guide");
+});
+
+// AND A HISTORY ENTRY DOES NOT QUOTE THE THREAD AT ALL. The excerpt of a comment
+// IS the comment body, so the History tab printed the Thread tab back one
+// clipped line at a time and the row never said what the change WAS. The feed
+// above keeps its excerpt rung — a cross-item feed has no thread beside it — and
+// this one names the kind instead.
+test("a history entry says what the change was, and never quotes it", () => {
+  expect(describeHistory(change({ kind: "comment", excerpt: "shipped it" }), {})).toBe("commented");
+  expect(describeHistory(change({ kind: "watchers" }), {})).toBe("changed the watchers");
+  // A KIND THIS BUILD HAS NEVER HEARD OF still renders as itself: a rolling
+  // upgrade puts a newer peer's kinds on the wire.
+  expect(describeHistory(change({ kind: "watcher_added" }), {})).toBe("watcher added");
+});
+
+// A HISTORY LINE SPEAKS THE READER'S LANGUAGE, NOT THE LOG'S.
+//
+// The engine stores `in_review`, a handle and a whole RFC3339 instant, while the
+// same page's header chip says "In review", its assignee chip says the seat's
+// name and its Due row says "Sep 19, 2026". The history was the one surface in
+// the product printing the stored form, six inches under the rail printing the
+// other.
+test("a history entry renders every field in the reader's own vocabulary", () => {
+  const ctx: LabelContext = {
+    seatName: (h) => (h === "frontend-engineer" ? "Frontend Engineer" : h),
+  };
+  expect(
+    describeHistory(
+      change({
+        fields: {
+          status: { from: "todo", to: "in_review" },
+          assignee: { from: "", to: "frontend-engineer" },
+          due: { from: "", to: "2026-09-19T00:00:00Z" },
+        },
+      }),
+      ctx,
+    ),
+  ).toBe(
+    `Status: To do → In review, Assignee: ${EMPTY_VALUE} → Frontend Engineer, ` +
+      `Due: ${EMPTY_VALUE} → Sep 19, 2026`,
+  );
+});
+
+// AND A DELTA NEVER RENDERS AS NO CHANGE. `internal/tracker/wake.go` compares
+// the WHOLE instant precisely so that moving a due time inside one day is a
+// change at all; printed as a day, both sides read "Sep 19, 2026" and the line
+// claims a field moved to where it already was.
+test("a due-time move inside one day renders the time on both sides", () => {
+  const said = describeHistory(
+    change({ fields: { due: { from: "2026-09-19T07:00:00Z", to: "2026-09-19T15:00:00Z" } } }),
+    {},
+  );
+  expect(said).toContain("09:00");
+  expect(said).toContain("17:00");
+});
+
+test("a delta takes the project's own label and the project's own tag name", () => {
+  expect(
+    describeHistory(change({ fields: { status: { from: "todo", to: "done" } } }), {
+      statuses: [{ status: "done", label: "Shipped", group: "done", description: "" }],
+    }),
+  ).toBe("Status: To do → Shipped");
+  expect(
+    describeHistory(change({ fields: { tags: { from: "", to: "p1" } } }), {
+      tags: [{ slug: "p1", label: "Priority one" }],
+    }),
+  ).toBe(`Tags: ${EMPTY_VALUE} → Priority one`);
 });
 
 const change = (over: Partial<WorkChange> = {}): WorkChange => ({
@@ -210,14 +306,12 @@ const change = (over: Partial<WorkChange> = {}): WorkChange => ({
 // where it can compare two documents, and the notification's own values —
 // plain scalars — where it cannot, which is every comment, mention and ask.
 test("a history entry renders a delta pair and a bare value alike", () => {
-  expect(describeHistory(change({ fields: { status: { from: "todo", to: "done" } } }))).toBe(
-    "status: todo → done",
+  expect(describeHistory(change({ fields: { status: { from: "todo", to: "done" } } }), {})).toBe(
+    "Status: To do → Done",
   );
-  expect(describeHistory(change({ kind: "comment", fields: { mentions: ["ada", "bo"] } }))).toBe(
-    "mentions: ada, bo",
-  );
-  expect(describeHistory(change({ kind: "watcher_added" }))).toBe("watcher added");
-  expect(describeHistory(change({ kind: "comment", excerpt: "shipped it" }))).toBe("shipped it");
+  expect(
+    describeHistory(change({ kind: "comment", fields: { mentions: ["ada", "bo"] } }), {}),
+  ).toBe("Mentions: ada, bo");
 });
 
 // ---------------------------------------------------------------------------
@@ -268,7 +362,9 @@ test("a number wears its declared unit and a checkbox reads as a word", () => {
 // AN UNSET FIELD IS A DASH. Rendering `null` as "null" is the shape that makes
 // a properties panel look broken on every task that did not set a field.
 test("an unset value is an em dash", () => {
-  expect(fieldValueText(value({ id: "f-eff", type: "number", value: null }), defs)).toBe("—");
+  expect(fieldValueText(value({ id: "f-eff", type: "number", value: null }), defs)).toBe(
+    EMPTY_VALUE,
+  );
 });
 
 test("a people field resolves each handle to a name", () => {
@@ -740,4 +836,105 @@ test("the total hint is silent when it repeats what is on screen", () => {
 // of rows on screen can imply.
 test("a capped count says so even when every row is on screen", () => {
   expect(totalHint(10000, 10000, true)).toBe("of 10000+ matching");
+});
+
+// ---------------------------------------------------------------------------
+// What a count is a count OF
+// ---------------------------------------------------------------------------
+
+// FOUR SHAPES DRAW THIS INDICATOR over the same question and the calendar does
+// not: its fetch is bounded to the grid's days, so under identical filters it
+// counted six where the list counted seventeen, in the same corner of the same
+// bar in the same words. `total_hint` cannot cover it — the engine counts it
+// over the same predicate as the rows, so it equals the row count and
+// `totalHint` correctly falls silent.
+test("a count over a windowed question says which window it counted", () => {
+  expect(countedLabel(17, {})).toBe("17 items");
+  expect(countedLabel(1, {})).toBe("1 item");
+  // THE ROUND TRIP, so the two sides cannot drift: the sentence is derived from
+  // the params that were actually sent.
+  const windowed = buildItemsParams({
+    container: "project:ENG",
+    shape: "calendar",
+    view: {},
+    filters: NO_FILTERS,
+    range: { from: "2031-03-31", to: "2031-05-05" },
+  });
+  expect(countedLabel(6, windowed)).toBe("6 items due in this window");
+});
+
+// THE GRAMMAR HAS ONE `due` KEY, and the calendar's own axis is already spending
+// it — so the Overdue chip could be pressed and narrow nothing at all.
+test("the calendar's window wins the one due key, and never leaves it unset", () => {
+  const range = { from: "2031-03-31", to: "2031-05-05" };
+  const pressed = buildItemsParams({
+    container: "project:ENG",
+    shape: "calendar",
+    view: {},
+    filters: { ...NO_FILTERS, overdue: true },
+    range,
+  });
+  expect(pressed.due).toBe("range:2031-03-31..2031-05-05");
+  // AND NO WINDOW MEANS NO CALENDAR QUESTION: `sort=due` over the whole backlog
+  // returns the five hundred soonest-due tasks in the company, which the grid
+  // cannot draw and the toolbar would count as if the reader had asked for them.
+  const unwindowed = buildItemsParams({
+    container: "project:ENG",
+    shape: "calendar",
+    view: {},
+    filters: { ...NO_FILTERS, overdue: true },
+  });
+  expect(unwindowed.due).toBeUndefined();
+});
+
+// A MONTH THE ADDRESS BAR MANGLED FALLS BACK TO THE READER'S OWN. `calendarWeeks`
+// over an unparseable one returns NO WEEKS: `Number` gives `NaN`, `??` does not
+// catch `NaN`, the cell count is `NaN` and the loop never runs — which takes
+// `buildItemsParams` down the calendar branch with no range at all.
+test("a month the address bar mangled falls back to the reader's own", () => {
+  const now = Date.parse("2031-04-16T12:00:00Z");
+  expect(monthOrNow("2031-04", now)).toBe("2031-04");
+  expect(monthOrNow("oops", now)).toBe(monthOf(now));
+  expect(monthOrNow("2031-13", now)).toBe(monthOf(now));
+  expect(monthOrNow("", now)).toBe(monthOf(now));
+  // WHY the guard exists, rather than tidiness.
+  expect(calendarWeeks("oops", "")).toHaveLength(0);
+});
+
+// A CELL'S DATE IS SAID IN FULL, because the grid's own answer to "which month
+// is this" is a colour. Asserted without naming a month: the locale is the
+// reader's and a literal would pin the suite to the runner's.
+test("a day's label carries more than the numeral, and separates repeated ones", () => {
+  expect(dayLabel("2031-03-31")).toContain("31");
+  expect(dayLabel("2031-03-31")).not.toBe("31");
+  // April 2031's grid holds 1 April and 1 May. Same numeral, two cells.
+  expect(dayLabel("2031-04-01")).not.toBe(dayLabel("2031-05-01"));
+  // And it is the browser's calendar, like the cells it labels — never a UTC
+  // instant, which shifts a day west of Greenwich.
+  expect(dayLabel("2031-03-31")).toBe(
+    new Date(2031, 2, 31).toLocaleDateString(undefined, {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }),
+  );
+});
+
+// A COUNT OVER ONE PAGE SAYS WHETHER THE PAGE IS THE WHOLE OF IT. The card draws
+// this string verbatim, so the `+` is the entire claim.
+test("a count over one page says whether the page is the whole of it", () => {
+  expect(pageCount(3, false)).toBe("3");
+  expect(pageCount(20, true)).toBe("20+");
+});
+
+test("a page that is the whole set says nothing at all", () => {
+  // Not "and that is all of them": a note that always drew is a note nobody
+  // reads by the time it matters.
+  expect(pageNote(3, false, "change")).toBe("");
+});
+
+test("a capped page names what it is the newest of, agreeing with its noun", () => {
+  expect(pageNote(20, true, "change")).toBe("The newest 20 changes; there are more.");
+  expect(pageNote(1, true, "change")).toBe("The newest 1 change; there are more.");
 });

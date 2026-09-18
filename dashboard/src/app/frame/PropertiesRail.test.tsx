@@ -10,6 +10,7 @@
 
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 
 import { PropertiesRail } from "./PropertiesRail.tsx";
 
@@ -31,8 +32,11 @@ describe("an absent property", () => {
         groups={[{ properties: [{ label: "Due" }, { label: "Start", value: undefined }] }]}
       />,
     );
-    expect(valueOf("Due")).toBe("—");
-    expect(valueOf("Start")).toBe("—");
+    // The mark plus the sentence that says WHICH absence it is, which is what
+    // the product draws everywhere now — a bare em dash in a `.muted` span said
+    // nothing at all to a reader who could not hover it.
+    expect(valueOf("Due")).toBe(`${EMPTY_VALUE}Not set`);
+    expect(valueOf("Start")).toBe(`${EMPTY_VALUE}Not set`);
   });
 
   test("is simply not there when the caller leaves the row out", () => {

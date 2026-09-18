@@ -54,7 +54,7 @@ import {
 // and six history entries to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import { DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
@@ -389,16 +389,24 @@ export function Spend() {
           icon={<ArrowForwardGlyph size="xs" />}
           label="Input / output"
           value={
-            tokens
-              ? `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
-              : "—"
+            tokens ? (
+              `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
+            ) : (
+              <EmptyValue label="Not counted yet" />
+            )
           }
           sub="input includes any cached prefix, as the provider reports it"
         />
         <StatCard
           icon={<ScheduleGlyph size="xs" />}
           label="Counted through"
-          value={tokens?.aggregated_through ? relTime(tokens.aggregated_through, now) : "—"}
+          value={
+            tokens?.aggregated_through ? (
+              relTime(tokens.aggregated_through, now)
+            ) : (
+              <EmptyValue label="Nothing has been counted yet" />
+            )
+          }
           sub={
             tokens?.aggregated_through
               ? fmtDateTime(tokens.aggregated_through)
@@ -575,7 +583,7 @@ export function Spend() {
                 a.calls > 0 ? (
                   <TokenCell value={Math.round(a.total_tokens / a.calls)} />
                 ) : (
-                  <Dash title="no calls to average over" />
+                  <EmptyValue label="No calls to average over" />
                 ),
             },
           ]}

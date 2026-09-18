@@ -10,8 +10,8 @@
 
 import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import { Burndown, SprintPanel, Velocity } from "./Sprints.tsx";
-import { describeChange } from "~/lib/work.ts";
 import { ProjectHead } from "./Work.tsx";
 import type { WorkBurndown, WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
 import type { ReactElement } from "react";
@@ -65,7 +65,7 @@ test("an assignee with no declared capacity renders an em-dash", () => {
       })}
     />,
   );
-  expect(screen.getByText("—")).toBeTruthy();
+  expect(screen.getByText(EMPTY_VALUE)).toBeTruthy();
   expect(document.querySelector(".table .meter-fill")).toBeNull();
 });
 
@@ -100,7 +100,7 @@ test("a declared capacity somebody is over is marked as such", () => {
   expect(fill).toBeTruthy();
   expect(fill?.getAttribute("data-tone")).toBe("critical");
   expect(screen.getByText("8 / 21")).toBeTruthy();
-  expect(screen.queryByText("—")).toBeNull();
+  expect(screen.queryByText(EMPTY_VALUE)).toBeNull();
 });
 
 // THE MEASURE IS RENDERED, because a bare "20" is points to one team and
@@ -210,107 +210,14 @@ test("no overview is drawn before the answer arrives", () => {
   expect(container.textContent).toBe("");
 });
 
-// A CHANGE IS RENDERED FROM ITS DELTAS, because "todo → in_progress" is what
-// every reader of one wants and the kind alone does not say it.
-test("a change with deltas renders them", () => {
-  expect(
-    describeChange({
-      id: "r",
-      log_seq: 1,
-      log_stream: "s",
-      log_generation: 1,
-      at: "2031-04-16T00:00:00Z",
-      effective_at: "2031-04-16T00:00:00Z",
-      kind: "status",
-      subject_kind: "task",
-      subject_id: "t",
-      notified: true,
-      fields: { status: { from: "todo", to: "in_progress" } },
-    }),
-  ).toBe("status: todo → in_progress");
-});
-
-// AN EMPTY SIDE RENDERS AS AN EM-DASH rather than as nothing: "assignee:  →
-// ada" reads as a rendering bug, where "assignee: — → ada" reads as an
-// assignment.
-test("an empty side of a delta renders as a dash", () => {
-  expect(
-    describeChange({
-      id: "r",
-      log_seq: 1,
-      log_stream: "s",
-      log_generation: 1,
-      at: "2031-04-16T00:00:00Z",
-      effective_at: "2031-04-16T00:00:00Z",
-      kind: "assignee",
-      subject_kind: "task",
-      subject_id: "t",
-      notified: true,
-      fields: { assignee: { from: "", to: "ada" } },
-    }),
-  ).toBe("assignee: — → ada");
-});
-
-// A REMOVAL RENDERS AS A DASH ON THE OTHER SIDE TOO — "assignee: ada → " is
-// the same rendering bug read from the other end, where "ada → —" is somebody
-// being taken off a task.
-test("a cleared value renders as a dash", () => {
-  expect(
-    describeChange({
-      id: "r",
-      log_seq: 1,
-      log_stream: "s",
-      log_generation: 1,
-      at: "2031-04-16T00:00:00Z",
-      effective_at: "2031-04-16T00:00:00Z",
-      kind: "assignee",
-      subject_kind: "task",
-      subject_id: "t",
-      notified: true,
-      fields: { assignee: { from: "ada", to: "" } },
-    }),
-  ).toBe("assignee: ada → —");
-});
-
-// A COMMENT HAS NO DELTAS AND IS THE THING MOST WORTH READING, so the excerpt
-// is what a feed shows for it — the kind alone says only that somebody spoke.
-test("a change with no deltas renders its excerpt", () => {
-  expect(
-    describeChange({
-      id: "r",
-      log_seq: 1,
-      log_stream: "s",
-      log_generation: 1,
-      at: "2031-04-16T00:00:00Z",
-      effective_at: "2031-04-16T00:00:00Z",
-      kind: "comment",
-      subject_kind: "task",
-      subject_id: "t",
-      notified: true,
-      excerpt: "rolled back, the migration was the cause",
-    }),
-  ).toBe("rolled back, the migration was the cause");
-});
-
-// AND A CHANGE WITH NEITHER DELTAS NOR AN EXCERPT IS STILL A CHANGE. Rendered
-// blank it would look like a rendering bug where it is a real commit — a
-// watcher added, a rank moved — so the kind is the last resort.
-test("a change with nothing to show falls back to its kind", () => {
-  expect(
-    describeChange({
-      id: "r",
-      log_seq: 1,
-      log_stream: "s",
-      log_generation: 1,
-      at: "2031-04-16T00:00:00Z",
-      effective_at: "2031-04-16T00:00:00Z",
-      kind: "comment_resolved",
-      subject_kind: "task",
-      subject_id: "t",
-      notified: false,
-    }),
-  ).toBe("comment resolved");
-});
+// THE FIVE `describeChange` CASES THAT WERE HERE ARE IN `lib/work.test.ts`.
+//
+// They were exact duplicates of that suite's — deltas, an empty from, an empty
+// to, an excerpt, a bare kind — stranded in a file whose component never calls
+// the function, which is the "the sprint report came to import a change renderer
+// from the board" problem `lib/work.ts`'s own doc was written against. Nothing
+// is lost: every one of them is asserted beside the function it is about, where
+// the reader's own vocabulary is asserted too.
 
 // ---------------------------------------------------------------------------
 // The burndown

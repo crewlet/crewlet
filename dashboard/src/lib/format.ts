@@ -10,6 +10,15 @@
  * through `tsKey`, never through `<` on the string.
  */
 
+// THE MARK AN ABSENT VALUE WEARS IS THE DESIGN SYSTEM'S, not a literal here.
+// This file owns how a value is SPELLED, and "there is no value" is one of
+// those spellings — written as a local EMPTY_VALUE it was a SECOND mark beside
+// `EmptyValue`'s en dash, and the work trash screen drew both at once: a 12px
+// em dash in the table's DUE column and a 6px en dash in the activity feed's
+// object column, one fact and two glyphs in one viewport. Importing the
+// constant rather than the component keeps this module free of React, which is
+// what lets it stay a leaf every screen and every test can reach.
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import { dates, zone } from "./prefs.ts";
 
 /** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
@@ -107,7 +116,7 @@ export function fmtTime(ts: string | null | undefined): string {
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
-  if (!d) return "—";
+  if (!d) return EMPTY_VALUE;
   return d.toLocaleString(dateLocale(), {
     ...dateParts(),
     hour: "2-digit",
@@ -120,7 +129,7 @@ export function fmtDateTime(ts: string | null | undefined): string {
 
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
-  if (!d) return "—";
+  if (!d) return EMPTY_VALUE;
   return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
 }
 
@@ -135,7 +144,7 @@ export function fmtDate(ts: string | null | undefined): string {
  */
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
-  if (!d) return "—";
+  if (!d) return EMPTY_VALUE;
   return d.toLocaleString(dateLocale(), {
     ...dateParts(),
     hour: "2-digit",
@@ -159,7 +168,7 @@ export function fmtMinute(ts: string | null | undefined): string {
  */
 export function fmtDateCompact(ts: string | null | undefined, now: number): string {
   const d = parseUTC(ts);
-  if (!d) return "—";
+  if (!d) return EMPTY_VALUE;
   // BOTH YEARS READ IN THE VIEWER'S ZONE, and the date rendered in it. This
   // read the browser's calendar on both counts while every other formatter in
   // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
@@ -192,7 +201,7 @@ function calendarYear(at: Date): string {
  */
 export function relTime(ts: string | null | undefined, now: number): string {
   const at = tsKey(ts);
-  if (!at) return "—";
+  if (!at) return EMPTY_VALUE;
   const secs = Math.round((now - at) / 1000);
   if (secs < 0) return inTime(ts, now);
   if (secs < 5) return "just now";
@@ -206,10 +215,24 @@ export function relTime(ts: string | null | undefined, now: number): string {
   return fmtDate(ts);
 }
 
-/** "in 4m" — the same rules, forward. */
+/**
+ * "in 4m" — the same rules as [relTime], forward, INCLUDING ITS TERMINUS.
+ *
+ * That last clause is what this did not have, while the comment above it claimed
+ * it did. Backwards, a relative reading stops counting days at thirty and prints
+ * the date; forwards it ran on for ever, so "in 341d" was the whole of what a
+ * yearly schedule's next run said and a goal due next quarter had no date on its
+ * screen at all.
+ *
+ * A relative time is the better answer only while the reader can still hold the
+ * interval: past a month it is a subtraction against a calendar they cannot see,
+ * and the absolute date is both shorter and exact. The threshold is [relTime]'s
+ * own thirty days rather than a second number — a forward reading and a backward
+ * one that changed shape at different points would put two clocks on one screen.
+ */
 export function inTime(ts: string | null | undefined, now: number): string {
   const at = tsKey(ts);
-  if (!at) return "—";
+  if (!at) return EMPTY_VALUE;
   const secs = Math.round((at - now) / 1000);
   if (secs <= 0) return "due";
   if (secs < 60) return `in ${secs}s`;
@@ -217,12 +240,14 @@ export function inTime(ts: string | null | undefined, now: number): string {
   if (mins < 60) return `in ${mins}m`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `in ${hours}h`;
-  return `in ${Math.floor(hours / 24)}d`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `in ${days}d`;
+  return fmtDate(ts);
 }
 
 /** A duration in ms as the shortest honest string. */
 export function fmtDuration(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return EMPTY_VALUE;
   if (ms < 1000) return `${Math.round(ms)} ms`;
   const s = ms / 1000;
   if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
@@ -245,7 +270,7 @@ export function fmtDuration(ms: number | null | undefined): string {
  * "-1 s" or an "in 1s" is the one reading that is certainly wrong.
  */
 export function fmtElapsed(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms == null || !Number.isFinite(ms)) return EMPTY_VALUE;
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -314,7 +339,7 @@ export function browserDay(date: Date): string {
  * the digit they were looking at.
  */
 export function fmtCount(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return "—";
+  if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const abs = Math.abs(n);
   if (abs < 10_000) return n.toLocaleString();
   if (abs < 1_000_000) return `${(n / 1000).toFixed(abs < 100_000 ? 1 : 0)}k`;
@@ -324,16 +349,16 @@ export function fmtCount(n: number | null | undefined): string {
 
 /** Always the exact figure, grouped. For a cell a reader is comparing. */
 export function fmtExact(n: number | null | undefined): string {
-  return n == null || !Number.isFinite(n) ? "—" : n.toLocaleString();
+  return n == null || !Number.isFinite(n) ? EMPTY_VALUE : n.toLocaleString();
 }
 
 export function fmtPct(part: number, whole: number, digits = 0): string {
-  if (!whole) return "—";
+  if (!whole) return EMPTY_VALUE;
   return `${((part / whole) * 100).toFixed(digits)}%`;
 }
 
 export function fmtBytes(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return "—";
+  if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const units = ["B", "KB", "MB", "GB"];
   let v = n;
   let u = 0;

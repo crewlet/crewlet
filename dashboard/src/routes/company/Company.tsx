@@ -31,7 +31,6 @@
  */
 
 import { useMemo, type CSSProperties } from "react";
-import { plural } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import { StateBadge, Section } from "~/components/common.tsx";
 import { Avatar, Callout, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
@@ -53,7 +52,16 @@ import {
 // then has to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { indexOrg, seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
+import {
+  indexOrg,
+  seatPath,
+  unitSeatsLabel,
+  unitTally,
+  UNIT_TOTAL_HINT,
+  type OrgIndex,
+  type Seat,
+  type Unit,
+} from "~/lib/seats.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -163,6 +171,7 @@ function SubUnitLinks({ units }: { units: Unit[] }) {
  */
 function unitView(index: OrgIndex, unit: Unit): { seats: Seat[]; facts: Fact[] } {
   const seats = index.seats.filter((s) => s.unitChain.some((u) => u === unit));
+  const tally = unitTally(unit);
   // THE EFFECTIVE LEAD, which is the nearest ancestor's where this unit
   // declares none. It behaves identically everywhere in the engine, and hiding
   // the difference is how somebody concludes a team is unmanaged. The ENGINE
@@ -190,9 +199,17 @@ function unitView(index: OrgIndex, unit: Unit): { seats: Seat[]; facts: Fact[] }
         ),
         path: lead ? seatPath(lead) : undefined,
       },
-      { label: "Seats", value: seats.length },
-      { label: "Directly in it", value: unit.seats.length },
-      { label: "Sub-units", value: unit.children.length },
+      // ALL THREE OFF ONE TALLY. They were three separate expressions over two
+      // different trees — `seats.length` is a filter over every seat in the
+      // company, `unit.seats.length` is the unit's own list — and the rail and
+      // the org chart each computed a fourth and a fifth somewhere else. What
+      // made that a defect rather than duplication is that they DISAGREED in
+      // public: "Leadership 5" in the rail, "2 seats" on the chart block, a
+      // third figure on the roster, none of them saying which question it was
+      // the answer to.
+      { label: "Seats", value: tally.total, note: UNIT_TOTAL_HINT },
+      { label: "Directly in it", value: tally.direct },
+      { label: "Sub-units", value: tally.subUnits },
     ],
   };
 }
@@ -219,7 +236,7 @@ const NO_SEATS_HINT =
  * seat its `unit:` reference moved into this unit is a member here and is
  * marked as one, where the document wrote it above every unit.
  */
-function UnitBlock({ unit }: { unit: Unit }) {
+export function UnitBlock({ unit }: { unit: Unit }) {
   const lead = unit.effectiveLead;
   return (
     <div className="org-unit">
@@ -238,7 +255,13 @@ function UnitBlock({ unit }: { unit: Unit }) {
           </Tag>
         )}
         <span className="spacer" />
-        <span className="t-caption">{plural(unit.seats.length, "seat")}</span>
+        {/* THE SUBTREE FIRST, and the direct count only where the two differ —
+            which is what `unitSeatsLabel` decides, once, for every surface.
+            This drew `unit.seats.length` bare while the workspace rail drew
+            the SUBTREE bare under the same name, so Leadership was "2 seats"
+            here and "5" three inches to the left. A unit with no sub-units has
+            one honest number and still reads as one fact. */}
+        <span className="t-caption">{unitSeatsLabel(unitTally(unit))}</span>
       </div>
       {unit.purpose && <div className="t-caption measure">{unit.purpose}</div>}
       {unit.seats.length > 0 && (

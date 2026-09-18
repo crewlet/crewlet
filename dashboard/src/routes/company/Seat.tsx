@@ -89,13 +89,16 @@ import {
   indexOrg,
   llmChain,
   mcpEnvOf,
+  reportsCaption,
   seatPath,
+  seatReading,
   seatSettings,
   statusLine,
   afkReason,
   runState,
   type OrgIndex,
   type Seat,
+  type SeatReading,
   type SeatSettings,
 } from "~/lib/seats.ts";
 import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
@@ -119,10 +122,9 @@ import type {
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import {
-  Dash,
   DateCell,
   DurationCell,
   KeyCell,
@@ -131,6 +133,7 @@ import {
   TokenCell,
 } from "~/app/frame/cells.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
+import { usePageLabels } from "~/app/Shell.tsx";
 
 // THE KIND DECIDES THE SET, and the set decides what a `tab=` may resolve to.
 // Turns, Conversations, Memory and Cost are properties of a RUNTIME and a
@@ -321,14 +324,14 @@ function liveRow(agents: AgentRow[], handle: string, seat: Seat | null): AgentRo
 function seatFacts({
   seat,
   agent,
-  role,
+  reading,
   hierarchy,
   human,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  /** The seat's entry in the company document, where a token allowed reading it. */
-  role: ConfigRole | null;
+  /** What this reader can say about the seat's guarded half. See [seatReading]. */
+  reading: SeatReading;
   /** Whether the engine reported its derived hierarchy at all. */
   hierarchy: boolean;
   human: boolean;
@@ -364,16 +367,115 @@ function seatFacts({
       // THE FLATTENED CHAIN, in the order the fallback walks it, from the
       // GUARDED document: `llm:` is not on the anonymous org projection, so a
       // reader without a token is told the chain is unreadable rather than
-      // shown the default provider as though that were the setting. An empty
-      // array is truthy, which is why this is a length test rather than `||`.
+      // shown the default provider as though that were the setting.
+      //
+      // THE OUTCOME IS RESOLVED BEFORE IT REACHES HERE, by [seatReading],
+      // because a refusal, an absence and an unasked question are three
+      // different facts and a nullable role can only carry one of them. The
+      // words are [modelFact]'s.
       label: "Model",
-      value: human
-        ? ""
-        : !role
-          ? "needs an operator token"
-          : llmChain(role.llm).length > 0
-            ? llmChain(role.llm).join(" → ")
-            : "default provider",
+      value: human ? "" : modelFact(reading),
+    },
+  ];
+}
+
+/**
+ * The MODEL fact's words, one per outcome of the guarded read.
+ *
+ * `unread` IS THE EMPTY STRING, so [FactLine] drops the fact entirely — the
+ * same rule the Runtime row above follows for a human seat. A screen that has
+ * not asked has nothing to report about the chain, and every sentence it could
+ * print instead is a claim nothing on the wire supports: "unknown" says the
+ * engine failed to answer, an em dash says the field is empty, and "needs an
+ * operator token" says the reader is missing a credential they may be holding.
+ * That last one is what this used to print, on five of the eight tabs and in
+ * every peek.
+ */
+function modelFact(reading: SeatReading): string {
+  switch (reading.state) {
+    case "read": {
+      // AN EMPTY ARRAY IS TRUTHY, which is why this is a length test.
+      const chain = llmChain(reading.role.llm);
+      return chain.length > 0 ? chain.join(" → ") : "default provider";
+    }
+    case "absent":
+      return "not in the active revision";
+    case "refused":
+      return "needs an operator token";
+    case "unread":
+      return "";
+  }
+}
+
+/**
+ * Why the configured cap is not a number, as a clause completing "…could not be
+ * read: ".
+ *
+ * ONE SENTENCE PER OUTCOME, shared by the tile's note and the meter's callout so
+ * the two can never disagree about one seat. Both printed "needs an operator
+ * token" for every outcome that was not a value — a claim about the READER,
+ * wrong for a document still in flight and wrong for a revision whose roles do
+ * not name this seat.
+ */
+function capNote(reading: SeatReading): string {
+  switch (reading.state) {
+    case "read":
+      return "";
+    case "absent":
+      return "the active revision has no single seat by this name";
+    case "refused":
+      return "it needs an operator token";
+    case "unread":
+      return "it has not been read yet";
+  }
+}
+
+/**
+ * What the company document configures for this seat — and ONLY what can apply
+ * to it.
+ *
+ * THE MODEL ROWS ARE AN AGENT'S. `org.Role.humanForbidden` refuses `llm` and
+ * every per-phase chain on a human seat and `Organization.Validate` runs it over
+ * every role, so on a human seat those two rows can only ever draw their own
+ * fallbacks: "default provider" is a MODEL for a seat that runs none, and "none,
+ * reflection uses the default" is a reflection pass that never happens. Both
+ * read as a setting somebody chose, on the one card whose whole job is to say
+ * what was chosen.
+ *
+ * So they are DROPPED rather than drawn empty — the first of [PropertiesRail]'s
+ * three absences, and the same call [seatFacts], the tab strip and the peek
+ * already make: a row that cannot have content is not an empty state, it is a
+ * claim that the reader is missing something.
+ *
+ * EMAIL IS ON BOTH KINDS, and survives the same refusal: a human seat's address
+ * is indexed so work addressed to it resolves to the person.
+ */
+function configuredProperties(role: ConfigRole | null, human: boolean): Property[] {
+  const email: Property = { label: "Email", value: <ConfigValue value={role?.email} /> };
+  if (human) return [email];
+  // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or a per-phase mapping,
+  // so this is the flattened order the provider chain actually walks — and an
+  // empty ARRAY is truthy, which is why the fallback is an explicit length test
+  // rather than `||`.
+  const chain = llmChain(role?.llm);
+  const auxiliary = llmChain(role?.llm_auxiliary);
+  return [
+    email,
+    {
+      label: "Model",
+      value: chain.length ? (
+        <ModelChain keys={chain} />
+      ) : (
+        <span className="muted">default provider</span>
+      ),
+    },
+    {
+      label: "Auxiliary model",
+      value: auxiliary.length ? (
+        <ModelChain keys={auxiliary} />
+      ) : (
+        <span className="muted">none, reflection uses the default</span>
+      ),
     },
   ];
 }
@@ -402,6 +504,30 @@ export function SeatScreen({ handle }: { handle: string }) {
     [index],
   );
   const seat = findSeat(index, handle);
+  // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by. A handle is
+  // DERIVED from the name — `agent-cto` for "Chief Technology Officer" — so with
+  // nothing published the page bar read "Company / People / agent-cto" over a
+  // header titled with the name, and `Shell` titles the browser tab from the
+  // same trail, so a reader with four tabs open had four slugs. Everywhere else
+  // a seat is drawn by NAME with the handle beside it as the identifier:
+  // `SeatChip`, the People rows, `seatLookup`, and this screen's own
+  // `ObjectHeader`.
+  //
+  // NOT THE RULE `WorkItem` FOLLOWS, and the difference is what a person types.
+  // `ENG-42` is an address somebody reads out of chat and pastes, so that crumb
+  // spends itself on the key and leaves the title to the header. A handle is a
+  // routing slug the engine mints; nobody quotes one, so this crumb spends
+  // itself on the name.
+  //
+  // KEYED ON THE RAW SEGMENT rather than on `seat.handle`: `seatPath` addresses
+  // a seat the engine reported no handle for BY NAME, and `findSeat` also
+  // resolves a role name and a mis-cased handle, so the key has to be the string
+  // the URL actually carries or the lookup in `crumbsFor` misses.
+  //
+  // AND NOTHING AT ALL FOR A SEAT WITH NO NAME. `labels` falls back to the
+  // segment, which is an identifier a reader can still act on; publishing ""
+  // would put a blank crumb in the bar and title the tab " · Crewlet".
+  usePageLabels(seat?.name ? { [handle]: seat.name } : {});
 
   const human = seat?.kind === "human";
   // AFTER THE SEAT RESOLVES, because the tab set is a property of the seat's
@@ -425,10 +551,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   // The seat's own phase history. Its `live` half is deliberately NOT read:
   // the projection already pushes it onto the roster, and reading it here too
   // would give one screen two sources for one fact.
+  // NOT FOR A HUMAN SEAT. The Turns tab is not in its set and the overview tile
+  // this answer fed is gone with it, so the only thing left to ask for is a
+  // phase history the engine can never have written.
   const history = useQuery(
     "agent",
     { id: handle },
-    { enabled: tab === "overview" || tab === "turns" },
+    { enabled: !human && (tab === "overview" || tab === "turns") },
   );
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
   // WHAT THIS SEAT HAS SAID ON A SURFACE THE ENGINE DOES NOT OWN. The ledger
@@ -498,7 +627,12 @@ export function SeatScreen({ handle }: { handle: string }) {
   const turnList = useQuery(
     "turns",
     { role, limit: 50 },
-    { enabled: tab === "turns" && role !== "" },
+    // TWENTY SECONDS, the cadence `routes/activity/Turns.tsx` already gives the
+    // same question — a store aggregate with no push behind it. Asked once at
+    // mount, this table froze its iterations, tokens and running flag at
+    // whatever the turn looked like when the tab opened, beside cards that keep
+    // ticking; and the turn a reader opened the tab to watch was never in it.
+    { enabled: tab === "turns" && role !== "", pollMs: 20_000 },
   );
   const spend = useQuery(
     "tokens",
@@ -510,9 +644,22 @@ export function SeatScreen({ handle }: { handle: string }) {
   // anonymous org projection — `internal/api/orgprojection.go` spells out what
   // is, field by field, and everything else stays behind the operator token —
   // so this screen reads them from the company document.
-  const config = useQuery("config", undefined, {
-    enabled: !!seat && (tab === "overview" || tab === "cost" || tab === "access"),
-  });
+  // ...AND ON EVERY TAB, because the HEADER reads the model chain out of this
+  // same answer and renders above the strip on all eight of them. `enabled` is
+  // the guard for a question whose PARAMETER is not chosen yet; gating it on
+  // which panel is open made the object describe itself by what was below it,
+  // and the five tabs that did not ask rendered the absence as "needs an
+  // operator token" to a reader already holding one.
+  //
+  // Leaving the gate and having the header say nothing on those five tabs is
+  // the smaller change and it is the wrong one: a fact that appears on Overview
+  // and vanishes on Work is still a header that moves when the panel does. A
+  // header is a property of the OBJECT.
+  //
+  // It costs no extra asking either — it saves it. Toggling `enabled` re-runs
+  // the effect and clears the answer, so Overview → Work → Overview used to
+  // fetch the whole document twice.
+  const config = useQuery("config", undefined, { enabled: !!seat });
   // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL. `useQuery` keeps its last good
   // answer through a failed ask, which suits a poll and is wrong for a guarded
   // read: once a token is cleared or refused, the email, model, budget and
@@ -522,7 +669,11 @@ export function SeatScreen({ handle }: { handle: string }) {
     () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
     [seat, config.data, config.error],
   );
-  const configured = settings?.state === "found" ? settings.role : null;
+  // WHAT THIS READER CAN SAY ABOUT THE GUARDED HALF, as a named outcome rather
+  // than a nullable role: [seatReading] carries the four this screen has to tell
+  // apart, and `configured` is the one of them that holds a document.
+  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  const configured = reading.state === "read" ? reading.role : null;
   const credentials = useMemo(
     () => (settings && seat ? mcpEnvOf(settings, seat.kind) : {}),
     [settings, seat],
@@ -574,6 +725,15 @@ export function SeatScreen({ handle }: { handle: string }) {
   }, [history.data, phaseEvents, agent, role]);
 
   const turns = useMemo(() => groupTurns(phases), [phases]);
+  // THE ENGINE'S OWN ROW FOR EACH CARD. One turn, one set of figures: the card
+  // reads its start and its duration off the same record the table above draws,
+  // and falls back to its phases only where there is no row. They disagreed
+  // three ways — "started 6m ago" beside "running for 3m 15s", a length shorter
+  // than a phase inside it, and one word over two quantities.
+  const turnRows = useMemo(
+    () => new Map((turnList.data?.turns ?? []).map((t) => [t.turn_id, t])),
+    [turnList.data],
+  );
   const liveTurns = useMemo(() => turns.filter((g) => g.live), [turns]);
   const doneTurns = useMemo(() => turns.filter((g) => !g.live), [turns]);
   const liveTurnKeys = useMemo(() => liveTurns.map(seatTurnKey), [liveTurns]);
@@ -650,7 +810,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             <StateBadge agent={agent} sandboxes={sandboxes} />
           )
         }
-        facts={seatFacts({ seat, agent, role: configured, hierarchy: index.hierarchy, human })}
+        facts={seatFacts({ seat, agent, reading, hierarchy: index.hierarchy, human })}
       />
       <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
 
@@ -819,50 +979,82 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "overview" && (
           <>
-            {/* The flush Panel is gone: StatGroup draws that surface itself. */}
-            <StatGroup columns={4}>
+            {/* The flush Panel is gone: StatGroup draws that surface itself.
+
+                THE KIND DECIDES THE TILES, for the reason it decides the tab
+                set above. Spend and turns are measurements of a RUNTIME and a
+                human seat has none, so "Tokens — Nothing recorded" and "Turns in
+                the record — 0" were two measurements of a thing that cannot be
+                measured — and the second's caption points at a phase history
+                this kind's overview does not have. The column count goes with
+                them, because a fixed grid with two tiles missing is two holes
+                rather than a shorter row. */}
+            <StatGroup columns={human ? 2 : 4}>
               <StatCard
                 icon={<BoltGlyph size="xs" />}
                 label="State"
                 value={human ? "human" : state}
                 sub={statusLine(agent, { sandbox, seat })}
               />
-              <StatCard
-                icon={<TokenGlyph size="xs" />}
-                // THE WINDOW THE ROLLUP ITSELF REPORTS, never a second
-                // hardcoded one. This tile is fed by the PUSHED rollup —
-                // which is why Overview fires no query for it — and that
-                // covers `livestate.LiveSpendWindow`, currently a day. Under
-                // a literal "7d" it was a day's spend beneath a week's
-                // heading, disagreeing by a factor of several with the Cost
-                // tab's tile of the same name one click away. The engine
-                // states the window on the answer for exactly this reason,
-                // and refuses to relabel a rollup it did not take.
-                label={tokens ? `Tokens · ${spanWords(tokens.since, tokens.until)}` : "Tokens"}
-                value={
-                  seatSpend ? (
-                    fmtCount(seatSpend.total_tokens)
-                  ) : (
-                    <EmptyValue label="Nothing recorded" />
-                  )
-                }
-                sub={
-                  seatSpend ? `${seatSpend.calls.toLocaleString()} model calls` : "nothing recorded"
-                }
-              />
-              <StatCard
-                icon={<LayersGlyph size="xs" />}
-                label="Turns in the record"
-                // Zero is a MEASUREMENT — this seat has taken no turns — and
-                // an em dash would claim nobody looked.
-                value={turns.length}
-                sub="the phase history loaded below"
-              />
+              {!human && (
+                <StatCard
+                  icon={<TokenGlyph size="xs" />}
+                  // THE WINDOW THE ROLLUP ITSELF REPORTS, never a second
+                  // hardcoded one. This tile is fed by the PUSHED rollup —
+                  // which is why Overview fires no query for it — and that
+                  // covers `livestate.LiveSpendWindow`, currently a day. Under
+                  // a literal "7d" it was a day's spend beneath a week's
+                  // heading, disagreeing by a factor of several with the Cost
+                  // tab's tile of the same name one click away. The engine
+                  // states the window on the answer for exactly this reason,
+                  // and refuses to relabel a rollup it did not take.
+                  label={tokens ? `Tokens · ${spanWords(tokens.since, tokens.until)}` : "Tokens"}
+                  value={
+                    seatSpend ? (
+                      fmtCount(seatSpend.total_tokens)
+                    ) : (
+                      <EmptyValue label="Nothing recorded" />
+                    )
+                  }
+                  sub={
+                    seatSpend
+                      ? `${seatSpend.calls.toLocaleString()} model calls`
+                      : "nothing recorded"
+                  }
+                />
+              )}
+              {!human && (
+                <StatCard
+                  icon={<LayersGlyph size="xs" />}
+                  label="Turns in the record"
+                  // Zero is a MEASUREMENT — this seat has taken no turns — and
+                  // an em dash would claim nobody looked.
+                  value={turns.length}
+                  sub="the phase history loaded below"
+                />
+              )}
               <StatCard
                 icon={<GroupGlyph size="xs" />}
                 label="Direct reports"
-                value={reports.length}
-                sub={manager ? `reports to ${manager.name}` : "no manager in the chart"}
+                // THE CAPTION IS THIS NUMBER'S FOOTNOTE, so it breaks this
+                // number down. It read "reports to <manager>" — who manages this
+                // seat, under a count of who this seat manages — so one tile
+                // carried two opposite relations, and the manager is a header
+                // fact and a "Who this is" row already.
+                //
+                // AND A ZERO IS A MEASUREMENT. Without the engine's derived
+                // block `reports` is empty because nothing was said, not because
+                // nobody reports here; lib/seats.ts keeps the two apart and this
+                // is where the difference gets drawn, exactly as the three rows
+                // below do.
+                value={
+                  index.hierarchy ? (
+                    reports.length
+                  ) : (
+                    <EmptyValue label="Not reported by this engine" />
+                  )
+                }
+                sub={reportsCaption(seat, index.hierarchy)}
               />
             </StatGroup>
 
@@ -954,39 +1146,22 @@ export function SeatScreen({ handle }: { handle: string }) {
                   settings={settings}
                   seat={seat}
                 >
-                  <PropertiesRail
-                    groups={[
-                      {
-                        properties: [
-                          {
-                            label: "Email",
-                            value: <ConfigValue value={configured?.email} />,
-                          },
-                          // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list
-                          // or a per-phase mapping, so this is the flattened
-                          // order the provider chain actually walks — and an
-                          // empty ARRAY is truthy, which is why the fallback is
-                          // an explicit length test rather than `||`.
-                          {
-                            label: "Model",
-                            value: llmChain(configured?.llm).length ? (
-                              <ModelChain keys={llmChain(configured?.llm)} />
-                            ) : (
-                              <span className="muted">default provider</span>
-                            ),
-                          },
-                          {
-                            label: "Auxiliary model",
-                            value: llmChain(configured?.llm_auxiliary).length ? (
-                              <ModelChain keys={llmChain(configured?.llm_auxiliary)} />
-                            ) : (
-                              <span className="muted">none, reflection uses the default</span>
-                            ),
-                          },
-                        ],
-                      },
-                    ]}
-                  />
+                  <div className="col gap-3">
+                    <PropertiesRail
+                      groups={[{ properties: configuredProperties(configured, human) }]}
+                    />
+                    {human && (
+                      // WHY THE PANEL IS SHORT. An absent row must not read as
+                      // one this token was not allowed to see — telling those
+                      // two apart is the rest of this card's job — so the reason
+                      // is written where the rows would have been.
+                      <p className="t-caption">
+                        A human seat runs no model: the engine never spawns one, so the document
+                        refuses <code className="inline">llm</code> and every per-phase chain on it.
+                        Their contact identities are on Access.
+                      </p>
+                    )}
+                  </div>
                 </SettingsState>
               </Card>
 
@@ -1044,39 +1219,56 @@ export function SeatScreen({ handle }: { handle: string }) {
             {reports.length > 0 && (
               <Section title="Direct reports" hint={`${reports.length}`}>
                 <div className="seat-grid">
-                  {reports.map((r) => (
-                    <a
-                      key={r.handle}
-                      className="seat-card"
-                      href={href(["company", "people", r.handle])}
-                    >
-                      <div className="row">
-                        {/* Their `variant="dashed"` is our `human`: a human
-                            seat is drawn rather than tinted, because the
-                            engine does not run it. Their `md` is 32px where
-                            ours was 26, so the step moves down one. */}
-                        <Avatar
-                          name={r.name}
-                          size="sm"
-                          variant={r.kind === "human" ? "dashed" : "solid"}
-                          decorative
-                          title={r.name}
-                        />
-                        <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                          <span className="truncate t-cell">{r.name}</span>
-                          <span className="truncate t-caption">{r.goal || r.unit?.name}</span>
-                        </span>
-                        {r.kind === "human" ? (
-                          <Tag appearance="outline">human</Tag>
-                        ) : (
-                          <StateBadge
-                            agent={agents.find((a) => a.role === r.name)}
-                            sandboxes={sandboxes}
+                  {reports.map((r) => {
+                    const about = r.goal || r.unit?.name || "";
+                    return (
+                      // `seatPath` rather than a handle spelled out again: it is
+                      // the one place that knows how a seat the engine reported
+                      // no handle for is addressed, and the rail below already
+                      // goes through it.
+                      <a key={r.key} className="seat-card" href={href(seatPath(r))}>
+                        <div className="row">
+                          {/* Their `variant="dashed"` is our `human`: a human
+                              seat is drawn rather than tinted, because the
+                              engine does not run it. Their `md` is 32px where
+                              ours was 26, so the step moves down one. */}
+                          <Avatar
+                            name={r.name}
+                            size="sm"
+                            variant={r.kind === "human" ? "dashed" : "solid"}
+                            decorative
+                            title={r.name}
                           />
+                          <span className="truncate t-cell" style={{ flex: 1, minWidth: 0 }}>
+                            {r.name}
+                          </span>
+                          {r.kind === "human" ? (
+                            <Tag appearance="outline">human</Tag>
+                          ) : (
+                            <StateBadge
+                              agent={agents.find((a) => a.role === r.name)}
+                              sandboxes={sandboxes}
+                            />
+                          )}
+                        </div>
+                        {/* A GOAL IS PROSE, SO IT GETS THE CARD'S OWN WIDTH.
+                            Between the avatar and the state badge it had about
+                            160px of a 300px card and one line of it, so
+                            `.truncate` — `white-space: nowrap`, a cut at
+                            whichever PIXEL came next — ended it mid-word with
+                            the card underneath empty. Below the row it has the
+                            whole card and two lines. `title` carries the rest
+                            for a goal longer than two lines; a screen reader
+                            reads it in full either way, because a clamp is
+                            visual and takes nothing out of the DOM. */}
+                        {about && (
+                          <span className="clamp t-caption" title={about}>
+                            {about}
+                          </span>
                         )}
-                      </div>
-                    </a>
-                  ))}
+                      </a>
+                    );
+                  })}
                 </div>
               </Section>
             )}
@@ -1165,7 +1357,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                         ) : row.next_run ? (
                           <DateCell at={row.next_run} now={now} />
                         ) : (
-                          <Dash />
+                          <EmptyValue label="Not recorded" />
                         ),
                     },
                     {
@@ -1305,11 +1497,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ),
                     },
                     {
-                      key: "rounds",
-                      header: "Rounds",
+                      key: "iterations",
+                      // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
+                      // column sat directly above phase rows printing TOOL rounds under
+                      // the same word — "Rounds 1" over a 3r execute and a 1r review.
+                      header: (
+                        <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
+                          Iterations
+                        </span>
+                      ),
                       shrink: true,
-                      sortValue: (t) => t.rounds,
-                      cell: (t) => <NumberCell value={t.rounds} />,
+                      sortValue: (t) => t.iterations,
+                      cell: (t) => <NumberCell value={t.iterations} />,
                     },
                     {
                       key: "tokens",
@@ -1375,7 +1574,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </div>
                 <div className="col gap-2">
                   {liveTurns.map((g) => (
-                    <TurnCard key={g.turnId} group={g} defaultOpen />
+                    <TurnCard key={g.turnId} group={g} row={turnRows.get(g.turnId)} defaultOpen />
                   ))}
                 </div>
               </section>
@@ -1390,6 +1589,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <TurnCard
                   key={g.turnId}
                   group={g}
+                  row={turnRows.get(g.turnId)}
                   defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
                 />
               ))}
@@ -1466,9 +1666,32 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card padding="none">
                   <Card.Header
                     icon={<ScheduleGlyph size="sm" />}
-                    count={threads.data?.entries?.length ?? 0}
+                    // A COUNT IS A FACT ABOUT THE THREAD THE READER OPENED.
+                    // `entries` is what this seat said in that ONE thread, and
+                    // the answer carries `entries: []` whenever no
+                    // `conversation` was asked for — `queries.conversations`
+                    // fills it only when one is named — so with nothing open the
+                    // old `?? 0` drew a chip reading 0 beside a title asking the
+                    // reader to pick a thread: a quantity stated about a thread
+                    // nobody had named, and one that could never have been
+                    // anything else.
+                    //
+                    // Three states, not two: nothing open, open but no answer
+                    // back yet, and open and answered — where a 0 IS the fact,
+                    // because the ledger is trimmed per conversation and the
+                    // empty state below says so. `undefined` is what
+                    // `Card.Header` reads as "no count" (it draws every other
+                    // value, 0 included), and dropping the `??` gives it for the
+                    // first two: `threads.data` is null until the answer lands.
+                    count={thread ? threads.data?.entries?.length : undefined}
                   >
-                    <Card.Title>{thread ? "In this thread" : "Pick a thread"}</Card.Title>
+                    {/* THE TITLE NAMES THE PANEL; IT DOES NOT INSTRUCT. The
+                        instruction is the empty state's, one line below, and a
+                        header carrying it too said the same thing twice — while
+                        renaming the panel on every click, so the chip beside it
+                        changed what it was counting with nothing to say so. A
+                        stable noun, like "Threads" on the card beside it. */}
+                    <Card.Title>Thread turns</Card.Title>
                   </Card.Header>
                   {!thread ? (
                     <EmptyState
@@ -1575,7 +1798,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           e.task_summary || e.content ? (
                             <TextCell>{e.task_summary || e.content}</TextCell>
                           ) : (
-                            <Dash title="the episode recorded no summary" />
+                            <EmptyValue label="The episode recorded no summary" />
                           ),
                       },
                       {
@@ -1597,7 +1820,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                               {e.review_outcome ?? e.outcome}
                             </Tag>
                           ) : (
-                            <Dash title="the turn ended without a review outcome" />
+                            <EmptyValue label="The turn ended without a review outcome" />
                           ),
                       },
                       {
@@ -1615,7 +1838,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           e.conversation_key ? (
                             <KeyCell value={e.conversation_key} />
                           ) : (
-                            <Dash title="not part of a conversation" />
+                            <EmptyValue label="Not part of a conversation" />
                           ),
                       },
                     ]}
@@ -1726,17 +1949,24 @@ export function SeatScreen({ handle }: { handle: string }) {
               <StatCard
                 icon={<TargetGlyph size="xs" />}
                 label="Configured budget"
-                // UNKNOWN IS NOT UNLIMITED. `token_budget` is on the guarded
+                // UNKNOWN IS NOT UNLIMITED, and WHY it is unknown is four
+                // answers rather than one. `token_budget` is on the guarded
                 // document, so a reader without a token is told the cap could
-                // not be read rather than shown "unlimited" — which is a
-                // statement about the company nothing on the wire supports.
-                value={!configured ? "Unknown" : budget ? fmtCount(budget) : "unlimited"}
+                // not be read rather than shown "unlimited" — a statement about
+                // the company nothing on the wire supports. A read still in
+                // flight and a document that does not name this seat are
+                // absences too, and telling either reader to fetch a token they
+                // may already hold is that same wrong statement aimed at them
+                // instead.
+                value={
+                  reading.state === "read" ? (budget ? fmtCount(budget) : "unlimited") : "Unknown"
+                }
                 sub={
-                  !configured
-                    ? "token_budget needs an operator token to read"
-                    : budget
+                  reading.state === "read"
+                    ? budget
                       ? "token_budget on this role in the company config"
                       : "token_budget is 0 or unset on this role"
+                    : `token_budget could not be read: ${capNote(reading)}`
                 }
               />
             </StatGroup>
@@ -1776,11 +2006,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Card>
             ) : (
               <Callout variant="neutral">
-                {!configured
-                  ? "No engine is reporting a meter for this seat, and its configured cap needs an operator token to read."
-                  : budget
+                {reading.state === "read"
+                  ? budget
                     ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
-                    : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
+                    : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."
+                  : `No engine is reporting a meter for this seat, and its configured cap could not be read: ${capNote(reading)}.`}
               </Callout>
             )}
 
@@ -1908,61 +2138,69 @@ export function SeatScreen({ handle }: { handle: string }) {
               </SettingsState>
             </Card>
 
-            <Card>
-              <Card.Header
-                icon={<KeyGlyph size="sm" />}
-                subtitle="merged down the unit chain, this seat's own entries winning"
-                count={Object.keys(credentials).length}
-              >
-                <Card.Title>Tool credentials</Card.Title>
-              </Card.Header>
-              <SettingsState
-                error={config.error}
-                loading={config.loading}
-                doc={config.data ?? null}
-                settings={settings}
-                seat={seat}
-              >
-                {Object.keys(credentials).length ? (
-                  <div className="col gap-3">
-                    {Object.entries(credentials).map(([server, vars]) => (
-                      <div key={server} className="col gap-1">
-                        <div className="t-label">{server}</div>
-                        <PropertiesRail
-                          groups={[
-                            {
-                              properties: Object.entries(vars).map(([k, v]) => ({
-                                label: k,
-                                code: true,
-                                // A CREDENTIAL FIELD, so anything that is not
-                                // one whole `${VAR}` is hidden whatever the
-                                // engine sent. Values are pointers in the
-                                // config and stored verbatim; the engine
-                                // resolves them only where a transport is
-                                // constructed.
-                                value: <ConfigValue secret value={v} />,
-                              })),
-                            },
-                          ]}
-                        />
-                      </div>
-                    ))}
-                    <p className="t-caption">
-                      These are the <code className="inline">${"{VAR}"}</code> references the config
-                      carries, not resolved values: the engine resolves them when it builds this
-                      seat&rsquo;s MCP children, and the API redacts anything literal.
-                    </p>
-                  </div>
-                ) : (
-                  <EmptyState
-                    size="compact"
-                    icon={<KeyGlyph size={32} />}
-                    title="No per-seat tool credentials"
-                    description="This seat uses whatever the shared MCP servers were configured with."
-                  />
-                )}
-              </SettingsState>
-            </Card>
+            {/* AN AGENT'S, AND ONLY AN AGENT'S. `mcp_env` is refused on a human
+                seat and a human member inherits none of its unit's
+                (`mcpEnvOf`), so this card could only ever draw its own empty
+                state — whose sentence, "this seat uses whatever the shared MCP
+                servers were configured with", is false of a seat that runs no
+                tools at all. Absent rather than empty, as above. */}
+            {!human && (
+              <Card>
+                <Card.Header
+                  icon={<KeyGlyph size="sm" />}
+                  subtitle="merged down the unit chain, this seat's own entries winning"
+                  count={Object.keys(credentials).length}
+                >
+                  <Card.Title>Tool credentials</Card.Title>
+                </Card.Header>
+                <SettingsState
+                  error={config.error}
+                  loading={config.loading}
+                  doc={config.data ?? null}
+                  settings={settings}
+                  seat={seat}
+                >
+                  {Object.keys(credentials).length ? (
+                    <div className="col gap-3">
+                      {Object.entries(credentials).map(([server, vars]) => (
+                        <div key={server} className="col gap-1">
+                          <div className="t-label">{server}</div>
+                          <PropertiesRail
+                            groups={[
+                              {
+                                properties: Object.entries(vars).map(([k, v]) => ({
+                                  label: k,
+                                  code: true,
+                                  // A CREDENTIAL FIELD, so anything that is not
+                                  // one whole `${VAR}` is hidden whatever the
+                                  // engine sent. Values are pointers in the
+                                  // config and stored verbatim; the engine
+                                  // resolves them only where a transport is
+                                  // constructed.
+                                  value: <ConfigValue secret value={v} />,
+                                })),
+                              },
+                            ]}
+                          />
+                        </div>
+                      ))}
+                      <p className="t-caption">
+                        These are the <code className="inline">${"{VAR}"}</code> references the
+                        config carries, not resolved values: the engine resolves them when it builds
+                        this seat&rsquo;s MCP children, and the API redacts anything literal.
+                      </p>
+                    </div>
+                  ) : (
+                    <EmptyState
+                      size="compact"
+                      icon={<KeyGlyph size={32} />}
+                      title="No per-seat tool credentials"
+                      description="This seat uses whatever the shared MCP servers were configured with."
+                    />
+                  )}
+                </SettingsState>
+              </Card>
+            )}
           </div>
         )}
       </div>
@@ -2055,9 +2293,20 @@ export function SeatPeek({ handle }: { handle: string }) {
         }
         // THE RAIL READS NOTHING GUARDED. It is opened from a row in a list,
         // and a per-peek read of the whole company document would be an
-        // operator-gated fetch on every `[`/`]` step through one — so the
-        // model line says it is unread rather than fetching it here.
-        facts={seatFacts({ seat, agent, role: null, hierarchy: index.hierarchy, human })}
+        // operator-gated fetch on every `[`/`]` step through one — so the model
+        // fact is `unread`, which [FactLine] DROPS.
+        //
+        // It used to pass a NULL ROLE, which the fact line rendered as "needs an
+        // operator token": a rail that had asked nobody telling every reader,
+        // holding a token or not, that they were missing one. The comment here
+        // already claimed this said "unread". Now it does.
+        facts={seatFacts({
+          seat,
+          agent,
+          reading: { state: "unread" },
+          hierarchy: index.hierarchy,
+          human,
+        })}
       />
 
       <div className="col gap-3">
@@ -2140,37 +2389,57 @@ export function SeatPeek({ handle }: { handle: string }) {
           <div className="t-label">Direct reports</div>
           {reports.length > 0 ? (
             <div className="list">
-              {reports.map((r) => (
-                <a key={r.key} className="thread-entry" href={href(seatPath(r))}>
-                  <div className="row gap-2">
-                    <Avatar
-                      name={r.name}
-                      size="xs"
-                      variant={r.kind === "human" ? "dashed" : "solid"}
-                      decorative
-                      title={r.name}
-                    />
-                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                      <span className="truncate t-cell">{r.name}</span>
-                      <span className="truncate t-caption">{r.goal || r.unit?.name || ""}</span>
-                    </span>
-                    {r.kind === "human" ? (
-                      <Tag appearance="outline">human</Tag>
-                    ) : (
-                      <StateBadge
-                        agent={agents.find((a) => a.role === r.name)}
-                        sandboxes={sandboxes}
+              {reports.map((r) => {
+                const about = r.goal || r.unit?.name || "";
+                return (
+                  <a key={r.key} className="thread-entry" href={href(seatPath(r))}>
+                    <div className="row gap-2">
+                      <Avatar
+                        name={r.name}
+                        size="xs"
+                        variant={r.kind === "human" ? "dashed" : "solid"}
+                        decorative
+                        title={r.name}
                       />
+                      <span className="truncate t-cell" style={{ flex: 1, minWidth: 0 }}>
+                        {r.name}
+                      </span>
+                      {r.kind === "human" ? (
+                        <Tag appearance="outline">human</Tag>
+                      ) : (
+                        <StateBadge
+                          agent={agents.find((a) => a.role === r.name)}
+                          sandboxes={sandboxes}
+                        />
+                      )}
+                    </div>
+                    {/* THE SAME CORRECTION THE CARD ABOVE CARRIES, and the rail
+                        is where it bit hardest: this panel is 360px at its
+                        narrowest, so a one-line cut lost the goal's subject
+                        after a few words — which is exactly the question a peek
+                        is opened to answer. `.thread-entry` is already a flex
+                        column with its own gap, so the clamped line needs no
+                        wrapper. */}
+                    {about && (
+                      <span className="clamp t-caption" title={about}>
+                        {about}
+                      </span>
                     )}
-                  </div>
-                </a>
-              ))}
+                  </a>
+                );
+              })}
             </div>
-          ) : (
+          ) : index.hierarchy ? (
             <p className="t-caption">
               Nobody reports to this seat. Delegation follows the chart, so work it cannot do itself
               goes sideways or nowhere.
             </p>
+          ) : (
+            // NOT NOBODY: THE ENGINE DID NOT SAY. The header fact three inches
+            // above this already reads "not reported by this engine" out of the
+            // same `index.hierarchy`, and a rail asserting both in one breath is
+            // a rail lying in one of them.
+            <p className="t-caption">{reportsCaption(seat, index.hierarchy)}.</p>
           )}
         </section>
       </div>

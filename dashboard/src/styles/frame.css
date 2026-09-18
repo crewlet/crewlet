@@ -896,10 +896,6 @@
 
 /* ---- Cells -------------------------------------------------------------- */
 
-.cell-dash {
-  color: var(--text-faint);
-}
-
 .cell-date {
   color: var(--text-muted);
   white-space: nowrap;
@@ -916,23 +912,6 @@
 
 .cell-seat:hover {
   text-decoration: underline;
-}
-
-.seat-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  flex: 0 0 auto;
-}
-
-.seat-mark.human {
-  border-style: dashed;
 }
 
 .cell-status {
@@ -1206,10 +1185,12 @@ button.histogram-bar[data-empty]:hover {
 }
 
 /* ---- Facets --------------------------------------------------------------
-   The values actually present on a loaded page, as a row of narrowing chips.
-   COUNTS ARE OVER WHAT IS LOADED and the row says so beside them: the engine
-   counts nothing server-side here, and a facet claiming a total would be
-   inventing a number. */
+   One dimension of a list, as a row of narrowing chips. WHAT THE COUNTS ARE
+   COUNTS OF is said beside them — over the loaded page or over the whole
+   window, which the rail's own `over` decides — and only where a number is
+   actually drawn: a caption about numbers that are not on screen qualifies
+   nothing. A dimension with nothing to count is a `.segmented`, not this.
+   See ui/FacetRail.tsx. */
 
 .facet-row {
   display: flex;

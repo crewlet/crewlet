@@ -27,11 +27,11 @@ import { destinationsOf } from "../nav.ts";
 import type { SidebarSection, SidebarRow } from "../frame/WorkspaceSidebar.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatTone } from "~/lib/seats.ts";
+import { indexOrg, seatTone, unitTally, UNIT_TOTAL_HINT, type Unit } from "~/lib/seats.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useRecents } from "~/lib/recents.ts";
-import type { OrgUnit, WorkProjectRow } from "~/protocol/index.ts";
+import type { WorkProjectRow } from "~/protocol/index.ts";
 
 /**
  * A project's sprint rows: the one that is running, and the list.
@@ -92,8 +92,10 @@ export function useWorkSidebar(): SidebarSection[] {
       // THE MAINTAINED COLUMN, not a count over the page: the engine keeps
       // open/done/closed on the project row itself precisely so a sidebar
       // does not have to aggregate per poll.
-      count: p.task_counts?.open,
-      countTitle: "open items — the engine's own maintained count",
+      count:
+        p.task_counts?.open == null
+          ? undefined
+          : { value: p.task_counts.open, of: "open items — the engine's own maintained count" },
       children: sprintRows(p),
     }));
 
@@ -140,7 +142,12 @@ export function useCompanySidebar(): SidebarSection[] {
   const org = useOrg();
   return useMemo(() => {
     const index = indexOrg(org);
-    function rowsFor(units: OrgUnit[] | undefined): SidebarRow[] {
+    // THE INDEXED TREE, not `org.units` off the wire. The raw projection
+    // carries neither the subtree membership nor the effective lead, so this
+    // walked it and re-derived both by hand — a filter over every seat per
+    // unit for the count, and "the first seat whose unit is this one" for the
+    // lead, which answers nothing for a unit with no seats of its own.
+    function rowsFor(units: Unit[] | undefined): SidebarRow[] {
       return (units ?? []).map((unit) => {
         // BY NAME. A unit's stable `id:` is guarded and the anonymous org
         // projection does not carry it, so every route to a unit is its name.
@@ -153,9 +160,13 @@ export function useCompanySidebar(): SidebarSection[] {
           // declares none: it behaves identically everywhere in the engine,
           // and hiding the difference is how somebody concludes a team is
           // unmanaged.
-          sub: index.seats.find((s) => s.unit?.name === unit.name)?.unitLead || undefined,
-          count: index.seats.filter((s) => s.unitChain.some((u) => u.name === unit.name)).length,
-          countTitle: "seats in this unit and everything under it",
+          sub: unit.effectiveLead?.handle || undefined,
+          // THE SUBTREE, THROUGH `unitTally`, and its own sentence from
+          // `UNIT_TOTAL_HINT` — because the number this rail draws was the one
+          // contradicted elsewhere: "Leadership 5" here against "2 seats" on
+          // the org chart's block for the same unit. Derived rather than
+          // re-counted, so the three surfaces cannot drift again.
+          count: { value: unitTally(unit).total, of: UNIT_TOTAL_HINT },
           children: rowsFor(unit.children),
         };
       });
@@ -165,7 +176,7 @@ export function useCompanySidebar(): SidebarSection[] {
       {
         key: "units",
         label: "Units",
-        rows: rowsFor(org?.units),
+        rows: rowsFor(index.topUnits),
         empty: "This company declares no units — every seat sits at the top level.",
       },
     ];
@@ -189,8 +200,7 @@ export function useKnowledgeSidebar(): SidebarSection[] {
           // navigable: the one with four hundred pages and the one with
           // two looked identical. Trashed pages are not counted, so the
           // number and the list behind it agree.
-          count: c.pages,
-          countTitle: "pages in this container, trashed ones excluded",
+          count: { value: c.pages, of: "pages in this container, trashed ones excluded" },
         })),
         empty: "This node knows about no containers yet.",
       },
@@ -266,8 +276,7 @@ export function useAdminSidebar(here: boolean): SidebarSection[] {
       key: n.id,
       label: n.id,
       path: ["admin", "fleet", n.id],
-      count: n.seats,
-      countTitle: "seats this node holds",
+      count: { value: n.seats, of: "seats this node holds" },
     }));
     // UNCONFIGURED IS NOT A FAULT, so it draws no dot at all. A surface
     // nobody has wired is a decision rather than a failure, and a neutral

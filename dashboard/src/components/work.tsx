@@ -170,6 +170,49 @@ export function SizeMark({ points, minutes }: { points?: number; minutes?: numbe
 }
 
 /**
+ * The mark for a notice that ASKS something of its recipient.
+ *
+ * ONE MARK, because there were two. The engine writes ONE fact —
+ * `tracker.Reason.Addressed`, a wake that obliges its seat to answer rather than
+ * absorb — and two screens drew it: My work as a caution-toned "asks" beside a
+ * neutral reason chip, the item's Woke tab as a TINT ON the reason chip. Two
+ * marks for one fact is two facts to a reader, and folding it into the reason
+ * meant "assignee that asked" and "assignee that informed" were the same word in
+ * two grounds.
+ *
+ * AND THE GROUND IT WAS FOLDED INTO IS NOT AVAILABLE. The accent means where the
+ * READER is — the active nav row, the primary button, the focus ring, the on
+ * filter — and nothing else; every other fact is neutral and carried by its word
+ * (docs/reference/dashboard-design.md, and uilet's own tone contract). Not a
+ * preference: `variant="brand"` resolves to `--color-brand-accent-soft` under
+ * `--color-brand-accent-ink`, which is the pair
+ * `.crewlet-filter-chip[aria-pressed='true']` takes, so the Woke panel's summary
+ * chip and one row's reason pill rendered the lavender ground of a switched-on
+ * filter — in a panel whose other half IS a selection list.
+ * `styles/tone.test.ts` is what keeps it there now.
+ *
+ * CAUTION RATHER THAN INFO. The tone has to mark the notice that WANTS
+ * something, and `info` is the tone of the half that does not.
+ */
+export function AsksTag({ count }: { count?: number }) {
+  const many = count !== undefined;
+  return (
+    <Tag
+      variant="warning"
+      title={
+        many
+          ? "asked something, rather than merely informed"
+          : "this asks something of its recipient, rather than informing them"
+      }
+    >
+      {/* ONE TEXT NODE, so a DOM query can match the pill's own label rather
+          than a fragment of it. */}
+      {many ? `${count} asked` : "asks"}
+    </Tag>
+  );
+}
+
+/**
  * One task as a board card.
  *
  * The three rows are fixed — identity, title, facts — so a column of cards
@@ -206,7 +249,7 @@ export function BoardCard({
         <span className="spacer" />
         <PriorityMark priority={row.priority} />
       </div>
-      <div className="work-card-title">{row.title}</div>
+      <div className="work-card-title clamp">{row.title}</div>
       <div className="work-card-foot">
         {row.blocked && (
           <Tag variant="danger" appearance="outline">

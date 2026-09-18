@@ -9,6 +9,7 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SavedViews } from "./SavedViews.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -83,4 +84,62 @@ test("a shared view says what shared means", async () => {
   const { container } = mount("v-1");
   await waitFor(() => expect(screen.getByText(/everybody in this company/)).toBeTruthy());
   expect(container.textContent).not.toContain("A personal view owned by");
+});
+
+/** The explanation each mark carries, in the order they are drawn. */
+function markTitles(root: HTMLElement): (string | null)[] {
+  return [...root.querySelectorAll(".crewlet-tag")]
+    .filter((t) => ["default", "protected", "pinned"].includes(t.textContent ?? ""))
+    .map((t) => t.getAttribute("title"));
+}
+
+// A HEADED COLUMN ANSWERS ON EVERY ROW.
+//
+// None of the three marks is set on a view somebody just saved, so the cell drew
+// an empty span for those rows — and in a company where nobody has pinned or
+// protected anything, a column headed "Marks" was blank the whole way down,
+// which reads as a screen that failed to load rather than as three settings
+// nobody turned on.
+test("a view carrying no marks says which absence that is", async () => {
+  serving({
+    work_views: {
+      views: [view(), view({ id: "v-2", key: "team-board", name: "Team board", pinned: true })],
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Team board")).toBeTruthy());
+
+  const dashes = container.querySelectorAll(".crewlet-empty-value");
+  expect(dashes.length).toBe(1);
+  // READ, not hovered: the sentence naming which absence this is rides in the
+  // accessible name now rather than in a `title` only a mouse could reach.
+  expect(dashes[0]!.textContent).toBe(
+    `${EMPTY_VALUE}Not the default, not protected, not pinned by you`,
+  );
+  // THE CONTROL: the marked row draws its mark and NO dash, or this would pass
+  // just as well on a grid that dashed every row in the column.
+  expect(screen.getByText("pinned")).toBeTruthy();
+});
+
+// ONE SPELLING OF A MARK. The grid's tags carried the sentence saying what each
+// mark means and the facts block's did not, so `protected` explained itself on
+// the inventory and explained nothing on the view's own page.
+test("a mark says what it means wherever it is drawn", async () => {
+  const marked = { default: true, protected: true, pinned: true };
+  serving({ work_views: { views: [view(marked)], complete: true } });
+  const list = mount();
+  await waitFor(() => expect(screen.getByText("My queue")).toBeTruthy());
+  const onTheGrid = markTitles(list.container);
+  cleanup();
+
+  serving({ work_views: { views: [view(marked)], complete: true } });
+  const page = mount("v-1");
+  await waitFor(() => expect(screen.getByText("Saved view")).toBeTruthy());
+  expect(markTitles(page.container)).toEqual(onTheGrid);
+  expect(onTheGrid).toEqual([
+    "the container's landing tab",
+    "only its owner may change it",
+    "pinned by you — pins are per reader",
+  ]);
 });

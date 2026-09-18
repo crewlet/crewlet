@@ -126,7 +126,11 @@ describe("the work scope is a server query, so it has four answers", () => {
   const hit = {
     key: "ENG-1",
     title: "Authentication rework",
-    status: "open",
+    // A TYPE, because the palette drew a hardcoded tick for every hit — in a
+    // list that also holds the DESTINATION rows from `nav.ts`, where a tick
+    // legitimately names the Work workspace.
+    type: "bug",
+    status: "in_progress",
     assignee: "ceo",
   };
 
@@ -154,6 +158,18 @@ describe("the work scope is a server query, so it has four answers", () => {
     type("#auth");
     expect(await screen.findByText(/connection went away/)).toBeDefined();
     expect(screen.queryByText(/Nothing matches/)).toBeNull();
+  });
+
+  // A HIT SAYS WHAT KIND OF THING IT IS, and says its status in the reader's own
+  // vocabulary. The row's label is a key and a title, so the type appears
+  // nowhere else on it; and this line printed `item.status` raw, so the palette
+  // said `in_progress` where every other surface in the product says "In
+  // progress".
+  test("a work hit names its type, and its status in words", async () => {
+    const { type } = open(answering(() => Promise.resolve({ hits: [hit], available: true })));
+    type("#auth");
+    expect(await screen.findByText(/Bug · In progress/)).toBeDefined();
+    expect(screen.queryByText(/in_progress/)).toBeNull();
   });
 
   test("an answered term with no items does say nothing matched", async () => {

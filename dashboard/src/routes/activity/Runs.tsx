@@ -30,6 +30,7 @@ import {
   CodeBlock,
   Disclosure,
   EmptyState,
+  EmptyValue,
   IconButton,
   Skeleton,
   StatCard,
@@ -38,7 +39,7 @@ import {
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -539,7 +540,7 @@ export function Runs({ runId }: { runId?: string }) {
                   r.role || r.agent_handle ? (
                     <TextCell icon="memory">{r.role || r.agent_handle}</TextCell>
                   ) : (
-                    <Dash title="no seat" />
+                    <EmptyValue label="No seat" />
                   ),
               },
               {
@@ -549,7 +550,7 @@ export function Runs({ runId }: { runId?: string }) {
                   r.task_description ? (
                     <TextCell>{r.task_description}</TextCell>
                   ) : (
-                    <Dash title="no task recorded" />
+                    <EmptyValue label="No task recorded" />
                   ),
               },
               {
@@ -563,7 +564,7 @@ export function Runs({ runId }: { runId?: string }) {
                       {r.coding_agent}
                     </Tag>
                   ) : (
-                    <Dash title="not recorded" />
+                    <EmptyValue label="Not recorded" />
                   ),
               },
               {
@@ -581,7 +582,7 @@ export function Runs({ runId }: { runId?: string }) {
                     // placement, so this is genuinely "the store has not
                     // written this run yet" rather than a run with nowhere to
                     // run, and the dash says the first on hover.
-                    <Dash title="the durable row has not been written yet" />
+                    <EmptyValue label="The durable row has not been written yet" />
                   ),
               },
               {

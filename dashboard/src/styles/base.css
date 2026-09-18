@@ -305,6 +305,64 @@ button.histogram-bar {
   white-space: nowrap;
   min-width: 0;
 }
+
+/* PROSE IS CUT AT A LINE. `.truncate` above cuts at a PIXEL, which is right for
+   a value that IS one line — a name, a handle, a key, a grid cell whose row
+   height is the line — and wrong for a sentence. Reach for it with prose and the
+   ellipsis lands wherever the box ended: a seat's goal came out of a 300px card
+   as "Build and run the ingestio…" in a ~160px slot with the rest of the card
+   empty underneath it, and a turn card's trigger line as "Message from founder:
+   a task created: Write the …" with room beneath that too.
+
+   BOUNDED rather than free-flowing: one of these is a card in a feed of forty,
+   and a single long value may not set the height of every row above the rest.
+   Two lines by default — the shape these values have is a short head and a
+   subject up to `tracker.MaxTitle` (256), so two carry the head plus the
+   distinguishing opening of the subject — and `--clamp-lines` raises it where a
+   card IS its title.
+
+   FOUR DECLARATIONS, AND THEY ONLY WORK TOGETHER: without `display:
+   -webkit-box` the line count is ignored outright, and without
+   `-webkit-box-orient: vertical` the box lays out horizontally and shows
+   everything. The unprefixed `line-clamp` ships in nothing yet, so the prefixed
+   pair is the only spelling that clamps today and the standard property is
+   written beside it for the day it lands. Each omission is silent — a valid
+   stylesheet, no warning, and jsdom computes no layout — so `styles/text.test.ts`
+   reads this block as text.
+
+   `.truncate` IS NOT A FALLBACK FOR THIS: the two disagree about
+   `white-space`, so an element carrying both gets one line with no ellipsis,
+   which is strictly worse than either. Carry one or the other, never both.
+
+   DECLARED ONCE. `.work-card-title` hand-rolled these same declarations and had
+   already drifted — it never carried `min-width: 0`, so a long unbroken title
+   could refuse to shrink inside its flex parent. */
+
+/* The count does not INHERIT. A clamp is a statement about one box's height,
+   and a card that says three would otherwise clamp every nested caption inside
+   it to three as well — a rule fired by ancestry, which is exactly the kind
+   nobody can find later. `inherits: false` with an initial value makes the
+   default two by construction rather than by a fallback every caller has to
+   remember. */
+@property --clamp-lines {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 2;
+}
+.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-lines, 2);
+  line-clamp: var(--clamp-lines, 2);
+  overflow: hidden;
+  min-width: 0;
+  /* A VALUE CAN BE A UUID OR A JSON OBJECT and neither carries a space to break
+     at, so an unbreakable run would paint over whatever sits beside it once the
+     nowrap is gone. `anywhere` rather than `break-word`, which leaves the
+     element's own min-content width at the whole word. */
+  overflow-wrap: anywhere;
+}
+
 .measure {
   max-width: var(--measure);
 }

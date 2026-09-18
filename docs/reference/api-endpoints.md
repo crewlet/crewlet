@@ -1269,7 +1269,12 @@ turn](../concepts/turn-engine.md#what-streams-during-a-turn).
 Each phase publishes an opening
 `agent_turn_progress` (`round_num = -1`) before its first provider call
 carrying the prompt, so the live row shows what the agent was asked while
-it is still answering.  `agent_turn_progress` is *stream-only*
+it is still answering.  The field is otherwise ZERO-BASED, so the round a
+reader counts is `round_num + 1`, and `-1` is neither a round nor a missing
+value — it is a turn that has begun and is waiting.  A surface drawing it
+resolves both through `lib/seats.ts`'s `roundLabel`, which answers "starting"
+for the sentinel and `round N+1` otherwise; the roster drew a bare dash and
+two of five working seats read "round —" with nothing saying why.  `agent_turn_progress` is *stream-only*
 (never written to the event store); carrying `live_call` in the
 snapshot means a tab that refreshes or reconnects mid-call re-renders
 the live row immediately instead of waiting for the next progress

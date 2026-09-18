@@ -2,10 +2,10 @@
  * The typed cells every grid in the product draws.
  *
  * ONE FUNCTION PER CELL TYPE, because the same value must look the same
- * wherever it appears: an absent number is an em dash on the spend table and
- * on the sprint report, a date drops its year in both places or in neither,
- * and a seat is an avatar and a name rather than a handle on one screen and a
- * display name on the next.
+ * wherever it appears: an absent number wears the same mark on the spend table
+ * and on the sprint report, a date drops its year in both places or in
+ * neither, and a seat is an avatar and a name rather than a handle on one
+ * screen and a display name on the next.
  *
  * Nothing here fetches, and nothing here decides what a value MEANS — a status
  * glyph's tone comes from the status vocabulary, and these render what they
@@ -23,15 +23,32 @@
  * consistent could not be adopted without making it inconsistent.
  *
  * What a cell adds over calling the formatter directly is the part a
- * formatter cannot have: an ABSENT value renders a dash that says what kind
- * of absence it is, and the value wears the tabular face so a column of them
- * lines up.
+ * formatter cannot have: an ABSENT value renders as [EmptyValue], which says
+ * what kind of absence it is, and the value wears the tabular face so a column
+ * of them lines up.
+ *
+ * # And the mark is the design system's, not one of our own
+ *
+ * There was a local `Dash` here: an em dash in a `.cell-dash` span with a
+ * `title`. `@crewlethq/ui` ships [EmptyValue] for exactly this and draws an EN
+ * dash — its own doc says the em dash is a mark "this design system does not
+ * use anywhere" — so the trash screen showed both at once, a 12px em dash in
+ * the table's DUE column beside a 6px en dash in the activity feed's object
+ * column, two glyphs for one fact in one viewport. Newer screens (People,
+ * Company, LiveNow, Trace, the org builder's table) had already adopted
+ * [EmptyValue]; the migration simply stopped halfway and nothing said so.
+ *
+ * The `title` went with it, and that is a gain rather than a cost: a `title`
+ * on a `<span>` is a hover tooltip no keyboard reaches and no screen reader is
+ * required to announce, so on the surface where the distinction actually
+ * matters — a column where absent and zero are different facts — the
+ * distinction was reachable only with a mouse. [EmptyValue]'s `label` is read
+ * in place of the dash.
  */
 
 import type { ReactNode } from "react";
 import { href } from "../router.tsx";
-import { Tag, cx } from "@crewlethq/ui";
-import { MemoryGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
+import { Avatar, cx, EmptyValue, Tag } from "@crewlethq/ui";
 // A `TextCell`'s mark is named by whichever screen draws the column, so the
 // name→drawing lookup stays in `~/ui/Icon.tsx` — one change there moves every
 // caller onto uilet's glyphs at once.
@@ -41,7 +58,7 @@ import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 
 /** An identifier — a key, a handle, an id. Monospaced, and usually a link. */
 export function KeyCell({ value, path }: { value: string; path?: string[] }) {
-  if (!value) return <Dash />;
+  if (!value) return <EmptyValue label="Not set" />;
   return path ? (
     <a className="mono t-link" href={href(path)}>
       {value}
@@ -52,7 +69,7 @@ export function KeyCell({ value, path }: { value: string; path?: string[] }) {
 }
 
 /**
- * A number, tabular, em dash when absent.
+ * A number, tabular, a marked absence when there is none.
  *
  * ABSENT IS NOT ZERO, and this is the whole reason the cell exists: "nothing
  * is estimated" and "everything is estimated at nothing" are different facts,
@@ -67,20 +84,11 @@ export function NumberCell({
   suffix?: string;
   title?: string;
 }) {
-  if (value == null) return <Dash title="nothing recorded" />;
+  if (value == null) return <EmptyValue label="Nothing recorded" />;
   return (
     <span className="t-num" title={title}>
       {fmtCount(value)}
       {suffix}
-    </span>
-  );
-}
-
-/** An em dash that says what it means when hovered. */
-export function Dash({ title = "not set" }: { title?: string }) {
-  return (
-    <span className="cell-dash" title={title}>
-      —
     </span>
   );
 }
@@ -93,7 +101,7 @@ export function Dash({ title = "not set" }: { title?: string }) {
  * needs once they have found the row.
  */
 export function DateCell({ at, now }: { at?: string | null; now: number }) {
-  if (!at) return <Dash title="never" />;
+  if (!at) return <EmptyValue label="Never" />;
   return (
     <span title={fmtDateTime(at)} className="cell-date">
       {relTime(at, now)}
@@ -101,7 +109,27 @@ export function DateCell({ at, now }: { at?: string | null; now: number }) {
   );
 }
 
-/** A seat: the avatar mark and the name, linking to the seat's page. */
+/**
+ * A seat: the identity badge and the name, linking to the seat's page.
+ *
+ * ONE BADGE FOR ONE SEAT. This drew its own `.seat-mark` — a 22px circle
+ * holding a robot or a person glyph — while the board, the list, the roster
+ * and every chip drew `@crewlethq/ui`'s `Avatar`, a rounded square of
+ * initials. So the same engineer was "FE" on the board and an identical
+ * generic robot on Search and on a goal's Owners panel, and a reader scanning
+ * two surfaces for one person had nothing to scan FOR: every agent's mark was
+ * the same drawing.
+ *
+ * The distinction the local mark carried is not lost, because the design
+ * system carries it: `dashed` is documented there as "a HUMAN seat: the engine
+ * does not run it", which is precisely the structural fact the dashed ring
+ * meant here. What IS lost is a picture of a robot, and that was the half
+ * saying nothing — it drew the KIND, which one glance at the roster gives, in
+ * the slot that should have been saying WHO.
+ *
+ * `decorative`, because the name is printed immediately beside the badge:
+ * without it the row reads "Ada Lovelace avatar, Ada Lovelace".
+ */
 export function SeatCell({
   handle,
   name,
@@ -111,15 +139,15 @@ export function SeatCell({
   name?: string;
   kind?: "agent" | "human" | string;
 }) {
-  if (!handle) return <Dash title="nobody" />;
+  if (!handle) return <EmptyValue label="Nobody" />;
   return (
     <a className="cell-seat" href={href(["company", "people", handle])} title={`@${handle}`}>
-      {/* THE MARK IS NEUTRAL AND STAYS NEUTRAL: a seat is an identity, and
-          colour here would say a state it does not have. What separates the
-          two kinds is the drawing and the dashed ring, not a hue. */}
-      <span className={cx("seat-mark", kind === "human" && "human")} aria-hidden="true">
-        {kind === "human" ? <PersonGlyph size="xs" /> : <MemoryGlyph size="xs" />}
-      </span>
+      <Avatar
+        name={name || handle}
+        size="xs"
+        variant={kind === "human" ? "dashed" : "solid"}
+        decorative
+      />
       <span className="truncate">{name || handle}</span>
     </a>
   );
@@ -162,20 +190,20 @@ export function StatusCell({
 
 /** A duration in milliseconds, rendered at the coarsest honest unit. */
 export function DurationCell({ ms }: { ms?: number | null }) {
-  if (ms == null) return <Dash title="not measured" />;
+  if (ms == null) return <EmptyValue label="Not measured" />;
   return <span className="t-num">{fmtDuration(ms)}</span>;
 }
 
 /** Tokens, abbreviated the way `fmtCount` abbreviates every other count. */
 export function TokenCell({ value }: { value?: number | null }) {
-  if (value == null) return <Dash title="nothing recorded" />;
+  if (value == null) return <EmptyValue label="Nothing recorded" />;
   return <span className="t-num">{fmtCount(value)}</span>;
 }
 
 /** Tags, capped with a count rather than wrapping a row to three lines. */
 export function TagsCell({ tags, max = 3 }: { tags?: string[] | null; max?: number }) {
   const list = tags ?? [];
-  if (list.length === 0) return <Dash title="no tags" />;
+  if (list.length === 0) return <EmptyValue label="No tags" />;
   const shown = list.slice(0, max);
   const rest = list.length - shown.length;
   return (
@@ -225,7 +253,7 @@ export function MeterCell({
   label: string;
   tone?: Tone;
 }) {
-  if (!(max > 0)) return <Dash title="nothing to measure against" />;
+  if (!(max > 0)) return <EmptyValue label="Nothing to measure against" />;
   const pct = Math.max(0, Math.min(100, (used / max) * 100));
   return (
     <span className="cell-meter" title={label} role="img" aria-label={label}>
@@ -234,11 +262,37 @@ export function MeterCell({
   );
 }
 
-/** Plain text with an icon, truncated. */
-export function TextCell({ children, icon }: { children: ReactNode; icon?: MarkName }) {
+/**
+ * Plain text with a leading mark, truncated.
+ *
+ * TWO SPELLINGS OF ONE SLOT, because a COLUMN's mark and a ROW's mark are
+ * different facts. `icon` is a NAME, and it is right when every row of the
+ * column wears the same drawing — the seat column's `memory`, a node's `dns`, a
+ * page's `description`. There the header carries the meaning and the mark is
+ * decoration, which is exactly what `Mark` renders it as: `aria-hidden`, with no
+ * word of its own.
+ *
+ * `mark` is a rendered node, for the case a name cannot serve: a drawing that
+ * VARIES PER ROW is the only place that row states the fact, so it has to bring
+ * its own hover word and its own accessible name with it. The tracker's
+ * `TypeIcon` is what forced it — a bug, an epic and a spike are three drawings
+ * AND three words, none of them in the header — and the screen that could not
+ * reach it drew a hardcoded tick on every ranked hit instead, which reads as
+ * "done" one column from a status saying otherwise.
+ *
+ * Exactly one of the two, enforced by the type rather than by a rule: a cell
+ * given both would draw the column's answer over the row's.
+ */
+export function TextCell({
+  children,
+  icon,
+  mark,
+}: { children: ReactNode } & (
+  { icon?: MarkName; mark?: never } | { icon?: never; mark: ReactNode }
+)) {
   return (
     <span className="row" style={{ gap: 6, minWidth: 0 }}>
-      {icon && <Mark name={icon} size="xs" />}
+      {mark ?? (icon && <Mark name={icon} size="xs" />)}
       <span className="truncate">{children}</span>
     </span>
   );

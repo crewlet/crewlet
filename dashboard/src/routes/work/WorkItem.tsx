@@ -28,6 +28,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
+  AsksTag,
   Assignee,
   Coverage,
   DueMark,
@@ -57,10 +58,13 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
+import { Mark } from "~/ui/glyph.tsx";
+import { plainText } from "~/lib/markdown.ts";
 import { fmtDate, fmtDateTime, fmtCount, fmtDuration, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
 import {
+  changeMark,
   describeHistory,
   fieldValueState,
   fieldValueText,
@@ -832,23 +836,37 @@ function History({
     <div className="work-hist" style={{ paddingTop: "var(--space-2)" }}>
       {history.map((entry) => (
         <div key={entry.id} className="work-hist-row">
-          <TimelineGlyph size="xs" />
-          <span className="truncate">
+          {/* THE KIND, AS A MARK. Every row drew the same timeline glyph, so a
+              comment and a field edit were the same picture — while the
+              cross-item feed, which renders the kind as a tag in a column of its
+              own, never had the problem. Decorative on purpose — no `title`, so
+              it stays aria-hidden: `glyph.tsx`'s own rule is that a mark in a row
+              that already says the word reads the word twice, and the sentence
+              beside this one always carries the fact (the deltas name the field,
+              and `changePhrase` names the kind when there are none). The mark is
+              the fast scan; the text is the authority. */}
+          <Mark name={changeMark(entry.kind)} size="xs" />
+          <span className="work-hist-what">
             <strong>
               {entry.actor ? (chrome.seatName?.(entry.actor) ?? entry.actor) : "the engine"}
             </strong>{" "}
-            {describeHistory(entry)}
-            {/* A COMMIT THAT ANNOUNCED NOTHING — a fact about the change
-                rather than about its importance: a bulk edit is quiet by
+            {describeHistory(entry, chrome)}
+          </span>
+          {/* A CONTROL DOES NOT LIVE IN A TRUNCATING CELL. `turn →` sat after the
+              sentence inside the same `.truncate` span, so the ellipsis ate it on
+              every row whose text filled the track — which was every comment row,
+              because the text WAS the comment. Its own track also puts it in the
+              same place on every row, which is what lets a reader scan a column
+              instead of hunting each line. */}
+          <span className="work-hist-tail">
+            {/* A COMMIT THAT ANNOUNCED NOTHING — a fact about the change rather
+                than about its importance: a bulk edit is quiet by
                 construction. */}
-            {entry.quiet && <span className="muted"> (quiet)</span>}
+            {entry.quiet && <span className="muted">quiet</span>}
             {entry.turn_id && (
-              <>
-                {" "}
-                <a className="t-link" href={href(["activity", "turns", entry.turn_id])}>
-                  turn →
-                </a>
-              </>
+              <a className="t-link" href={href(["activity", "turns", entry.turn_id])}>
+                turn →
+              </a>
             )}
           </span>
           <span className="work-hist-when" title={fmtDateTime(entry.at)}>
@@ -923,12 +941,16 @@ function Woke({
             onClick={() => onPick(entry.id)}
           >
             <span className="row gap-1">
-              <NotificationsGlyph size="xs" />
+              {/* THE KIND HERE TOO. Every row of this list is a notification
+                  by construction, so a notifications mark on each said only what
+                  the tab above already says, and the rows were as
+                  indistinguishable as the history's were. */}
+              <Mark name={changeMark(entry.kind)} size="xs" />
               <span className="truncate t-cell" style={{ flex: 1 }}>
                 <strong>
                   {entry.actor ? (chrome.seatName?.(entry.actor) ?? entry.actor) : "the engine"}
                 </strong>{" "}
-                {describeHistory(entry)}
+                {describeHistory(entry, chrome)}
               </span>
               <span className="t-caption" title={fmtDateTime(entry.at)}>
                 {relTime(entry.at, now)}
@@ -946,7 +968,7 @@ function Woke({
 }
 
 /** One change's recipients, or the reason there are none to show. */
-function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChrome }) {
+export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChrome }) {
   if (answer.recipients.length === 0) {
     return <NobodyWoken answer={answer} />;
   }
@@ -957,8 +979,11 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
   // repetition was ever information.
   const shared =
     answer.recipients.length > 0 &&
+    // COMPARED RAW, flattened only once it is chosen: two different excerpts
+    // that flatten to one string are still two excerpts, and collapsing them
+    // here would claim a sentence everybody got that nobody was sent.
     answer.recipients.every((r) => r.excerpt === answer.recipients[0]?.excerpt)
-      ? (answer.recipients[0]?.excerpt ?? "")
+      ? plainText(answer.recipients[0]?.excerpt ?? "")
       : "";
   return (
     <div className="col gap-2">
@@ -966,11 +991,7 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
         <Tag appearance="outline">
           {answer.recipients.length} {answer.recipients.length === 1 ? "person" : "people"}
         </Tag>
-        {answer.addressed > 0 && (
-          <Tag variant="brand" title="asked something, rather than merely informed">
-            {answer.addressed} asked
-          </Tag>
-        )}
+        {answer.addressed > 0 && <AsksTag count={answer.addressed} />}
         {answer.fallback > 0 && (
           <Tag appearance="outline" title="reached only because nobody better was found">
             {answer.fallback} by fallback
@@ -984,24 +1005,26 @@ function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChr
             <div className="row gap-1">
               <SeatChip name={chrome.seatName?.(r.handle) ?? r.handle} handle={r.handle} />
               <span className="spacer" />
+              {/* WHETHER IT ASKED IS ITS OWN MARK, never a tint on the reason.
+                  Folded into the reason chip's colour it made the chip say two
+                  things in one pill, and the ground it said the second one in is
+                  the accent — which this product spends on where the READER is,
+                  and which a pressed FilterChip takes byte for byte. `AsksTag`
+                  is the mark My work has drawn for this all along. */}
+              {r.addressed && <AsksTag />}
               {/* THE REASON IS THE ROW'S POINT, so it is a badge rather
                   than a caption: it is the one of twenty that found them.
                   IN THE THIRD PERSON — this list is about colleagues, and
                   `reasonPhrase`'s "assigned to you" beside somebody else's
                   name is a sentence about the wrong person. */}
-              <Tag
-                variant={r.addressed ? "brand" : "neutral"}
-                appearance={r.addressed ? "soft" : "outline"}
-              >
-                {reasonAbout(r.reason)}
-              </Tag>
+              <Tag appearance="outline">{reasonAbout(r.reason)}</Tag>
               {r.fallback && (
                 <Tag appearance="outline" title="nobody better was found">
                   substitute{r.fallback_rank ? ` #${r.fallback_rank}` : ""}
                 </Tag>
               )}
             </div>
-            {!shared && r.excerpt && <p className="t-caption">{r.excerpt}</p>}
+            {!shared && r.excerpt && <p className="t-caption">{plainText(r.excerpt)}</p>}
           </div>
         ))}
       </div>

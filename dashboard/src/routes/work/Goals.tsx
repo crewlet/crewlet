@@ -63,30 +63,37 @@ import {
 import { Meter } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { href, useParam } from "~/app/router.tsx";
-import { fmtDate, plural, relTime } from "~/lib/format.ts";
+import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
+// THE WORKSPACE'S ONE DUE-DATE RENDERER — the same mark a board card, a list
+// row, a table cell and a task's own fact line draw. A goal's deadline is read
+// against the work under it, so a second spelling of it here is a second rule.
+import { DueMark } from "~/components/work.tsx";
 import { useNow } from "~/lib/clock.ts";
 import type { WorkGoal, WorkGoalTarget } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { Dash, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
+import { NumberCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
+import { healthLabel } from "~/lib/work.ts";
 
-/** The health values, and their tone. A closed set, so one the engine adds
- *  later renders as itself rather than vanishing. */
-const HEALTH: Record<
-  string,
-  { label: string; tone: "success" | "warning" | "danger" | "neutral" }
-> = {
-  on_track: { label: "On track", tone: "success" },
-  at_risk: { label: "At risk", tone: "warning" },
-  off_track: { label: "Off track", tone: "danger" },
-  done: { label: "Done", tone: "success" },
+/**
+ * The TONE each health value carries.
+ *
+ * The WORDS are `lib/work.ts`'s — a `health` delta renders the same four in a
+ * sentence, and two copies of one vocabulary is how one of them stops matching.
+ * A value with no tone wears no badge, which is what an unjudged goal is.
+ */
+const HEALTH_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  on_track: "success",
+  at_risk: "warning",
+  off_track: "danger",
+  done: "success",
 };
 
 /**
@@ -102,11 +109,11 @@ const HEALTH: Record<
  * because an empty child still takes its gap in the header row.
  */
 function goalFlags(goal: WorkGoal): ReactNode {
-  const health = HEALTH[goal.health ?? ""];
-  if (!health && !goal.archived) return undefined;
+  const tone = HEALTH_TONE[goal.health ?? ""];
+  if (!tone && !goal.archived) return undefined;
   return (
     <span className="row gap-1">
-      {health && <Tag variant={health.tone}>{health.label}</Tag>}
+      {tone && <Tag variant={tone}>{healthLabel(goal.health ?? "")}</Tag>}
       {goal.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
   );
@@ -123,7 +130,13 @@ function goalFlags(goal: WorkGoal): ReactNode {
  * it is in, when it is due, where it is, and how many targets say so — so the
  * rail answers "is this the one I meant" in the reader's own terms.
  */
-function goalFacts({
+/**
+ * EXPORTED for the suite. The page and the rail both read this, so a fix
+ * applied to the panel alone would leave the header still counting days — and
+ * reaching it through either frame means a Router and a live query for the sake
+ * of one span.
+ */
+export function goalFacts({
   goal,
   now,
   seatName,
@@ -146,7 +159,7 @@ function goalFacts({
         owners.length > 0 ? (
           owners.map(seatName).join(", ")
         ) : (
-          <Dash title="nobody owns this goal" />
+          <EmptyValue label="Nobody owns this goal" />
         ),
       // ONLY WHERE THERE IS ONE PLACE TO GO. A list of three names cannot be
       // one link, and linking the whole line to the first owner would send a
@@ -155,13 +168,34 @@ function goalFacts({
     },
     // A GROUP IS IDENTITY, so it is a plain word rather than a toned badge —
     // colour in this product says what state a thing is in and nothing else.
-    { label: "Group", value: goal.group || <Dash title="this goal is in no group" /> },
+    { label: "Group", value: goal.group || <EmptyValue label="This goal is in no group" /> },
     {
       label: "Due",
+      // A DATE SOMEBODY CHOSE, DRAWN AS A DATE. This read "in 19d" beside a
+      // board whose tasks read "Sep 19", and the date itself was on a `title` —
+      // a hover, absent on touch — because `relTime` hands a future instant to
+      // `inTime`, which never reaches an absolute date going FORWARD at all. A
+      // reader cannot line a goal up against the work under it by subtracting
+      // days from today.
+      //
+      // THE WORKSPACE'S ONE DUE RENDERER: the same mark a board card, a list
+      // row, a table cell and a task's own fact line draw. A goal's deadline is
+      // read against the work under it, so a second spelling of it here is a
+      // second rule and the reader is the one who has to reconcile them.
+      //
+      // NO `overdue` FLAG, exactly as a task's own fact line passes none:
+      // overdue is DERIVED by the engine against the company's day start and
+      // rides on the rows that carry it, and a goal row carries no such field. A
+      // browser re-deriving it here is how one screen calls a thing late and the
+      // next does not.
+      //
+      // THE DASH STAYS for an unset date: the five facts are read in one order
+      // wherever the object appears, so dropping the row would reorder the line
+      // on exactly the goals nobody has dated.
       value: goal.due_at ? (
-        <span title={fmtDate(goal.due_at)}>{relTime(goal.due_at, now)}</span>
+        <DueMark due={goal.due_at} now={now} />
       ) : (
-        <Dash title="no date is set on this goal" />
+        <EmptyValue label="No date is set on this goal" />
       ),
     },
     {
@@ -171,7 +205,7 @@ function goalFacts({
       // are different facts, and a goal with no targets has the first.
       value:
         goal.progress === undefined ? (
-          <Dash title="no targets, so there is nothing to measure" />
+          <EmptyValue label="No targets, so there is nothing to measure" />
         ) : (
           `${Math.round(goal.progress * 100)}%`
         ),
@@ -224,7 +258,24 @@ export function Goals() {
     return [...seen].sort();
   }, [goals]);
 
-  const atRisk = goals.filter((g) => g.health === "at_risk" || g.health === "off_track");
+  // THE TILE FOLDS TWO HEALTH VALUES, so its caption is the SPLIT rather than a
+  // list of the goals in it. `sub` is ONE line — the design system draws it
+  // `white-space: nowrap` with `text-overflow: ellipsis` — and a goal name is
+  // founder prose the engine bounds at 256 characters (`tracker.MaxGoalName`),
+  // so a join of them is cut mid-word and prints a goal nobody wrote: it shipped
+  // reading "Console reads honestly under uncertainty, Console reads hon…".
+  //
+  // CAPPING THE LIST IS THE TEMPTING WRONG FIX — one 256-character name already
+  // overflows a tile that is a third of a content column, so a cap moves the
+  // threshold and keeps the mid-word cut. WHICH goals is the list below's
+  // question, and every row there already wears its own health badge.
+  //
+  // Both halves print even at zero, so the caption's SHAPE does not move with
+  // the data: "4 at risk, 0 off track" says the tile folds exactly two states,
+  // where dropping the empty half would read like a list again.
+  const atRisk = goals.filter((g) => g.health === "at_risk");
+  const offTrack = goals.filter((g) => g.health === "off_track");
+  const raised = atRisk.length + offTrack.length;
 
   return (
     <>
@@ -246,8 +297,12 @@ export function Goals() {
           <StatCard
             icon={<WarningGlyph size="xs" />}
             label="At risk or off track"
-            value={atRisk.length}
-            sub={atRisk.length ? atRisk.map((g) => g.name).join(", ") : "nobody has raised one"}
+            value={raised}
+            sub={
+              raised
+                ? `${atRisk.length} at risk, ${offTrack.length} off track`
+                : "nobody has raised one"
+            }
           />
           <StatCard
             icon={<CheckGlyph size="xs" />}
@@ -383,11 +438,12 @@ export function GoalPanel({
             {seatName(handle)}
           </FilterChip>
         ))}
-        {goal.due_at && (
-          <span className="t-caption" title={fmtDate(goal.due_at)}>
-            due {relTime(goal.due_at, now)}
-          </span>
-        )}
+        {/* THE SAME MARK THE FACT LINE AND A BOARD CARD'S FOOT DRAW. The word
+            "due" beside the calendar mark would be a second spelling of what the
+            mark already says, and this row IS a card foot: chips, then the
+            compact date, exactly as `work-card-foot` has it. `DueMark` renders
+            nothing for an absent date, so the guard goes with it. */}
+        <DueMark due={goal.due_at} now={now} />
       </div>
 
       {goal.description && <p className="t-body">{goal.description}</p>}
@@ -664,11 +720,17 @@ export function GoalCheckIns({
             <div key={`${update.at}-${i}`} className="thread-entry">
               <div className="row gap-1">
                 <strong className="t-cell">{seatName(update.author)}</strong>
-                {update.health && HEALTH[update.health] && (
-                  <Tag variant={HEALTH[update.health]!.tone}>{HEALTH[update.health]!.label}</Tag>
+                {update.health && HEALTH_TONE[update.health] && (
+                  <Tag variant={HEALTH_TONE[update.health]!}>{healthLabel(update.health)}</Tag>
                 )}
                 <span className="spacer" />
-                <span className="t-caption" title={update.at}>
+                {/* THE FORMATTER, never the raw stamp. This was the only
+                    `title` in the dashboard holding an ISO string straight off
+                    the wire, so a check-in's hover read
+                    `2031-04-16T00:00:00Z` — UTC, in neither the reader's zone
+                    nor their date format, on a screen where every other tooltip
+                    honours both. */}
+                <span className="t-caption" title={fmtDateTime(update.at)}>
                   {relTime(update.at, now)}
                 </span>
               </div>

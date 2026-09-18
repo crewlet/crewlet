@@ -17,9 +17,23 @@
  * exactly twice. It was invisible under a 10%-alpha tint on a grey page and
  * obvious the moment the palette changed, which is how it was found.
  *
- * So selection compares BOTH, and a row with no query still matches a route
- * that carries one — `activity/turns` stays current when a seat narrows it,
- * because the seat row is the narrower answer and both are true.
+ * So selection compares BOTH, and a row with no query is still COMPATIBLE with
+ * a route that carries one — `activity/turns` is still where you are when a seat
+ * narrows it.
+ *
+ * # EXACTLY ONE ROW IS CURRENT, and the sidebar decides which
+ *
+ * Comparing the query too made the seats one match each and left the rule where
+ * it cannot be enforced: in a predicate every row answers about itself. Two
+ * sections holding one destination then answer yes twice, and that is the
+ * ordinary case rather than a corner — Starred and Recent repeat the tree's own
+ * rows by design, so a project the reader had opened drew the accent twice and
+ * read out as two current pages, and `Turns` did the same over every seat row
+ * beneath it.
+ *
+ * So the sidebar picks ONE row across every section it draws: the narrowest
+ * compatible row, ties going to the first in reading order. [currentRowOf]
+ * carries the rest of that reasoning.
  *
  *
  * # Selection is derived, never held
@@ -58,9 +72,16 @@ export interface SidebarRow {
   icon?: MarkName;
   /** A state mark, never an identity colour. */
   tone?: Tone;
-  count?: number;
-  /** What the count is over, when it is not a maintained total. */
-  countTitle?: string;
+  /**
+   * A number beside the label, and WHAT IT COUNTS — one field, because the two
+   * halves were a number and an optional sibling and the optional half is the
+   * one that went missing. "Leadership 5" in this rail was a unit's whole
+   * subtree while the org chart's block under the same name read "2 seats" and
+   * the roster's group head a third figure, none of them saying which
+   * question they had answered. `of` is the title a reader gets on the badge;
+   * it is the same rule [FacetRail] makes a required prop for a chip.
+   */
+  count?: { value: number; of: string };
   /** A second line under the label — a lead's handle, an owner. */
   sub?: string;
   children?: SidebarRow[];
@@ -96,15 +117,16 @@ function matches(row: SidebarRow, needle: string): boolean {
 }
 
 /**
- * Whether this row IS the page being read.
+ * Whether this row's destination is COMPATIBLE with the route — not whether it
+ * is the one row that is current, which is [currentRowOf]'s answer.
  *
  * A row's query has to match for a group like Activity's seats, which are one
- * path and eight queries. A row that carries NO query matches on path alone —
- * `activity/turns` is still where you are when `?seat=` narrows it, and
- * demanding an exact query there would leave a reader inside a filtered log
- * with nothing in the tree marked at all.
+ * path and eight queries. A row that carries NO query is compatible on path
+ * alone — `activity/turns` is still where you are when `?seat=` narrows it, and
+ * demanding an exact query there would leave a reader inside a filtered log with
+ * nothing in the tree marked at all.
  */
-function isCurrent(row: SidebarRow, route: { path: string[]; query: URLSearchParams }): boolean {
+function compatible(row: SidebarRow, route: { path: string[]; query: URLSearchParams }): boolean {
   if (!samePath(row.path, route.path)) return false;
   for (const [key, value] of Object.entries(row.query ?? {})) {
     if (route.query.get(key) !== value) return false;
@@ -112,9 +134,70 @@ function isCurrent(row: SidebarRow, route: { path: string[]; query: URLSearchPar
   return true;
 }
 
-function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: string }) {
+/**
+ * THE row that is the page being read — one for the whole sidebar.
+ *
+ * WHY THIS IS THE SIDEBAR'S ANSWER AND NOT EACH ROW'S. "Exactly one row is
+ * current" is a statement about the SET of rows, and a predicate a row evaluates
+ * about itself cannot make it: every compatible row answers yes, and the frame
+ * spends the accent and writes `aria-current="page"` once per yes. More than one
+ * section holds the same destination BY DESIGN — a project the reader starred is
+ * under Starred and under Projects, a goal they opened is under Recent and under
+ * Goals, and Activity's `Turns` row sits above eight seat rows that are the same
+ * path with a query.
+ *
+ * DEDUPING THE SECTIONS IS THE OBVIOUS ALTERNATIVE AND IT IS WRONG. A star is a
+ * shortcut somebody chose precisely because the object is otherwise one row of
+ * two hundred in the tree; dropping it from Starred because the tree also lists
+ * it removes the only reason to keep one. The repetition is the feature — what
+ * has to be singular is the MARK.
+ *
+ * THE NARROWEST COMPATIBLE ROW WINS, and `>` rather than `>=` is the tie-break:
+ * the first row in reading order keeps it. A row with no query still wins where
+ * nothing narrower is compatible — a `?seat=` for a handle the roster no longer
+ * has leaves `Turns` marked rather than leaving the tree with nothing marked at
+ * all. Order decides a tie because a workspace's own tree is drawn above the
+ * sections built from what this reader kept: the tree row is the address,
+ * Starred and Recent are shortcuts to it.
+ */
+function currentRowOf(
+  sections: SidebarSection[],
+  route: { path: string[]; query: URLSearchParams },
+): SidebarRow | null {
+  let best: SidebarRow | null = null;
+  let narrowest = -1;
+  const walk = (rows: SidebarRow[]): void => {
+    for (const row of rows) {
+      const narrowness = Object.keys(row.query ?? {}).length;
+      if (narrowness > narrowest && compatible(row, route)) {
+        best = row;
+        narrowest = narrowness;
+      }
+      walk(row.children ?? []);
+    }
+  };
+  for (const section of sections) walk(section.rows);
+  return best;
+}
+
+function Row({
+  row,
+  depth,
+  filter,
+  current,
+}: {
+  row: SidebarRow;
+  depth: number;
+  filter: string;
+  /**
+   * The one row this sidebar marks, from [currentRowOf]. Compared by IDENTITY
+   * rather than by `key`: a key is unique only within the section that built it,
+   * and two sections naming one destination is the case this exists for.
+   */
+  current: SidebarRow | null;
+}) {
   const route = useRoute();
-  const current = isCurrent(row, route);
+  const here = row === current;
   const onPath = containsRoute(row, route.path);
   const hasChildren = (row.children ?? []).length > 0;
   // OPEN BECAUSE THE READER IS INSIDE IT, or because they searched into it, or
@@ -147,7 +230,7 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
 
   return (
     <>
-      <div className={cx("side-row", current && "current")} style={{ "--depth": depth } as never}>
+      <div className={cx("side-row", here && "current")} style={{ "--depth": depth } as never}>
         {hasChildren ? (
           // OURS RATHER THAN `IconButton`: the twist is a 16px slot in a tree
           // row, and `IconButton`'s smallest step is a 24px square — the WCAG
@@ -168,7 +251,7 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
         <a
           className="side-link"
           href={href(row.path, row.query)}
-          aria-current={current ? "page" : undefined}
+          aria-current={here ? "page" : undefined}
         >
           {row.icon && <RowGlyph name={row.icon} />}
           {/* THEIRS, and it is the same 6px mark in the same tones — with the
@@ -181,9 +264,15 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
             <span className="truncate">{row.label}</span>
             {row.sub && <span className="side-sub truncate">{row.sub}</span>}
           </span>
-          {row.count != null && (
-            <span className="side-count t-num" title={row.countTitle}>
-              {row.count}
+          {/* `!== undefined`, NOT a truthy test. `count` holds a record now, so
+              `row.count &&` is safe — but it reads exactly like the mistake
+              `app/source.test.ts` exists to catch (`{rows.length && …}` renders
+              a bare "0"), and the gate flags it on the field's NAME because no
+              text scan can see a type. A reader has the same doubt the gate
+              does, and this is what answers both. */}
+          {row.count !== undefined && (
+            <span className="side-count t-num" title={row.count.of}>
+              {row.count.value}
             </span>
           )}
         </a>
@@ -191,7 +280,9 @@ function Row({ row, depth, filter }: { row: SidebarRow; depth: number; filter: s
       {open &&
         (row.children ?? [])
           .filter((child) => matches(child, filter))
-          .map((child) => <Row key={child.key} row={child} depth={depth + 1} filter={filter} />)}
+          .map((child) => (
+            <Row key={child.key} row={child} depth={depth + 1} filter={filter} current={current} />
+          ))}
     </>
   );
 }
@@ -211,6 +302,7 @@ export function WorkspaceSidebar({
   onClose?: () => void;
   head?: ReactNode;
 }) {
+  const route = useRoute();
   const [filter, setFilter] = useState("");
   const needle = filter.trim().toLowerCase();
   const shown = useMemo(
@@ -226,6 +318,10 @@ export function WorkspaceSidebar({
         .filter((section) => section.rows.length > 0 || (!needle && section.empty)),
     [sections, needle],
   );
+  // OVER WHAT IS OFFERED rather than over everything this sidebar was handed: a
+  // filter that hides the tree's row leaves the reader looking at the copy under
+  // Recent, and a mark on a row nothing draws marks nothing at all.
+  const current = useMemo(() => currentRowOf(shown, route), [shown, route]);
 
   return (
     <>
@@ -252,7 +348,7 @@ export function WorkspaceSidebar({
               {section.label && <div className="side-section-label">{section.label}</div>}
               {section.rows.length > 0
                 ? section.rows.map((row) => (
-                    <Row key={row.key} row={row} depth={0} filter={needle} />
+                    <Row key={row.key} row={row} depth={0} filter={needle} current={current} />
                   ))
                 : section.empty && <div className="side-empty">{section.empty}</div>}
             </div>

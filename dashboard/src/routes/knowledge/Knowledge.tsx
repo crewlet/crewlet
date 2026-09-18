@@ -41,7 +41,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Dash, DateCell, NumberCell } from "~/app/frame/cells.tsx";
+import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import type { PageContainer, PageSummary } from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
@@ -404,7 +404,7 @@ function containerFacts({
       // otherwise render as `DateCell`'s "never" — a container nobody has ever
       // written in, stated about a container nothing has been read about.
       value: unread ? (
-        <Dash title="the container's page list has not answered, so nothing here says when it last moved" />
+        <EmptyValue label="The container's page list has not answered, so nothing here says when it last moved" />
       ) : (
         <DateCell at={newest} now={now} />
       ),
@@ -427,7 +427,7 @@ function containerFacts({
       ) : units.length > 0 ? (
         units.map((u) => u.name).join(", ")
       ) : (
-        <Dash title="no unit names this container in its space:" />
+        <EmptyValue label="No unit names this container in its space:" />
       ),
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that

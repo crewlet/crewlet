@@ -145,6 +145,13 @@ human member inherits none of it, so a human seat can sit in, and lead, a
 unit whose agents share tool credentials; only an `mcp_env` written on the
 human seat itself is refused.
 
+The dashboard draws the same rule rather than restating it. A human seat's
+page omits every row a human seat cannot carry — the model chain, the token
+budget, the tool credentials, the turn and token tiles — instead of drawing
+their fallbacks: "default provider" is a MODEL for a seat that runs none, and
+a configured-settings panel asserting one is a panel claiming this company
+configured something validation would have refused.
+
 Handles are validated for format (`[a-z0-9][a-z0-9-]*`) and org-wide
 uniqueness. They are the canonical seat identity, and an agent and a human
 sharing one would misattribute the person's activity to the agent.

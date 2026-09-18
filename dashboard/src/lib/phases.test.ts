@@ -12,6 +12,7 @@ import {
   decisionLabel,
   fromLiveCall,
   fromPhaseEvent,
+  decisionTone,
   groupTurns,
   mergePhases,
   phaseKey,
@@ -148,6 +149,39 @@ describe("ordering", () => {
     const [group] = groupTurns([live, failed]);
     expect(group?.live).toBe(true);
     expect(group?.failed).toBe(true);
+  });
+
+  // A TURN'S SPAN COVERS ITS FIRST PHASE, not the gap between two LANDINGS.
+  // Both `at` values are completion instants, so subtracting them drops the
+  // opening phase's own length entirely: the turn card printed its review's
+  // duration as the whole turn's, above a phase card showing three minutes.
+  test("a turn's span covers its first phase, not the gap between landings", () => {
+    const exec = fromPhaseEvent(
+      phaseEvent({ phase: "execute", duration_ms: 180_000 }, "2026-01-01T10:03:00Z"),
+    )!;
+    const review = fromPhaseEvent(
+      phaseEvent({ phase: "review", duration_ms: 60_000 }, "2026-01-01T10:04:00Z"),
+    )!;
+    const [group] = groupTurns([exec, review]);
+    expect(group?.span).toBe(240_000);
+    // THE INVARIANT THE SCREENSHOT BROKE: a turn is never shorter than the
+    // longest phase inside it.
+    expect(group!.span!).toBeGreaterThanOrEqual(
+      Math.max(...group!.phases.map((p) => p.durationMs)),
+    );
+  });
+
+  // AND ITS ITERATION COUNT IS ITS OWN PHASES', which is the same quantity
+  // `store.Turns` reports as `MAX(iteration)` — so the turns table above the
+  // cards and the card itself state one number. A worker's iteration belongs to
+  // the delegate call that spawned it, not to this turn.
+  test("a turn's iteration count is the highest its OWN phases reached", () => {
+    const exec = fromPhaseEvent(phaseEvent({ phase: "execute", iteration: 2 }))!;
+    const worker = fromPhaseEvent(
+      phaseEvent({ phase: "subagent", iteration: 7, host_phase: "execute", host_iteration: 2 }),
+    )!;
+    const [group] = groupTurns([exec, worker]);
+    expect(group?.iterations).toBe(2);
   });
 });
 
@@ -625,5 +659,50 @@ describe("a phase's duration", () => {
     // NEGATIVE instant that passes no filter written for a missing one.
     const done = fromPhaseEvent(phaseEvent({ duration_ms: 1000 }, "not a timestamp"))!;
     expect(phaseStart(done)).toBe(0);
+  });
+});
+
+// A DECISION CARRIES ITS OWN TONE.
+//
+// The phase card's tone was an inline `=== "self_iterate" ? warning : neutral`
+// at its own call site, so the three outcomes a reader has to act on drew the
+// same grey as the one that needs nothing.
+describe("a decision carries its own tone", () => {
+  test("the three outcomes a reader must act on are not the ordinary hue", () => {
+    // `blocked` is the executor reporting it could not do the work;
+    // `incomplete` is the engine saying nothing was submitted at all; and a
+    // reviewer's `failed` is the one nothing else on a phase card draws red,
+    // because a review record never sets the phase's own `failed` flag.
+    expect(decisionTone("execute", "blocked")).toBe("caution");
+    expect(decisionTone("execute", "incomplete")).toBe("caution");
+    expect(decisionTone("review", "failed")).toBe("critical");
+  });
+
+  test("the ordinary end of a turn is not a caution", () => {
+    // Four status hues spent on every row is four hues spent on none: a turn
+    // that delivered and a turn nobody asked anything of are what a seat's feed
+    // is mostly made of.
+    expect(decisionTone("execute", "no_action")).toBe("neutral");
+    expect(decisionTone("execute", "delivered")).toBe("positive");
+    expect(decisionTone("review", "done")).toBe("positive");
+    expect(decisionTone("review", "self_iterate")).toBe("caution");
+  });
+
+  test("a decision this build cannot read takes no hue", () => {
+    // A row written by a build this bundle predates still renders, and a hue it
+    // was never given is not invented for it. `subagent` is deliberately in
+    // here: every status but `ok` already sets the record's `failed` flag and
+    // draws a danger pill, so a second one beside it reports one stop twice.
+    expect(decisionTone("plan", "direct")).toBe("neutral");
+    expect(decisionTone("subagent", "timed_out")).toBe("neutral");
+    expect(decisionTone("execute", "")).toBe("neutral");
+    expect(decisionTone("", "blocked")).toBe("neutral");
+  });
+
+  test("a phase reaches the table whatever its case", () => {
+    // A phase value is a column in the event store and nothing normalises its
+    // case on the way out — the label lookup already lowercases, and a tone that
+    // did not would lose the hue on one screen and not the next.
+    expect(decisionTone("Execute", "blocked")).toBe("caution");
   });
 });

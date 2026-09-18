@@ -32,6 +32,7 @@ import type {
   ToolExecution,
 } from "~/protocol/index.ts";
 import { tsKey } from "./format.ts";
+import type { Tone } from "~/ui/primitives.tsx";
 
 export interface ToolCall {
   name: string;
@@ -98,7 +99,21 @@ export interface PhaseRecord {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  roundNum: number;
+  /**
+   * Rounds that have come back: ONE-BASED, 0 when none has, and the same
+   * quantity from both constructors — `live_call.rounds` on a running phase,
+   * `rounds_used` on a settled one.
+   *
+   * It is the ONLY round figure a record carries. `roundNum` used to sit beside
+   * it holding the engine's ZERO-BASED `round_num` from the live path and
+   * `rounds_used` from the event path — one name, two quantities, decided by
+   * which constructor ran — and both consumers got it wrong in opposite
+   * directions: the model table read `max(roundsUsed, roundNum + 1)` and so
+   * added one to every settled phase, and the phase card read
+   * `max(ledger.length, roundNum)` and so was one short on a live phase whose
+   * rounds narrated nothing. The opening frame's `-1` also never matched that
+   * card's `=== 0` guard, so the one phase its dash exists for rendered "0r".
+   */
   roundsUsed: number;
   exhaustedRounds: boolean;
   /**
@@ -350,7 +365,6 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     inputTokens: call.input_tokens,
     outputTokens: call.output_tokens,
     totalTokens: call.total_tokens,
-    roundNum: call.round_num,
     roundsUsed: call.rounds,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
@@ -413,7 +427,6 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     inputTokens: num(p.input_tokens),
     outputTokens: num(p.output_tokens),
     totalTokens: num(p.total_tokens),
-    roundNum: num(p.rounds_used),
     roundsUsed: num(p.rounds_used),
     exhaustedRounds: p.exhausted_rounds === true,
     emptyAnswerRounds: num(p.empty_answer_rounds),
@@ -535,6 +548,52 @@ export function phaseStart(rec: Timed): number {
 }
 
 /**
+ * The window a set of phases ran in.
+ *
+ * THE SPAN OVER EVERYTHING THE CALLER HOLDS, not over one list. Read off a
+ * page's events only, a turn whose phases all arrived on the stream reported a
+ * duration of "—" beside a phase list several minutes long.
+ *
+ * The start is a minimum over EVERY phase, never over `phases[0]`. That list is
+ * ordered by when each phase LANDED, so its first element is the earliest
+ * FINISHER — and a worker a delegate spawned lands inside the window of the
+ * execute round that spawned it. On the one case the span exists for, a turn
+ * deep-linked while it runs (no query answer to supply the other term), that
+ * made the window open at the first worker's start and "Took" under-report the
+ * whole stretch before the fan-out.
+ *
+ * Each phase's start comes from [phaseStart], which is the live record's own
+ * instant or the finished record's landing less what the engine measured.
+ * Reading `startedAt` off a finished record put its END into the minimum.
+ *
+ * A zero is dropped rather than taken as a minimum: [tsKey] answers 0 for a
+ * timestamp it cannot parse, and 0 is the epoch — one unreadable instant would
+ * report a turn that has been running since 1970.
+ *
+ * HERE RATHER THAN ON THE TURN SCREEN, which is where it was written. The turn
+ * CARD subtracted two LANDING instants instead — `last.at - first.at` — which
+ * drops the first phase's own length: an execute-then-review turn reported its
+ * review's duration as the whole turn's, printed above a phase card showing
+ * three minutes. Two rules for one measurement is two answers on one screen.
+ */
+export function turnSpan(
+  events: readonly { timestamp: string }[],
+  phases: readonly Timed[],
+): { from: number; to: number } {
+  const live = (instants: number[]) => instants.filter((t) => t > 0);
+  // EVERY instant on both sides, never the first and last of either. Indexing
+  // would make the caller's sort order a precondition this function cannot
+  // state or check, and it is the precondition the phase list already broke.
+  const stamps = events.map((e) => tsKey(e.timestamp));
+  const starts = live([...stamps, ...phases.map(phaseStart)]);
+  const ends = live([...stamps, ...phases.map((p) => tsKey(p.at))]);
+  // Both or neither: a start with no end would render a duration measured
+  // against nothing, which is worse than the em dash the caller falls back to.
+  if (!starts.length || !ends.length) return { from: 0, to: 0 };
+  return { from: Math.min(...starts), to: Math.max(...ends) };
+}
+
+/**
  * Merge the live view and the durable record into one ordered list.
  *
  * The DURABLE record wins on a key collision, always: it is the complete one,
@@ -576,6 +635,26 @@ export interface TurnGroup {
   at: string;
   /** When the turn's OLDEST phase began. Never moves; `at` does. */
   startedAt: string;
+  /**
+   * How long this turn ran, across its phases, or null when nothing here can
+   * say.
+   *
+   * NOT `last.at - first.at`. Both are LANDING instants, so that subtraction
+   * drops the first phase's own length: an execute-then-review turn reported
+   * its review's duration as the whole turn's, printed above a phase card
+   * showing three minutes. Through [turnSpan] so this and the Turn screen
+   * cannot disagree — a minimum over every phase's [phaseStart] and a maximum
+   * over every landing, with unreadable instants dropped, and never an index
+   * into a list whose sort is the caller's business.
+   */
+  span: number | null;
+  /**
+   * The highest self-iterate round the turn's OWN phases reached — the same
+   * quantity `store.Turns` reports as `MAX(iteration)`, so the turns table and
+   * this card state one number. A worker's iteration belongs to the delegate
+   * call that spawned it, not to this turn.
+   */
+  iterations: number;
   live: boolean;
   failed: boolean;
   totalTokens: number;
@@ -616,19 +695,12 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         nested.set(host, [...(nested.get(host) ?? []), rec]);
       }
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
-      // The EARLIEST start across the turn's phases. A turn is "running for"
-      // as long as its first phase has been going, not its newest round.
-      //
-      // Through [phaseStart], so a FINISHED phase contributes the instant it
-      // began rather than the instant it landed. Reading `startedAt` off the
-      // record put a completed phase's own end into the minimum, and on the
-      // shape this matters for — a turn whose first rounds have landed and
-      // whose newest one is live — that reported the turn as beginning where
-      // its opening phase FINISHED.
-      const from = ordered.reduce((min, r) => {
-        const t = phaseStart(r);
-        return t > 0 && (min === 0 || t < min) ? t : min;
-      }, 0);
+      // THE WINDOW THIS TURN RAN IN, by the one rule [turnSpan] states. It was
+      // two rules: a reduce here for the start, and a subtraction of two
+      // LANDING instants in `TurnCard` for the length. A turn is "running for"
+      // as long as its first phase has been going, not its newest round; and
+      // read off `at`, a completed phase contributes its END.
+      const { from, to } = turnSpan([], ordered);
       const startedAt = from > 0 ? new Date(from).toISOString() : "";
       return {
         turnId,
@@ -637,6 +709,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         nested,
         at,
         startedAt,
+        span: to > from ? to - from : null,
+        iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
         live: ordered.some((r) => r.live),
         failed: ordered.some((r) => r.failed),
         totalTokens: ordered.reduce((n, r) => n + r.totalTokens, 0),
@@ -649,6 +723,23 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       if (at !== bt) return bt - at;
       return a.turnId < b.turnId ? 1 : a.turnId > b.turnId ? -1 : 0;
     });
+}
+
+/**
+ * What woke a turn, as one line: the trigger's own summary, else its bare type,
+ * else the word a card must still print.
+ *
+ * ONE EXPRESSION because two readers need the IDENTICAL string — the text a
+ * clamp cuts, and the `title` that carries what the clamp cut. Spelled at each
+ * site, a tooltip can come to claim something its own card does not say.
+ *
+ * `activity/Turn.tsx` deliberately does NOT read this: its chain has a third
+ * source between the two (the turn record's own `summary`) and ends at "" rather
+ * than at a word, because that screen has a heading to fall back on and a card
+ * does not.
+ */
+export function triggerHeadline(trigger: PhaseRecord["trigger"]): string {
+  return trigger?.summary || trigger?.type || "turn";
 }
 
 /**
@@ -666,43 +757,94 @@ export function splitThinking(response: string): { thinking: string; answer: str
 }
 
 /**
- * What a phase's decision means, said in words rather than left as an enum.
+ * What each decision MEANS: the words a reader sees, and whether it is something
+ * they have to act on.
  *
- * The executor's decision is its OUTCOME — its own last word on the turn —
- * and `incomplete` is the one word here the model did not write: the engine
+ * ONE ROW FOR BOTH, because they are one fact. Spelled as two tables a decision
+ * gets a sentence and no hue, which is exactly what happened: the phase card's
+ * tone was an inline `=== "self_iterate"` at its own call site, so `blocked` —
+ * the executor saying it could not do the work — drew the same neutral pill as
+ * `delivered`. So did the engine-written `incomplete`, and so did the reviewer's
+ * `failed`, which nothing else on that card draws red (a review record never
+ * sets the phase's own `failed` flag). The three outcomes a reader has to act on
+ * were the same grey as the one that needs nothing. Written as a `Record` of
+ * `{label, tone}`, adding a decision without a tone is a type error rather than
+ * a silent grey pill.
+ *
+ * The tones are the design doc's own rule for the turn header's outcome tile
+ * (`done` positive, `self_iterate` caution, a failure critical); this chip is
+ * the per-phase form of that tile and was the one surface not keeping it.
+ *
+ * `no_action` is deliberately NEUTRAL rather than a quiet caution. It is the
+ * ordinary, uneventful end — nobody was asking — and a seat's feed is mostly
+ * made of those; four status hues spent on every row is four hues spent on none.
+ *
+ * `incomplete` is the one word here the model did not write: the engine
  * synthesises it when the executor never submitted at all. It is labelled as
  * such, because a reader who cannot tell an engine-written outcome from a
  * model's own is reading a claim as a commitment.
+ */
+const DECISIONS: Record<string, Record<string, { label: string; tone: Tone }>> = {
+  execute: {
+    delivered: { label: "delivered the work", tone: "positive" },
+    no_action: { label: "nothing to do — ended silently", tone: "neutral" },
+    blocked: { label: "blocked, and said why", tone: "caution" },
+    incomplete: {
+      label: "never said what it did — the engine marked it incomplete",
+      // CAUTION, NOT CRITICAL. The reviewer still judges the turn after this;
+      // what is critical is the reviewer deciding against it.
+      tone: "caution",
+    },
+  },
+  review: {
+    done: { label: "accepted the work", tone: "positive" },
+    self_iterate: { label: "sent the turn back for another round", tone: "caution" },
+    failed: { label: "failed — the turn will not retry", tone: "critical" },
+  },
+  onboarding: {
+    done: { label: "read its team's pages and marked itself onboarded", tone: "positive" },
+  },
+};
+
+/**
+ * The row for one decision, or nothing for a decision this build has never heard
+ * of.
+ *
+ * The THIRD value matters to one caller: the turn header says "the executor said
+ * <word>" for a word it cannot gloss, which a label falling through verbatim
+ * could not tell it.
+ */
+export function decisionMeaning(
+  phase: string,
+  decision: string,
+): { label: string; tone: Tone } | undefined {
+  if (!decision) return undefined;
+  return DECISIONS[(phase || "").toLowerCase()]?.[decision];
+}
+
+/**
+ * What a phase's decision means, said in words rather than left as an enum.
  *
  * An unknown value falls through verbatim rather than being dropped, which is
- * what keeps a row written by a build this bundle predates readable: the
- * retired `plan` phase's `plan` / `direct` / `skip` still render as
- * themselves.
+ * what keeps a row written by a build this bundle predates readable: the retired
+ * `plan` phase's `plan` / `direct` / `skip` still render as themselves.
  */
 export function decisionLabel(phase: string, decision: string): string {
   if (!decision) return "";
-  const p = phase.toLowerCase();
-  if (p === "execute") {
-    return (
-      {
-        delivered: "delivered the work",
-        no_action: "nothing to do — ended silently",
-        blocked: "blocked, and said why",
-        incomplete: "never said what it did — the engine marked it incomplete",
-      }[decision] ?? decision
-    );
-  }
-  if (p === "review") {
-    return (
-      {
-        done: "accepted the work",
-        self_iterate: "sent the turn back for another round",
-        failed: "failed — the turn will not retry",
-      }[decision] ?? decision
-    );
-  }
-  if (p === "onboarding") {
-    return { done: "read its team's pages and marked itself onboarded" }[decision] ?? decision;
-  }
-  return decision;
+  return decisionMeaning(phase, decision)?.label ?? decision;
+}
+
+/**
+ * The hue that decision is drawn in.
+ *
+ * NEUTRAL for anything the table does not carry, which is the same rule the
+ * label keeps and covers two real cases rather than one. A rolling upgrade puts
+ * a later build's decision on the wire, and a hue invented for a word this build
+ * cannot read is a claim about a fact it does not have. And the phases the table
+ * deliberately omits — `subagent`, `judge` — already draw a `danger` pill of
+ * their own off the record's `failed` flag, so toning their decision too would
+ * report one stop twice, side by side.
+ */
+export function decisionTone(phase: string, decision: string): Tone {
+  return decisionMeaning(phase, decision)?.tone ?? "neutral";
 }

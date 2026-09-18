@@ -1888,17 +1888,44 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The filter bar ----------------------------------------------------- */
 
+/* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
+   `--z-sticky`, opaque, wrapping, and a `--toolbar-h` floor. This rule used to
+   restate all of that and omit the class, which cost the one thing the class
+   is for: `.screen:has(.toolbar)` publishes `--sticky-top`, so with the copy
+   the property stayed at its `0px` default and `.grid-head` — which offsets
+   itself by it — parked underneath this band. What is left here is only what
+   is genuinely the work bar's own.
+
+   A COLUMN GAP WIDER THAN THE ROW GAP, because the children are GROUPS now and
+   the space between two groups has to read as a boundary against the
+   `--space-2` between the controls inside one. */
 .work-filters {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
+  column-gap: var(--space-4);
+}
+/* THE GROUPS ARE THE WRAP UNIT. A single wrapping row broke between any two
+   controls, and since what the bar draws varies by shape — type, sprint,
+   group-by and sort each appear on some tabs and not others — the scope
+   control landed at x≈345 on List, x≈1338 on Board and x≈1155 on Calendar.
+   Grouped, a break falls between the question and the switches, and the
+   switches sit against the count rather than against six conditional
+   pickers. */
+.work-filters-ask,
+.work-filters-switches {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
-  padding: var(--space-2) 0;
-  background: var(--bg);
   min-width: 0;
+}
+/* THE QUESTION TAKES THE SLACK, which is what positions the switches from the
+   RIGHT edge. `margin-left: auto` on the count alone could not: an auto margin
+   is measured against the line the item lands on, so when the Overdue chip
+   wrapped the chip sat at x≈345 with ~1,200px of nothing beside it. */
+.work-filters-ask {
+  flex: 1 1 auto;
+}
+.work-filters-switches {
+  flex: 0 0 auto;
 }
 /* SEARCH IS THE WIDEST CONTROL IN THE BAR, because it is the one a person
    types into: the selects beside it hold a word each and never grow. */
@@ -1908,9 +1935,13 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 160px;
 }
 /* The coverage cluster ends the bar, so how fresh and how complete an answer
-   is sits beside the count it qualifies rather than above the rows. */
+   is sits beside the count it qualifies rather than above the rows. It keeps
+   the auto margin for the one case the groups above do not cover: a bar whose
+   question and switches both fit on one line still has slack after them, and
+   the count belongs at the edge rather than trailing the last chip. */
 .work-summary {
   margin-left: auto;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -2052,15 +2083,18 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-2);
   min-width: 0;
 }
+/* THE CLAMP IS `.clamp` IN base.css, which this element carries. What stays
+   here is the card's own type register and the COUNT: three is a fact about how
+   tall a work card may be, not a fact about clamping, and the declarations that
+   do the clamping are written once so a second spelling of them cannot appear
+   beside this one and drift. This copy already had — it never carried
+   `min-width: 0`, so a long unbroken title could refuse to shrink inside its
+   flex parent. */
 .work-card-title {
+  --clamp-lines: 3;
   font-size: var(--fs-xs);
   line-height: var(--lh-snug);
   color: var(--text);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .work-card-foot {
   display: flex;
@@ -2233,7 +2267,12 @@ details > summary.int-summary::-webkit-details-marker {
   text-transform: uppercase;
   color: var(--text-secondary);
   position: sticky;
-  top: 0;
+  /* NOT 0: the filter bar is sticky at the top of this same scroller, opaque
+     and at `--z-sticky`, so a head that stopped at 0 would stop underneath it
+     — and at `z-index: 1` it loses that overlap every time. `--sticky-top` is
+     what the bar publishes for exactly this, and it is `0px` on a screen with
+     no toolbar rather than a band of empty page above every head. */
+  top: var(--sticky-top);
   z-index: 1;
 }
 .work-group-foot {
@@ -2293,20 +2332,51 @@ details > summary.int-summary::-webkit-details-marker {
 }
 /* A DAY OF A NEIGHBOURING MONTH IS STILL A DAY — its work is really due then
    — so it is drawn quieter rather than left out, which is what lets a task
-   due on the 1st be visible from the month before it. */
+   due on the 1st be visible from the month before it.
+
+   THE GROUND IS RUNG 3, AND RUNG 2 WAS A NO-OP. This rule said `--surface-2`
+   and rendered nothing from the day it was written: that token is
+   `--color-surface-topbar-lift`, which is #f4f4f5 light and #1c1e24 dark —
+   byte-identical to `--color-surface-subtle`, the ground every Card in this
+   product paints, in all three states of the cascade. So every cell of the grid
+   came back the card's own colour and the leading 31 was indistinguishable from
+   the 1st. The `--surface-1/2/3` ramp steps off the PAGE and a card already
+   stands on rung 2, so rung 3 is the first step a card can show. See uilet.css's
+   surfaces note; `styles/surfaces.test.ts` resolves both against the installed
+   palette and fails if they collide again. */
 .work-cal-cell.out {
-  background: var(--surface-2);
+  background: var(--surface-3);
 }
 .work-cal-day {
   align-self: flex-start;
   font-size: var(--fs-3xs);
   font-weight: var(--fw-medium);
-  color: var(--text-muted);
+  color: var(--text);
   font-variant-numeric: tabular-nums;
   padding: 1px var(--space-1);
   border-radius: var(--r-full);
   min-width: 18px;
   text-align: center;
+}
+/* AND THE NUMERAL STEPS DOWN A RUNG, because the ground alone is not the
+   distinction. A grid can open with a SINGLE out-of-month cell — a month
+   beginning on Tuesday — and one tinted square at the head of a row reads as a
+   day that is highlighted rather than as a day that is elsewhere. The step is
+   the design system's own device on `.crewlet-calendar__day.is-outside`: body
+   ink for the month being read, tertiary for the months either side.
+
+   NOT `--text-faint`. That is `--color-text-muted`, #8f8f95, which is declared
+   decoration-only for exactly this reason: a date is read, not decorated. Nor a
+   WEIGHT step — thirty semibold numerals is a grid that shouts, and the accent
+   pill below is already the emphasis this cell has.
+
+   IT MUST PRECEDE THE `today` RULE. Both selectors are three classes, so the tie
+   is broken by source order alone, and today can be an out-of-month cell — page
+   to May on the 30th of April and the 30th is in the first row. Ordered the
+   other way this muted ink would land on the accent fill and today's pill would
+   lose its contrast. */
+.work-cal-cell.out .work-cal-day {
+  color: var(--text-muted);
 }
 .work-cal-cell.today .work-cal-day {
   background: var(--accent);
@@ -2369,9 +2439,15 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--space-4);
   min-width: 0;
 }
+/* ONLY THE RAIL STICKS — the main column is what scrolls past it. */
 .work-item-side {
   position: sticky;
-  top: 0;
+  /* `--sticky-top`, NOT 0, for the reason `.work-group-head` gives: the two
+     resolve identically on an item page today because it draws no toolbar, and
+     that is exactly what makes the literal dangerous — it is a rule that goes
+     wrong on the day somebody adds one, with nothing to say it was ever a
+     choice. */
+  top: var(--sticky-top);
 }
 
 /* A metadata list, not a panel layout: two columns sized for compact pairs,
@@ -2413,18 +2489,68 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   flex-direction: column;
 }
+/* AN ENTRY IS AS LONG AS THE CHANGE WAS, so this row is a variable height and
+   every rule below is written for one taller than a line.
+
+   The description carried `.truncate`, which is right for a cell with a shape —
+   a title, a handle, a key — and wrong for this one. A create moves every field
+   the applier compares (`internal/tracker`'s `TaskDeltas`: title, status,
+   assignee, priority, project, type, tags, sprint, due, start, estimate, points,
+   capped at `MaxDeltas`) and `describeHistory` renders a clause each, so ~250
+   characters arrived in a cell about 100 wide and the ellipsis fell inside
+   `Status: ` — on a panel with a page of unused height under it.
+
+   A SHORTER STRING IS NOT THE ALTERNATIVE. The panel's whole subject is what
+   moved, so a cap hides the same clauses the clip did — and it would not help at
+   all with the real cost: `quiet` and the `turn →` link were in this same inline
+   box, after the description, so the clip took the row's only control out of
+   sight and left it in the tab order. They have their own track now. */
 .work-hist-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
   align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-1) 0;
+  /* SEPARATED BY MORE THAN THEIR OWN LEADING, which `--space-1` was not: 4px of
+     padding put 8px between two entries while the lines inside one sit 18px
+     apart, so a wrapped panel read as a single block of prose with no boundary
+     anywhere. The hairline is what every other variable-height list here already
+     uses — `.work-feed-row`, `.thread-entry`. */
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-2xs);
+  /* STATED rather than inherited from `body`, because the glyph's offset below
+     is computed from it. */
+  line-height: var(--lh-normal);
   min-width: 0;
+}
+.work-hist-row:last-child {
+  border-bottom: none;
 }
 .work-hist-row > svg {
   color: var(--text-faint);
-  align-self: center;
+  /* ON THE ENTRY'S FIRST LINE, never in the middle of it. The row aligns on the
+     FIRST baseline, so the timestamp stays level with the opening line; an icon
+     centred in the ROW tracks the row's HEIGHT instead and slides to the middle
+     of a four-line create, pointing at nothing. `start` plus one line's
+     half-leading lands it exactly where `center` landed it while every entry was
+     a single line, so this changes nothing about a one-line row and fixes every
+     taller one. 12px is the `xs` glyph's own edge; `1em` is this row's own font
+     size. */
+  align-self: start;
+  margin-top: calc((1em * var(--lh-normal) - 12px) / 2);
+}
+/* The description, wrapping. `anywhere` rather than `break-word`: a value can be
+   a uuid or a JSON object — `describeHistory`'s `scalar` stringifies both — and
+   neither carries a space to break at, so an unbreakable run would paint over
+   the timestamp beside it once the clip is gone. */
+.work-hist-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The tail: what the row's sentence must not be able to swallow. */
+.work-hist-tail {
+  display: flex;
+  gap: var(--space-2);
+  white-space: nowrap;
 }
 .work-hist-when {
   color: var(--text-faint);
@@ -3320,6 +3446,14 @@ a.work-cal-chip:hover {
   background: var(--surface-1);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--r-md);
+}
+
+/* THE BAND'S FILTERS SIT IN ITS OWN FLOW. The reason rail moved out of the list
+   so a reason matching nothing still draws the chip that would lift it;
+   `.facet-row`'s bottom margin exists for a parent with no gap, and here it is
+   ADDED to the band's own gap. */
+.inbox-band > .facet-row {
+  margin-bottom: 0;
 }
 
 .inbox-row {

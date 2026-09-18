@@ -23,7 +23,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { SeatScreen } from "./Seat.tsx";
+import { SeatPeek, SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -42,7 +42,14 @@ class InertWebSocket {
 /** The anonymous projection, written out as `internal/api` emits it. */
 const projection: OrgProjection = {
   name: "Acme",
-  roles: [{ name: "CEO", handle: "ceo" }],
+  roles: [
+    { name: "CEO", handle: "ceo" },
+    // A HUMAN SEAT, because half of what this screen decides is decided by the
+    // kind: the tab set, the overview's tiles, the Configured card's rows and
+    // the tool-credential card all differ, and a fixture with only agents in it
+    // can assert none of it.
+    { name: "Ada Founder", handle: "ada", kind: "human", availability: "CET business hours" },
+  ],
   units: [
     {
       name: "Engineering",
@@ -60,6 +67,17 @@ const projection: OrgProjection = {
         manager: "",
         managers: null,
         reports: ["dev-a"],
+        auto_reports: null,
+        onboarding_chain: null,
+      },
+      {
+        handle: "ada",
+        name: "Ada Founder",
+        kind: "human",
+        placed_by_ref: false,
+        manager: "",
+        managers: null,
+        reports: null,
         auto_reports: null,
         onboarding_chain: null,
       },
@@ -103,6 +121,13 @@ const document_: CompanyDocument = {
       token_budget: 250000,
       llm: { default: ["fast", "backup"], review: "big" },
       schedules: [{ name: "weekly-review", cron: "0 9 * * 1", task: "Review the week" }],
+    },
+    {
+      name: "Ada Founder",
+      handle: "ada",
+      kind: "human",
+      email: "ada@example.com",
+      contact: { slack_user_id: "U0ADA" },
     },
   ],
   units: [
@@ -194,7 +219,23 @@ function mount(hash: string, answer: (what: string) => Promise<unknown>) {
 }
 
 const answering = (what: string) =>
-  what === "config" ? Promise.resolve(document_) : Promise.resolve({ llm_history: [], next: "" });
+  what === "config"
+    ? Promise.resolve(document_)
+    : // THE SHAPE THE ENGINE ACTUALLY SENDS for a rollup. `totals` is not
+      // optional on that answer, and the Cost tab reads it without a guard — so
+      // a fixture answering `{}` for it crashed the tab rather than testing it.
+      what === "tokens"
+      ? Promise.resolve({ totals: { total_tokens: 0, calls: 0 }, by_model: [], by_turn: [] })
+      : Promise.resolve({ llm_history: [], next: "" });
+
+/** Let every settled promise land, and the renders they cause. */
+async function settle() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
 
 test("the settings the projection does not carry are read from the document", async () => {
   mount("#/company/people/ceo", answering);
@@ -340,4 +381,120 @@ test("a reader without the credential gets the open list and not the private que
   // NOT ASKED AT ALL. Asking and rendering the refusal is the shape this
   // avoids: the answer is not "no queue", it is "not yours".
   expect(askedMyWork).toBe(false);
+});
+
+/**
+ * The header's fact line, which renders ABOVE the tab strip on every tab.
+ *
+ * Read off the DOM rather than through `getByText`, because the Overview panel's
+ * own `ModelChain` renders the same keys and normalises to the same string — so
+ * a text query would match two elements on one tab and one on the others, and
+ * pass for the wrong reason.
+ */
+function headerFacts(): string {
+  return (document.querySelector(".object-head .fact-line")?.textContent ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// THE HEADER IS A PROPERTY OF THE SEAT, NOT OF THE OPEN TAB.
+//
+// The guarded document read was gated on `tab === "overview" | "cost" |
+// "access"` and the header that reads the model chain out of it renders on all
+// eight tabs. So a reader WITH a token was shown the chain on three and told
+// "needs an operator token" on Work, Turns, Conversations, Memory and Schedules
+// — the same seat, the same header, one click apart.
+test("the model fact is the same on every tab", async () => {
+  mount("#/company/people/ceo", answering);
+  await settle();
+  expect(headerFacts()).toContain("fast → backup → big");
+
+  for (const name of [
+    "Work",
+    "Turns",
+    "Conversations",
+    "Memory",
+    "Cost",
+    "Access",
+    "Schedules",
+    "Overview",
+  ]) {
+    fireEvent.click(screen.getByRole("tab", { name }));
+    await settle();
+    expect(headerFacts(), name).toContain("fast → backup → big");
+    expect(headerFacts(), name).not.toContain("needs an operator token");
+  }
+});
+
+// THE RAIL ASKS NOBODY, SO IT CLAIMS NOTHING.
+//
+// `SeatPeek` reads nothing guarded on purpose — a per-peek fetch of the whole
+// company document would make every `[`/`]` step through a list an
+// operator-gated read. It passed a null role for that, and the fact line
+// rendered the null as "needs an operator token", so a rail that had asked
+// nobody told every reader, token or not, that they were missing one.
+test("the seat rail states no model rather than claiming a missing token", async () => {
+  const store = new Store();
+  store.applyOrg(projection);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
+    Promise.reject(new Error("the rail asks nothing guarded"));
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <SeatPeek handle="ceo" />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await settle();
+
+  expect(screen.queryByText(/needs an operator token/)).toBeNull();
+  // AND NO MODEL ROW AT ALL: `FactLine` drops a fact whose value is empty, the
+  // same rule a human seat's runtime follows.
+  expect(headerFacts()).not.toContain("Model");
+});
+
+// A HUMAN SEAT'S CONFIGURED PANEL CARRIES NO MODEL ROW.
+//
+// `org.Role.humanForbidden` refuses `llm` and every per-phase chain on a human
+// seat, so those rows could only ever draw their own fallbacks: "default
+// provider" is a MODEL for a seat that runs none, and "none, reflection uses the
+// default" is a reflection pass that never happens — both on the one card whose
+// whole job is to say what somebody chose.
+test("a human seat's configured panel carries no model row", async () => {
+  mount("#/company/people/ada", answering);
+  await settle();
+  expect(screen.getByText("ada@example.com")).toBeTruthy();
+  expect(screen.queryByText("default provider")).toBeNull();
+  expect(screen.queryByText("none, reflection uses the default")).toBeNull();
+  expect(screen.queryByText("Auxiliary model")).toBeNull();
+  expect(screen.getByText(/A human seat runs no model/)).toBeTruthy();
+});
+
+// AND ITS OVERVIEW MEASURES NO RUNTIME, and asks for no phase history.
+test("a human seat shows no spend or turn tile, and asks for no phase history", async () => {
+  let askedAgent = false;
+  mount("#/company/people/ada", (what: string) => {
+    if (what === "agent") askedAgent = true;
+    return answering(what);
+  });
+  await settle();
+  expect(screen.queryByText("Turns in the record")).toBeNull();
+  expect(screen.queryByText(/^Tokens/)).toBeNull();
+  expect(askedAgent).toBe(false);
+  // NOT EMPTIED WHOLESALE: the two tiles that describe a seat of any kind stay.
+  expect(screen.getByText("Direct reports")).toBeTruthy();
+});
+
+// AND ITS ACCESS TAB HAS NO TOOL-CREDENTIAL CARD. `mcp_env` is refused on a
+// human seat and a human member inherits none of its unit's, so that card could
+// only ever draw an empty state whose sentence — "this seat uses whatever the
+// shared MCP servers were configured with" — is false of a seat that runs no
+// tools at all.
+test("a human seat's access tab has no tool-credential card", async () => {
+  mount("#/company/people/ada?tab=access", answering);
+  await settle();
+  expect(screen.getByText("U0ADA")).toBeTruthy();
+  expect(screen.queryByText("Tool credentials")).toBeNull();
+  expect(screen.queryByText("No per-seat tool credentials")).toBeNull();
 });

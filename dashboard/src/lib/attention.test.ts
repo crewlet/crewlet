@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { attentionQueue, type AttentionInput } from "./attention.ts";
+import { attentionQueue, SUBJECTS, WATCHED, type AttentionInput } from "./attention.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -22,7 +22,6 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     runs: [],
     budget: {},
     engine: { status: "ok", configured: true },
-    seats: [],
     connected: true,
     authRejected: false,
     now,
@@ -171,7 +170,7 @@ describe("what it surfaces", () => {
         ],
       }),
     );
-    expect(items.filter((i) => i.id.startsWith("sandbox-"))).toEqual([]);
+    expect(items.filter((i) => i.subject === "run")).toEqual([]);
   });
 
   test("a live round that stopped moving is surfaced, and escalates", () => {
@@ -205,6 +204,29 @@ describe("what it surfaces", () => {
 
     const stale = attentionQueue(input({ agents: [call(new Date(now - 200_000).toISOString())] }));
     expect(stale[0]?.severity).toBe("caution");
+    // THE ROUND A PERSON READS, which is the engine's zero-based counter plus
+    // one. This row printed the raw counter, so it named a round one lower than
+    // the seat card it links to — one call, two numbers, one click apart.
+    expect(stale[0]?.detail).toContain("round 4");
+    // AND THE OPENING FRAME IS NOT A MISSING VALUE. `-1` is the phase's first
+    // model round-trip still in flight, which is exactly the case this row is
+    // for; it used to render "round ?".
+    const opening = attentionQueue(
+      input({
+        agents: [
+          {
+            ...call(new Date(now - 900_000).toISOString()),
+            live_call: {
+              ...call(new Date(now - 900_000).toISOString()).live_call,
+              round_num: -1,
+              rounds: 0,
+            },
+          },
+        ],
+      }),
+    );
+    expect(opening[0]?.detail).toContain("starting");
+    expect(opening[0]?.detail).not.toContain("?");
 
     const stalled = attentionQueue(
       input({ agents: [call(new Date(now - 900_000).toISOString())] }),
@@ -229,6 +251,45 @@ describe("what it surfaces", () => {
     // AND A HEALTHY METER RAISES NOTHING, which is what stops the first
     // two being a check that anything at all is pushed.
     expect(attentionQueue(input({ budget: { org: { used: 10, max: 100 } } }))).toEqual([]);
+  });
+
+  // WHAT THE QUIET BAND DRAWS IS TWO-SIDED, and only one side is a type error.
+  //
+  // TypeScript refuses a condition that names no subject. Nothing but this
+  // refuses a SUBJECT no condition can raise — a phrase on the landing screen
+  // claiming something is checked when nothing checks it, which is the exact
+  // shape of the sentence it replaced: "No seat is stopped, no run is parked on
+  // a question, and no budget is refusing", three of the twelve conditions
+  // here, read as all of them.
+  test("every subject the quiet band draws is one a condition can raise", () => {
+    const items = attentionQueue(
+      input({
+        engine: { status: "ok", configured: false },
+        budget: { org: { used: 100, max: 100 } },
+        runs: [parked("awaiting_clarification")],
+        agents: [
+          {
+            id: "a",
+            role: "Dev A",
+            last_error: {
+              kind: "llm_unavailable",
+              message: "provider unreachable",
+              phase: "execute",
+              turn_id: "t1",
+              at: "2026-01-01T11:59:00Z",
+              event_id: "e1",
+            },
+          },
+        ],
+      }),
+    );
+    expect(new Set(items.map((i) => i.subject))).toEqual(new Set(Object.keys(SUBJECTS)));
+  });
+
+  // AND THE CLAUSE CARRIES ALL OF THEM. The band drops one string in, so a join
+  // that lost its last item would read as a complete sentence.
+  test("the clause the screen drops in carries every subject", () => {
+    for (const phrase of Object.values(SUBJECTS)) expect(WATCHED).toContain(phrase);
   });
 });
 

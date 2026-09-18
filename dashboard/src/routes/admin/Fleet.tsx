@@ -35,6 +35,7 @@ import {
   Callout,
   Card,
   EmptyState,
+  EmptyValue,
   InlineCode,
   Skeleton,
   StatCard,
@@ -55,7 +56,6 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
-  Dash,
   DateCell,
   DurationCell,
   KeyCell,
@@ -285,7 +285,7 @@ function FleetScreen() {
                   n.posture ? (
                     <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
                   ) : (
-                    <Dash title="this node has published no presence heartbeat" />
+                    <EmptyValue label="This node has published no presence heartbeat" />
                   ),
               },
               {
@@ -676,7 +676,7 @@ export function nodeFacts({
     {
       label: "Posture",
       // The control plane's own word, never a verdict of this screen's.
-      value: node.posture || <Dash title="this node has published no presence heartbeat" />,
+      value: node.posture || <EmptyValue label="This node has published no presence heartbeat" />,
     },
     {
       label: "Epoch",
@@ -692,7 +692,7 @@ export function nodeFacts({
         applied > 0 ? (
           `${applied} of ${target}`
         ) : (
-          <Dash title="this node has reported no config apply" />
+          <EmptyValue label="This node has reported no config apply" />
         ),
     },
     {
@@ -718,7 +718,7 @@ export function nodeFacts({
       label: "Lag",
       value:
         applied === 0 ? (
-          <Dash title="nothing to compare against: this node has reported no config apply" />
+          <EmptyValue label="Nothing to compare against: this node has reported no config apply" />
         ) : behind > 0 ? (
           `${plural(behind, "epoch")} behind`
         ) : (
@@ -732,7 +732,7 @@ export function nodeFacts({
     {
       label: "Version",
       value: version ?? (
-        <Dash title="only the node serving this dashboard reports its build version" />
+        <EmptyValue label="Only the node serving this dashboard reports its build version" />
       ),
     },
   ];

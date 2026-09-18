@@ -32,14 +32,14 @@
  */
 
 import { useMemo } from "react";
-import { Card, InlineCode, Skeleton, Tag } from "@crewlethq/ui";
+import { Card, EmptyValue, InlineCode, Skeleton, Tag } from "@crewlethq/ui";
 import { DnsGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, TextCell } from "~/app/frame/cells.tsx";
+import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes } from "~/lib/format.ts";
@@ -212,7 +212,7 @@ export function DomainScreen({ name }: { name: string }) {
                         p.seq < 0 ? (
                           // COUNTED AND SILENT, which is the state that pins a
                           // log: the trim waits for a node it cannot see.
-                          <Dash title="this node has published no position for this domain" />
+                          <EmptyValue label="This node has published no position for this domain" />
                         ) : (
                           <span className="t-num">
                             {p.seq}
@@ -228,7 +228,11 @@ export function DomainScreen({ name }: { name: string }) {
                       shrink: true,
                       sortValue: (p) => p.lag ?? 0,
                       cell: (p) =>
-                        p.lag == null ? <Dash /> : <span className="t-num">{p.lag}</span>,
+                        p.lag == null ? (
+                          <EmptyValue label="Not reported" />
+                        ) : (
+                          <span className="t-num">{p.lag}</span>
+                        ),
                     },
                     {
                       key: "state",

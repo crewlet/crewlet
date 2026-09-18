@@ -22,7 +22,7 @@
  */
 
 import { useMemo } from "react";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -1140,7 +1140,7 @@ function PageChanges({
                   {relTime(change.at, now)}
                 </span>
               </span>
-              {change.excerpt && <p className="t-caption">{change.excerpt}</p>}
+              {change.excerpt && <p className="t-caption">{plainText(change.excerpt)}</p>}
             </div>
           ))}
         </div>

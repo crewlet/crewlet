@@ -1,7 +1,7 @@
 /**
  * One person's day — the seven claims on their attention, and the feed.
  *
- * # Seven blocks, not one list
+ * # Seven claims, and the feed that reached them
  *
  * A person who saw only their assignments would miss six other things asking
  * for their time: what a lead put at the top of their list, the questions
@@ -9,14 +9,35 @@
  * the work they were brought onto without owning, what moved on what they
  * follow, and what became workable while they were not looking. Each is a
  * different claim, and folding them into one list is how six of them go
- * unnoticed.
+ * unnoticed. The eighth block is not a claim at all: `work_inbox` is what
+ * REACHED them, and the one reason of twenty it reached them under.
  *
  * # Every block is bounded the same
  *
  * Twenty rows each, so no block can crowd out another — the same rule the
  * engine's own answer follows, for the same reason: this is read as one page
  * and a person with two hundred assignments would otherwise never see their
- * asks.
+ * asks. The inbox block takes that same bound — see [INBOX_ROWS] — and not the
+ * engine's own inbox ceiling of fifty, which belongs to the screen that IS
+ * somebody's inbox.
+ *
+ * # Every number here is over the page it is on
+ *
+ * `work_inbox` says so on the field: `unread` and `primary` are counts over the
+ * rows the answer returned, never totals. So a figure drawn here carries a word
+ * saying what it counts. The count pill is the ROWS UNDER IT, the way that slot
+ * reads on every other card in this product, and the unread half is said in
+ * prose beside it. It was the other way round — the pill held the unread tally
+ * and the subtitle opened with the row count — which is two bare digits side by
+ * side, each denying the other's meaning, and on a quiet day both of them `0`.
+ *
+ * # Whose day it is decides the pronoun, everywhere
+ *
+ * Including the wake reasons. `reasonPhrase` is the second person — "assigned
+ * to you" — and on an operator reading a report's day that is a sentence about
+ * the reader, who is not on the list. That is the exact failure `reasonAbout`
+ * was written for, and this is the only screen in the product that renders
+ * somebody else's notices, so it is the only one that has to choose.
  *
  * # Read-only, like every other work screen
  *
@@ -26,22 +47,40 @@
  */
 
 import { useMemo } from "react";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Callout, Card, EmptyState, Select, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import { AsksTag, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
+import { Callout, Card, Count, EmptyState, Select, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { ErrorGlyph, HelpGlyph, InboxGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { reasonPhrase } from "~/lib/reasons.ts";
+import { reasonAbout, reasonPhrase } from "~/lib/reasons.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { WorkAskRow, WorkChecklistRow, WorkSummary } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+
+/**
+ * How many notices the inbox block carries.
+ *
+ * TWENTY, which is the bound the engine puts on each of the seven blocks beside
+ * it (`tracker.MyWorkRows`). It was twelve, a number with no anchor at the call
+ * site and none anywhere else — and this page's whole rule is that no block may
+ * crowd out another, which a block bounded below its seven neighbours breaks in
+ * the one direction nobody notices: it runs out first, and a truncated feed
+ * reads as a quiet one.
+ *
+ * NOT the engine's own ceiling of fifty (`tracker.MaxInboxRows`). That is what
+ * the Inbox screen asks for, because that screen IS somebody's inbox; this is
+ * one card on somebody's day, and fifty notices here would be most of the page.
+ * Anything above fifty is clamped by the reader, so this is a request it can
+ * always serve whole.
+ */
+const INBOX_ROWS = 20;
 
 export function MyWork() {
   const org = useOrg();
@@ -96,11 +135,29 @@ export function MyWork() {
   // found this person — the fact no commercial tracker records — and the
   // reader behind it has existed, tested and swept on a 365-day retention,
   // since the tracker did.
-  const inbox = useQuery("work_inbox", whose ? { handle: whose, limit: 12 } : undefined, {
+  const inbox = useQuery("work_inbox", whose ? { handle: whose, limit: INBOX_ROWS } : undefined, {
     enabled: whose !== "",
     pollMs: 30_000,
   });
   const notices = inbox.data?.notices ?? [];
+  // THE REASON VOCABULARY, IN THE VOICE OF WHOSE DAY THIS IS. `reasonPhrase` is
+  // the second person — "assigned to you" — which on a report's day is a
+  // sentence about the reader, who is not on the list.
+  const reasonWord = ownDay ? reasonPhrase : reasonAbout;
+  // AND THE CARD'S FOOTER AS ONE STRING. `Card.Footer` is a flex row that does
+  // not wrap, so two element children sit on one line and squeeze each other;
+  // one text node is a single anonymous flex item and wraps like prose. The
+  // primary split is ABSENT rather than half-written when the engine has not
+  // stated one — "counting as primary: ." is worse than saying nothing.
+  const primary = (inbox.data?.primary_reasons ?? []).map(reasonWord);
+  const inboxNote = [
+    primary.length
+      ? `Of the reasons below, ${primary.join(" · ")} count as primary for ${ownDay ? "you" : "them"}.`
+      : "",
+    `Read and snoozed marks are written by ${ownDay ? "your" : "this person’s"} own assistant, through mark_inbox — the dashboard shows what it recorded.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <>
@@ -110,14 +167,29 @@ export function MyWork() {
           theirs. */}
       <PageActions>
         {whose ? (
-          <Tag
-            appearance={whose === viewer.handle ? "soft" : "outline"}
-            variant={whose === viewer.handle ? "success" : "neutral"}
-          >
-            {whose === viewer.handle
-              ? "yours"
-              : `${index.byHandle.get(whose)?.name ?? whose}’s day`}
-          </Tag>
+          // ONE PILL, WHATEVER IT SAYS. This took `success` — the POSITIVE
+          // STATUS hue, a soft green tint under green ink — when the day was
+          // your own, and the neutral outline when it was somebody else's, so
+          // the only thing either the hue or the fill separated was two people.
+          // Colour carries STATE here and never IDENTITY (`styles/tokens.css`;
+          // uilet's own tone doc: "a tone says what a thing IS, never who it
+          // is"), and a green pill in the page bar reads as a verdict on the day
+          // rather than a label on the page.
+          //
+          // IT WAS ALSO THE WRONG WAY ROUND. The reader who must not miss this
+          // tag is the operator on somebody ELSE'S day — acting on work that is
+          // not theirs is the failure the tag exists to prevent — and that was
+          // the branch wearing the quiet outline (`crewlet-tag--neutral` under
+          // `--outline` drops to the tertiary ink) while the harmless branch
+          // wore the green. So both take the same pill, at the louder of the two
+          // registers, and the WORDS carry whose day it is: a name is stable,
+          // legible, and does not run out at eight.
+          //
+          // `ownDay` rather than a fourth spelling of `whose === viewer.handle`
+          // — inside this guard `whose` is non-empty, so the two are the same
+          // question, and one question spelled per prop is how one prop came to
+          // disagree with the rule while its neighbours did not.
+          <Tag>{ownDay ? "yours" : `${index.byHandle.get(whose)?.name ?? whose}’s day`}</Tag>
         ) : undefined}
         {
           <a className="t-link" href={href(["work"])}>
@@ -217,18 +289,40 @@ export function MyWork() {
               <Card padding="none">
                 <Card.Header
                   icon={<InboxGlyph size="sm" />}
-                  count={inbox.data?.unread ?? notices.length}
+                  // THE SUBTITLE CARRIES THE FIGURE THE PILL CANNOT, WITH A WORD
+                  // ON IT. Both numbers are over the PAGE — the answer says so
+                  // on the field — so neither is a total, and two bare digits
+                  // beside each other said nothing about which was which. The
+                  // bound is stated unconditionally rather than only when the
+                  // page fills, which is the rule `FacetRail` already keeps for
+                  // the same reason: a number is read as "how many there are"
+                  // until something says otherwise, and a sentence that appears
+                  // only sometimes is one nobody learns to look for.
+                  //
+                  // GUARDED ON THE ANSWER, NEVER ON THE FIELD. `unread` is sent
+                  // on every answer, so `?? 0` there could only ever substitute
+                  // a made-up figure for a missing one.
                   subtitle={
                     inbox.data
-                      ? `${notices.length} most recent · counting as primary: ${(
-                          inbox.data.primary_reasons ?? []
-                        )
-                          .map(reasonPhrase)
-                          .join(" · ")}`
+                      ? `${inbox.data.unread} unread · the ${INBOX_ROWS} most recent`
                       : undefined
                   }
                 >
-                  <Card.Title>Reached you</Card.Title>
+                  <Card.Title>{ownDay ? "Reached you" : "Reached them"}</Card.Title>
+                  {/* THE COUNT IS RENDERED HERE rather than through
+                      `Card.Header`'s own `count`, which passes no `label` to
+                      `Count`: a reader on a screen reader then hears "Reached
+                      you, 12" with nothing to say what twelve is. It draws in
+                      the same place — the header puts `children` into the name
+                      block immediately before its own pill — and it is the ROWS
+                      UNDER IT, which is what that slot means on every other card
+                      here. A pill disagreeing with what the reader can count is
+                      the defect this replaced.
+                      DRAWN ONLY ONCE THERE IS AN ANSWER: this card is gated on
+                      `work_my_work` and the inbox is a second round trip, so a
+                      pill built from `notices.length` would have said `0` —
+                      "nothing reached you" — before anything had been asked. */}
+                  {inbox.data && <Count value={notices.length} label="notices on this page" />}
                 </Card.Header>
                 <QueryState
                   error={inbox.error}
@@ -256,18 +350,19 @@ export function MyWork() {
                             </a>
                           )}
                           <span className="truncate t-cell" style={{ flex: 1 }}>
-                            {notice.excerpt || notice.kind.replace(/_/g, " ")}
+                            {plainText(notice.excerpt ?? "") || notice.kind.replace(/_/g, " ")}
                           </span>
-                          {notice.addressed && (
-                            <Tag variant="warning" title="this asks something of them">
-                              asks
-                            </Tag>
-                          )}
+                          {/* THE ONE MARK, shared with the item page's Woke
+                              panel — which drew the same fact as a TINT on the
+                              reason chip instead, in the accent ground a pressed
+                              filter chip takes. Two marks for one engine fact is
+                              two facts to a reader. */}
+                          {notice.addressed && <AsksTag />}
                           <Tag
                             appearance="outline"
                             title={notice.fallback ? "nobody better was found" : undefined}
                           >
-                            {reasonPhrase(notice.reason)}
+                            {reasonWord(notice.reason)}
                           </Tag>
                           <span className="t-caption">{relTime(notice.at, now)}</span>
                         </div>
@@ -284,12 +379,18 @@ export function MyWork() {
                   </div>
                 </QueryState>
                 <Card.Footer variant="meta">
-                  Read and snoozed marks are written by {ownDay ? "your" : "this person's"} own
-                  assistant, through mark_inbox — the dashboard shows what it recorded.
+                  {/* THE PRIMARY SPLIT BELONGS HERE, not on the header line. The
+                      subtitle is one row that truncates — `flex-shrink: 100`,
+                      `text-overflow: ellipsis` — and the shipped default is
+                      eight reasons, so the sentence explaining the card was cut
+                      to two words on every render it ever made. A footer wraps,
+                      and it is the only place a reason list can be read beside
+                      the tags it describes. */}
+                  {inboxNote}
                 </Card.Footer>
               </Card>
 
-              <Asks rows={mine.asked_of_me} now={now} chrome={chrome} />
+              <Asks rows={mine.asked_of_me} now={now} chrome={chrome} ownDay={ownDay} />
               <TaskBlock
                 title="Priorities"
                 hint="What somebody put at the top of this list, in the order they put it."
@@ -359,16 +460,25 @@ export function Asks({
   rows,
   now,
   chrome,
+  // WHOSE QUESTIONS THESE ARE, and the DEFAULT IS SOMEBODY ELSE'S. This block
+  // is rendered on a report's day here and on every seat page, which is written
+  // in the third person throughout — so a caller that says nothing is a caller
+  // that has not claimed the rows are the reader's, and the safe reading of an
+  // unstated owner is "not yours". That is the same lesson this screen's own
+  // handle resolution records: it guessed, and told everybody they were reading
+  // their own day.
+  ownDay = false,
 }: {
   rows: WorkAskRow[];
   now: number;
   chrome?: RowChrome;
+  ownDay?: boolean;
 }) {
   if (rows.length === 0) return null;
   return (
     <Card>
       <Card.Header icon={<HelpGlyph size="sm" />} count={rows.length}>
-        <Card.Title>Asked of you</Card.Title>
+        <Card.Title>{ownDay ? "Asked of you" : "Asked of them"}</Card.Title>
       </Card.Header>
       <div className="col gap-3">
         {rows.map((ask) => (

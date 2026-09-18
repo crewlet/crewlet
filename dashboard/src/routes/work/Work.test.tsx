@@ -14,11 +14,20 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { Board, CalendarView, ProjectHead, Work, WorkspaceHead, patchedHref } from "./Work.tsx";
+import { EMPTY_VALUE } from "@crewlethq/ui";
+import {
+  ActivityFeed,
+  Board,
+  CalendarView,
+  ProjectHead,
+  Work,
+  WorkspaceHead,
+  patchedHref,
+} from "./Work.tsx";
 import { BoardCard, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import { calendarWeeks, dayKey, filterPatchForGroup } from "~/lib/work.ts";
+import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type {
   QueryName,
   WorkGroup,
@@ -284,11 +293,37 @@ test("overdue and finished chips are marked differently and both are drawn", () 
   expect(container.querySelector('.work-cal-chip[data-done="true"]')).toBeTruthy();
 });
 
-// UNDATED WORK IS NOT ON THE CALENDAR AND THE SCREEN SAYS SO. A reader who
-// cannot see the omission reads the month as the whole backlog.
-test("undated rows are counted out loud rather than dropped in silence", () => {
-  calendar([row("a"), row("b")]);
-  expect(screen.getByText(/2 of the items on this page carry no due date/)).toBeTruthy();
+// THE CALENDAR NAMES BOTH OF THE SETS ITS WINDOW LEAVES OUT.
+//
+// This asserted a sentence the product cannot reach: `buildItemsParams` bounds
+// the fetch to the grid's days and the engine compiles that to `due_at IS NOT
+// NULL AND due_at >= ? AND due_at < ?`, so an undated row can never be in
+// `rows` — the count was always zero and the clause it gated never rendered.
+// Both omissions are stated unconditionally instead, because neither count is
+// ours to give: neither set is in this answer and the grammar has no `due=null`
+// to ask for one. The rows here all carry due dates, which is the only kind the
+// query can return.
+test("the calendar names both of the sets its window leaves out", () => {
+  const { container } = calendar([row("a", { due: new Date(2031, 3, 16, 9, 0, 0).toISOString() })]);
+  const note = container.querySelector(".work-cal-note")!;
+  expect(note.textContent).toContain("no due date");
+  expect(note.textContent).toContain("outside");
+});
+
+// TWO CELLS, ONE NUMERAL. April 2031 opens on 31 March and closes on 4 May, so
+// `1` is drawn twice — once for April and once for May. The tint that separates
+// them is a colour; this is the half that is not.
+test("every cell says which date it is, so a repeated numeral is not ambiguous", () => {
+  const { container } = calendar([]);
+  const cells = [...container.querySelectorAll(".work-cal-cell")];
+  const ones = cells.filter((c) => c.querySelector(".work-cal-day")?.textContent === "1");
+  expect(ones).toHaveLength(2);
+  const spoken = ones.map((c) => c.querySelector(".sr-only")?.textContent);
+  expect(spoken[0]).toBe(dayLabel("2031-04-01"));
+  expect(spoken[1]).toBe(dayLabel("2031-05-01"));
+  expect(spoken[0]).not.toBe(spoken[1]);
+  // And the numeral is not read twice over the date beside it.
+  expect(ones[0]?.querySelector(".work-cal-day")?.getAttribute("aria-hidden")).toBe("true");
 });
 
 // A DAY WITH MORE THAN THE CELL HOLDS SAYS HOW MANY, rather than truncating
@@ -734,8 +769,8 @@ test("a removal older than the loaded history draws a dash, not a blank", async 
     return mountWork();
   })();
   await waitFor(() => expect(screen.getByText("removed long ago")).toBeTruthy());
-  const dashed = [...container.querySelectorAll("[title]")].filter((el) =>
-    (el.getAttribute("title") ?? "").includes("older than the loaded history"),
+  const dashed = [...container.querySelectorAll(".crewlet-empty-value")].filter((el) =>
+    (el.textContent ?? "").includes("older than the loaded history"),
   );
   expect(dashed.length).toBeGreaterThan(0);
 });
@@ -765,7 +800,7 @@ test("a purged task appears in its own band, marked irreversible", async () => {
           subject_kind: "task",
           subject_id: "t-3",
           subject_key: "ENG-11",
-          excerpt: "duplicate of ENG-4",
+          excerpt: "duplicate of **ENG-4**",
           notified: false,
         },
       ],
@@ -780,7 +815,11 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   // that are about THIS band have to be scoped to it.
   const band = screen.getByText("Purged").closest(".crewlet-card") as HTMLElement;
   expect(band).toBeTruthy();
+  // FLATTENED, like the feed's. An operator's own reason is free text, so it can
+  // carry markdown too, and an excerpt rendered two ways on one screen is the
+  // drift a shared helper exists to stop.
   expect(within(band).getByText("duplicate of ENG-4")).toBeTruthy();
+  expect(band.textContent).not.toContain("**");
   expect(within(band).getByText("irreversible")).toBeTruthy();
   // NO LINK. The task is gone, so an anchor would lead to a NotFound on every
   // row — and the key is the entry's own, because there is no task row left to
@@ -793,4 +832,87 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   // AND AN EMPTY TRASH IS NOT "NOTHING MATCHES": the band above IS the answer
   // on a company whose removals have all been purged.
   expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// MARKDOWN IS THE CONTRACT, so an excerpt is a markdown fragment. The feed cell
+// is ONE LINE — `.truncate` is `white-space: nowrap` — so the row drew "##
+// Understanding the work This task is to interview…" with the hashes in it,
+// which reads as a bug in the engine rather than as a heading.
+test("the activity feed draws a markdown excerpt as prose, not as its source", () => {
+  const { container } = render(
+    <ActivityFeed
+      records={[
+        {
+          id: "h-9",
+          log_seq: 12,
+          log_stream: "CREWLET_WORK_LOG",
+          log_generation: 1,
+          at: "2031-04-15T00:00:00Z",
+          effective_at: "2031-04-15T00:00:00Z",
+          kind: "created",
+          subject_kind: "task",
+          subject_id: "t-9",
+          subject_key: "ENG-12",
+          excerpt:
+            "## Understanding the work\n\nInterview three desks about **settlement**, then read [the guide](https://docs.crewlet.ai/x).",
+          notified: true,
+        },
+      ]}
+      now={NOW}
+    />,
+  );
+  const cell = container.querySelector(".work-feed-what") as HTMLElement;
+  // BOTH HALVES. The negative alone passes on a cell that renders nothing at
+  // all, which is the shape of an assertion that cannot fail.
+  expect(cell.textContent).toBe(
+    "Understanding the work Interview three desks about settlement, then read the guide.",
+  );
+  expect(cell.textContent).not.toContain("#");
+  expect(cell.textContent).not.toContain("**");
+  expect(cell.textContent).not.toContain("https://");
+});
+
+// ---------------------------------------------------------------------------
+// The filter bar
+// ---------------------------------------------------------------------------
+
+// THE BAR IS A TOOLBAR, and `toolbar` is not a synonym for "the row of
+// controls at the top": `.screen:has(.toolbar)` is what publishes
+// `--sticky-top`, which is the offset every other sticky band in the same
+// scroller starts at — the grid's column heads among them. Hand-rolled here,
+// `.work-filters` restated every one of `.toolbar`'s declarations and omitted
+// the class, so the property stayed at its 0px default and the table's own
+// header parked underneath an opaque band. See styles/sticky.test.ts for the
+// other half of this; a class name is the only part of it the DOM can see.
+test("the filter bar declares itself the screen's toolbar", async () => {
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-filters")).toBeTruthy());
+  expect(container.querySelector(".work-filters")?.classList.contains("toolbar")).toBe(true);
+});
+
+// AND ITS CONTROLS TRAVEL IN GROUPS. What the bar draws varies by shape — the
+// type, sprint, group-by and sort pickers each appear on some tabs and not
+// others — and as one flat wrapping row that put the scope control at x≈345 on
+// List, x≈1338 on Board and x≈1155 on Calendar, with the Overdue chip wrapping
+// to a line of its own ~1,200px from the count. A group is the wrap unit, so a
+// break falls between the question and the switches and never inside either.
+test("the scope control and the chips are one group, not loose children of the bar", async () => {
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-filters-switches")).toBeTruthy());
+  const switches = container.querySelector(".work-filters-switches") as HTMLElement;
+  // The scope segments and both chips, in one box.
+  for (const label of ["Open", "Closed", "All", "Blocked", "Overdue"]) {
+    expect(within(switches).getByText(label), `${label} is not in the switch group`).toBeTruthy();
+  }
+  // And the search field is NOT — it belongs to the question, which is the
+  // group that takes the bar's slack.
+  const ask = container.querySelector(".work-filters-ask") as HTMLElement;
+  expect(ask.querySelector(".work-filters-search")).toBeTruthy();
+  expect(switches.querySelector(".work-filters-search")).toBeNull();
+  // Both groups are children of the bar itself, which is what makes them the
+  // wrap unit — nested one inside the other they would wrap as one.
+  expect(ask.parentElement).toBe(container.querySelector(".work-filters"));
+  expect(switches.parentElement).toBe(container.querySelector(".work-filters"));
 });

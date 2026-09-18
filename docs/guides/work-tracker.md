@@ -428,7 +428,11 @@ A **view** is a saved query with a shape. Five shapes:
   you twenty. Loading one further is `group=<value>`, which narrows the whole
   query — including its totals.
 - **`calendar`** — by date, which is what you want when the question is "what
-  is due".
+  is due". Its axis IS the `due` key, so the grid's own window spends the one
+  key the grammar has for it: the fetch is bounded to the days on screen, the
+  Overdue chip is not offered (pressed, it could narrow nothing at all), and
+  the toolbar's count says what it counted — "6 items due in this window" where
+  every other shape under the same filters says "17 items".
 - **`timeline`** — bars down a date axis, which is what you want when the
   question is "how does this lay out". It is the one shape that can show a
   task **spanning** time rather than sitting on a day, and the only one that

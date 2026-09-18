@@ -40,6 +40,7 @@ import {
   Button,
   Callout,
   Card,
+  EmptyValue,
   InlineCode,
   Skeleton,
   StatCard,
@@ -55,7 +56,7 @@ import {
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -327,7 +328,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sortValue: (s) => s.bytes ?? null,
               cell: (s) =>
                 s.bytes == null ? (
-                  <Dash title="this node holds no snapshot" />
+                  <EmptyValue label="This node holds no snapshot" />
                 ) : (
                   <span className="t-num t-caption">{fmtBytes(s.bytes)}</span>
                 ),
@@ -343,7 +344,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                       {domain} @{seq}
                     </Tag>
                   ))}
-                  {!s.domains && <Dash title="this node holds no snapshot" />}
+                  {!s.domains && <EmptyValue label="This node holds no snapshot" />}
                 </span>
               ),
             },
@@ -484,7 +485,7 @@ export function NodePositions({ node }: { node: RetentionNode }) {
     // ABSENT IS NOT ZERO. This node has published nothing for any domain,
     // which the "Reported" column explains; a 0 here would read as a node
     // that has applied nothing, which is a different claim.
-    return <Dash title="this node has published no position for any domain" />;
+    return <EmptyValue label="This node has published no position for any domain" />;
   }
   return (
     <span className="col gap-1">

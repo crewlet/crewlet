@@ -6,7 +6,8 @@ import { describe, expect, test } from "vitest";
 
 /**
  * The chrome's layout rules that fail SILENTLY and correctly in every other
- * gate — frame.css, shell.css and the shared panel in components.css.
+ * gate — frame.css, shell.css, the shared panel in components.css, and the
+ * screens whose own rules have to agree with the chrome's sticky band.
  *
  * `classes.test.ts` proves a class is declared and `tokens.test.ts` proves a
  * property is. Neither can see a declaration the CSS parser drops, a track
@@ -274,4 +275,40 @@ test("no stylesheet negates a var() with a unary minus", () => {
     }
   }
   expect(found, "a minus in front of var() drops the declaration — use calc(-1 * …)").toEqual([]);
+});
+
+describe("a work item's history", () => {
+  // A HISTORY ENTRY IS AS LONG AS THE CHANGE WAS.
+  //
+  // The work item's history row held its description in `.truncate`: one line,
+  // ellipsed. A create moves every field `TaskDeltas` compares and
+  // `describeHistory` renders a clause each, so the cut landed inside `Status: `
+  // — and took the `quiet` marker and the `turn →` link with it, clipped out of
+  // sight and still in the tab order, on a panel with a page of unused height
+  // beneath it.
+  //
+  // IN THE SHEET because there is nowhere else: jsdom computes no layout, so
+  // every case that renders this panel stays green whether the cell wraps or
+  // ellipses. The other direction is covered already — `.work-hist-what` is
+  // declared here and written only by WorkItem.tsx, so classes.test.ts fails if
+  // either side alone goes back.
+  test("a work item's history entry wraps rather than ellipsing what changed", () => {
+    const css = sheet("screens.css");
+    const what = block(css, ".work-hist-what");
+    expect(what).toMatch(/overflow-wrap:\s*anywhere/);
+    // The three halves of `.truncate`, none of which may come back here.
+    expect(what).not.toMatch(/white-space:\s*nowrap/);
+    expect(what).not.toMatch(/text-overflow/);
+    expect(what).not.toMatch(/overflow:\s*hidden/);
+
+    // AND THE ROW AROUND IT IS BUILT FOR MORE THAN ONE LINE. A centred glyph
+    // tracks the row's height and slides to the middle of a four-line entry;
+    // entries 8px apart whose own lines are 18px apart have no boundary. And the
+    // tail has a track of its own, so the sentence cannot swallow the control.
+    expect(block(css, ".work-hist-row > svg")).toMatch(/align-self:\s*start/);
+    const row = block(css, ".work-hist-row");
+    expect(row).toMatch(/border-bottom:\s*1px solid var\(--border-subtle\)/);
+    expect(row).toMatch(/align-items:\s*baseline/);
+    expect(row).toMatch(/grid-template-columns:\s*18px minmax\(0, 1fr\) auto auto/);
+  });
 });

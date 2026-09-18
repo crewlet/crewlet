@@ -244,6 +244,18 @@ what they did, what it cost, the machine.
 indistinguishable from one that does not exist, so an operator on a fresh
 browser would conclude the product has no configuration screen.
 
+**A number beside a workspace row says what it counts.** `SidebarRow.count` is
+one field holding a value AND the sentence naming its question, because the two
+used to be a number and an optional sibling and the optional half is the one
+that went missing. A unit carried three unqualified figures across the product:
+its whole subtree in this rail, its own members on the org chart's block, its
+on-screen rows in the roster's group head. All three now come off
+`lib/seats.ts`'s `unitTally`, which answers both questions at once —
+`unitSeatsLabel` says the subtree first and names the direct count only where
+the two differ, and `unitDirectLabel` is what a roster group says, because a
+seat sits in exactly one group and nothing under a unit is in it. A filter
+outranks both: with one on, every count on the screen is over what matched.
+
 `g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
 `g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
 because every single-modifier combination worth having is already the browser's.
@@ -413,6 +425,14 @@ said beside the chips. A number next to a chip is read as "how many there are",
 and when it is really "how many of the four hundred rows this tab happens to be
 holding" the reader is being told something false about their own company.
 
+**The note is a caption on the numbers, so it is drawn only where a number is.**
+Printed unconditionally it appeared beside a rail that could never carry a count
+— the Inbox's unread/all/snoozed control, whose two other scopes are rows the
+loaded page does not hold — and qualified figures the reader could not see. A
+dimension that cannot be counted at all is not a facet rail: it is one of N
+scopes, which is a `Segmented`, the same control the work toolbar's
+open/closed/everything uses.
+
 A facet count is computed with its **own** filter lifted and every other one
 applied, because that is the only meaning it can have: a chip says how many rows
 choosing it would show. Counted through its own filter, every chip but the
@@ -534,8 +554,9 @@ labelled "today" — the window is the engine's and the screen was not given one
 so the strip names the figure and puts the window it covers on hover.
 
 **Two bands, stacked on one screen, never two tabs.** **Needs a decision** is
-what the engine derived — a run parked on a question, a seat it stopped, a
-budget refusing, a node past its lease. **Notices** is the person's own inbox:
+what the engine derived, over the four subjects `lib/attention.ts` declares: the
+engine and this node's link to it, the token budgets, the coding runs waiting on
+an answer, and the seats themselves. **Notices** is the person's own inbox:
 what reached them, and why. They are never interleaved, because one fused list
 ordered by time would eventually rank a backup-age alarm above the CEO seat
 asking whether to hold a release. And they are never a toggle: a tab hides the
@@ -545,6 +566,27 @@ what this screen is for. A band with nothing in it still draws its own heading
 and says why it is quiet, because a band that disappears takes its name with it
 and a reader cannot then tell "nothing is waiting on you" from "this product
 does not have that".
+
+The sentence it draws is DERIVED FROM THE ANSWER, never from the row count. Zero
+rows is six different facts — nothing has answered yet, the answer was a
+refusal, a reason chip took them all, the page holds none and there are more
+pages, the reader is caught up, and nothing has ever reached them — and the band
+branched on the facet alone, so a person who had never received a single notice
+was told that everything had been marked read and sent to a facet that was just
+as empty. `work_inbox` carries the evidence that separates the last two:
+`seen_through` is the person's own read watermark, written only by `mark_inbox`,
+and absent until they have marked something, so the copy claims the watermark
+and not more than it. A band also draws its own filters whether or not anything
+survives them — a reason chip matching nothing is exactly when it is the only
+way back — and its count is an em dash before the first answer, for the same
+reason the pulse strip's figures are.
+
+**Unread, all and snoozed is a scope, not a facet.** Each is a different
+question put to `work_inbox` — `unread` and `include_snoozed` are its parameters
+— so the other two are pages this one does not hold and no count over the loaded
+rows could describe them. It is a three-option `Segmented` with exactly one
+always chosen, and an unknown `state=` resolves to `unread` rather than leaving
+the control blank and the query wide.
 
 **Two panes, and the right one is there before it is needed.** Reading one row
 IS the activity here, so the detail sits beside the list rather than behind a
@@ -630,6 +672,16 @@ and each lived in a different screen:
 Ordered by what it costs to ignore, then newest first inside a severity. Every
 row says what happened AND what it costs to leave it, and carries a link to
 where the answer is.
+
+**What the band says when it is EMPTY is derived, not written.** Every condition
+names one of four subjects, `SUBJECTS` maps each to the phrase a reader sees,
+and the quiet band draws all four. That sentence used to be prose on the screen
+— "No seat is stopped, no run is parked on a question, and no budget is
+refusing" — three of the twelve conditions, read as the whole list, so an
+operator whose engine had no active configuration or whose node was shedding its
+seats was told in a closed sentence that those had been checked and were clean.
+A thirteenth condition cannot be pushed without naming a subject, and a new
+subject fails the build until it has its own phrase.
 
 ---
 
@@ -981,6 +1033,19 @@ What replaced it:
 - **The spend panel is a link.** It was Spend's panel on Spend's data at
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
+- **A toolbar carries the `toolbar` class, and its controls travel in
+  groups.** The class is not decoration: `.screen:has(.toolbar)` publishes
+  `--sticky-top`, and every other band that sticks to the same scroller — a
+  grid's column heads, a grouped list's group heads, an item's side rail —
+  starts at that offset. The tracker's filter bar restated every one of
+  `.toolbar`'s declarations under a name of its own, so the property stayed at
+  its `0px` default and the table's own header parked underneath an opaque
+  band. Inside the bar, what narrows the rows is one group and what switches
+  between answers is another, because the bar draws different controls on
+  different tabs: as one flat wrapping row, the scope control moved from x≈345
+  on List to x≈1338 on Board and x≈1155 on Calendar, and the Overdue chip
+  wrapped to a line of its own ~1,200px from the count. A wrap breaks between
+  groups.
 
 Three rows of buttons, and a table, that behaved differently from a keyboard
 than they looked:
@@ -2093,6 +2158,15 @@ to.
    per-category chip colour. If you need to tell two things apart, use their
    names. The third-party app marks in `@crewlethq/icons` are the one, bounded
    exception (see "The one rule" above); nothing else is.
+   **A seat's identity badge is `Avatar`, everywhere**, drawn from its name or
+   handle so the initials are what tell one seat from another, with
+   `variant="dashed"` for a human seat — the engine does not run it, which is a
+   structural fact and therefore an edge rather than a hue. A hand-rolled mark
+   holding a robot glyph drew the KIND, which the roster gives at a glance, in
+   the slot that should have been saying WHO: the same engineer was "FE" on the
+   board and an identical generic robot on Search and on a goal's Owners panel.
+   `tone="brand"` is for the one badge that IS the reader, in the rail's own
+   account row, and for nothing else.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The
@@ -2127,6 +2201,15 @@ to.
     what the absence means ("Not reported", "Not measured"), because a bare
     dash is read aloud as "dash" or skipped, and a value still arriving is a
     different fact again, which a tile reports by being busy.
+    **There is exactly ONE absent mark, and it is `EmptyValue`'s** — its en
+    dash in JSX, its `EMPTY_VALUE` constant in a string a module returns. No
+    module spells one itself. Half the screens adopted it while the rest kept a
+    local `Dash`, an em dash the design system says it "does not use anywhere",
+    so the tracker's trash screen drew a 12px em dash in the table's DUE column
+    beside a 6px en dash in the activity feed's object column — one fact, two
+    glyphs, one viewport. `cells.test.tsx` scans the tree for a string literal
+    or a JSX text node that is nothing but a dash; an em dash inside prose is
+    house punctuation and is not what it is looking for.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
     a download, a write, a revoke — if the reader cannot see the result, the
     control says it, in text a screen reader reaches as well as an icon. A

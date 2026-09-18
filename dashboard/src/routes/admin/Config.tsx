@@ -26,6 +26,7 @@ import {
   CodeBlock,
   CopyButton,
   EmptyState,
+  EmptyValue,
   InlineCode,
   Skeleton,
   Tag,
@@ -48,7 +49,7 @@ import { QueryState } from "~/components/common.tsx";
 // note on `useRovingGroup`; this is the trade the pattern itself names.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -787,7 +788,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                       r.summary ? (
                         <TextCell>{r.summary}</TextCell>
                       ) : (
-                        <Dash title="no summary was written" />
+                        <EmptyValue label="No summary was written" />
                       ),
                   },
                   {
@@ -799,7 +800,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                       r.created_by ? (
                         <TextCell>{r.created_by}</TextCell>
                       ) : (
-                        <Dash title="nobody recorded" />
+                        <EmptyValue label="Nobody recorded" />
                       ),
                   },
                 ]}

@@ -42,11 +42,11 @@
  */
 
 import { useMemo } from "react";
-import { Button, Tag, useClipboard } from "@crewlethq/ui";
+import { Button, EmptyValue, Tag, useClipboard } from "@crewlethq/ui";
 import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
 import { DataGrid, type GridBand, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
+import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
 import { DueMark, PriorityMark, StatusBadge, TypeIcon, type RowChrome } from "./work.tsx";
 import { groupLabel } from "~/lib/work.ts";
 import { fmtCount, fmtDuration } from "~/lib/format.ts";
@@ -200,7 +200,7 @@ export function TableView({
           row.assignee ? (
             <SeatCell handle={row.assignee} name={chrome.seatName?.(row.assignee)} />
           ) : (
-            <Dash title="nobody holds this" />
+            <EmptyValue label="Nobody holds this" />
           ),
       },
     ];
@@ -221,14 +221,19 @@ export function TableView({
         // overdue tint is `DueMark`'s and two spellings of it is two rules
         // as soon as one screen's changes.
         cell: (row) =>
-          row.due ? <DueMark due={row.due} overdue={row.overdue} now={now} /> : <Dash />,
+          row.due ? (
+            <DueMark due={row.due} overdue={row.overdue} now={now} />
+          ) : (
+            <EmptyValue label="No date" />
+          ),
       }),
       sorted("start", {
         header: "Start",
         shrink: true,
         optional: true,
         sortValue: (row) => row.start ?? "",
-        cell: (row) => (row.start ? <DateCell at={row.start} now={now} /> : <Dash />),
+        cell: (row) =>
+          row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
       }),
       // TWO MEASURES, TWO COLUMNS. A company sizes in points or in minutes
       // per PROJECT, and the engine orders by one or the other — so a single
@@ -241,7 +246,11 @@ export function TableView({
         optional: true,
         sortValue: (row) => row.points ?? 0,
         cell: (row) =>
-          row.points ? <span className="t-num">{row.points}</span> : <Dash title="unestimated" />,
+          row.points ? (
+            <span className="t-num">{row.points}</span>
+          ) : (
+            <EmptyValue label="Unestimated" />
+          ),
       }),
       sorted("estimate", {
         header: "Estimate",
@@ -253,7 +262,7 @@ export function TableView({
           row.estimate_min ? (
             <span className="t-num">{fmtDuration(row.estimate_min * 60_000)}</span>
           ) : (
-            <Dash title="unestimated" />
+            <EmptyValue label="Unestimated" />
           ),
       }),
       sorted("updated", {
@@ -333,7 +342,7 @@ function trashColumns(
         // THE FEED IS A PAGE. A row whose removal is older than the entries
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
-        if (!record) return <Dash title="its removal is older than the loaded history" />;
+        if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
         return <DateCell at={record.at} now={now} />;
       },
     }),
@@ -343,7 +352,8 @@ function trashColumns(
       shrink: true,
       cell: (row) => {
         const record = removals.get(row.id);
-        if (!record?.actor) return <Dash title="its removal is older than the loaded history" />;
+        if (!record?.actor)
+          return <EmptyValue label="Its removal is older than the loaded history" />;
         return (
           <span className="row gap-1">
             <SeatCell handle={record.actor} name={chrome.seatName?.(record.actor)} />

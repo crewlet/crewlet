@@ -427,12 +427,19 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               ),
             },
             {
-              key: "rounds",
-              header: "Rounds",
+              key: "iterations",
+              // SELF-ITERATE ROUNDS, and the word says so. Headed "Rounds" this
+              // column sat directly above phase rows printing TOOL rounds under
+              // the same word — "Rounds 1" over a 3r execute and a 1r review.
+              header: (
+                <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
+                  Iterations
+                </span>
+              ),
               shrink: true,
               align: "right",
-              sortValue: (t) => t.rounds,
-              cell: (t) => <NumberCell value={t.rounds} />,
+              sortValue: (t) => t.iterations,
+              cell: (t) => <NumberCell value={t.iterations} />,
             },
             {
               key: "phases",

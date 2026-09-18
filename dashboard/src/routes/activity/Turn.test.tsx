@@ -11,7 +11,11 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { outcomeOf, problemCount, turnFacts, turnSpan, type TurnView } from "./Turn.tsx";
+import { outcomeOf, problemCount, turnFacts, type TurnView } from "./Turn.tsx";
+// THE SPAN RULE LIVES BESIDE THE PHASES IT MEASURES NOW. The turn CARD had a
+// second one — two LANDING instants subtracted, which drops the first phase's
+// own length — so the two are one function and one set of cases.
+import { turnSpan } from "~/lib/phases.ts";
 import type { PhaseRecord, Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
@@ -166,11 +170,14 @@ describe("outcomeOf", () => {
     expect(out.sub).toBe("the engine stopped it: guard_breach");
   });
 
-  test("no record at all is still an em dash, not a failure", () => {
+  test("no record at all is still an absence, not a failure", () => {
     // The absence the early return exists for, which reading the flag first
-    // must not swallow.
+    // must not swallow. THE EMPTY STRING rather than the mark an absence is
+    // drawn as: the two call sites that read this compared against the glyph,
+    // so the day the product settled on one absent mark the comparison would
+    // have gone false and a running turn would have grown an Outcome fact.
     expect(outcomeOf({ summary: undefined, learning: undefined })).toEqual({
-      word: "—",
+      word: "",
       tone: undefined,
       sub: "",
     });
@@ -231,7 +238,7 @@ describe("turnFacts", () => {
       tokens: 0,
       workerTokens: 0,
       workerCount: 0,
-      rounds: 0,
+      iterations: 0,
       traceIds: [],
       ...over,
     };

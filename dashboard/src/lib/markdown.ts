@@ -543,3 +543,117 @@ function renderBlock(block: Block, key: string): ReactNode {
 export function renderMarkdown(source: string): ReactNode[] {
   return parseBlocks(source ?? "").map((block, i) => renderBlock(block, `b${i}`));
 }
+
+// --- flattening ------------------------------------------------------------
+
+/**
+ * One run of inline markdown as the text it renders to.
+ *
+ * THE SAME [INLINE] ALTERNATION AS [renderInline], deliberately. What a code
+ * span is, where a destination ends and which emphasis run closes which are
+ * decisions this file has already made once; a second set of them for the text
+ * case is the drift `textcut` and `whsec` each record in their own package docs.
+ * What differs between the two walks is only what a match BECOMES — a node
+ * there, a string here.
+ */
+function inlineText(text: string): string {
+  const out: string[] = [];
+  let rest = text;
+
+  while (rest.length > 0) {
+    const m = INLINE.exec(rest);
+    if (!m || m.index === undefined) break;
+    if (m.index > 0) out.push(rest.slice(0, m.index));
+
+    if (m[1] !== undefined) {
+      // A code span's own content, minus the one padding space CommonMark lets
+      // a span carry so it can start with a backtick.
+      out.push((m[2] ?? "").replace(/^ | $/g, ""));
+    } else if (m[3] !== undefined || m[4] !== undefined) {
+      // AN IMAGE IS ITS ALT TEXT, which is what alt text is for. One with no alt
+      // contributes nothing rather than a filename nobody wrote.
+      out.push(m[3] ?? "");
+    } else if (m[5] !== undefined || m[6] !== undefined) {
+      // A LINK IS ITS LABEL, never its destination: the label is the sentence
+      // somebody wrote, and a URL in a one-line cell spends the whole line.
+      out.push(inlineText(m[5] ?? ""));
+    } else if (m[7] !== undefined) {
+      // An autolink has no label, so the URL IS the text it renders to.
+      out.push(m[7]);
+    } else if (m[9] !== undefined) {
+      out.push(inlineText(m[9]));
+    } else if (m[11] !== undefined) {
+      out.push(inlineText(m[11]));
+    } else if (m[13] !== undefined) {
+      out.push(inlineText(m[13]));
+    }
+    rest = rest.slice(m.index + m[0].length);
+  }
+  if (rest.length > 0) out.push(rest);
+  return out.join("");
+}
+
+/** One block as text. Every case is the prose the block renders to. */
+function blockText(block: Block): string {
+  switch (block.kind) {
+    case "heading":
+    case "paragraph":
+      return inlineText(block.text);
+    case "code":
+      // THE CODE, WITHOUT ITS FENCE. What was inside a fence is still what the
+      // comment said; the backticks are the only part that was never content.
+      return block.text;
+    case "quote":
+      return block.blocks.map(blockText).join(" ");
+    case "list":
+      return block.items
+        .map((item) => {
+          const said = item.blocks.map(blockText).join(" ");
+          // A TASK ITEM KEEPS ITS BOX. `[ ]` and `[x]` are markdown syntax, and
+          // they are the one piece of it whose meaning survives being flattened
+          // — dropping them turns "not done yet" into a sentence that reads as a
+          // statement of fact.
+          if (item.checked === null) return said;
+          return (item.checked ? "[x] " : "[ ] ") + said;
+        })
+        .join(" ");
+    case "table":
+      return [block.head, ...block.rows].map((row) => row.map(inlineText).join(" ")).join(" ");
+    case "rule":
+      // A rule is a MARK rather than content: its whole meaning is visual, so it
+      // renders to nothing rather than to three dashes in a sentence.
+      return "";
+  }
+}
+
+/**
+ * A markdown document as ONE LINE of the prose it renders to.
+ *
+ * WHY IT EXISTS: a comment body and a task description are markdown by contract
+ * — every tool that writes one says so in its own schema — and the engine's
+ * `excerpt` is a cut of one of them. Every surface that draws an excerpt in a
+ * single cell was therefore drawing `## Understanding the work` with the hashes
+ * in it: the same `pre-wrap` bug this file was written to end, surviving in the
+ * places too narrow to render blocks into.
+ *
+ * WHY NOT [renderMarkdown] THERE: those cells are one line inside a grid track,
+ * and `.truncate` is `white-space: nowrap` — it cannot clip a block box at all,
+ * so an `<h2>` or a `<table>` in one breaks the row rather than being shortened.
+ * Several of them are a `<p>`, where a block child is invalid DOM. And an
+ * excerpt is a CUT fragment rather than a document: `textcut.Within` ends it
+ * mid-construct, which is exactly the case `firstLines` avoids on the one
+ * surface that can render blocks.
+ *
+ * WHITESPACE COLLAPSES TO A SINGLE SPACE and blocks join with one, which is the
+ * engine's own rule for the same job (`internal/search`'s `excerptOf` is
+ * `strings.Join(strings.Fields(body), " ")`). No separator is invented between
+ * blocks: a reader cannot tell a "·" this function added from one somebody
+ * typed, and the row already links to the full text.
+ */
+export function plainText(source: string): string {
+  return parseBlocks(source ?? "")
+    .map(blockText)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}

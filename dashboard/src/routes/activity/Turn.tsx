@@ -82,7 +82,7 @@ import {
 // `PhaseTag` has a real peer (`Tag` carries the three phase variants), but it
 // is a primitive in `~/ui`, so porting it is that file's half rather than a
 // copy inlined into a route. See the report.
-import { CopyButton, DownloadButton, PhaseTag } from "~/ui/primitives.tsx";
+import { CopyButton, DownloadButton, PhaseTag, type Tone } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -95,15 +95,16 @@ import {
 } from "~/lib/format.ts";
 import {
   decisionLabel,
+  decisionMeaning,
+  decisionTone,
   fromLiveCall,
   fromPhaseEvent,
   groupTurns,
   mergePhases,
   phaseDuration,
-  phaseStart,
   streamedPhases,
+  turnSpan,
   type PhaseRecord,
-  type Timed,
 } from "~/lib/phases.ts";
 import {
   prefetchBlocks,
@@ -148,7 +149,7 @@ function str(event: EventRecord | undefined, key: string): string {
  */
 export function outcomeOf(rec: TurnRecord): {
   word: string;
-  tone: "positive" | "caution" | "critical" | undefined;
+  tone: Tone | undefined;
   sub: string;
 } {
   const failed = field(rec.summary, "failed") === true;
@@ -169,18 +170,38 @@ export function outcomeOf(rec: TurnRecord): {
       sub: kind ? `the engine stopped it: ${kind}` : "the turn will not retry",
     };
   }
-  if (!review && !executor) return { word: "—", tone: undefined, sub: "" };
-  const label: Record<string, string> = {
-    delivered: "delivered the work",
-    no_action: "nothing to do — ended silently",
-    blocked: "blocked, and said why",
-    incomplete: "never said what it did",
-  };
+  // NO OUTCOME IS THE EMPTY STRING, not the mark an absence is DRAWN as. This
+  // returned "—" and two call sites below tested `word === "—"` — so the
+  // sentinel was a glyph, and changing how this product draws an absence
+  // (which it just did: one `EmptyValue` en dash everywhere, never an em
+  // dash) would have turned the sentinel into a value that renders, with
+  // both comparisons silently going false and a running turn sprouting an
+  // Outcome fact reading "—". A caller that has a tile to fill draws the mark
+  // itself; this says only that there is nothing to draw.
+  if (!review && !executor) return { word: "", tone: undefined, sub: "" };
+  // ONE TABLE, in lib/phases.ts. This held a private copy of the executor's
+  // label map and the copies had already drifted: `incomplete` read "never said
+  // what it did" here and "never said what it did — the engine marked it
+  // incomplete" on every phase card, so one fact printed as two sentences
+  // depending on which screen a reader was on. That is the failure `textcut`,
+  // `whsec` and `jsprovision` each exist to end on the engine side of this
+  // repository.
+  //
+  // The TONE comes off the same row, which is what makes this tile and the
+  // phase chip agree about which outcomes need a reader — `no_action` is no
+  // longer a caution here and a neutral there.
+  const spoken = review ? "review" : "execute";
+  const executorSaid = decisionMeaning("execute", executor);
   return {
     word: review === "done" ? "done" : review || executor,
-    tone: review === "done" ? "positive" : "caution",
+    tone: decisionTone(spoken, review || executor),
+    // A WORD THIS BUILD CANNOT GLOSS IS STILL ATTRIBUTED. `decisionLabel` falls
+    // through verbatim, which would print the bare word twice — once as the
+    // value and once as its own caption — so the row is read directly and the
+    // attribution is written where there is no row.
     sub:
-      label[executor] ?? (executor ? `the executor said ${executor}` : "the reviewer's decision"),
+      executorSaid?.label ??
+      (executor ? `the executor said ${executor}` : "the reviewer's decision"),
   };
 }
 
@@ -208,46 +229,6 @@ export function outcomeOf(rec: TurnRecord): {
 export function problemCount(wentWrong: readonly EventRecord[], failed: boolean): number {
   const stopped = wentWrong.some((e) => TURN_STOP.has(e.type));
   return wentWrong.length + (failed && !stopped ? 1 : 0);
-}
-
-/**
- * The window this page can see the turn through.
- *
- * THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
- * Read off `events` only, a turn whose phases all arrived on the stream
- * reported a duration of "—" beside a phase list several minutes long.
- *
- * The start is a minimum over EVERY phase, never over `phases[0]`. That list
- * is ordered by when each phase LANDED, so its first element is the earliest
- * FINISHER — and a worker a delegate spawned lands inside the window of the
- * execute round that spawned it. On the one case the span exists for, a turn
- * deep-linked while it runs (no query answer to supply the other term), that
- * made the window open at the first worker's start and "Took" under-report
- * the whole stretch before the fan-out.
- *
- * Each phase's start comes from [phaseStart], which is the live record's own
- * instant or the finished record's landing less what the engine measured.
- * Reading `startedAt` off a finished record put its END into the minimum.
- *
- * A zero is dropped rather than taken as a minimum: `tsKey` answers 0 for a
- * timestamp it cannot parse, and 0 is the epoch — one unreadable instant
- * would report a turn that has been running since 1970.
- */
-export function turnSpan(
-  events: readonly { timestamp: string }[],
-  phases: readonly Timed[],
-): { from: number; to: number } {
-  const live = (instants: number[]) => instants.filter((t) => t > 0);
-  // EVERY instant on both sides, never the first and last of either. Indexing
-  // would make the caller's sort order a precondition this function cannot
-  // state or check, and it is the precondition the phase list already broke.
-  const stamps = events.map((e) => tsKey(e.timestamp));
-  const starts = live([...stamps, ...phases.map(phaseStart)]);
-  const ends = live([...stamps, ...phases.map((p) => tsKey(p.at))]);
-  // Both or neither: a start with no end would render a duration measured
-  // against nothing, which is worse than the em dash the caller falls back to.
-  if (!starts.length || !ends.length) return { from: 0, to: 0 };
-  return { from: Math.min(...starts), to: Math.max(...ends) };
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +279,7 @@ export interface TurnView {
   workerTokens: number;
   workerCount: number;
   /** The highest self-iterate round its own phases reached. */
-  rounds: number;
+  iterations: number;
   /** Every trace this turn touched, store's list first — see [useTurnView]. */
   traceIds: string[];
 }
@@ -442,7 +423,12 @@ export function useTurnView(turnId: string): TurnView {
     // (`MAX(iteration)`, in `store.Turns`) — a self-iterate round, not a tool
     // round. Over the turn's own phases only: a worker's iteration belongs to
     // the delegate call that spawned it rather than to this turn.
-    rounds: own.reduce((n, p) => Math.max(n, p.iteration), 0),
+    //
+    // THE WORD IS "ITERATIONS" EVERYWHERE NOW. "Rounds" is this product's word
+    // for a phase's TOOL rounds — `Model.tsx`'s column, every phase card's `3r`
+    // — and one word over two quantities put "Rounds 1" directly above "3r" for
+    // the same turn on the same screen.
+    iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
   };
 }
 
@@ -507,20 +493,19 @@ export function turnFacts(view: TurnView): Fact[] {
       value: view.role ? <SeatChip name={view.role} handle={view.role} /> : "the engine",
     },
     {
-      // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an em
-      // dash for a caller that has a tile to fill. A fact line has no tile:
-      // the fact is dropped and the status beside the title says "running" —
-      // and the note goes with it, since a caption under nothing is a caption
-      // about nothing.
+      // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an empty
+      // word. A fact line has no tile to fill: the fact is dropped and the
+      // status beside the title says "running" — and the note goes with it,
+      // since a caption under nothing is a caption about nothing.
       label: "Outcome",
-      value: view.outcome.word === "—" ? "" : view.outcome.word,
+      value: view.outcome.word,
       // WHOSE WORD THIS IS. `done` is the reviewer's verdict and `delivered`
       // is the executor's own, and the badge renders one word for both — so
       // without this a reader cannot tell a turn the reviewer passed from one
       // that merely reported itself finished. On a failure it is the engine's
       // `error_kind`, which is the difference between a turn that was stopped
       // and one that decided against itself.
-      note: view.outcome.word === "—" ? undefined : view.outcome.sub || undefined,
+      note: view.outcome.word ? view.outcome.sub || undefined : undefined,
     },
     {
       label: "Took",
@@ -546,7 +531,7 @@ export function turnFacts(view: TurnView): Fact[] {
         : undefined,
     },
     { label: "Phases", value: counted ? view.own.length : "" },
-    { label: "Rounds", value: counted ? view.rounds : "" },
+    { label: "Iterations", value: counted ? view.iterations : "" },
     {
       label: "Tokens",
       value: counted ? fmtCount(view.tokens) : "",

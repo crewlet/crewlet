@@ -29,7 +29,11 @@ import {
   staleness,
   STALE_MS,
   STALLED_MS,
+  unitDirectLabel,
+  unitSeatsLabel,
   unitSettings,
+  unitTally,
+  UNIT_TOTAL_HINT,
 } from "./seats.ts";
 import type {
   CompanyDocument,
@@ -465,5 +469,69 @@ describe("llmChain", () => {
     expect(llmChain(llm, "review")).toEqual(["big"]);
     // And a flat chain answers the same for every phase, because it is one.
     expect(llmChain(["fast", "backup"], "judge")).toEqual(["fast", "backup"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A unit's headcount
+// ---------------------------------------------------------------------------
+
+/**
+ * TWO HONEST NUMBERS, AND ONE PLACE THAT DECIDES WHICH.
+ *
+ * Every surface used to count for itself and draw the answer bare: the
+ * workspace rail summed the whole subtree, the org chart's block counted the
+ * unit's own members, the roster's group head counted whatever was on screen,
+ * and the unit page printed three figures over two different trees. So
+ * "Leadership" carried 5, 2 and a third number across one product, with
+ * nothing anywhere saying which question any of them had answered.
+ *
+ * The fixture is the shape that makes the difference visible: Engineering
+ * holds one seat of its own and one sub-unit holding three.
+ */
+describe("a unit's headcount", () => {
+  const engineering = index.units.find((u) => u.name === "Engineering")!;
+  const backend = index.units.find((u) => u.name === "Backend")!;
+
+  test("counts its own members and its subtree separately", () => {
+    expect(unitTally(engineering)).toEqual({ direct: 1, total: 4, subUnits: 1 });
+    // A LEAF'S TWO ANSWERS AGREE, which is why most units never showed the bug.
+    expect(unitTally(backend)).toEqual({ direct: 3, total: 3, subUnits: 0 });
+  });
+
+  // THE SUBTREE INCLUDES A SEAT THE DOCUMENT PUT SOMEWHERE ELSE. `Designer` is
+  // written above every unit and the ENGINE placed it in Backend, so a count
+  // derived from the document's own nesting would miss it — and did, on the
+  // one surface that walked `org.units` instead of the index.
+  test("the subtree is the engine's placement, not the document's nesting", () => {
+    expect(engineering.allSeats.map((s) => s.handle).sort()).toEqual([
+      "designer",
+      "dev-a",
+      "dev-b",
+      "vpe",
+    ]);
+  });
+
+  // ONE SENTENCE PER SURFACE, and the appended clause only where the two
+  // numbers differ: "3 seats, 3 directly" reads as two facts about a team that
+  // has one.
+  test("says the subtree first and names the direct count only when it differs", () => {
+    expect(unitSeatsLabel(unitTally(engineering))).toBe("4 seats, 1 directly");
+    expect(unitSeatsLabel(unitTally(backend))).toBe("3 seats");
+  });
+
+  // THE OTHER HALF, for a surface that can only ever show direct members: a
+  // seat sits in exactly one group, so a roster grouped by unit is the unit's
+  // own members and nothing under it.
+  test("a roster group says that it is the direct members", () => {
+    expect(unitDirectLabel(3)).toBe("3 seats directly in it");
+    expect(unitDirectLabel(1)).toBe("1 seat directly in it");
+  });
+
+  // AND THE HEADLINE NUMBER CARRIES ITS OWN SENTENCE. A bare number beside a
+  // name is read as "how many there are"; this is what the rail's badge and
+  // the unit page's fact both hand a reader instead.
+  test("the total's hint names what it counted", () => {
+    expect(UNIT_TOTAL_HINT).toContain("everything under it");
   });
 });

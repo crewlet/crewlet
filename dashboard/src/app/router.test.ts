@@ -241,6 +241,23 @@ describe("the breadcrumb", () => {
     expect(named[named.length - 1]?.label).toBe("Platform");
   });
 
+  // A SEAT IS NAMED BY ITS NAME AND ADDRESSED BY A SLUG. The company branch was
+  // the one branch here that never set `mono`, so an unresolved handle was drawn
+  // in the proportional face and read as somebody's name. A unit's segment IS
+  // its name, so that one is deliberately not mono.
+  test("a seat's crumb is its name, and an unnamed handle is an identifier", () => {
+    const raw = crumbsFor(["company", "people", "agent-cto"]);
+    expect(raw[raw.length - 1]?.label).toBe("agent-cto");
+    expect(raw[raw.length - 1]?.mono, "a slug drawn as prose reads as a name").toBe(true);
+    const named = crumbsFor(["company", "people", "agent-cto"], {
+      "agent-cto": "Chief Technology Officer",
+    });
+    expect(named[named.length - 1]?.label).toBe("Chief Technology Officer");
+    expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
+    const unit = crumbsFor(["company", "units", "Platform"]);
+    expect(unit[unit.length - 1]?.mono, "a unit is addressed by its own name").toBeFalsy();
+  });
+
   // THE TAB TITLE COMES FROM THE SAME TRAIL, so a reader with four tabs open
   // can tell them apart. It said "Crewlet" on every screen.
   test("the tab title is the last crumb", () => {

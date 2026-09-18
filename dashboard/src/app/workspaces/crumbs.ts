@@ -141,8 +141,21 @@ function workCrumbs(rest: string[], labels: Labels): Crumb[] {
 function companyCrumbs(rest: string[], labels: Labels): Crumb[] {
   const [first = "", second] = rest;
   if (first === "people") {
+    // A SEAT IS ADDRESSED BY A SLUG AND NAMED BY A NAME, so the fallback is mono
+    // and the resolved label is not — the same rule every other branch here
+    // follows, and the one this branch was missing. Until the screen publishes,
+    // or where the handle resolves to no seat at all, the crumb is the raw
+    // address and has to LOOK like one; drawn in the proportional face it is
+    // indistinguishable from somebody's name.
+    //
+    // THE UNIT BRANCH BELOW IS DELIBERATELY NOT MONO: a unit's segment IS its
+    // name (`UnitScreen` resolves `units.find((u) => u.name === id)`), so there
+    // is no identifier there to mark.
     return second
-      ? [{ label: "People", path: ["company", "people"] }, { label: named(labels, second) }]
+      ? [
+          { label: "People", path: ["company", "people"] },
+          { label: named(labels, second), mono: !labels[second] },
+        ]
       : [{ label: "People" }];
   }
   if (first === "units") {

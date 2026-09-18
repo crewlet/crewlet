@@ -52,10 +52,10 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { StatusBadge } from "~/components/work.tsx";
-import { Button, EmptyState, Input } from "@crewlethq/ui";
+import { StatusBadge, TypeIcon } from "~/components/work.tsx";
+import { Button, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
 import { ScheduleGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -208,7 +208,27 @@ export function WorkSearch() {
                 header: "Item",
                 cell: (r) => (
                   <div className="col gap-1">
-                    <TextCell icon="check">{r.title}</TextCell>
+                    {/* THE ITEM'S OWN TYPE, through the one component that owns
+                        what a type is drawn as and what it is called. This
+                        column drew a hardcoded tick, which was wrong twice: a
+                        bug, an epic and a spike were one drawing here and three
+                        on every other tracker surface, and a TICK is this
+                        product's completion mark — so a hit whose Status cell
+                        one column over read "In progress" carried a mark saying
+                        it was finished.
+
+                        AND THE MARK IS THE ONLY PLACE THIS SCREEN STATES A TYPE,
+                        since there is no Type column. That is why it is
+                        `TypeIcon` and not `icon={typeIcon(r.type)}`: a
+                        name-keyed mark renders `aria-hidden` with no hover word,
+                        so the right drawing alone would still be a fact nobody
+                        can name.
+
+                        WITHOUT THE PROJECT'S OWN TYPE TABLE, for the reason the
+                        Status column below gives about the six statuses: a
+                        ranked answer spans every project, so the shipped word is
+                        the only one true of the whole list. */}
+                    <TextCell mark={<TypeIcon type={r.type} />}>{r.title}</TextCell>
                     {/* THE INDEX'S OWN EXCERPT — the half a board row cannot
                         have, because a board row does not know what you
                         asked. */}
@@ -253,7 +273,7 @@ export function WorkSearch() {
                 // whole list. The board, which is inside one project, passes
                 // that project's definitions.
                 cell: (r) =>
-                  r.status ? <StatusBadge status={r.status} /> : <Dash title="no status" />,
+                  r.status ? <StatusBadge status={r.status} /> : <EmptyValue label="No status" />,
               },
               {
                 key: "assignee",

@@ -45,8 +45,8 @@ import {
   useKeptSections,
   useWorkSidebar,
 } from "./workspaces/sidebars.tsx";
-import { SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
-import { ComputerGlyph, DarkModeGlyph, LightModeGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
+import { Avatar, SegmentedControl, StatusDot, Tag } from "@crewlethq/ui";
+import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -99,6 +99,15 @@ export function usePageLabels(labels: Labels): void {
   const key = JSON.stringify(labels);
   useEffect(() => {
     setLabels(labels);
+    // AND THEY GO WHEN THE SCREEN DOES, for the reason `usePageCoverage` below
+    // spells out: the Shell is mounted once for the life of the tab and only the
+    // screen inside it remounts, so what a screen published is what the frame
+    // keeps showing. A label map is keyed on the ROUTE SEGMENT, so a seat's name
+    // left behind would title an identically spelled segment on the next screen
+    // — a node id, a tool name — as that person. A cleanup here runs in the
+    // right order (outgoing destroy before incoming create) and both writes land
+    // in one batch, so nothing flickers through the raw segment.
+    return () => setLabels({});
     // The labels object is rebuilt every render by most callers, so the
     // dependency is its CONTENT: an identity dependency here is an infinite
     // render loop, and one on `labels` alone would be exactly that.
@@ -447,14 +456,25 @@ function ViewerChip() {
       href={`#/company/people/${viewer.handle}`}
       title={`@${viewer.handle}`}
     >
-      {/* THE SEAT MARK STAYS OURS. It is the one mark in the product that says
-          human seat rather than agent seat, it is drawn identically in the
-          people list, the peek and the org chart, and uilet's Avatar is a
-          picture of a person rather than a kind-of-seat mark. What changed is
-          what is inside it. */}
-      <span className="seat-mark human" aria-hidden="true">
-        <PersonGlyph size="xs" />
-      </span>
+      {/* THE SAME BADGE THE REST OF THE PRODUCT DRAWS. This held the last
+          hand-rolled `.seat-mark` in the tree, kept on the reasoning that
+          "uilet's Avatar is a picture of a person rather than a kind-of-seat
+          mark" — which was never true of the badge and is not true of the
+          product either: `Avatar` draws INITIALS, and its `dashed` variant is
+          documented as "a HUMAN seat: the engine does not run it", the exact
+          fact the dashed ring carried. Meanwhile the claim beside it, that the
+          mark is "drawn identically in the people list, the peek and the org
+          chart", had stopped holding — all three draw `Avatar` — so the one
+          place a reader sees THEMSELVES was the one place they did not look
+          like themselves. `brand`, because this badge IS the reader: it is the
+          single use the tone exists for. */}
+      <Avatar
+        name={viewer.name || viewer.handle}
+        size="xs"
+        tone="brand"
+        variant="dashed"
+        decorative
+      />
       <span className="truncate">{viewer.name || viewer.handle}</span>
     </a>
   );

@@ -32,6 +32,7 @@
  */
 
 import { Fragment, type ReactNode } from "react";
+import { EmptyValue } from "@crewlethq/ui";
 import { ArrowOutwardGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "../router.tsx";
 import type { SetBy } from "./ObjectHeader.tsx";
@@ -120,7 +121,7 @@ function Value({ property }: { property: Property }) {
   // are values a property can legitimately hold, and a truthiness test here
   // would render both as "nothing set".
   if (value === null || value === undefined || value === "") {
-    return <span className="muted">—</span>;
+    return <EmptyValue label="Not set" />;
   }
   if (path) {
     return (

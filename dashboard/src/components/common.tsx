@@ -31,12 +31,21 @@ import {
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
 // at once - the same call `app/frame/cells.tsx` makes for the same reason.
 import { Mark } from "~/ui/glyph.tsx";
-import { uiletTone } from "~/ui/primitives.tsx";
+import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
-import { runState, seatTone, stateLabel, statusLine, toneOf, type Seat } from "~/lib/seats.ts";
+import {
+  roundLabel,
+  runState,
+  seatPath,
+  seatTone,
+  stateLabel,
+  statusLine,
+  toneOf,
+  type Seat,
+} from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 
@@ -124,8 +133,13 @@ export function SeatCard({
   const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
+  // Decoded ONCE, by the helper the attention queue also reads: the number on
+  // this card and the sentence in that row are the same reading of one field.
+  const round = call ? roundLabel(call.round_num) : null;
   return (
-    <a className="seat-card" data-tone={tone} href={href(["company", "people", seat.handle])}>
+    // `seatPath`, not a handle spelled out again: a seat the engine reported no
+    // handle for is addressed by NAME, and `#/company/people/` opens nothing.
+    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
         <Avatar
           name={seat.name}
@@ -146,15 +160,30 @@ export function SeatCard({
       <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
       {call?.in_progress && (
         <div className="row gap-1">
-          {/* `info`, NOT the phase vocabulary, deliberately. `TagVariant`
-              carries `phase-execute` and the rest, but this pill is drawn
-              beside a seat's run state rather than inside a turn, and our
-              `PhaseTag` — which is where the phase hues belong — is a
-              `~/ui` primitive another port owns. Two spellings of one
-              phase in two colours is worse than the tone this already had. */}
-          <Tag variant="info">{call.phase}</Tag>
-          <span className="t-caption t-num">
-            round {call.round_num >= 0 ? call.round_num + 1 : "—"}
+          {/* THE PHASE IN THE PHASE'S OWN HUE, drawn by the one component that
+              holds the table. Phase is the single categorical identity this
+              product spends colour on outside a chart, and the whole reason it
+              spends it is that a reader FOLLOWS a phase across screens — so one
+              `info` pill for every phase cost twice: `execute` and `review` were
+              the same fill side by side on the roster, and the same phase was a
+              different colour one screen over from the phase card, the turn card
+              and the Trace, Seat and Model screens. `PhaseTag` also lowercases
+              (the value is a store column and nothing normalises its case on the
+              way out) and names an absent phase, where this drew a coloured gap.
+              The note it replaces called the miss deliberate because `PhaseTag`
+              was somebody else's file during the uilet port; it is a `~/ui`
+              primitive this module already imports for `uiletTone`, so there was
+              never a second spelling to avoid — only a second colour. */}
+          <PhaseTag phase={call.phase} />
+          {/* NOT A BARE DASH. "round —" on a seat that is plainly working reads
+              as a field the engine failed to report; the engine reported it
+              exactly — `-1` is the opening frame a phase publishes before its
+              first provider call, so the phase has started and its first model
+              round has not come back. `t-num` stays: it is what keeps the digits
+              from jittering as the round advances, and it does nothing to a
+              word. */}
+          <span className="t-caption t-num" title={round?.hint}>
+            {round?.text}
           </span>
           <span className="spacer" />
           <span className="t-caption">{relTime(call.updated_at, now)}</span>

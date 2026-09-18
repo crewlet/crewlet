@@ -40,6 +40,7 @@
  * row, which on a 200-seat company was roughly 80,000 array scans per push.
  */
 
+import { plural } from "./format.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -94,6 +95,21 @@ export interface Unit {
   chain: Unit[];
   /** Direct members, after root seats were attached where the engine said so. */
   seats: Seat[];
+  /**
+   * This unit's members AND every member of every unit under it.
+   *
+   * THE OTHER HONEST ANSWER to "how big is this team", and it is here rather
+   * than re-derived per screen because it was re-derived per screen: the
+   * workspace rail filtered the whole roster on `unitChain` once per unit, and
+   * the org chart counted `seats` instead, so one name carried two numbers
+   * three inches apart. Filled in one pass over the depth-first unit list, so
+   * a hundred-unit company costs one walk rather than a hundred scans.
+   *
+   * It is the ENGINE's placement, never the document's nesting: a root seat
+   * whose `unit:` reference moved it into a team is a member of that team's
+   * subtree and of nothing it was written under.
+   */
+  allSeats: Seat[];
   raw: OrgUnit;
 }
 
@@ -212,6 +228,7 @@ function newUnit(raw: OrgUnit, at: number): Unit {
     children: [],
     chain: [],
     seats: [],
+    allSeats: [],
     raw,
   };
 }
@@ -422,13 +439,164 @@ function authoredOnly(authored: Authored): OrgIndex {
 }
 
 /** Index the org projection once. Everything a screen needs comes off this. */
+/**
+ * Fill every unit's [Unit.allSeats] from its own members and its children's.
+ *
+ * ONE REVERSE PASS, which is all it takes: `units` is depth first, so a child
+ * always sits after its parent and walking backwards means every child is
+ * finished before the parent that reads it. The obvious alternative — recursing
+ * from each top unit — is the same work and re-enters a shared subtree once per
+ * ancestor; the other obvious one, filtering the roster per unit, is what the
+ * two surfaces this replaces were each doing separately.
+ *
+ * Order is a unit's own members first, then its children's in tree order, so a
+ * caller that lists the array reads it the way the chart draws it.
+ */
+function fillSubtrees(units: Unit[]): void {
+  for (let i = units.length - 1; i >= 0; i--) {
+    const unit = units[i]!;
+    unit.allSeats = [...unit.seats, ...unit.children.flatMap((c) => c.allSeats)];
+  }
+}
+
 export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   const authored = walk(org);
   const built = overlay(authored, org?.derived) ?? authoredOnly(authored);
+  // AFTER whichever half built the tree, because both build one and the pass
+  // reads only `seats` and `children` — which both of them have set by here.
+  fillSubtrees(built.units);
   for (const seat of built.seats) {
     if (!built.byName.has(seat.name)) built.byName.set(seat.name, seat);
   }
   return built;
+}
+
+// ---------------------------------------------------------------------------
+// A unit's headcount, and a seat's
+// ---------------------------------------------------------------------------
+
+/**
+ * A unit's headcount, both ways round, and what sits under it.
+ *
+ * TWO NUMBERS, BECAUSE A UNIT THAT HOLDS UNITS HAS TWO HONEST ANSWERS. The
+ * whole reason this type exists is that every surface used to pick one of them
+ * and draw it bare: "Leadership 5" in the workspace rail was its whole
+ * subtree, the org chart's block under it counted its own members, and the
+ * roster's unit group counted a third figure.
+ */
+export interface UnitTally {
+  /** Seats whose own unit is this one. */
+  direct: number;
+  /** Seats in this unit and in every unit under it. */
+  total: number;
+  /** Units directly under this one. */
+  subUnits: number;
+}
+
+export function unitTally(unit: Unit): UnitTally {
+  return {
+    direct: unit.seats.length,
+    total: unit.allSeats.length,
+    subUnits: unit.children.length,
+  };
+}
+
+/**
+ * What a unit's headline number counts, in the one sentence every surface says
+ * it with. A number beside a name is read as "how many there are", and one
+ * that is really something else tells a reader something false about their own
+ * company — the rule [FacetRail] already makes a required prop for a chip.
+ */
+export const UNIT_TOTAL_HINT = "seats in this unit and everything under it";
+
+/**
+ * A unit's headcount AS WORDS: what a chart block draws.
+ *
+ * The subtree comes FIRST because that is the question a reader asks of a team
+ * — "how big is Engineering" — and the direct count is appended only where the
+ * two differ: a unit with no sub-units has one honest number, and "4 seats, 4
+ * directly" reads as two facts about a team that has one.
+ */
+export function unitSeatsLabel(tally: UnitTally): string {
+  return tally.direct === tally.total
+    ? plural(tally.total, "seat")
+    : `${plural(tally.total, "seat")}, ${tally.direct} directly`;
+}
+
+/**
+ * The other half, for a surface that can only ever show direct members: a seat
+ * sits in exactly one group, so a roster grouped by unit is the unit's own
+ * members and nothing under it. Spelled here rather than on that screen so
+ * "directly" stays one word across the product.
+ */
+export function unitDirectLabel(n: number): string {
+  return `${plural(n, "seat")} directly in it`;
+}
+
+/**
+ * What a seat's direct-report COUNT is made of, in the one line under it.
+ *
+ * THE CAPTION BREAKS THE NUMBER DOWN AND NEVER NAMES ANOTHER RELATION. The
+ * tile read "reports to <manager>" beneath a count of who reports to THIS seat
+ * — the opposite direction, in the line a reader takes as that number's own
+ * footnote. The manager is already an object-header fact and a "Who this is"
+ * row on the same screen, so the caption was spending itself on a duplicate of
+ * the one relation the number is not.
+ *
+ * WHAT IT SAYS INSTEAD is where the reports came from, because that is the
+ * question a surprising count actually raises: a seat that leads a unit manages
+ * that unit's direct members without anybody writing it down, and a lead
+ * looking at a number larger than their own `manages:` list has no other way to
+ * find out why. [Seat.autoReports] is the engine's own subset, so this is a
+ * reading of what the engine derived rather than a rule re-applied here.
+ *
+ * AND WITHOUT THE DERIVED BLOCK THERE IS NO COUNT TO BREAK DOWN. The tile draws
+ * a marked absence in that case, so the caption says what is missing rather
+ * than explaining a number that is not on screen.
+ */
+export function reportsCaption(seat: Seat, hierarchy: boolean): string {
+  if (!hierarchy) return "this engine did not report its hierarchy";
+  const total = seat.reports.length;
+  if (total === 0) return "nobody reports to this seat";
+  const auto = seat.autoReports.length;
+  if (auto === 0) return "all from its manages list";
+  if (auto === total) return "all by leading a unit";
+  return `${total - auto} from its manages list, ${auto} by leading a unit`;
+}
+
+/**
+ * WHICH ROUND A LIVE CALL IS ON, as a reader reads it — and the one value that
+ * is not a round at all.
+ *
+ * `round_num` is the engine's ZERO-BASED counter, so the number a person reads
+ * is `round_num + 1`; a row printing the raw field named a round one lower than
+ * the one the phase card beside it showed. And the field is `-1` before the
+ * first model round has come back, which is not round zero and is not a missing
+ * value: it is a turn that has started and is waiting. Drawn as a dash, two of
+ * five working seats on the roster read "round —" with nothing saying why — the
+ * one fact the sentinel carries.
+ *
+ * A `hint` rather than a second word on screen, because the card has room for a
+ * short label and not for a clause; the clause is what a reader gets on hover
+ * and what assistive technology reads.
+ */
+export function roundLabel(roundNum: number | null | undefined): {
+  text: string;
+  hint: string;
+} {
+  // `< 0` RATHER THAN `=== -1`, and `== null` for a field an older engine may
+  // not send at all: both are "there is no round yet", and a build that met a
+  // second sentinel would otherwise print it.
+  if (roundNum == null || roundNum < 0) {
+    return {
+      text: "starting",
+      hint: "the turn has begun and its first model round has not come back",
+    };
+  }
+  return {
+    text: `round ${roundNum + 1}`,
+    hint: "the model round this turn is on, counting from one",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +608,50 @@ export type SeatSettings =
   | { state: "found"; role: ConfigRole; unit: ConfigUnit | null }
   | { state: "missing" }
   | { state: "ambiguous" };
+
+/**
+ * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
+ *
+ * FOUR OUTCOMES, NOT A NULLABLE ROLE. The company document is behind an
+ * operator token, so "this seat is not in the active revision", "you may not
+ * read it", "the read has not come back yet" and "here it is" are four
+ * different facts — and a `ConfigRole | null` collapses the first three into
+ * one. Every screen that did that printed the same sentence for all of them,
+ * and the sentence it picked was the reader's: the seat header's MODEL fact
+ * read "needs an operator token" on five of eight tabs, because those tabs
+ * simply did not ask.
+ *
+ * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
+ * keeps its last good answer through a failed ask — which suits a poll and is
+ * exactly wrong for a guarded read: once a token is cleared or refused, the
+ * document it had been allowed to read is still in hand, so a reading that
+ * looked at the answer first would keep printing a revoked reader's model,
+ * budget and schedules beside a banner saying the answer needs a token.
+ */
+export type SeatReading =
+  | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
+  /** The revision answered and names no single seat by this name. */
+  | { state: "absent" }
+  /** The engine refused the read: this reader is missing a credential. */
+  | { state: "refused" }
+  /** Nothing has been asked, or nothing has come back. Never a claim. */
+  | { state: "unread" };
+
+export function seatReading(
+  settings: SeatSettings | null | undefined,
+  error?: unknown,
+): SeatReading {
+  if (error) return { state: "refused" };
+  if (!settings) return { state: "unread" };
+  if (settings.state === "found") {
+    return { state: "read", role: settings.role, unit: settings.unit };
+  }
+  // `missing` AND `ambiguous` ARE ONE ANSWER HERE. Both mean the revision
+  // holds no single entry this page may attribute to this seat, and the second
+  // is only reachable from a revision stored before names had to be unique —
+  // so a distinct sentence for it would be a sentence nobody will ever read.
+  return { state: "absent" };
+}
 
 /** Every unit in a company document, depth first, parents before children. */
 export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUnit[] {

@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Callout, CodeBlock, Disclosure, Tag, cx } from "@crewlethq/ui";
+import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Tag } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   KeyboardArrowDownGlyph,
@@ -53,10 +53,11 @@ import {
 // `phase-execute` and `phase-review` — but it is a primitive in `~/ui`, and
 // porting it THERE moves this card, the turn card and the seat screen in one
 // change rather than leaving three inlined copies of one variant table behind.
-import { PhaseTag } from "~/ui/primitives.tsx";
+import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
+  decisionTone,
   ledgerOf,
   phaseDuration,
   type PhaseRecord,
@@ -351,8 +352,19 @@ export function PhaseCard({
 
         {/* Everything below is present on BOTH a live and a finished phase, in
             the same order, so the row does not reshape when it completes. */}
+        {/* THE DECISION IS THE PHASE'S OWN STATE, so it takes the state's tone
+            — the design doc's rule for the turn header's outcome tile, which
+            this chip is the per-phase form of. It was `=== "self_iterate" ?
+            warning : neutral`, keyed on ONE value, so `blocked` (the executor
+            reporting it could not do the work), the engine-written `incomplete`
+            and the reviewer's `failed` all drew the ordinary grey pill. `failed`
+            is the one that hid worst: a review record never sets the phase's own
+            `failed` flag, so the danger tag above never fires for it and a turn
+            the reviewer ended carried no red anywhere on the card. The table is
+            in lib/phases.ts beside the words, because a decision's sentence and
+            its hue are one fact. */}
         {record.decision && (
-          <Tag variant={record.decision === "self_iterate" ? "warning" : "neutral"}>
+          <Tag variant={uiletTone(decisionTone(record.phase, record.decision))}>
             {decisionLabel(record.phase, record.decision)}
           </Tag>
         )}
@@ -386,19 +398,28 @@ export function PhaseCard({
           </Tag>
         )}
 
-        <span className="phase-meta mono">{record.model || "—"}</span>
+        <span className="phase-meta mono">
+          {record.model || <EmptyValue label="No model recorded" />}
+        </span>
         {/* AND THE SAME RULE ONE FIELD EARLIER. A settled phase whose
             `rounds_used` is 0 took no tool round — which is what a phase that
             died before its first call came back looks like, and is the fact
             that explains the failure below it. Rendering "—" there said the
-            engine had not recorded the rounds when it recorded none. */}
-        {record.live && !ledger.length && record.roundNum === 0 ? (
+            engine had not recorded the rounds when it recorded none.
+
+            ON `roundsUsed`, which is the engine's own count on a live phase as
+            well as a settled one. This tested `roundNum === 0`, a field that was
+            zero-based while live and so held `-1` at the opening frame: the
+            phase whose first round had not come back — precisely the case this
+            dash is for — fell through and rendered "0r". And the count below it
+            was one short on a live phase whose rounds narrated nothing. */}
+        {record.live && !ledger.length && record.roundsUsed === 0 ? (
           <span className="phase-meta" title="this phase has not finished a round yet">
             —
           </span>
         ) : (
           <span className="phase-meta t-num" title="tool rounds used">
-            {`${Math.max(ledger.length, record.roundNum)}r`}
+            {`${Math.max(ledger.length, record.roundsUsed)}r`}
           </span>
         )}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE PHASE'S ZERO IS AN ABSENCE. This

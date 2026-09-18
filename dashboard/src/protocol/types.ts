@@ -3441,7 +3441,11 @@ export interface TurnRow {
    *  or died mid-flight, and those look identical from a list. */
   complete: boolean;
   phases: number;
-  rounds: number;
+  /** SELF-ITERATE rounds — the highest iteration any phase reached. A phase's
+   *  TOOL rounds are `rounds_used` on its own record; the two are different
+   *  quantities and were both called "rounds", so a one-iteration turn listed
+   *  "Rounds 1" directly above phase rows reading "3r" and "1r". */
+  iterations: number;
   /** Whether ANY event of the turn was a failure, which is a different
    *  question from its outcome: a turn can recover from a failed provider
    *  call and still end well. */

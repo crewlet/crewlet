@@ -46,6 +46,7 @@ import { useNow } from "~/lib/clock.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
   decisionLabel,
+  decisionTone,
   fromLiveCall,
   fromPhaseEvent,
   mergePhases,
@@ -55,13 +56,13 @@ import {
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { Dash, DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
+import { DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 // THE ONE PHASE MARK. This file carried a private copy of the variant table
 // until `PhaseTag` was rebuilt on uilet's `Tag`; two tables spelling one
 // vocabulary is how a phase renders the neutral pill on one screen and its
 // own hue on the next, with nothing in the build to say so.
-import { PhaseTag } from "~/ui/primitives.tsx";
+import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 
 const PAGE = 60;
 
@@ -244,7 +245,7 @@ export function ModelActivity() {
         cell: (r) => (
           <span className="row gap-2">
             {r.live && <span className="dot info" />}
-            <span className="truncate">{r.role || <Dash title="no seat" />}</span>
+            <span className="truncate">{r.role || <EmptyValue label="No seat" />}</span>
           </span>
         ),
         sortValue: (r) => r.role,
@@ -265,9 +266,30 @@ export function ModelActivity() {
           ) : r.live ? (
             <span className="t-caption">running</span>
           ) : r.decision ? (
-            <span className="truncate t-caption">{decisionLabel(r.phase, r.decision)}</span>
+            // A DECISION IS A STATE, and this column already draws one of them
+            // as a toned pill one branch up. Rendered as caption text beside it,
+            // `blocked` and `delivered` were the same grey — the phase card's
+            // defect, one screen over.
+            //
+            // THE WORD, WITH THE SENTENCE ON IT. A pill has a fixed line box and
+            // this column does not shrink, so "never said what it did — the
+            // engine marked it incomplete" inside one would set the column's
+            // width for every other row. The word is what the header promises
+            // and what the seat's episodes grid already shows; the gloss stays a
+            // hover away.
+            <Tag
+              variant={uiletTone(decisionTone(r.phase, r.decision))}
+              title={decisionLabel(r.phase, r.decision)}
+            >
+              {r.decision}
+            </Tag>
           ) : (
-            <span className="t-caption">done</span>
+            // NOT "done". A settled phase with no decision is an onboarding pass
+            // that did NOT mark itself onboarded — the runner writes an empty
+            // decision and the note "did not mark (will retry next turn)" — so
+            // the word this cell invented was the opposite of what the record
+            // says, in the one column a reader trusts it.
+            <EmptyValue label="This phase recorded no decision" />
           ),
         sortValue: (r) => (r.failed ? 0 : r.live ? 1 : 2),
       },
@@ -290,8 +312,12 @@ export function ModelActivity() {
         header: "Rounds",
         align: "right",
         shrink: true,
-        cell: (r) => <NumberCell value={Math.max(r.roundsUsed, r.roundNum + 1)} />,
-        sortValue: (r) => Math.max(r.roundsUsed, r.roundNum + 1),
+        // ONE FIELD. The two this compared were the same quantity in two bases
+        // on a settled phase — `roundNum` was `rounds_used` there — so
+        // `roundNum + 1` won every comparison and every finished row in this
+        // column claimed one round more than the phase ran.
+        cell: (r) => <NumberCell value={r.roundsUsed} />,
+        sortValue: (r) => r.roundsUsed,
       },
       {
         key: "tokens",

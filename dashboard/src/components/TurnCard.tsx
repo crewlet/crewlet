@@ -13,7 +13,7 @@
  */
 
 import { useState } from "react";
-import { Button, Tag, cx } from "@crewlethq/ui";
+import { Button, cx, EmptyValue, Tag } from "@crewlethq/ui";
 import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS, and for the reason PhaseCard gives at its own import: `PhaseTag`
 // has a peer, but it is a `~/ui` primitive, so its port belongs to that file
@@ -23,43 +23,69 @@ import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useNavigator } from "~/app/router.tsx";
-import type { TurnGroup } from "~/lib/phases.ts";
+import { triggerHeadline, type TurnGroup } from "~/lib/phases.ts";
+import type { TurnRow } from "~/protocol/index.ts";
 
 export function TurnCard({
   group,
+  row,
   defaultOpen,
-  showRole,
 }: {
   group: TurnGroup;
+  /** The engine's own settled row for this turn, where the screen holds one.
+   *  The card and the turns table above it are ONE turn on ONE screen and were
+   *  reporting different numbers for it. */
+  row?: TurnRow;
   defaultOpen?: boolean;
-  showRole?: boolean;
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
   const nav = useNavigator();
 
-  // The turn's own wall time, from its first phase to its last. The engine's
-  // `turn_completed` carries an exact `duration_ms`, but it is a separate
-  // event; where the turn's phases are all we have, this is the honest
-  // measure and it is labelled as spanning them.
-  const first = group.phases[0];
-  const last = group.phases[group.phases.length - 1];
-  const span =
-    first && last && tsKey(last.at) > tsKey(first.at) ? tsKey(last.at) - tsKey(first.at) : null;
+  // THE ENGINE'S OWN FIGURES WHERE A RECORD CARRIES THEM, the window across this
+  // card's phases otherwise — the rule `turnFacts` states for the Turn screen,
+  // applied here because the table above prints the same turn.
+  //
+  // `started_at` is the turn's FIRST RECORDED EVENT — its prefetch lands before
+  // the first model call, so the table said "started 6m ago" beside a card
+  // counting 3m 15s from the phase that is running. The phase window is the
+  // fallback for the one turn the store cannot answer for: the one that began
+  // after the table was answered, and every turn on a node keeping no event log.
+  //
+  // The length used to be `last.at - first.at`, two LANDING instants, which
+  // drops the first phase's own length: a 60s review over a 3m execute rendered
+  // as "1m 0s" above a phase card reading 3m.
+  const measured = !!row?.complete && (row?.duration_ms ?? 0) > 0;
+  const took = measured ? row!.duration_ms : group.span;
+  const startedAt = row?.started_at || group.startedAt;
+  const began = tsKey(startedAt);
 
   const trigger = group.trigger;
+  const headline = triggerHeadline(trigger);
 
   return (
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
         {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
-          <div className="row gap-1">
-            {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
-            <span className="truncate t-cell secondary">
-              {trigger?.summary || trigger?.type || "turn"}
-            </span>
-          </div>
+          {/* THE ONE SENTENCE A COLLAPSED CARD CARRIES, and it CLAMPS where it
+              used to be cut at a line. `.truncate` is the cell rule: it is right
+              in the Turns grid one panel up, where a row has a fixed height and
+              a column can be widened. Here nothing constrains the height — the
+              card grows to its content and the metadata beside it is centred
+              against whatever this is — so "Message from founder: " plus a task
+              title (up to tracker.MaxTitle, 256) lost its subject at about the
+              fortieth character with empty card underneath, and the only way to
+              learn what the turn was about was to open it.
+              TWO LINES, not free-flowing: this is one card in a feed of forty
+              and the head's rule is that the same facts sit in the same places,
+              so one long title may not push every card below it down. What two
+              lines still cannot hold is on `title`, and that is a POINTER
+              affordance only — a clamp is visual, so the whole sentence stays in
+              the DOM and a screen reader has it either way. */}
+          <span className="clamp t-cell secondary" title={headline}>
+            {headline}
+          </span>
           <div className="row gap-1">
             {group.phases.map((p) => (
               <PhaseTag key={p.key} phase={p.phase} />
@@ -109,20 +135,39 @@ export function TurnCard({
             {fmtCount(group.totalTokens)}
           </span>
         )}
-        {span != null && (
-          <span className="phase-meta t-num" title="from the first phase to the last">
-            {fmtDuration(span)}
+        {took != null && (
+          <span
+            className="phase-meta t-num"
+            title={
+              measured
+                ? "what the engine measured"
+                : "across this turn's phases — its own record is not in hand"
+            }
+          >
+            {fmtDuration(took)}
           </span>
         )}
-        {/* Running for HOW LONG, or landed WHEN — measured from a start
-            that does not move. Against `at`, which advances on every
-            streamed frame, a live turn read "just now" forever. */}
+        {/* Running for HOW LONG, or landed WHEN — from a start that does not
+            move, and the SAME start the turns table prints. Against `at`, which
+            advances on every streamed frame, a live turn read "just now"
+            forever; and against the phase's own start rather than the turn's,
+            it disagreed with the table beside it by the length of the prefetch.
+            An unreadable instant draws the absent mark rather than counting
+            from 1970. */}
         <time
           className="phase-meta"
-          dateTime={group.live ? group.startedAt : group.at}
-          title={fmtDateTime(group.live ? group.startedAt : group.at)}
+          dateTime={group.live ? startedAt : group.at}
+          title={fmtDateTime(group.live ? startedAt : group.at)}
         >
-          {group.live ? fmtElapsed(now - tsKey(group.startedAt)) : relTime(group.at, now)}
+          {group.live ? (
+            began > 0 ? (
+              fmtElapsed(now - began)
+            ) : (
+              <EmptyValue label="Started at an instant this build could not read" />
+            )
+          ) : (
+            relTime(group.at, now)
+          )}
         </time>
       </header>
 

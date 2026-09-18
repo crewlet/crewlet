@@ -31,6 +31,7 @@ import {
   Callout,
   Card,
   EmptyState,
+  EmptyValue,
   IconButton,
   InlineCode,
   Skeleton,
@@ -49,7 +50,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, Dash, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -623,7 +624,7 @@ export function Secrets({ name }: { name?: string }) {
                   s.updated_by ? (
                     <TextCell>{s.updated_by}</TextCell>
                   ) : (
-                    <Dash title="nobody recorded" />
+                    <EmptyValue label="Nobody recorded" />
                   ),
               },
               {
@@ -737,7 +738,7 @@ function Readers({ paths }: { paths: string[] | null }) {
     );
   }
   if (paths.length === 0) {
-    return <Dash title="no field in the active configuration names it" />;
+    return <EmptyValue label="No field in the active configuration names it" />;
   }
   return (
     <Tag appearance="outline" title={paths.join("\n")}>

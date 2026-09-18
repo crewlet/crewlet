@@ -22,7 +22,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import {
   CalendarTodayGlyph,
   DescriptionGlyph,
@@ -30,7 +30,7 @@ import {
   ScheduleGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { Dash, DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -363,6 +363,13 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // row says so in its own `problem` field and a blank Next cell was the
   // only symptom.
   const broken = schedules.filter((s) => s.problem);
+  // THE SOONEST OF THEM, which is what a one-line caption has room for: a
+  // schedule's name is founder prose, so joining them was cut mid-word and named
+  // a schedule nobody declared. WHICH schedules is the table below's question —
+  // every row carries its own Next cell.
+  const soonest = due.length
+    ? due.reduce((best, s) => (tsKey(s.next_run) < tsKey(best.next_run) ? s : best))
+    : undefined;
 
   // THE ORDER `[` AND `]` WALK, published only from the LIST. On the detail
   // route this same component renders one schedule, and a stepper walking
@@ -449,16 +456,20 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
           icon={<ScheduleGlyph size="xs" />}
           label="Firing within the hour"
           value={due.length}
-          sub={due.length ? due.map((s) => s.name).join(", ") : "nothing due soon"}
+          sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
         />
         <StatCard
           icon={<ErrorGlyph size="xs" />}
           label="Cannot fire"
           tone={broken.length ? "danger" : undefined}
           value={broken.length}
+          // A `problem` IS FREE TEXT the engine writes — no closed set to split
+          // on — so the only bounded thing to say is where the reasons are. Each
+          // broken row prints its own `problem` in its Next cell, which is the
+          // one place it is legible in full.
           sub={
             broken.length
-              ? broken.map((s) => s.name).join(", ")
+              ? "each one says why in its Next cell"
               : "every expression parses and every timezone resolves"
           }
         />
@@ -576,7 +587,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       )}
                     </span>
                   ) : (
-                    <Dash title="nobody — this schedule wakes no seat" />
+                    <EmptyValue label="Nobody — this schedule wakes no seat" />
                   ),
               },
               {
@@ -599,7 +610,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       {s.problem}
                     </Tag>
                   ) : (
-                    <Dash title="disabled, or the calendar never reaches it" />
+                    <EmptyValue label="Disabled, or the calendar never reaches it" />
                   ),
               },
               {
@@ -609,7 +620,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 sortValue: (s) => tsKey(lastFire.get(rowID(s))?.fired_at ?? ""),
                 cell: (s) => {
                   const run = lastFire.get(rowID(s));
-                  if (!run) return <Dash title="this schedule has never fired" />;
+                  if (!run) return <EmptyValue label="This schedule has never fired" />;
                   return (
                     <span className="row gap-1">
                       <DateCell at={run.fired_at} now={now} />
@@ -698,7 +709,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       {r.outcome}
                     </Tag>
                   ) : (
-                    <Dash title="the ledger recorded no outcome for this fire" />
+                    <EmptyValue label="The ledger recorded no outcome for this fire" />
                   ),
               },
               {
@@ -718,7 +729,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                       {fmtDateTime(r.scheduled_at)}
                     </span>
                   ) : (
-                    <Dash title="the ledger recorded no tick for this fire" />
+                    <EmptyValue label="The ledger recorded no tick for this fire" />
                   ),
               },
             ]}
@@ -860,7 +871,7 @@ function OneSchedule({
                   r.outcome ? (
                     <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
                   ) : (
-                    <Dash title="the ledger recorded no outcome for this fire" />
+                    <EmptyValue label="The ledger recorded no outcome for this fire" />
                   ),
               },
               {
@@ -878,7 +889,7 @@ function OneSchedule({
                       {fmtDateTime(r.scheduled_at)}
                     </span>
                   ) : (
-                    <Dash title="the ledger recorded no tick for this fire" />
+                    <EmptyValue label="The ledger recorded no tick for this fire" />
                   ),
               },
             ]}
@@ -989,7 +1000,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           {r.outcome ? (
                             <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
                           ) : (
-                            <Dash title="the ledger recorded no outcome for this fire" />
+                            <EmptyValue label="The ledger recorded no outcome for this fire" />
                           )}
                           <span className="spacer" />
                           <span className="t-caption" title={fmtDateTime(r.fired_at)}>

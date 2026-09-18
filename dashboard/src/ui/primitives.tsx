@@ -52,11 +52,12 @@ import {
 import { CheckGlyph, ContentCopyGlyph, ErrorGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
-  Tag,
   cx,
-  writeClipboard,
+  EmptyValue,
+  Tag,
   type TagVariant,
   type Tone as UiletTone,
+  writeClipboard,
 } from "@crewlethq/ui";
 import { Mark, type MarkName } from "./glyph.tsx";
 
@@ -146,7 +147,11 @@ const PHASE_VARIANT: Record<string, TagVariant> = {
  */
 export function PhaseTag({ phase }: { phase: string }) {
   const key = (phase || "").toLowerCase();
-  return <Tag variant={PHASE_VARIANT[key] ?? "neutral"}>{key || "—"}</Tag>;
+  return (
+    <Tag variant={PHASE_VARIANT[key] ?? "neutral"}>
+      {key || <EmptyValue label="No phase on this record" />}
+    </Tag>
+  );
 }
 
 // ---------------------------------------------------------------------------

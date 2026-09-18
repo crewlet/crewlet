@@ -39,7 +39,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
-    roundNum: 0,
     roundsUsed: 0,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
@@ -117,7 +116,7 @@ describe("a settled phase's zero is a number", () => {
   });
 
   test("and the same for the rounds it never took", () => {
-    const { container } = render(<PhaseCard record={phase({ roundNum: 0, failed: true })} />);
+    const { container } = render(<PhaseCard record={phase({ failed: true })} />);
     expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0r");
   });
 
@@ -126,7 +125,7 @@ describe("a settled phase's zero is a number", () => {
   // spent nothing.
   test("a live phase's zero is still an absence", () => {
     const { container } = render(
-      <PhaseCard record={phase({ live: true, totalTokens: 0, roundNum: 0 })} />,
+      <PhaseCard record={phase({ live: true, totalTokens: 0, roundsUsed: 0 })} />,
     );
     expect(container.querySelector('[title="total tokens"]')).toBeNull();
     expect(
@@ -268,5 +267,65 @@ describe("a failed tool call", () => {
     expect(screen.getByRole("button", { name: /^submit_work/ }).textContent).not.toContain(
       "failed",
     );
+  });
+});
+
+// THE DECISION CHIP IS DRAWN IN THE STATE IT NAMES.
+//
+// It was `=== "self_iterate" ? warning : neutral`, keyed on ONE value, so
+// `blocked` — the executor reporting it could not do the work — drew the
+// ordinary grey pill, indistinguishable from `delivered` two rows up. The
+// fixture leaves `failed`, `exhaustedRounds`, `emptyAnswerRounds` and
+// `rescueFired` at their quiet defaults, so the decision chip is the only
+// warning or danger pill the card can draw.
+describe("the decision chip is drawn in the state it names", () => {
+  test("an executor that could not do the work is not the ordinary pill", () => {
+    const { container } = render(<PhaseCard record={phase({ decision: "blocked" })} />);
+    expect(container.querySelector(".crewlet-tag--warning")).not.toBeNull();
+    // COLOUR IS NEVER THE ONLY CARRIER: the sentence is beside it.
+    expect(screen.getByText("blocked, and said why")).not.toBeNull();
+  });
+
+  // The one the card had no other way to say. A review record never sets the
+  // phase's `failed` flag, so the danger tag in the header does not fire and
+  // this chip was the whole of what a reader got.
+  test("a review that ended the turn is drawn as the failure it is", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ phase: "review", decision: "failed" })} />,
+    );
+    expect(container.querySelector(".crewlet-tag--danger")).not.toBeNull();
+    expect(screen.getByText("failed — the turn will not retry")).not.toBeNull();
+  });
+
+  // AND AN UNEVENTFUL TURN KEEPS THE QUIET PILL, or four status hues are spent
+  // on every row and therefore on none: a seat's feed is mostly made of these.
+  test("an uneventful turn keeps the quiet pill", () => {
+    const { container } = render(<PhaseCard record={phase({ decision: "no_action" })} />);
+    expect(container.querySelector(".crewlet-tag--warning")).toBeNull();
+    expect(container.querySelector(".crewlet-tag--danger")).toBeNull();
+  });
+});
+
+// AND THE ROUND COUNT IS THE ENGINE'S OWN, whatever narrated.
+//
+// `roundNum` held the engine's ZERO-BASED `round_num` on a live record and
+// `rounds_used` on a settled one — one name, two quantities — so a live phase
+// whose rounds narrated nothing counted one short, and the opening frame's `-1`
+// never matched the `=== 0` guard the dash above is for, which rendered "0r".
+describe("the tool-round count", () => {
+  test("a live phase counts the rounds the engine reported, not the ones that narrated", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ live: true, roundsUsed: 3, narration: [], tools: [] })} />,
+    );
+    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("3r");
+  });
+
+  test("a live phase whose first round has not come back draws the marked absence", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ live: true, roundsUsed: 0, narration: [], tools: [] })} />,
+    );
+    expect(
+      container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
+    ).toBe("—");
   });
 });

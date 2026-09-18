@@ -581,7 +581,11 @@ describe("PhaseTag", () => {
   // coloured gap a reader has to hover to interrogate.
   test("names an absent phase rather than drawing an empty pill", () => {
     const { container } = render(<PhaseTag phase="" />);
-    expect(container.textContent).toBe("—");
+    // THE LABEL IS THE ASSERTION, not the glyph. `EmptyValue` draws the mark
+    // for the eye and the sentence for everyone else, and the sentence is the
+    // half a hover-only `title` never had.
+    expect(container.querySelector(".crewlet-empty-value")).not.toBeNull();
+    expect(container.textContent).toContain("No phase on this record");
     expect(container.querySelector(".crewlet-tag--neutral")).not.toBeNull();
   });
 

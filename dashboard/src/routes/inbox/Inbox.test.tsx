@@ -20,8 +20,10 @@
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 
 import { Inbox } from "./Inbox.tsx";
+import { SUBJECTS } from "~/lib/attention.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -83,7 +85,15 @@ function mount(answers: Record<string, unknown> = {}) {
       query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
     }
   ).query = (what: string) => {
-    if (what in answers) return Promise.resolve(answers[what]);
+    if (what in answers) {
+      const answer = answers[what];
+      // A THUNK, so a case can answer with silence or a rejection. Building the
+      // promise in the fixture object would create one nothing has adopted yet,
+      // and an unhandled rejection fails the run somewhere else entirely.
+      return typeof answer === "function"
+        ? (answer as () => Promise<unknown>)()
+        : Promise.resolve(answer);
+    }
     if (what === "viewer") {
       return Promise.resolve({
         operator_id: "U0FOUNDER",
@@ -265,6 +275,184 @@ test("a figure whose query has not answered draws a dash, never a zero", async (
 
   const strip = screen.getByRole("group", { name: "The company right now" });
   const openFact = [...strip.querySelectorAll("a")].find((a) => a.textContent?.includes("open"));
-  expect(openFact?.textContent).toContain("—");
+  expect(openFact?.textContent).toContain(EMPTY_VALUE);
   expect(openFact?.textContent).not.toContain("0");
+});
+
+// AN INBOX NOBODY HAS EVER WRITTEN CLAIMS NO READ HISTORY.
+//
+// Zero rows is six facts, and the band branched on the FACET: a person the
+// applier has never written a `tracker_notifications` row for was told
+// "Everything the company told you about has been marked read. Switch to All to
+// read back through it." — a history that does not exist, and a pointer at a
+// facet that is just as empty. `seen_through` is the evidence that separates
+// the two and nothing in this bundle read it.
+test("an inbox nobody has ever written claims no read history", async () => {
+  mount();
+  await settle();
+
+  expect(screen.getByText("Nothing has reached you yet")).toBeTruthy();
+  const notices = screen.getByText("Notices").closest("section");
+  expect(notices?.textContent).not.toContain(
+    "Everything the company told you about has been marked read",
+  );
+  expect(notices?.textContent).not.toContain("Switch to All");
+});
+
+// AND THE OTHER SIDE OF THE ONE BIT, so a fix cannot collapse both branches
+// into the never-reached sentence: a person who HAS marked a page read is
+// pointed back through it.
+test("a person who has marked a page read is pointed back through it", async () => {
+  mount({
+    work_inbox: {
+      handle: "ada",
+      notices: [],
+      primary_reasons: [],
+      unread: 0,
+      primary: 0,
+      seen_through: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 42 },
+    },
+  });
+  await settle();
+
+  expect(screen.getByText("You are caught up")).toBeTruthy();
+  expect(screen.getByText("Notices").closest("section")?.textContent).toContain("Switch to All");
+});
+
+// A REASON THAT MATCHES NOTHING KEEPS THE CHIP THAT WOULD LIFT IT.
+//
+// `reasons` deliberately keeps a sticky zero-count entry for the selected value
+// — "a filter you cannot see is a filter you cannot lift" — and the band hid
+// the whole rail exactly when that entry was the only way back, because the
+// rail was a CHILD and children are not drawn on the empty path.
+test("a reason that matches nothing keeps the chip that would lift it", async () => {
+  location.hash = "#/inbox?reason=mention";
+  mount({
+    work_inbox: {
+      handle: "ada",
+      notices: [notice("assignee", 1), notice("watcher", 2)],
+      primary_reasons: ["assignee"],
+      unread: 2,
+      primary: 1,
+    },
+  });
+  await settle();
+
+  // The chip's own text carries its count beside the label, so this matches the
+  // label rather than the whole node.
+  const rail = screen.getByRole("group", { name: "Reason" });
+  expect(rail.textContent).toContain("mentioned you");
+  expect(screen.getByText("Nothing on this page carries that reason")).toBeTruthy();
+  expect(screen.getByText("Notices").closest("section")?.textContent).not.toContain(
+    "has been marked read",
+  );
+});
+
+// A BAND WHOSE READ HAS NOT ANSWERED COUNTS NOTHING AND CLAIMS NOTHING.
+//
+// `count={notices.length}` showed a literal `0` in the head before anything had
+// answered — the exact claim the pulse strip's own figures are forbidden from
+// making one component up — and the empty state asserted a read history over an
+// answer nobody had.
+test("a band whose read has not answered counts nothing and claims nothing", async () => {
+  mount({ work_inbox: () => new Promise(() => {}) });
+  await settle();
+
+  // Scoped to the quiet block rather than to the section: the band's own NOTE
+  // legitimately says "what reached you", and it draws whatever the read does.
+  const notices = screen.getByText("Notices").closest("section");
+  expect(notices?.querySelector(".inbox-band-count")?.textContent).toBe(
+    `${EMPTY_VALUE}Not counted: this read did not answer`,
+  );
+  expect(notices?.querySelector(".inbox-quiet")).toBeNull();
+});
+
+// A REFUSED INBOX READ IS NOT A CAUGHT-UP INBOX.
+//
+// `QueryState` was a CHILD of the band, and children are not rendered on the
+// empty path — so an `unauthorized` on `work_inbox` drew "everything has been
+// marked read" and never drew the refusal.
+test("a refused inbox read is not a caught-up inbox", async () => {
+  mount({ work_inbox: () => Promise.reject(new Error("unauthorized")) });
+  await settle();
+
+  const notices = screen.getByText("Notices").closest("section");
+  expect(notices?.textContent).toContain("auth-gated");
+  expect(notices?.textContent).not.toContain("marked read");
+  expect(notices?.textContent).not.toContain("Nothing has reached you");
+});
+
+// THE NOTICES SCOPE IS A SCOPE, NOT A FACET RAIL.
+//
+// "All" and "Snoozed" name rows the loaded page does not hold — they are
+// `work_inbox` parameters — so no count over the loaded rows could ever
+// describe them, and the rail still printed the caption that qualifies counts.
+// Its all-chip, the chip that means "no filter", had to be labelled `Unread`,
+// the NARROWEST of the three.
+test("the notices scope offers three states with one chosen, and claims no counts", async () => {
+  mount({
+    work_inbox: {
+      handle: "ada",
+      // ONE reason deliberately: the Reason rail's own `length > 1` guard keeps
+      // the one rail that legitimately counts off screen, so the caption has no
+      // other source.
+      notices: [notice("assignee", 1), notice("assignee", 2)],
+      primary_reasons: ["assignee"],
+      unread: 2,
+      primary: 1,
+    },
+  });
+  await settle();
+
+  const group = screen.getByRole("radiogroup", { name: "Which notices" });
+  const options = [...group.querySelectorAll('[role="radio"]')];
+  expect(options.map((o) => (o.textContent ?? "").trim())).toEqual(["Unread", "All", "Snoozed"]);
+  const checked = options.filter((o) => o.getAttribute("aria-checked") === "true");
+  expect(checked).toHaveLength(1);
+  expect((checked[0]?.textContent ?? "").trim()).toBe("Unread");
+  expect(screen.queryByText("counts over the rows loaded")).toBeNull();
+});
+
+// AND CHOOSING ONE IS ONE PRESS. A facet rail's all-chip clears on a SECOND
+// press, which here silently returned the reader to Unread — a gesture with no
+// affordance and a destination nobody named.
+test("choosing All is one press, and pressing it again does not go back", async () => {
+  mount();
+  await settle();
+
+  const all = () =>
+    [
+      ...screen
+        .getByRole("radiogroup", { name: "Which notices" })
+        .querySelectorAll('[role="radio"]'),
+    ].find((o) => (o.textContent ?? "").trim() === "All")!;
+  fireEvent.click(all());
+  await settle();
+  const param = () => new URLSearchParams(location.hash.split("?")[1] ?? "").get("state");
+  expect(param()).toBe("all");
+  expect(all().getAttribute("aria-checked")).toBe("true");
+
+  fireEvent.click(all());
+  await settle();
+  expect(param()).toBe("all");
+  expect(all().getAttribute("aria-checked")).toBe("true");
+});
+
+// THE QUIET BAND NAMES WHAT WAS CHECKED, AND `lib/attention.ts` OWNS THE LIST.
+//
+// It read "No seat is stopped, no run is parked on a question, and no budget is
+// refusing" — three of the twelve conditions that queue raises, written as a
+// closed sentence on the one screen an operator opens to find out whether
+// anything is wrong. An engine with no active configuration, a node shedding
+// its seats, a draining node, a refused token and a round stalled for eleven
+// minutes were all inside the silence that sentence claimed to have measured.
+test("the quiet band names every subject the engine's queue watches", async () => {
+  mount();
+  await settle();
+
+  const quiet = screen.getByText("Nothing needs a decision").closest(".inbox-quiet");
+  expect(quiet).toBeTruthy();
+  for (const phrase of Object.values(SUBJECTS)) {
+    expect(quiet?.textContent, phrase).toContain(phrase);
+  }
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { parseBlocks, renderMarkdown, safeHref } from "./markdown.ts";
+import { parseBlocks, plainText, renderMarkdown, safeHref } from "./markdown.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
 // somebody can read and edit as markdown, and a fixture that only exists
@@ -239,5 +239,46 @@ describe("the block parser", () => {
   it("answers an empty document with nothing rather than throwing", () => {
     expect(parseBlocks("")).toEqual([]);
     expect(renderMarkdown("")).toEqual([]);
+  });
+});
+
+/**
+ * A BODY IS RENDERED; AN EXCERPT IS FLATTENED.
+ *
+ * The engine's `excerpt` is a CUT of a markdown body, and the surfaces that draw
+ * one are a single line inside a grid track. `renderMarkdown` is wrong there
+ * three times over: `.truncate` is `white-space: nowrap`, which cannot clip a
+ * block box at all; several of those cells are a `<p>`, where a block child is
+ * invalid; and a cut fragment stops mid-construct. So the tracker's feed printed
+ * "## Understanding the work This task is to interview three energy trading
+ * desks…" with the hashes in it.
+ */
+describe("plain text", () => {
+  it("renders every construct to the prose it draws", () => {
+    expect(plainText("# Title\n\nbody")).toBe("Title body");
+    expect(plainText("- one\n- two")).toBe("one two");
+    // A TASK ITEM KEEPS ITS BOX: `[ ]` is the one piece of syntax whose meaning
+    // survives being flattened, and dropping it turns "not done yet" into a
+    // statement of fact.
+    expect(plainText("- [ ] ship it\n- [x] merged")).toBe("[ ] ship it [x] merged");
+    expect(plainText("use `**not bold**` here")).toBe("use **not bold** here");
+    expect(plainText("![a diagram](x.png)")).toBe("a diagram");
+    expect(plainText("read [the guide](https://docs.crewlet.ai/x)")).toBe("read the guide");
+    expect(plainText("<https://docs.crewlet.ai/x>")).toBe("https://docs.crewlet.ai/x");
+    expect(plainText("a\n\n---\n\nb")).toBe("a b");
+    expect(plainText("| h |\n| --- |\n| c |")).toBe("h c");
+  });
+
+  it("emits no markdown syntax over a whole real document", () => {
+    // THE PAGE FIXTURE, because a case list only covers what somebody thought
+    // of. Every construct the renderer knows is in that file.
+    const flat = plainText(pageFixture);
+    expect(flat).not.toMatch(/^#|\s#{1,6}\s|\*\*|```|\| ---/);
+    expect(flat).not.toContain("\n");
+  });
+
+  it("answers an empty document with an empty string rather than throwing", () => {
+    expect(plainText("")).toBe("");
+    expect(plainText("   \n\n  ")).toBe("");
   });
 });

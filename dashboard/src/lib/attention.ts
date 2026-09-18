@@ -11,6 +11,15 @@
  * They are one list because they are one question, and it is the question an
  * operator opens this page with. Ordered by what it costs to ignore, and every
  * item carries where to go.
+ *
+ * WHAT IT WATCHES IS A DECLARATION, NOT PROSE ON A SCREEN. The inbox's quiet
+ * band has to say what "nothing needs a decision" was measured over — an empty
+ * band with no scope reads exactly like a band nobody wired up. It said "No
+ * seat is stopped, no run is parked on a question, and no budget is refusing",
+ * which is three of the twelve conditions below written as a closed sentence,
+ * so an engine with no active company configuration, a node shedding its
+ * seats, a draining node, a refused token and a round stalled for eleven
+ * minutes were all inside a silence that claimed to have measured them.
  */
 
 import type {
@@ -21,13 +30,59 @@ import type {
   SandboxRun,
 } from "~/protocol/index.ts";
 import type { MarkName } from "~/ui/glyph.tsx";
-import { runState, staleness, type Seat } from "./seats.ts";
+import { roundLabel, runState, staleness } from "./seats.ts";
 
 export type Severity = "critical" | "caution" | "info";
+
+/**
+ * WHAT A CONDITION IS ABOUT — the vocabulary the quiet band draws.
+ *
+ * A SUBJECT rather than one entry per condition, for two reasons. Twelve
+ * clauses is not a sentence: the band's caption is read at a glance or not at
+ * all. And a subject is what survives — a thirteenth budget condition is
+ * already covered by "the token budgets", so the sentence only changes when the
+ * KIND of thing being watched changes, which is the only change a reader needs
+ * told.
+ *
+ * It is two-sided by construction. `subject` is required on [Attention], so a
+ * push site that names none is a type error; [SUBJECTS] is total over the
+ * union, so a new subject is a type error until it has the phrase a reader
+ * sees. Neither half is a convention anybody has to remember.
+ */
+export type Subject = "engine" | "budget" | "run" | "seat";
+
+/** Each subject as the reader's own words, in the order the clause lists them. */
+export const SUBJECTS: Record<Subject, string> = {
+  engine: "the engine and this node's link to it",
+  budget: "the company's and every seat's token budget",
+  run: "every coding run waiting on an answer",
+  seat: "every seat's own state",
+};
+
+function joinClauses(parts: readonly string[]): string {
+  if (parts.length < 3) return parts.join(" and ");
+  // THE OXFORD COMMA IS LOAD-BEARING HERE: the clauses carry their own "and"
+  // ("the company's and every seat's token budget"), so without it the last two
+  // run together and read as one item.
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
+}
+
+/**
+ * The subjects as one English clause — the sentence the inbox drops in.
+ *
+ * JOINED HERE, beside the words it joins. `Intl.ListFormat` is the obvious
+ * alternative and is wrong for this string: it joins in the BROWSER's locale,
+ * so a reader on a Japanese one would get "、" between clauses that are
+ * themselves hardcoded English, and the assertion that the band names every
+ * subject would pass or fail on the machine's locale.
+ */
+export const WATCHED: string = joinClauses(Object.values(SUBJECTS));
 
 export interface Attention {
   id: string;
   severity: Severity;
+  /** What this is about. [SUBJECTS] is what the quiet band draws from it. */
+  subject: Subject;
   icon: MarkName;
   /** What happened, in the fewest words that are still true. */
   title: string;
@@ -65,7 +120,6 @@ export interface AttentionInput {
   runs: SandboxRun[];
   budget: OrgBudget;
   engine: EngineHealth | null;
-  seats: Seat[];
   connected: boolean;
   authRejected: boolean;
   now: number;
@@ -82,6 +136,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "auth",
       severity: "critical",
+      subject: "engine",
       icon: "key",
       title: "The engine refused this browser's token",
       detail:
@@ -91,6 +146,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "offline",
       severity: "critical",
+      subject: "engine",
       icon: "power_settings_new",
       title: "No connection to the engine",
       detail:
@@ -105,6 +161,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "unconfigured",
       severity: "critical",
+      subject: "engine",
       icon: "tune",
       title: "No company configuration is active",
       detail:
@@ -116,6 +173,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: `posture-${engine.posture}`,
       severity: "critical",
+      subject: "engine",
       icon: "dns",
       title: `This node's control-plane posture is "${engine.posture}"`,
       detail:
@@ -129,6 +187,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "draining",
       severity: "caution",
+      subject: "engine",
       icon: "power_settings_new",
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
@@ -157,6 +216,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "org-budget",
       severity: "critical",
+      subject: "budget",
       icon: "token",
       title: "The company token budget is spent",
       detail: `${org.used.toLocaleString()} of ${org.max.toLocaleString()} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
@@ -166,6 +226,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: "org-budget-near",
       severity: "caution",
+      subject: "budget",
       icon: "token",
       title: "The company token budget is nearly spent",
       detail: `${Math.round((org.used / org.max) * 100)}% of the process-lifetime meter is used.`,
@@ -184,6 +245,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     out.push({
       id: `sandbox-${run.turn_id}`,
       severity: "caution",
+      subject: "run",
       icon: "help",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
@@ -205,6 +267,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `error-${agent.role}`,
         severity: "critical",
+        subject: "seat",
         icon: "warning",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
@@ -218,6 +281,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `afk-${agent.role}`,
         severity: "caution",
+        subject: "seat",
         icon: "pause",
         title: `${agent.role} is AFK`,
         detail: agent.afk_reason
@@ -236,12 +300,18 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         out.push({
           id: `stale-${agent.role}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
+          subject: "seat",
           icon: "schedule",
           title:
             how === "stalled"
               ? `${agent.role} has been on one round for over 10 minutes`
               : `${agent.role} has been on one round for over 2 minutes`,
-          detail: `${call.phase} · round ${call.round_num >= 0 ? call.round_num : "?"} — no update since ${call.updated_at}.`,
+          // THE SAME READING AS THE CARD THIS ROW LINKS TO, from the same
+          // helper. It printed the raw zero-based counter, so the queue named a
+          // round one lower than the seat page it lands on, and "?" for the
+          // opening frame — which is the case this row exists for: a first
+          // model round that never came back.
+          detail: `${call.phase} · ${roundLabel(call.round_num).text} — no update since ${call.updated_at}.`,
           path: ["company", "people", String(agent.handle ?? agent.id)],
           query: { tab: "model" },
           at: call.updated_at,
@@ -254,6 +324,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",
+        subject: "budget",
         icon: "token",
         title: `${agent.role}'s token budget is spent`,
         detail: `${meter.used.toLocaleString()} of ${meter.max.toLocaleString()} tokens. This seat's turns are being declined at the gate.`,
