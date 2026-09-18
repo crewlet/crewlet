@@ -19,6 +19,13 @@
      "Knowle…", which is the label failing at the one job it has. */
   --rail-w: 80px;
   --rail-w-collapsed: 48px;
+  /* The bottom bar's height on a phone. A glyph, its label under it, and the
+     touch target both have to live in: 56px is the floor every platform's own
+     guidance gives for one a thumb hits reliably, and the label needs the
+     rest. It is a token because the page's own bottom padding is derived from
+     it — a bar whose height and a page whose clearance are two literals is a
+     list whose last row goes under the navigation the day either moves. */
+  --rail-bar-h: 62px;
   /* The page bar keeps the old topbar's height: the two are the same band,
      and a reader moving between an old bookmark and a new one should not see
      the content jump. */
@@ -1130,4 +1137,106 @@ button.histogram-bar[data-empty]:hover {
   background: var(--surface-inset);
   color: var(--text-muted);
   flex: 0 0 auto;
+}
+
+/* ---- Phone: the rail is a bottom bar ------------------------------------ */
+
+/* THE ONE COLUMN A PHONE CANNOT SPARE. At 960 the rail collapses to 48px of
+   icons, which is the right move on a tablet and the wrong one on a 390px
+   phone: it is an eighth of the window spent on navigation, permanently, down
+   the side of every screen — and it is the edge a thumb reaches worst. Every
+   phone-shaped application this product is measured against puts its top-level
+   navigation along the bottom, and so does this one below 860, which is the
+   same width at which the Inbox becomes one pane.
+
+   THE RAIL DOES NOT MOVE IN THE MARKUP. It is the grid's first child and stays
+   there; what changes is that the grid becomes one column with a row for the
+   bar, and the bar is fixed to the bottom edge. Reordering it in the DOM would
+   put the navigation after the page for a screen reader and for Tab, which is
+   the opposite of what this is for. */
+@media (max-width: 860px) {
+  .app,
+  .app[data-rail-collapsed="true"],
+  .app[data-no-sidebar="true"],
+  .app[data-no-sidebar="true"][data-rail-collapsed="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rail {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--z-drawer);
+    flex-direction: row;
+    height: var(--rail-bar-h);
+    border-right: none;
+    border-top: 1px solid var(--border);
+    /* The home indicator on a modern phone sits over the bottom edge, so the
+       last row of anything flush to it is unpressable. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* The brand and the collapse control are both about a COLUMN, and there is
+     no column here. The rest of the foot — the engine pill, the theme — moves
+     into the bar's own row. */
+  .rail-brand,
+  .rail-collapse {
+    display: none;
+  }
+
+  .rail-rows {
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: stretch;
+    padding: 0;
+    overflow-x: auto;
+    /* A bar a thumb drags sideways must not also drag the page behind it. */
+    overscroll-behavior-x: contain;
+  }
+
+  .rail-row {
+    flex: 1 0 auto;
+    justify-content: center;
+    min-width: 56px;
+    border-radius: 0;
+  }
+
+  /* THE BAR MOVES TO THE TOP EDGE OF THE ROW, because on a bottom bar a
+     vertical rule beside the icon is a rule against the screen's edge. */
+  .rail-row.active::before {
+    left: var(--space-2);
+    right: var(--space-2);
+    top: 0;
+    bottom: auto;
+    inset-block: auto;
+    width: auto;
+    height: 2px;
+  }
+
+  /* THE LABEL COMES BACK. It is hidden at 960 because a 48px column cannot
+     hold "Knowledge"; a bar row is 56px wide and can, and a row of eight
+     unlabelled glyphs along the bottom of a phone is exactly the navigation
+     nobody learns. */
+  .rail-label {
+    display: block;
+  }
+
+  .rail-foot {
+    flex-direction: row;
+    align-items: center;
+    border-top: none;
+    border-left: 1px solid var(--border);
+    padding: 0 var(--space-2);
+  }
+
+  /* The workspace drawer opens over the page from the left edge now, since
+     the rail no longer holds a column for it to sit beside. */
+  .workspace-side {
+    left: 0;
+  }
+
+  /* THE PAGE'S CLEARANCE OVER THE BAR is `shell.css`'s, derived from
+     `--rail-bar-h` where `.screen-inner`'s padding is already declared. Set
+     here as well it would be two rules at one breakpoint racing on one
+     property, and the loser would be whichever file happened to load second.
+  */
 }

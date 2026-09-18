@@ -179,7 +179,15 @@
     display: inline-flex;
   }
 
+  /* THE BOTTOM PADDING CLEARS THE RAIL, which is a bottom bar at this width
+     (frame.css). Derived from `--rail-bar-h` rather than eyeballed, because a
+     bar whose height and a page whose clearance are two literals is a list
+     whose last row goes under the navigation the day either one moves. The
+     safe-area inset is the home indicator on a modern phone, which the bar
+     also pads for — it is counted once here and once there because they are
+     two boxes stacked on the same edge. */
   .screen-inner {
-    padding: var(--space-4) var(--space-3) var(--space-12);
+    padding: var(--space-4) var(--space-3)
+      calc(var(--rail-bar-h) + env(safe-area-inset-bottom, 0px) + var(--space-6));
   }
 }
