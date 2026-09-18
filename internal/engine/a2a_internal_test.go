@@ -156,7 +156,18 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	inbox, group := topics.AgentInbox("ceo"), topics.AgentInboxGroup("ceo")
 	if err := e.Backends().Queue.Subscribe(t.Context(), inbox, group,
 		func(_ context.Context, ev *events.Event) queue.Result {
-			woken <- ev
+			// NEVER BLOCKING, which is the shape the rest of this package
+			// already uses (backends_test.go, reconcile_test.go). A send
+			// into a bounded channel from inside a delivery handler parks
+			// the broker's own goroutine once the buffer fills, and this
+			// case only ever reads one event — so a fifth delivery would
+			// wedge the subscription and then q.Stop in cleanup, which
+			// reaches CI as a package that hung for the whole test timeout
+			// with no failing test in it.
+			select {
+			case woken <- ev:
+			default:
+			}
 			return queue.Ack()
 		}); err != nil {
 		t.Fatalf("subscribe: %v", err)

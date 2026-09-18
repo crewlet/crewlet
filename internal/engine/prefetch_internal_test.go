@@ -198,7 +198,14 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 	if err := q.Subscribe(t.Context(), topics.Event("prefetch_summary"), "probe",
 		func(_ context.Context, ev *events.Event) queue.Result {
 			if p, ok := events.DataAs[*types.PrefetchSummary](ev); ok && p != nil {
-				got <- *p
+				// NEVER BLOCKING — see the note in a2a_internal_test.go.
+				// This buffer holds one and the case reads one, so a
+				// second summary would park the broker's delivery
+				// goroutine for the rest of the run.
+				select {
+				case got <- *p:
+				default:
+				}
 			}
 			return queue.Ack()
 		}); err != nil {
