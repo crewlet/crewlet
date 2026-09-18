@@ -164,9 +164,7 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 		}
 		props, _ := tool.Parameters()["properties"].(map[string]any)
 		shape, _ := props["type"].(map[string]any)
-		for _, v := range shape["enum"].([]string) {
-			offered = append(offered, v)
-		}
+		offered = append(offered, shape["enum"].([]string)...)
 	}
 	if len(offered) == 0 {
 		t.Fatal("save_work_view declares no view shapes at all, so this gate certifies nothing")
