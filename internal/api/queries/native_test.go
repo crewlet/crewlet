@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1103,5 +1104,44 @@ func TestAViewerNamedByTheSurfaceReachesTheExpansion(t *testing.T) {
 	}
 	if got := w.expandViewer.Handle; got != "ada" {
 		t.Errorf("expansion viewer = %q, want ada", got)
+	}
+}
+
+// AN ACTOR KIND OFF THE WIRE IS CHECKED AT THIS SURFACE, and it is the only
+// place that can check it.
+//
+// `work_activity` builds its `Kinds` by trusting whatever it was handed —
+// [tracker.ChangeKind] over an arbitrary string — and an unknown change kind
+// simply matches nothing, which is a filter that answers empty. That is
+// survivable for a change kind and is not for the ACTOR kind, because it is
+// the filter the audit screen is made of: an empty audit reads as a company
+// nobody has touched, and a filter quietly ignored reads as one where
+// everybody is an operator. The reader takes typed values and cannot tell a
+// kind the caller invented from one this build was compiled without, so the
+// refusal belongs here, at the edge where the string still exists.
+func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+		"container": "workspace", "actor_kinds": "root",
+	}); err == nil {
+		t.Fatal("work_activity accepted actor_kinds=root — nothing is written " +
+			"under it, so the feed answers empty and the screen reads as a " +
+			"company nobody has touched")
+	}
+	if got := w.activityQuery.ActorKinds; len(got) != 0 {
+		t.Errorf("the refused query still reached the reader as %v", got)
+	}
+
+	// AND THE KINDS THE ENGINE DOES WRITE UNDER ALL ARRIVE, in the order
+	// they were named — a gate that refused everything would pass the case
+	// above and take the screen with it.
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+		"container": "workspace", "actor_kinds": "operator, human",
+	}); err != nil {
+		t.Fatalf("work_activity naming two real actor kinds: %v", err)
+	}
+	want := []tracker.AuthorKind{tracker.AuthorOperator, tracker.AuthorHuman}
+	if got := w.activityQuery.ActorKinds; !slices.Equal(got, want) {
+		t.Errorf("the reader was asked for %v, want %v", got, want)
 	}
 }

@@ -852,6 +852,23 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
 		}
 	}
+	// WHO WAS WRITING, which is the audit screen's whole question: every
+	// commit a token or a person made, across the company, rather than one
+	// seat's work. REFUSED rather than dropped when it names a kind this
+	// build does not have — a filter silently ignored answers a wider
+	// question than the caller asked and looks exactly like one that
+	// worked, which on an audit surface is the worst shape of all.
+	for _, name := range strings.Split(p.String("actor_kinds"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		kind := tracker.AuthorKind(name)
+		if !kind.Valid() {
+			return nil, badParams("actor_kinds", name, names(tracker.AuthorKinds))
+		}
+		q.ActorKinds = append(q.ActorKinds, kind)
+	}
 	// THE `since` KEY TAKES EITHER SHAPE, and which one it is decides what
 	// it means: a LOG POSITION resumes a feed exactly, and an instant is
 	// the wall-clock bound a person typed. Tried as a position first,

@@ -112,6 +112,12 @@ type PageActivityQuery struct {
 	// Kinds narrows to particular changes. Empty is every kind.
 	Kinds []ChangeKind
 
+	// ActorKinds narrows to who was WRITING rather than to which handle —
+	// every page change an operator token made, say. Empty is every kind.
+	// The tracker's own feed carries the same filter for the same reason,
+	// and one audit surface reads both.
+	ActorKinds []AuthorKind
+
 	// Since is a lower bound as a composed log position.
 	Since uint64
 
@@ -134,6 +140,12 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 	for _, kind := range q.Kinds {
 		if !kind.Valid() {
 			return PageActivity{}, fmt.Errorf("pages: %q is not a change kind", kind)
+		}
+	}
+	for _, kind := range q.ActorKinds {
+		if !kind.Valid() {
+			return PageActivity{}, fmt.Errorf("pages: %q is not an author kind — "+
+				"the three are %v", kind, AuthorKinds())
 		}
 	}
 	limit := q.Limit
@@ -186,6 +198,17 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 			args = append(args, string(kind))
 		}
 		where = append(where, "h.kind IN ("+strings.Join(marks, ",")+")")
+	}
+	if len(q.ActorKinds) > 0 {
+		// `(actor_kind, version DESC)` — migration 0012 — which is the
+		// feed's own order, so one kind is a range on the index rather
+		// than a sort over every page change the company has made.
+		marks := make([]string, len(q.ActorKinds))
+		for i, kind := range q.ActorKinds {
+			marks[i] = "?"
+			args = append(args, string(kind))
+		}
+		where = append(where, "h.actor_kind IN ("+strings.Join(marks, ",")+")")
 	}
 	if q.Since > 0 {
 		where = append(where, "h.version > ?")

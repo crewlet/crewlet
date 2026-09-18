@@ -277,6 +277,62 @@ func TestThePageFeedNarrowsByPageContainerAndKind(t *testing.T) {
 	}
 }
 
+// AND BY WHO WAS WRITING, which is the fourth narrowing and the one an audit
+// is made of.
+//
+// "Every page change a token or a person made" is not expressible as a set of
+// handles: an `operator` change carries the token's own label and an `agent`
+// one carries a seat handle, so the two name spaces are disjoint and the set
+// of people is the roster, which changes. The tracker's feed carries the same
+// filter for the same reason, and one screen reads both.
+func TestThePageFeedNarrowsByWhoWasWriting(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	r.write(pages.Actor{Handle: "ops-1", Kind: pages.AuthorOperator},
+		pages.NewPage{Title: "Rotation", Body: "prose"})
+	r.drain()
+
+	all := r.activity(pages.PageActivityQuery{})
+	if len(all.Changes) < 2 {
+		t.Fatalf("the company-wide feed has %d changes, want a human's and a "+
+			"token's — this case tests nothing without both", len(all.Changes))
+	}
+
+	byOperator := r.activity(pages.PageActivityQuery{
+		ActorKinds: []pages.AuthorKind{pages.AuthorOperator},
+	})
+	if len(byOperator.Changes) != 1 {
+		t.Fatalf("actor_kinds=operator gave %d changes, want the one a token "+
+			"made", len(byOperator.Changes))
+	}
+	if got := byOperator.Changes[0].ActorKind; got != string(pages.AuthorOperator) {
+		t.Errorf("it answered a change written by a %q", got)
+	}
+
+	// A SET IS A UNION, and every change here was written by one or the
+	// other — so a filter naming both narrows nothing, which is what tells
+	// a working filter from one that is ANDing its values together.
+	both := r.activity(pages.PageActivityQuery{
+		ActorKinds: []pages.AuthorKind{pages.AuthorOperator, pages.AuthorHuman},
+	})
+	if len(both.Changes) != len(all.Changes) {
+		t.Errorf("actor_kinds=operator,human gave %d of %d changes",
+			len(both.Changes), len(all.Changes))
+	}
+
+	// AND A KIND OFF THE WIRE THAT THIS BUILD HAS NEVER HEARD OF IS
+	// REFUSED, for the reason the change kind above is: read as a filter
+	// matching nothing it answers empty, and an empty audit reads as a
+	// company nobody has touched.
+	if _, err := r.reader.Activity(t.Context(), pages.PageActivityQuery{
+		ActorKinds: []pages.AuthorKind{"root"},
+		Freshness:  statelog.Freshness{Level: statelog.ReadSession},
+	}); err == nil {
+		t.Error("an unknown author kind was accepted")
+	}
+}
+
 // A REVISION IS A BODY, and the detail's summaries could only ever say that
 // one existed.
 //

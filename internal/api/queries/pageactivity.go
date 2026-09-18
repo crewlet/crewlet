@@ -35,6 +35,18 @@ func (s Sources) pageActivity(ctx context.Context, p Params) (any, error) {
 		}
 		q.Kinds = append(q.Kinds, kind)
 	}
+	// WHO WAS WRITING, which is the audit screen's whole question: every
+	// page change a token or a person made, across the company. REFUSED
+	// rather than dropped when it names a kind this build has never heard
+	// of, because a filter silently ignored answers a wider question than
+	// the caller asked and looks exactly like one that worked.
+	for _, name := range splitList(p.String("actor_kinds")) {
+		kind := pages.AuthorKind(name)
+		if !kind.Valid() {
+			return nil, badParams("actor_kinds", name, names(pages.AuthorKinds()))
+		}
+		q.ActorKinds = append(q.ActorKinds, kind)
+	}
 	// THE CURSOR AND THE WINDOW ARE THE SAME UNIT — a composed log position
 	// — and they are two parameters because they are two questions: the
 	// cursor moves with every page and the bound does not.

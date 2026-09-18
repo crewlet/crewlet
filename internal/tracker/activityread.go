@@ -142,8 +142,21 @@ type ActivityQuery struct {
 	From time.Time
 	To   time.Time
 
-	Kinds    []ChangeKind
-	Actor    string
+	Kinds []ChangeKind
+	Actor string
+
+	// ActorKinds narrows to who was WRITING rather than to which handle:
+	// every commit an operator token made, or every one the engine made
+	// for itself. Empty is every kind.
+	//
+	// IT IS NOT `Actor` WITH A PREFIX. An `operator` commit carries the
+	// TOKEN's name and an `agent` one carries a seat handle, so the two
+	// name spaces are disjoint and a caller asking "what did a person do"
+	// cannot express it as a set of handles — that set is the roster,
+	// which changes, and a commit by somebody who has left would drop out
+	// of an audit built from it.
+	ActorKinds []AuthorKind
+
 	Assignee string
 
 	// Q is an escaped LIKE over the excerpt, and is GATED — see
@@ -438,6 +451,18 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 	}
 	if actor := strings.TrimSpace(q.Actor); actor != "" {
 		add("h.actor = ?", actor)
+	}
+	if len(q.ActorKinds) > 0 {
+		// THE INDEX IS `(actor_kind, log_seq DESC)` — migration 0012 — so
+		// a single kind is a range on it and the feed's own newest-first
+		// order comes out of the index rather than a temp b-tree over
+		// every commit the company has ever made. A set of kinds is one
+		// range each, which SQLite plans as a lookup per value.
+		values := make([]any, 0, len(q.ActorKinds))
+		for _, kind := range q.ActorKinds {
+			values = append(values, string(kind))
+		}
+		add("h.actor_kind IN ("+placeholders(len(values))+")", values...)
 	}
 	if batch := strings.TrimSpace(q.Batch); batch != "" {
 		add("h.batch_id = ?", batch)

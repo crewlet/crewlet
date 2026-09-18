@@ -246,3 +246,76 @@ func TestTheActivityFiltersNarrow(t *testing.T) {
 		t.Errorf("actor=nobody answers %d records", len(got.Records))
 	}
 }
+
+// THE FEED NARROWS TO WHO WAS WRITING, which is a different question from
+// which handle.
+//
+// `actor` is a name and the two name spaces are DISJOINT: an `operator` commit
+// carries the token's own label and an `agent` one carries a seat handle. So
+// "what did the operators of this company do to it" — the whole of the audit
+// screen — cannot be asked as a set of handles. That set is the roster, it
+// changes, and a commit by somebody who has left would silently drop out of an
+// audit assembled from it.
+//
+// BOTH DIRECTIONS, because a filter that narrowed to nothing and one that
+// narrowed to everything both look like a working screen: the first reads as a
+// quiet company and the second as one with no seats.
+func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	inSprint(t, r, "t-1", nil)
+
+	// The harness's own writer is a HUMAN; this one is the operator token,
+	// which is what an audit is about.
+	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	done := tracker.StatusDone
+	if _, err := operator.UpdateTask(t.Context(), "op-by-token", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("UpdateTask as the operator: %v", err)
+	}
+	r.drain()
+
+	all := r.activity(tracker.ActivityQuery{Workspace: true})
+	if len(all.Records) < 2 {
+		t.Fatalf("the feed carries %d records, want the human's create and the "+
+			"operator's change — this case tests nothing without both",
+			len(all.Records))
+	}
+
+	byOperator := r.activity(tracker.ActivityQuery{
+		Workspace: true, ActorKinds: []tracker.AuthorKind{tracker.AuthorOperator},
+	})
+	if len(byOperator.Records) != 1 {
+		t.Fatalf("actor_kinds=operator answers %d records, want the one commit "+
+			"a token made", len(byOperator.Records))
+	}
+	if got := byOperator.Records[0]; got.ActorKind != tracker.AuthorOperator {
+		t.Errorf("the record it answered was written by a %s", got.ActorKind)
+	}
+
+	// A SET IS A UNION, not an intersection: "everything a person or a
+	// token did" is one question and it names two kinds.
+	both := r.activity(tracker.ActivityQuery{
+		Workspace: true,
+		ActorKinds: []tracker.AuthorKind{
+			tracker.AuthorOperator, tracker.AuthorHuman,
+		},
+	})
+	if len(both.Records) != len(all.Records) {
+		t.Errorf("actor_kinds=operator,human answers %d of %d records, and every "+
+			"commit here was written by one or the other",
+			len(both.Records), len(all.Records))
+	}
+
+	// AND A KIND NOBODY WROTE UNDER ANSWERS NOTHING rather than falling
+	// through to every commit — which is what an ignored filter does, and
+	// on an audit surface an ignored filter is a wider answer wearing the
+	// shape of the narrow one.
+	if got := r.activity(tracker.ActivityQuery{
+		Workspace: true, ActorKinds: []tracker.AuthorKind{tracker.AuthorSystem},
+	}); len(got.Records) != 0 {
+		t.Errorf("actor_kinds=system answers %d records, and the engine wrote "+
+			"none of them", len(got.Records))
+	}
+}
