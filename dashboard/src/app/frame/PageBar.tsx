@@ -195,12 +195,21 @@ export function PageBar({
       )}
       <Breadcrumb crumbs={crumbs} />
       <span className="spacer" />
-      {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has controls:
-          a portal needs a node to land in, and one that appears only when the
-          frame already knows there are controls could never be found by the
-          screen that has them. */}
-      <div className="row gap-1 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
-      {actions}
+      {/* WHAT THIS PAGE CAN DO, IN ONE ELEMENT.
+          The portalled slot and the frame's own actions were two siblings of
+          the bar, which is fine until the bar has to fit a phone: there they
+          move together onto a line of their own, and a rule cannot name a
+          prop. `actions` is an arbitrary node with no wrapper of its own, so
+          the wrapper is here. See `.page-controls` at the narrow breakpoint in
+          frame.css. */}
+      <div className="page-controls">
+        {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has controls:
+            a portal needs a node to land in, and one that appears only when
+            the frame already knows there are controls could never be found by
+            the screen that has them. */}
+        <div className="row gap-1 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
+        {actions}
+      </div>
       {viewer}
       {/* `SearchTrigger` IS `.omni`, down to the breakpoint that drops the
           label and the hint — and it fixes the bug that shape has: ours was

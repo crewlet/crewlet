@@ -454,6 +454,18 @@
   min-width: 5ch;
 }
 
+/* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
+   own actions together, so the narrow breakpoint below can move both onto a
+   line of their own with one rule. On a wide bar it is a plain row and changes
+   nothing. */
+.page-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .page-actions {
   flex: 0 0 auto;
 }
@@ -1319,4 +1331,84 @@ button.histogram-bar[data-empty]:hover {
      here as well it would be two rules at one breakpoint racing on one
      property, and the loser would be whichever file happened to load second.
   */
+
+  /* ---- The page bar on a phone ------------------------------------------
+     NOTHING IN THE CHROME MAY SIT OUTSIDE THE VIEWPORT, which is what this
+     bar did. It is one non-wrapping row whose middle — a screen's own control
+     group, portalled in — is `flex: 0 0 auto`, so at 390px it took 364px on
+     the audit and 478px on the turns list and shoved everything after it off
+     the right edge. `overflow` is `visible` there, so off the edge meant
+     UNREACHABLE, not merely out of sight: the star, Copy link, the viewer
+     chip and the SEARCH TRIGGER — the command palette's only pointer
+     affordance, and therefore the only way to the theme and density settings
+     dropped below — were all past x=390 with no way to scroll to them. The
+     trail, meanwhile, shrank to exactly zero pixels wide, so the bar whose
+     whole subject is "where you are, and what you can do about it" answered
+     neither.
+
+     So the bar WRAPS, and the line break is where the division already is:
+     the way in and out stays on the first line, and what this page can do
+     takes the second. That is the shape the file already argues for one rule
+     up — "THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out". */
+  .page-bar {
+    flex-wrap: wrap;
+    /* A FLOOR RATHER THAN A HEIGHT, because the bar is two rows here and a
+       fixed one would clip the second. Unwrapped — a screen with no controls
+       at all — it is exactly the height it was. */
+    height: auto;
+    min-height: var(--page-bar-h);
+    padding: 0 var(--space-2);
+    gap: var(--space-1);
+  }
+
+  /* THE SECOND LINE. `flex-basis: 100%` is what breaks it, and `order` is what
+     puts it after the globals rather than before them: in document order the
+     controls sit between the trail and the viewer chip, and a line break there
+     would push the chip and the search trigger down with them. */
+  .page-controls {
+    order: 9;
+    flex: 0 0 100%;
+    min-width: 0;
+    /* AND THEY SCROLL rather than overflow. A screen's control group is as
+       wide as that screen needs — five window buttons and an export on the
+       audit — and at 390px some of them are past the edge whatever the bar
+       does. Scrolling keeps every one of them reachable, which overflowing
+       does not. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* THE GROUP DOES NOT WRAP INSIDE ITS OWN SCROLLER. `.wrap` is on the slot
+     for the wide bar, where wrapping is what keeps a long group inside the
+     page; inside a horizontal scroller it wraps to the scroller's own width
+     instead of scrolling, which is the one thing that would hide the tail
+     again. */
+  .page-controls .page-actions {
+    flex-wrap: nowrap;
+  }
+
+  /* THE VIEWER IS ITS MARK HERE. The chip is 117px of a 390px bar for a name
+     the reader already knows — their own — and the mark alone is the same
+     link to the same page. The anchor keeps its accessible name from `title`,
+     which carries the handle. */
+  .viewer-chip > .truncate {
+    display: none;
+  }
+
+  /* ---- The bottom bar is navigation --------------------------------------
+     `.rail-foot` is `flex: 0 0 auto` and carries the engine pill, the theme
+     switch and the density switch: 250px of a 390px bar, leaving 140px for
+     eight destinations, of which about two and a half were on screen. The
+     rows do scroll, so nothing was unreachable — but a navigation bar that
+     gives 64% of itself to two settings is not a navigation bar.
+
+     THE COLLAPSED RAIL ALREADY MADE THIS DECISION, in `Shell.tsx`: at 80px
+     the foot is the engine pill alone, because a theme switch does not fit.
+     A 390px bar is the narrowest surface in the product, and both settings
+     are in the command palette's `>` scope, which is where a reader who
+     wants them goes. The engine pill stays: it is the one thing in the foot
+     that is a STATE rather than a preference. */
+  .rail-foot > .crewlet-segmented {
+    display: none;
+  }
 }

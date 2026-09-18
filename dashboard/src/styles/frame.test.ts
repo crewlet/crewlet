@@ -150,6 +150,47 @@ describe("the frame's layout", () => {
     expect(block(sheet("screens.css"), ".crewlet-card--flush")).toMatch(/overflow:\s*clip/);
   });
 
+  // NOTHING IN THE CHROME SITS OUTSIDE A PHONE'S VIEWPORT.
+  //
+  // The page bar is one non-wrapping row whose middle — a screen's own control
+  // group, portalled in — was `flex: 0 0 auto`: 364px on the audit and 478px
+  // on the turns list, inside a 390px viewport, shoving everything after it
+  // off the right edge of a bar whose `overflow` is `visible`. Off the edge
+  // meant UNREACHABLE: the star, Copy link, the viewer chip and the search
+  // trigger — the command palette's only pointer affordance — were all past
+  // x=390 with nothing to scroll. The trail shrank to exactly 0px wide.
+  //
+  // Asserted in the SHEET for the same reason as everything else in this file:
+  // jsdom computes no layout, and a media query is invisible to every suite
+  // that renders the frame.
+  test("the page bar wraps rather than pushing the chrome off a phone", () => {
+    const css = sheet("frame.css");
+    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+    expect(narrow, "the narrow breakpoint is gone").toContain(".page-bar");
+
+    // THE BAR IS TWO LINES HERE, and a fixed height would clip the second.
+    const bar = block(narrow, ".page-bar");
+    expect(bar).toMatch(/flex-wrap:\s*wrap/);
+    expect(bar).toMatch(/min-height:\s*var\(--page-bar-h\)/);
+    expect(bar).toMatch(/height:\s*auto/);
+
+    // AND THE SECOND LINE IS THE PAGE'S OWN CONTROLS: a full basis is what
+    // breaks the line, an order past the globals is what keeps the viewer
+    // chip and the search trigger on the first one, and the scroll is what
+    // makes a group wider than the phone reachable rather than merely
+    // out of sight.
+    const controls = block(narrow, ".page-controls");
+    expect(controls).toMatch(/flex:\s*0 0 100%/);
+    expect(controls).toMatch(/order:\s*\d/);
+    expect(controls).toMatch(/overflow-x:\s*auto/);
+
+    // AND THE BOTTOM BAR IS NAVIGATION. Its foot carried the engine pill, the
+    // theme switch and the density switch — 250px of 390, leaving about two
+    // and a half of eight destinations on screen. Both settings are in the
+    // command palette, and the collapsed rail already drops them.
+    expect(narrow).toContain(".rail-foot > .crewlet-segmented");
+  });
+
   // THE PANEL TITLE'S CAP IS GONE WITH THE PANEL, deliberately and not by
   // oversight. It asserted `flex: 0 0 auto` and `max-width: 100%` on
   // `.panel-head > .panel-title`, and Panel is one of the fifteen components

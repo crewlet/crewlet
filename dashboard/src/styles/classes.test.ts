@@ -538,6 +538,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-segmented",
+    why: "uilet's SegmentedControl writes it. styles/frame.css hides the two in the rail's foot — theme and density — once the rail is a bottom bar, where they took 250px of a 390px phone and left 140px for eight destinations. Both settings are in the command palette's `>` scope, and the collapsed rail already drops them for the same reason. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-disclosure__trigger",
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",
