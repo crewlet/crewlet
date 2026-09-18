@@ -124,3 +124,69 @@ func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
 		}
 	})
 }
+
+// THE SHAPES THE TOOL OFFERS ARE THE SHAPES THE ENGINE TAKES.
+//
+// `save_work_view`'s `type` enum and [tracker.ViewType.Valid] are two lists of
+// the same set, written in two files, with nothing holding them together. They
+// had already drifted: the enum offered three where the validator accepts
+// four, so a seat could not save a `timeline` view although the write would
+// have taken one, the refusal names it as one of the four, and the tracker
+// ships a BUILTIN timeline that every reader can already see. The shape was
+// reachable by reading and unreachable by writing, and the tool's own schema
+// was the only thing claiming otherwise.
+//
+// A MODEL CANNOT DISCOVER WHAT THE ENUM OMITS. An enum is a closed set to
+// whatever is reading it, so the omission is not a hint the model can work
+// around — it is the whole of what that model believes the surface accepts.
+//
+// Checked in BOTH directions: an enum naming a shape the engine refuses would
+// be the same defect the other way round, and it fails at the write instead of
+// at the schema, which is worse.
+func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
+	t.Parallel()
+
+	// THE OPERATOR SURFACE, because that is the only registry this tool is in:
+	// a saved view is furniture a person arranges, and no seat is given it.
+	// Built from the real constructor rather than a literal, so a tool that
+	// stops registering fails the guard below instead of passing silently.
+	work := newFakeTracker()
+	var offered []string
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: builtin.WorkDeps{
+			Reader:     work,
+			Writer:     work.as,
+			ViewWriter: func(builtin.Actor) builtin.ViewWriter { return nil },
+		},
+	}) {
+		if tool.Name() != tracker.SaveWorkViewTool {
+			continue
+		}
+		props, _ := tool.Parameters()["properties"].(map[string]any)
+		shape, _ := props["type"].(map[string]any)
+		for _, v := range shape["enum"].([]string) {
+			offered = append(offered, v)
+		}
+	}
+	if len(offered) == 0 {
+		t.Fatal("save_work_view declares no view shapes at all, so this gate certifies nothing")
+	}
+
+	for _, name := range offered {
+		if !tracker.ViewType(name).Valid() {
+			t.Errorf("the tool offers the shape %q and the engine refuses it at "+
+				"the write — a model is told to send something that cannot land", name)
+		}
+	}
+	// AND EVERY SHAPE THE ENGINE TAKES IS OFFERED. This is the direction the
+	// drift actually went.
+	for _, want := range []tracker.ViewType{
+		tracker.ViewList, tracker.ViewBoard, tracker.ViewCalendar, tracker.ViewTimeline,
+	} {
+		if !slices.Contains(offered, string(want)) {
+			t.Errorf("the engine accepts the shape %q and the tool does not offer it — "+
+				"an enum is a closed set to the model reading it, so this shape is "+
+				"unreachable however the model is asked", want)
+		}
+	}
+}
