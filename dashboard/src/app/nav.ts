@@ -187,6 +187,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "schedules",
   "a2a",
   "events",
+  "traces",
   "servers",
   "revisions",
   "domains",
@@ -196,7 +197,6 @@ export const RESERVED_SEGMENTS: string[] = [
   "tools",
   "config",
   "credentials",
-  "audit",
   "me",
 ];
 

@@ -214,10 +214,15 @@ and no reserved segment has the shape of a key the engine mints.
 
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
-uuid — and every reserved segment (`views`, `sprints`, `people`, `units`,
-`turns`, `runs`, `schedules`, `a2a`, `events`, `servers`, `revisions`, `fleet`,
-`config`, `credentials`, `me`) is lowercase. That is what lets `#/work/views`
+uuid — and every reserved segment is lowercase. That is what lets `#/work/views`
 resolve before any answer arrives.
+
+The set itself is `RESERVED_SEGMENTS` in `app/nav.ts` and is deliberately NOT
+copied out here: a prose list of twenty-one strings is a list that goes stale,
+and this one had drifted to fifteen while two of the entries it did name were
+reserving route space nothing routed. `router.test.ts` holds the routes named
+in the table above against that list and against `RAIL`, so the table and the
+code cannot disagree about which addresses exist.
 
 ### The rail
 
@@ -268,6 +273,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/runs` · `#/activity/runs/{turn_id}` | **Coding runs** — live and durable | |
 | `#/activity/schedules` | **Schedules** | |
 | `#/activity/a2a` | **Agent-to-agent** | |
+| `#/activity/traces/{id}` | **Trace** — one distributed trace, every span of it. NO LIST: nothing enumerates traces, so a bare `#/activity/traces` is the turns list, which is the nearest thing to "the traces" this product has | |
 | `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
 | `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |

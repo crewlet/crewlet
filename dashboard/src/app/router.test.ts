@@ -16,6 +16,8 @@
 
 // @vitest-environment node
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
 import { DESTINATIONS, RAIL, RESERVED_SEGMENTS, railRow, workspaceOf } from "./nav.ts";
@@ -284,4 +286,149 @@ test("a second owned segment names itself in the trail", () => {
   expect(goals[1]?.path).toBeUndefined();
   // And the workspace's OWN landing page is still a single crumb.
   expect(crumbsFor(["work"]).map((c) => c.label)).toEqual(["Work"]);
+});
+
+/**
+ * THE DESIGN DOC'S ROUTE TABLE AND THE CODE'S OWN TABLES SAY THE SAME THING.
+ *
+ * `docs/reference/dashboard-design.md` carries the product's information
+ * architecture as a table of addresses, and it is the half of the IA nothing
+ * compiles: a route added to the switch and left out of the table is invisible
+ * to every reader who starts from the document, and a row in the table whose
+ * address nothing routes is a promise the product does not keep. Both have
+ * happened in this tree — `#/activity/traces` was dispatched, screened and
+ * breadcrumbed while the word "traces" appeared nowhere in two thousand lines
+ * of design document, and `audit` sat in `RESERVED_SEGMENTS` reserving route
+ * space no route ever took.
+ *
+ * So the table is held against `RAIL`, `RESERVED_SEGMENTS` and `DESTINATIONS`
+ * in both directions. What is deliberately NOT parsed is `App.tsx`'s dispatch:
+ * it spells a route three different ways (a `case`, a length test on the tail,
+ * a key shape), and reading TypeScript for it would mean either a regex that
+ * agrees with the switch by luck or the compiler's own parser, which ships
+ * behind a subpath its own package calls unstable. A gate that is honest about
+ * two tables beats one that is approximate about a syntax tree.
+ */
+describe("the information architecture", () => {
+  const DESIGN_DOC = fileURLToPath(
+    new URL("../../../docs/reference/dashboard-design.md", import.meta.url),
+  );
+  const HEADING = "### The routes";
+
+  /** The lines of the route table's own section, and no other section's. */
+  function region(): string[] {
+    const lines = readFileSync(DESIGN_DOC, "utf8").split("\n");
+    const start = lines.findIndex((line) => line.trim() === HEADING);
+    // A GUARD THAT CANNOT FIND ITS SUBJECT IS A GUARD THAT PASSES. A heading
+    // somebody reworded would leave this walking an empty region and reporting
+    // a green run over a table it never read, which is the failure mode
+    // `internal/skipgate` exists for one language over.
+    expect(
+      start,
+      `“${HEADING}” is not in dashboard-design.md — this guard is asserting nothing`,
+    ).toBeGreaterThan(-1);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => /^#{2,3} /.test(line));
+    expect(end, `no heading closes “${HEADING}” — this guard is asserting nothing`).toBeGreaterThan(
+      -1,
+    );
+    return rest.slice(0, end);
+  }
+
+  /** Every address written in the table's ROUTE column, in document order. */
+  function documented(): string[] {
+    const out: string[] = [];
+    for (const line of region()) {
+      if (!line.startsWith("|")) continue;
+      // THE FIRST CELL ONLY. The Page column's prose carries addresses too —
+      // the trace row names `#/activity/traces` precisely to say that it is
+      // NOT a route — and a scan of the whole line would read a sentence's
+      // counter-example as a claim.
+      // The whole backticked token rather than a capture group: index 0 of a
+      // match is the one element TypeScript knows is there.
+      for (const [token] of (line.split("|")[1] ?? "").matchAll(/`#\/[^`]*`/g)) {
+        out.push(token.slice(1, -1));
+      }
+    }
+    expect(
+      out.length,
+      "the route table holds no routes — this guard is asserting nothing",
+    ).toBeGreaterThan(20);
+    return out;
+  }
+
+  /** `#/work/{KEY}/sprints` → `["work", "{KEY}", "sprints"]`. */
+  const segmentsOf = (route: string): string[] =>
+    route
+      .replace(/^#\//, "")
+      .split("/")
+      .filter((segment) => segment !== "");
+
+  /** An id the engine mints, standing in for itself. */
+  const minted = (segment: string): boolean => segment.includes("{");
+
+  // DOC → CODE. Every address the document promises resolves under the tables
+  // the router actually reads.
+  test("every route in the design doc is one the code owns", () => {
+    for (const route of documented()) {
+      const segments = segmentsOf(route);
+      // `#/` is the root and redirects; it owns nothing and names nothing.
+      if (segments.length === 0) continue;
+      const head = segments[0] ?? "";
+      expect(
+        RAIL.some((row) => row.owns.includes(head)),
+        `${route}: no rail row owns “${head}”, so it marks no workspace`,
+      ).toBe(true);
+      for (const segment of segments.slice(1)) {
+        if (minted(segment)) continue;
+        // A LITERAL SEGMENT THE ENGINE COULD MINT IS A COLLISION WAITING. The
+        // reserved list is what holds `#/work/views` apart from a project
+        // called VIEWS, and a route table naming a word that is not on it is
+        // a route one `create project` call takes away.
+        expect(
+          RESERVED_SEGMENTS.includes(segment),
+          `${route}: “${segment}” is not in RESERVED_SEGMENTS`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // CODE → DOC, FIRST DIRECTION. A reservation nothing addresses is route
+  // space held against a key the engine might legitimately mint, for a screen
+  // that does not exist: `audit` was one, and it was found by asking this.
+  test("every reserved segment is a segment of some documented route", () => {
+    const written = new Set(
+      documented()
+        .flatMap(segmentsOf)
+        .filter((s) => !minted(s)),
+    );
+    for (const segment of RESERVED_SEGMENTS) {
+      expect(
+        written.has(segment),
+        `“${segment}” is reserved but no route in the design doc uses it`,
+      ).toBe(true);
+    }
+  });
+
+  // CODE → DOC, SECOND DIRECTION. The fixed furniture — every row the palette
+  // and the sidebars draw — is written down at its own address. A destination
+  // missing from the table is a page a reader of the document cannot know is
+  // there, which is how `traces` stayed unwritten through four rewrites.
+  test("every rail row and every fixed destination is written down", () => {
+    const routes = new Set(documented());
+    for (const row of RAIL) {
+      for (const segment of row.owns) {
+        expect(
+          [...routes].some((route) => segmentsOf(route)[0] === segment),
+          `the rail owns “${segment}”, and no route in the design doc starts with it`,
+        ).toBe(true);
+      }
+    }
+    for (const dest of DESTINATIONS) {
+      expect(
+        routes.has(`#/${dest.path.join("/")}`),
+        `${dest.key} is a destination at #/${dest.path.join("/")}, which the design doc does not list`,
+      ).toBe(true);
+    }
+  });
 });
