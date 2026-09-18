@@ -140,7 +140,7 @@ function SpendOverTime({ range }: { range: TimeRange }) {
   );
 
   const data = series.data;
-  const bands = useMemo(() => bandsOf(data), [data]);
+  const bands = useMemo(() => bandsOf(data, group), [data, group]);
   const columns = useMemo(() => columnsOf(data, bands), [data, bands]);
   const ghost = useMemo(() => ghostHeights(prior.data), [prior.data]);
   const unbanded = unbandedTokens(data);

@@ -19,6 +19,7 @@
  */
 
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
+import { phaseColor } from "~/ui/charts.tsx";
 import type { SeriesPoint, TokenSeries } from "~/protocol/types.ts";
 
 export interface Band {
@@ -38,6 +39,16 @@ export interface Band {
  * columns and the per-phase bar list), so a second spelling of the same five
  * values is the drift `textcut` and `whsec` are named after in this repo.
  *
+ * EXCEPT WHERE THE VALUE HAS A COLOUR OF ITS OWN. A PHASE does: `phaseColor`
+ * is what the by-phase bar list, the per-seat share bar and the turn page all
+ * draw it in. Grouped by phase — which is this screen's DEFAULT — the time
+ * chart drew `execute` from the positional ramp and the panel below it drew
+ * the same `execute` from the phase palette, so one screen carried two
+ * legends that disagreed about the same three words. The positional half was
+ * the worse of the two on its own terms as well: `dataColor(i)` is keyed on a
+ * band's ORDER, and `by_group` is biggest-first, so a phase changed colour
+ * whenever the window changed which phase was biggest.
+ *
  * THE ORDER IS NOT RE-DERIVED. `by_group` is already biggest-first with the
  * residual last, and re-sorting here would put a residual larger than the
  * fifth band ahead of it — at which point it stops meaning "the rest".
@@ -46,11 +57,14 @@ export interface Band {
  * empty key precisely so that a phase, a model or a seat genuinely called
  * "other" cannot be mistaken for it.
  */
-export function bandsOf(series: TokenSeries | null): Band[] {
+export function bandsOf(series: TokenSeries | null, group?: string): Band[] {
   return (series?.by_group ?? []).map((b, i) => ({
     key: b.other ? "" : b.group,
     label: b.other ? `other (${b.folded})` : b.group,
-    color: b.other ? DATA_COLOR_OTHER : dataColor(i),
+    // THE RESIDUAL IS NEVER A PHASE. It is "the rest", so it keeps the
+    // residual hue whatever the grouping is — a fold of three phases drawn
+    // in one of their colours would name one of them.
+    color: b.other ? DATA_COLOR_OTHER : group === "phase" ? phaseColor(b.group) : dataColor(i),
     total: b.total_tokens,
   }));
 }

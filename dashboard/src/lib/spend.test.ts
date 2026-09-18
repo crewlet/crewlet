@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { DATA_COLOR_OTHER } from "@crewlethq/ui";
+
 import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "./spend.ts";
+import { phaseColor } from "~/ui/charts.tsx";
 import type { Bucket, TokenSeries } from "~/protocol/types.ts";
 
 function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
@@ -57,6 +60,52 @@ describe("the legend", () => {
     expect(bands[0]).toMatchObject({ key: "other", label: "other" });
     expect(bands[1]).toMatchObject({ key: "", label: "other (3)" });
     expect(bands[0]?.color).not.toBe(bands[1]?.color);
+  });
+
+  // ONE SCREEN, ONE COLOUR PER PHASE.
+  //
+  // Grouped by phase — which is this screen's default — the time chart drew
+  // its bands from the positional data ramp while the panel directly below it
+  // drew the same phases from `phaseColor`. Two legends on one screen,
+  // disagreeing about the same three words, so a reader who learned "execute
+  // is indigo" from the lower one read the upper one wrong.
+  //
+  // The positional half was worse than inconsistent: `dataColor(i)` is keyed
+  // on a band's ORDER and `by_group` is biggest-first, so a phase changed
+  // colour whenever the window changed which phase was biggest.
+  it("draws a phase in the phase palette, not by its position", () => {
+    const by_group = [
+      { ...bucket(100), group: "execute", other: false, folded: 0 },
+      { ...bucket(50), group: "review", other: false, folded: 0 },
+      { ...bucket(9), group: "", other: true, folded: 2 },
+    ];
+    const phases = bandsOf(series({ by_group }), "phase");
+    expect(phases[0]?.color).toBe(phaseColor("execute"));
+    expect(phases[1]?.color).toBe(phaseColor("review"));
+    // THE RESIDUAL IS NEVER A PHASE. It is "the rest", so a fold of three
+    // phases drawn in one of their colours would name one of them.
+    //
+    // Belt and braces rather than load-bearing, and the comment says so
+    // because mutating the branch order does not turn this red: the residual
+    // carries an EMPTY group, and `phaseColor` falls back to exactly this hue
+    // for a phase it does not know. What the assertion holds is the property;
+    // what protects it is two independent reasons, which is the right number
+    // for the one band that must not be mistaken for a value.
+    expect(phases[2]?.color).toBe(DATA_COLOR_OTHER);
+
+    // AND THE ORDER NO LONGER DECIDES IT: the same phase keeps its colour when
+    // the window puts it second.
+    const swapped = bandsOf(
+      series({ by_group: [by_group[1]!, by_group[0]!, by_group[2]!] }),
+      "phase",
+    );
+    expect(swapped.find((b) => b.key === "execute")?.color).toBe(phases[0]?.color);
+
+    // Every OTHER grouping keeps the positional ramp: a seat, a model and a
+    // unit have no colour of their own, and giving them one would be colour
+    // carrying identity.
+    const seats = bandsOf(series({ by_group }), "seat");
+    expect(seats[0]?.color).not.toBe(phaseColor("execute"));
   });
 });
 
