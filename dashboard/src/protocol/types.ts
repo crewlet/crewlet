@@ -1878,16 +1878,34 @@ export interface WorkItemsAnswer {
  *  a timeline without anybody saving one — they are not objects, so there is
  *  nothing to rename, protect, rank or pin — and a screen renders them from
  *  `key`. */
+/**
+ * The renderings a view may be drawn in, and there are no others.
+ *
+ * HELD AGAINST THE ENGINE'S OWN CLOSED SET by a Go gate —
+ * `internal/tracker/viewshape_client_test.go` — because this is a copy the
+ * dashboard has to keep: it is a separate build in a separate language and
+ * cannot import `tracker.ViewTypes`. A shape the engine mints that this union
+ * does not name is a tab that renders a blank body, and one named here the
+ * engine refuses is a branch nothing can reach. Both are silent.
+ *
+ * `timeline` draws the rows against a DATE AXIS, which is the one arrangement
+ * the others cannot express: a list orders by a column, a board groups by one,
+ * and a calendar puts a task on the day it is due — none of them can show that
+ * a task spans three weeks, or that it cannot start until another finishes.
+ * `table` puts one field per column, which is what a question about a FIELD
+ * rather than about a task needs.
+ *
+ * THE TRASH IS NOT ONE OF THESE. It is a table carrying `removed=true`,
+ * because what makes a listing the trash is the query rather than the drawing
+ * — so every view saved with that parameter is one.
+ */
+export type WorkViewShape = "list" | "board" | "calendar" | "timeline" | "table";
+
 export interface WorkView {
   id?: string;
   key: string;
   name: string;
-  /** The four renderings, and there are no others. `timeline` draws the rows
-   *  against a DATE AXIS, which is the one arrangement the others cannot
-   *  express: a list orders by a column, a board groups by one, and a calendar
-   *  puts a task on the day it is due — none of them can show that a task
-   *  spans three weeks, or that it cannot start until another finishes. */
-  type: "list" | "board" | "calendar" | "timeline";
+  type: WorkViewShape;
   container: { kind: string; id: string };
   builtin: boolean;
   /** Empty is a SHARED view; a handle makes it personal to that person. */

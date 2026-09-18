@@ -12,7 +12,7 @@
  * also why the board can be drawn inside a peek panel and a sprint report.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Board, CalendarView, ProjectHead, Work, WorkspaceHead, patchedHref } from "./Work.tsx";
 import { BoardCard, WorkRow } from "~/components/work.tsx";
@@ -591,4 +591,200 @@ test("a saved view's grouping heads the list's columns by name", async () => {
   await waitFor(() => expect(container.querySelector(".work-group-head")).toBeTruthy());
   expect(container.querySelector(".work-group-head")?.textContent).toContain("Ada Okonkwo");
   expect(container.querySelector(".work-group-head")?.textContent).not.toContain("ada");
+});
+
+// ---------------------------------------------------------------------------
+// The table, and the trash
+// ---------------------------------------------------------------------------
+
+/** The builtin strip as the engine mints it, with one tab chosen as default. */
+function strip(defaultKey: string) {
+  const rows = [
+    { key: "list", name: "List", type: "list", params: {} },
+    { key: "table", name: "Table", type: "table", params: {} },
+    {
+      key: "trash",
+      name: "Trash",
+      type: "table",
+      params: { removed: "true", show_closed: "true" },
+    },
+  ];
+  return {
+    views: rows.map((v) => ({
+      ...v,
+      container: { kind: "workspace", id: "" },
+      builtin: true,
+      default: v.key === defaultKey,
+    })),
+    complete: true,
+  };
+}
+
+/** What `work_items` was actually asked, which is the claim most of these make. */
+function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
+  // THE CALL'S SECOND ARGUMENT, which the stub's own signature does not
+  // declare — `serving` takes the question alone, because every other case
+  // here asks only which questions were put. The parameters are the whole
+  // claim of the cases below, so they are read off the recorded call.
+  const calls = query.mock.calls as unknown as [string, Record<string, unknown>?][];
+  return calls.findLast(([what]) => what === "work_items")?.[1] ?? {};
+}
+
+// THE TRASH ASKS FOR REMOVED WORK WHATEVER STATE IT WAS IN.
+//
+// This is the end of the round trip `seededScope` sits in the middle of. The
+// tab's own parameters say `removed=true, show_closed=true`; the scope segment
+// is seeded from those parameters and then WRITES ITS GROUP BACK over them.
+// Seeded `open` — which is what a view naming no `status_group` used to get —
+// it wrote `status_group=not_started,active`, so the one tab whose whole job is
+// "what did my assistant delete" answered with the removed tasks that were
+// still open and hid every removal of anything already done. Silently: the
+// rows it showed were real.
+test("the trash asks for removed work without re-narrowing it to open", async () => {
+  const query = serving({
+    work_views: strip("trash"),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(asked(query).removed).toBe("true"));
+  expect(asked(query).show_closed).toBe("true");
+  expect(asked(query).status_group).toBeUndefined();
+});
+
+// AND THE ORDINARY TABLE IS AN ORDINARY BOARD QUESTION. Same tab strip, same
+// screen, and none of the trash's parameters — so a reader on Table is not
+// quietly looking at deleted work.
+test("the table tab asks for live work, the way the list does", async () => {
+  const query = serving({
+    work_views: strip("table"),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: { records: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(query.mock.calls.some(([what]) => what === "work_items")).toBe(true));
+  expect(asked(query).removed).toBeUndefined();
+  expect(asked(query).status_group).toBe("not_started,active");
+});
+
+// WHO REMOVED IT COMES FROM THE HISTORY, because the row does not carry it.
+//
+// A list row is deliberately not a document read per card, so it has no
+// tombstone on it: the removal is a fact about the COMMIT and lives in
+// `work_activity`. A trash that drew the rows alone could say what is in the
+// bin and not one thing about how it got there — which is the entire question
+// somebody opens it with.
+test("a removed row names who removed it, from the feed rather than the row", async () => {
+  serving({
+    work_views: strip("trash"),
+    work_items: {
+      items: [row("t-1", { key: "ENG-9", title: "the wrong subtree" })],
+      groups: [],
+      complete: true,
+    },
+    work_activity: {
+      records: [
+        {
+          id: "h-1",
+          log_seq: 9,
+          log_stream: "CREWLET_WORK_LOG",
+          log_generation: 1,
+          at: "2031-04-15T00:00:00Z",
+          effective_at: "2031-04-15T00:00:00Z",
+          kind: "removed",
+          actor: "ada",
+          actor_kind: "seat",
+          subject_kind: "task",
+          subject_id: "t-1",
+          subject_key: "ENG-9",
+          notified: false,
+        },
+      ],
+      complete: true,
+    },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("the wrong subtree")).toBeTruthy());
+  expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0);
+  // And the way back is on the row: this dashboard writes nothing, so what it
+  // offers is the call an assistant would make.
+  expect(screen.getByText("Restore")).toBeTruthy();
+});
+
+// A ROW THE FEED'S PAGE DOES NOT REACH SAYS SO.
+//
+// The rows and the history page independently, so a task removed long enough
+// ago has no entry on the loaded page. "Removed by nobody" is not a fact this
+// product can state, and a blank cell in a date column reads as "just now".
+test("a removal older than the loaded history draws a dash, not a blank", async () => {
+  const { container } = (() => {
+    serving({
+      work_views: strip("trash"),
+      work_items: {
+        items: [row("t-2", { key: "ENG-10", title: "removed long ago" })],
+        groups: [],
+        complete: true,
+      },
+      work_activity: { records: [], complete: true },
+    });
+    return mountWork();
+  })();
+  await waitFor(() => expect(screen.getByText("removed long ago")).toBeTruthy());
+  const dashed = [...container.querySelectorAll("[title]")].filter((el) =>
+    (el.getAttribute("title") ?? "").includes("older than the loaded history"),
+  );
+  expect(dashed.length).toBeGreaterThan(0);
+});
+
+// A PURGE HAS NO ROW AT ALL, AND IS STILL ON THE SCREEN.
+//
+// A removal hides a task and a restore brings it back at any age. A purge
+// destroys the rows, so there is nothing for the grid to list and the history
+// entry is the only evidence the work ever existed. Drawn nowhere, an emptied
+// trash is indistinguishable from a company that has removed nothing.
+test("a purged task appears in its own band, marked irreversible", async () => {
+  serving({
+    work_views: strip("trash"),
+    work_items: { items: [], groups: [], complete: true },
+    work_activity: {
+      records: [
+        {
+          id: "h-2",
+          log_seq: 11,
+          log_stream: "CREWLET_WORK_LOG",
+          log_generation: 1,
+          at: "2031-04-14T00:00:00Z",
+          effective_at: "2031-04-14T00:00:00Z",
+          kind: "purged",
+          actor: "U0FOUNDER",
+          actor_kind: "operator",
+          subject_kind: "task",
+          subject_id: "t-3",
+          subject_key: "ENG-11",
+          excerpt: "duplicate of ENG-4",
+          notified: false,
+        },
+      ],
+      complete: true,
+    },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Purged")).toBeTruthy());
+  // WITHIN THE BAND. The same record also reaches the screen's ordinary
+  // activity feed — one is a page of the whole log and the other is the three
+  // tombstone kinds — and a purge honestly belongs in both, so the assertions
+  // that are about THIS band have to be scoped to it.
+  const band = screen.getByText("Purged").closest(".crewlet-card") as HTMLElement;
+  expect(band).toBeTruthy();
+  expect(within(band).getByText("duplicate of ENG-4")).toBeTruthy();
+  expect(within(band).getByText("irreversible")).toBeTruthy();
+  // NO LINK. The task is gone, so an anchor would lead to a NotFound on every
+  // row — and the key is the entry's own, because there is no task row left to
+  // resolve one from.
+  const key = [...band.querySelectorAll("span")].find((el) => el.textContent === "ENG-11");
+  expect(key).toBeTruthy();
+  expect(key?.closest("a")).toBeNull();
+  // AND AN EMPTY TRASH IS NOT "NOTHING MATCHES": the band above IS the answer
+  // on a company whose removals have all been purged.
+  expect(screen.queryByText("Nothing matches")).toBeNull();
 });

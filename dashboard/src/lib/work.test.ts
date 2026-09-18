@@ -510,10 +510,46 @@ test("a view's own status group survives being read into the segment and back", 
 // green and opened the tracker on every closed task the company has.
 test("a view naming no status group is seeded open rather than empty", () => {
   expect(seededScope(undefined)).toBe("open");
-  expect(seededScope("")).toBe("open");
+  expect(seededScope({})).toBe("open");
+  expect(seededScope({ status_group: "" })).toBe("open");
   // And a group the segments DO express seeds itself, which is the round trip.
-  expect(seededScope("not_started,active")).toBe("open");
-  expect(seededScope("done,closed")).toBe("closed");
+  expect(seededScope({ status_group: "not_started,active" })).toBe("open");
+  expect(seededScope({ status_group: "done,closed" })).toBe("closed");
+});
+
+// A VIEW THAT WIDENED TO FINISHED WORK ITSELF OPENS ON THE WIDE SEGMENT.
+//
+// `open` is the seed for a view that says NOTHING about status. A view setting
+// `show_closed` has said something: it asked for finished work explicitly, and
+// seeding `open` over it writes `status_group=not_started,active`, which
+// excludes exactly the half it widened to. Two real views were in that shape —
+// "and whatever finished this week" answered as open work alone, and the
+// builtin TRASH tab answered as the removed tasks that were still open,
+// silently hiding every removal of anything already done, which is the one
+// thing that tab exists to show.
+//
+// THROUGH THE QUERY, not just the segment, because the segment is only half
+// the round trip: seeded `open`, `buildItemsParams` writes the narrow group
+// back over the view and the widening is lost there rather than here.
+test("a view that asked for finished work is not re-narrowed to open", () => {
+  for (const widened of ["true", "recent:168h"]) {
+    const view = { removed: "true", show_closed: widened };
+    const scope = seededScope(view);
+    expect(scope, widened).toBe("");
+    const params = build({ view, filters: { ...NO_FILTERS, scope } });
+    expect(params.status_group, widened).toBeUndefined();
+    // AND THE VIEW'S OWN VALUE STANDS: the empty segment supplies the key
+    // only where nothing else did, so `recent:168h` is not overwritten with
+    // "everything ever closed".
+    expect(params.show_closed, widened).toBe(widened);
+  }
+  // `false` is an author EXCLUDING finished work on purpose, which is not a
+  // widening: seeding the empty segment there would label the screen "All"
+  // over a query that shows less.
+  expect(seededScope({ show_closed: "false" })).toBe("open");
+  // And a view that names a group is decided by the group, whatever else it
+  // carries — the three segments can express it, so the round trip holds.
+  expect(seededScope({ status_group: "done,closed", show_closed: "true" })).toBe("closed");
 });
 
 // AND A GROUP THE SEGMENTS CANNOT EXPRESS STILL OPENS ON UNFINISHED WORK,
@@ -529,7 +565,7 @@ test("a view naming no status group is seeded open rather than empty", () => {
 // not have, over an input only a deliberate click on All can reach.
 test("a group outside the three segments opens wider, and says which", () => {
   expect(scopeOf("active")).toBe("");
-  const scope = seededScope("active");
+  const scope = seededScope({ status_group: "active" });
   expect(scope).toBe("open");
   const params = build({
     view: { status_group: "active" },

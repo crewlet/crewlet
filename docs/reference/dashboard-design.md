@@ -254,7 +254,7 @@ because every single-modifier combination worth having is already the browser's.
 |---|---|---|
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
-| `#/work` | **All work** | `view=list\|board\|calendar\|timeline` + the filter grammar |
+| `#/work` | **All work** | `view=list\|board\|calendar\|timeline\|table\|trash` + the filter grammar |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
@@ -1450,14 +1450,30 @@ is one of the rules on this page applied to a tracker.
   counts beside them, and choosing one is a SECTION change rather than a
   filter. `All work` is a real destination above them, because "what is the
   whole company doing" is a question somebody asks.
-- **Six views over ONE answer.** List, Board, Calendar, Timeline, Sprint and
-  Backlog differ in how rows are SHAPED and never in what was asked for — the
-  board's columns are the server's own grouping, the calendar buckets rows the
-  server already returned, and the timeline lays out the `start`, `due` and
-  `waiting_on` those same rows carry. A view that fetched differently would be
-  a second idea of what the filters mean. The timeline's own window is derived
-  from the rows on screen, which is why it asks for a big unpaged page: a
-  second page would redraw the first one's axis.
+- **Five SHAPES over one answer, and eight tabs.** List, Board, Calendar,
+  Timeline and Table differ in how rows are DRAWN and never in what was asked
+  for — the board's columns are the server's own grouping, the calendar buckets
+  rows the server already returned, the timeline lays out the `start`, `due`
+  and `waiting_on` those same rows carry, and the table puts one field per
+  column so a column can be compared down and sorted at its head. A shape that
+  fetched differently would be a second idea of what the filters mean. The
+  timeline's own window is derived from the rows on screen, which is why it
+  asks for a big unpaged page: a second page would redraw the first one's axis.
+  Sprint, Backlog and **Trash** are the other three tabs, and each is a saved
+  QUERY rather than a shape — which is the distinction the strip is built on. A
+  tab whose meaning is a parameter is a view; a tab whose meaning is a drawing
+  is a type. The trash is a Table carrying `removed=true`, so every view saved
+  with that parameter is read as one: the removal's actor and instant come from
+  `work_activity` rather than from the row, and PURGED work has no row at all —
+  its history entry is the only evidence it existed, so it gets a band of its
+  own saying it cannot be restored.
+- **The table sorts at the ENGINE.** A header writes the query's own `sort=`
+  key, so the whole set is ordered rather than the hundred rows that happen to
+  be loaded — and a column the grammar has no key for is therefore NOT
+  sortable, because `ParseQuery` refuses an unknown key rather than ignoring
+  it: one wrong header would take the board down with a refusal rather than
+  mis-ordering a column. `status` is the one a reader expects and cannot have;
+  `group_by=status` is what that question actually wants.
 - **A view SETS the scope segment.** Open / Closed / All is the single
   authority on the status group a read asks for: the screen spreads a view's
   saved parameters and then writes that one key from the segment. So a
@@ -1467,8 +1483,13 @@ is one of the rules on this page applied to a tracker.
   from the chosen view, which is what makes the control and the query agree;
   a scope somebody picks is in the URL and outlives a view switch, like every
   other filter here. A saved group the three segments cannot name — `active`
-  alone — reads as `All`, so the segment and the read agree on the wider set
-  rather than the control claiming a narrowing that is not applied.
+  alone — reads as `Open`, the wider set nearest what its author asked for, so
+  the segment and the read agree rather than the control claiming a narrowing
+  that is not applied. And a view that WIDENED — `show_closed` with no group at
+  all — opens on `All`, because seeding `Open` there writes the narrow group
+  back over exactly the half the view asked for: "and whatever finished this
+  week" answered as open work alone, and the Trash tab answered as the removed
+  tasks that were still open, hiding every removal of anything already done.
 - **A row is a table, and its columns belong to the LIST.** Every row was its
   own grid container once, so `auto` tracks sized against that row's content
   alone and a status badge landed at a different x on every line. The tracks

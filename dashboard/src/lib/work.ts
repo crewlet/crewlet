@@ -30,6 +30,7 @@ import type {
   WorkSummary,
   WorkTypeDef,
   WorkView,
+  WorkViewShape,
 } from "~/protocol/index.ts";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info";
@@ -309,7 +310,15 @@ export function fieldValueState(field: WorkFieldValue): string {
 // Views
 // ---------------------------------------------------------------------------
 
-export type Shape = "list" | "board" | "calendar" | "timeline";
+/**
+ * The renderings, which are the WIRE's — [WorkViewShape], where the gate that
+ * holds them against the engine's closed set reads them.
+ *
+ * An alias rather than a second union: a view's `type` IS the shape, so two
+ * spellings of one closed set would be two lists that can disagree, in one
+ * build, about which tab renders anything.
+ */
+export type Shape = WorkViewShape;
 
 /** The shape a view is drawn in. */
 export function shapeOf(viewKey: string, views: WorkView[]): Shape {
@@ -520,6 +529,10 @@ export function buildItemsParams(args: {
     params.sort = filters.sort || "start";
     return params;
   } else {
+    // THE LIST AND THE TABLE ASK THE SAME QUESTION. They are two arrangements
+    // of one answer — the same rows, the same grouping, the same page — and
+    // the whole difference is where a field is drawn, so a second arm here
+    // would be a second copy of one paging rule.
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
@@ -620,13 +633,36 @@ export function scopeOf(group: string | undefined): string {
  * the control and the query agree about which set is on screen — and `open`
  * is the one nearer to what the view's author asked for.
  *
+ * EXCEPT WHERE THE VIEW ITSELF WIDENED. `show_closed` with no `status_group`
+ * is a view whose author asked for finished work explicitly, and seeding
+ * `open` over it writes `status_group=not_started,active`, which excludes
+ * exactly the half they widened to. `recent:168h` — "and whatever finished
+ * this week" — answered as open work alone; the builtin TRASH tab, which is
+ * removed work whatever state it was in when it was removed, answered as the
+ * removed tasks that were still open, silently hiding every removal of
+ * anything already done. So a view in that shape opens on the empty segment,
+ * which deletes the key and lets the view's own `show_closed` stand.
+ *
+ * `show_closed: "false"` is NOT that: it is an author excluding finished work
+ * on purpose, so it keeps the `open` seed and the control agrees with the
+ * query rather than saying "All" over a query that shows less.
+ *
+ * TAKES THE WHOLE PARAMS rather than the one key, because that is the
+ * information the decision needs — passed `status_group` alone it could not
+ * see the widening and this was not expressible at all.
+ *
  * HERE RATHER THAN AT THE CALL SITE so it can be asserted over. Spelled
  * `scopeOf(group) || "open"` inside the screen, it was the one step of the
  * round trip no test could reach: deleting it left every suite green while the
  * tracker opened on every closed task the company has.
  */
-export function seededScope(group: string | undefined): string {
-  return scopeOf(group) || "open";
+export function seededScope(view: Record<string, string> | undefined): string {
+  const group = view?.status_group;
+  const scope = scopeOf(group);
+  if (scope) return scope;
+  const widened = (view?.show_closed ?? "").trim();
+  if (!group && widened && widened !== "false") return "";
+  return "open";
 }
 
 // ---------------------------------------------------------------------------

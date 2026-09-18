@@ -56,6 +56,7 @@ import {
   type RowChrome,
 } from "~/components/work.tsx";
 import { TimelineView } from "~/components/timeline.tsx";
+import { TableView, removalsOf } from "~/components/worktable.tsx";
 import {
   BarList,
   Button,
@@ -82,9 +83,11 @@ import {
   ChevronRightGlyph,
   CloseGlyph,
   DashboardGlyph,
+  DeleteGlyph,
   ListGlyph,
   SearchGlyph,
   TimelineGlyph,
+  ViewColumnGlyph,
 } from "@crewlethq/icons/glyphs";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
@@ -159,10 +162,28 @@ const VIEW_GLYPH = {
   board: DashboardGlyph,
   calendar: CalendarTodayGlyph,
   timeline: TimelineGlyph,
+  table: ViewColumnGlyph,
 } as const;
 
-function viewGlyph(type: string): ReactNode {
-  const Glyph = VIEW_GLYPH[type as keyof typeof VIEW_GLYPH] ?? ListGlyph;
+/** The builtin tabs whose SHAPE is not what they are about. */
+const BUILTIN_GLYPH: Record<string, (typeof VIEW_GLYPH)[keyof typeof VIEW_GLYPH]> = {
+  trash: DeleteGlyph,
+};
+
+/**
+ * THE KEY BEFORE THE SHAPE, and only for a builtin row.
+ *
+ * The trash IS a table — `removed=true` is what makes it the trash — so a
+ * strip keyed on the type alone drew the two tabs with one glyph, which is a
+ * strip where the one destructive-looking tab is indistinguishable from the
+ * one beside it. `builtin` gates it because a saved view somebody happens to
+ * name `trash` is theirs, not the engine's.
+ */
+function viewGlyph(view: WorkView): ReactNode {
+  const Glyph =
+    (view.builtin ? BUILTIN_GLYPH[view.key] : undefined) ??
+    VIEW_GLYPH[view.type as keyof typeof VIEW_GLYPH] ??
+    ListGlyph;
   return <Glyph size="sm" />;
 }
 
@@ -261,7 +282,7 @@ export function Work({ project = "" }: { project?: string }) {
   // agree, which is the property that matters; they agree on
   // `not_started,active`, the wider set the segment stands for, rather than on
   // the narrower one the view named.
-  const viewScope = seededScope(viewParams(chosenView, views).status_group);
+  const viewScope = seededScope(viewParams(chosenView, views));
   const [scope, setScope] = useParam("scope", viewScope);
 
   const filters: TrackerFilters = {
@@ -310,6 +331,30 @@ export function Work({ project = "" }: { project?: string }) {
   // feed is ordered by the LOG rather than by anything this board sorts on,
   // so a change that moved nothing on screen is still visible.
   const feed = useQuery("work_activity", { container, limit: 20 }, { pollMs: 60_000 });
+
+  // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
+  // The row says a task is removed; WHO removed it, WHEN, and whether the
+  // removal rode along with a parent's are facts about the COMMIT, which live
+  // in the history — a row carrying them would be a document read per card,
+  // which is exactly what the list read is built not to do.
+  //
+  // And a PURGE has no row at all, by construction: the rows are destroyed and
+  // the history entry is the only trace that the work ever existed. So the
+  // three kinds are asked for together, on the same page, rather than the
+  // removals being read from the rows and the purges from somewhere else.
+  //
+  // KEYED ON THE PARAMETER, not on the view key. `removed=true` is what makes
+  // a listing the trash — the builtin tab is a table carrying it — so a view
+  // somebody saves with that parameter is read exactly the same way.
+  const inTrash = params.removed === "true" || params.removed === true;
+  const tombstones = useQuery(
+    "work_activity",
+    inTrash ? { container, kinds: "removed,restored,purged", limit: 100 } : undefined,
+    { enabled: inTrash, pollMs: 60_000 },
+  );
+  const tombRecords = useMemo(() => tombstones.data?.records ?? [], [tombstones.data]);
+  const removals = useMemo(() => removalsOf(tombRecords), [tombRecords]);
+  const purges = useMemo(() => tombRecords.filter((r) => r.kind === "purged"), [tombRecords]);
 
   const groups = useMemo(() => data?.groups ?? [], [data]);
   const rows = useMemo(() => data?.items ?? [], [data]);
@@ -438,7 +483,7 @@ export function Work({ project = "" }: { project?: string }) {
             items={views.map((v) => ({
               value: v.key,
               label: `${v.pinned ? "★ " : ""}${v.name}`,
-              icon: viewGlyph(v.type),
+              icon: viewGlyph(v),
             }))}
           />
         )}
@@ -675,7 +720,13 @@ export function Work({ project = "" }: { project?: string }) {
               error={error}
               loading={loading}
               empty={
-                shown.length || groups.length
+                // A TRASH WITH NOTHING IN IT IS NOT A FILTER THAT MATCHED
+                // NOTHING, and it is not empty either: a purge leaves no row
+                // and its history entry is the only trace the work ever
+                // existed, so the band below is the whole answer on a company
+                // whose removals have all been purged. Suppressing the screen
+                // for it would replace that answer with "widen your filters".
+                shown.length || groups.length || inTrash
                   ? undefined
                   : {
                       title: "Nothing matches",
@@ -730,6 +781,21 @@ export function Work({ project = "" }: { project?: string }) {
                   overflowHref={listOverflowHref}
                 />
               )}
+              {shape === "table" && (
+                <TableView
+                  rows={rows}
+                  groups={groups}
+                  axis={String(params.group_by ?? "")}
+                  chrome={chrome}
+                  detail={detail}
+                  now={now}
+                  workspace={!project}
+                  selected={peek?.kind === "item" ? peek.id : ""}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  removals={inTrash ? removals : undefined}
+                />
+              )}
               {shape === "timeline" && (
                 <TimelineView
                   rows={rows}
@@ -755,6 +821,7 @@ export function Work({ project = "" }: { project?: string }) {
               )}
             </QueryState>
 
+            {inTrash && <PurgeBand records={purges} now={now} />}
             <ActivityFeed records={feed.data?.records ?? []} now={now} />
           </div>
         </div>
@@ -1661,6 +1728,55 @@ export function CalendarView({
  * renders the AUTHORED instant, which is what the writer's clock said and what
  * "yesterday" has to keep meaning.
  */
+/**
+ * What was PURGED, which is the half of the trash with no rows.
+ *
+ * A removal hides a task and a restore brings it back at any age. A purge
+ * destroys the rows — so there is nothing for the grid above to list, and this
+ * history entry is the only evidence the work ever existed. Drawing it as a
+ * grid row would be drawing a task that is gone; drawing it nowhere would make
+ * an emptied trash indistinguishable from a company that has removed nothing.
+ *
+ * ITS OWN BAND, SAYING IT IS IRREVERSIBLE, because every other row on this
+ * screen carries a way back and these do not. And the key is rendered from
+ * whatever the entry itself holds: a purged task has no row for the feed to
+ * resolve a key against, which is exactly the point.
+ */
+function PurgeBand({ records, now }: { records: WorkActivityRecord[]; now: number }) {
+  if (records.length === 0) return null;
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<DeleteGlyph size="sm" />}
+        count={records.length}
+        subtitle="A purge destroys the rows. These cannot be restored — what survives is that it happened, to which key, by whom, and the reason the operator gave."
+      >
+        <Card.Title>Purged</Card.Title>
+      </Card.Header>
+      {records.map((record) => (
+        <div key={record.id} className="work-feed-row">
+          <span className="work-feed-when" title={fmtDateTime(record.at)}>
+            {relTime(record.at, now)}
+          </span>
+          <span className="work-feed-kind">
+            <Tag variant="danger" appearance="outline">
+              irreversible
+            </Tag>
+          </span>
+          <span className="mono">
+            {/* NO LINK. The task is gone, so an anchor here would lead to a
+                NotFound on every row — and the key is the entry's own,
+                because there is no task row left to resolve one from. */}
+            {record.subject_key || <EmptyValue label="No key recorded" />}
+          </span>
+          <span className="work-feed-what truncate">{record.excerpt || "purged"}</span>
+          <span className="work-feed-who">{record.actor || "the engine"}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; now: number }) {
   if (records.length === 0) return null;
   return (
