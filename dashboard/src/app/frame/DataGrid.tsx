@@ -49,6 +49,12 @@ export interface GridColumn<T> {
   /** The value sorted on. Omit to make the column unsortable. */
   sortValue?: (row: T) => string | number | null | undefined;
   align?: "left" | "right";
+  /**
+   * The column's name where `header` cannot carry one — a glyph head, or none
+   * at all. Used by the card layout a grid takes on a phone, where every value
+   * draws its own name beside it; ignored everywhere `header` is drawn.
+   */
+  label?: string;
   /** Shrink to content and never wrap. */
   shrink?: boolean;
   width?: string;
@@ -345,10 +351,32 @@ export function DataGrid<T>({
     index += 1;
     const at = index;
     const key = rowKey(row);
+    // THE CELL CARRIES ITS COLUMN'S OWN NAME.
+    //
+    // Below the drawer breakpoint a row is not a row: the column heads go and
+    // each cell is drawn as a labelled line, because a nine-column table in a
+    // 390px card clips six of them with nothing to scroll (the wrap is
+    // `overflow: clip`, which is what keeps the sticky head working). A label
+    // per cell is the only way a value keeps its meaning once the head it sat
+    // under is gone.
+    //
+    // FROM THE HEADER WHERE THE HEADER IS A WORD, and from `label` where it is
+    // not. A head may be a glyph or nothing at all — a type mark, a row action,
+    // a pair of state tags — because the column is twenty pixels wide and a
+    // word does not fit in it. `attr()` can only read text, and a head like
+    // that leaves the card with an unnamed line: measured on the tracker at
+    // 390px as a bare type mark floating between KEY and TITLE, which reads as
+    // a rendering fault rather than as a value. The head cannot carry the word
+    // — that is what made it a glyph — so the column says it separately, and
+    // the card is the only layout that spends it.
     const inner = shownColumns.map((column) => (
       <span
         key={column.key}
         className={cx("grid-cell", column.align === "right" && "right", column.shrink && "shrink")}
+        data-label={
+          (typeof column.header === "string" && column.header ? column.header : column.label) ||
+          undefined
+        }
       >
         {column.cell(row)}
       </span>

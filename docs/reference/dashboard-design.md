@@ -369,6 +369,37 @@ the reader had touched. A name rather than an index, because an index is a fact
 about the source order and inserting a grid above would move every link's
 meaning by one.
 
+**Below 860px a row is a card, because 390px has no columns.** The audit's six
+want 808px between them and the work trash's twelve want more, and the grid's
+wrap is `overflow: clip` — the same decision that keeps the head sticky — so
+everything past the viewport was cut off with nothing to scroll to: WHAT, TO
+and DETAIL simply did not exist on a phone. Scrolling sideways is not the way
+out either, which is worth saying because it is the obvious fix: the flexible
+tracks are `minmax(0, 1fr)`, so the moment the wrap becomes a scroller its
+content box is the viewport, the content-sized columns alone exceed it, and
+every flexible track resolves to zero — the title column vanishing to make room
+for a due date.
+
+So the head goes and each cell draws its own name beside its value. Three
+things follow from that, and each is a rule a new column has to keep:
+
+- **A column with no word in its head declares one.** `header` is what the head
+  row draws, so a twenty-pixel column carries a mark or nothing — a work item's
+  type, a row's actions, a pair of state tags. A card has no head to explain
+  it, so the column supplies the word separately in `label`, drawn only here.
+  Without it the card gets a bare mark on a line of its own between two
+  labelled ones, which reads as a rendering fault rather than as a value.
+  `app/source.test.ts` is what stops one reaching a screen.
+- **A value wraps rather than being cut.** `.truncate` is right for a cell that
+  IS one line of a fixed column and wrong once the column is gone: at 390px it
+  cut the one field the reader opened the list for and left the rest of the
+  card empty underneath it. What bounds the value instead is the engine — a
+  title is at most `tracker.MaxTitle`.
+- **The sort control goes with the head.** That is the real cost of the shape
+  and it is the right trade: a column head a reader cannot see is not an
+  affordance, and `sort=` is in the URL — so a sorted list still arrives sorted
+  from a link, or from the wider layout that set it.
+
 ### An object's own facts
 
 `PropertiesRail` is the rail beside an object — its state, its people, its
@@ -496,7 +527,7 @@ none of it:
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
 | `DetailRail` | the peek's chrome — resizable, a drawer under 1180 px |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
-| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells |
+| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 860 |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
 | `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
 | `TimeRangePicker` | the one control for `window=` |

@@ -173,6 +173,61 @@ test("the columns are declared on the grid, not copied onto every row", () => {
   for (const el of [...heads, ...rows]) expect(el.style.gridTemplateColumns).toBe("");
 });
 
+// A CELL CARRIES ITS COLUMN'S NAME, SO A PHONE CAN LABEL IT.
+//
+// Below the drawer breakpoint the column heads go and each cell is drawn as a
+// labelled line — a nine-column table in a 390px card clips six of them with
+// nothing to scroll, because the wrap is `overflow: clip` and a scroller would
+// resolve every `minmax(0, 1fr)` track to zero. The label comes from
+// `data-label` via `::before`, so the attribute is the whole mechanism.
+//
+// jsdom computes no layout and applies no media query, so what is asserted
+// here is the ATTRIBUTE; the rules that read it are asserted in
+// styles/frame.test.ts.
+test("a cell carries its column's name, and only when that name is a word", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          // A COLUMN THAT HAS BOTH DRAWS ITS HEAD. `label` is the word a head
+          // that cannot hold one supplies, never an override of one that can —
+          // two names for one column is how a table and its cards start
+          // disagreeing about what a value is.
+          { key: "id", header: "Id", label: "Identifier", cell: (r) => r.id },
+          // A GLYPH HEAD AND AN EMPTY ONE cannot supply the word — `attr()`
+          // reads text — so the column says it separately. `label` is what a
+          // twenty-pixel column has instead of a head, and it is drawn ONLY
+          // here: the head row keeps the glyph.
+          { key: "mark", header: <span>·</span>, label: "Mark", cell: () => <span>·</span> },
+          { key: "act", header: "", label: "Actions", cell: () => <span>+</span> },
+          // AND A COLUMN WITH NEITHER draws nothing rather than an empty line
+          // per row. `source.test.ts` is what stops one reaching a screen.
+          { key: "none", header: "", cell: () => <span>-</span> },
+        ]}
+      />
+    </Router>,
+  );
+  const cells = [...container.querySelectorAll<HTMLElement>(".grid-row > .grid-cell")];
+  expect(cells.length).toBe(ROWS.length * 4);
+  const label = (key: string): (string | null)[] =>
+    cells
+      .filter((_, at) => at % 4 === ["id", "mark", "act", "none"].indexOf(key))
+      .map((c) => c.getAttribute("data-label"));
+  expect(label("id")).toEqual(ROWS.map(() => "Id"));
+  // THE HEAD WINS WHERE IT IS A WORD, so a column never repeats itself, and
+  // `label` fills in only where the head cannot.
+  expect(label("mark")).toEqual(ROWS.map(() => "Mark"));
+  expect(label("act")).toEqual(ROWS.map(() => "Actions"));
+  expect(label("none")).toEqual(ROWS.map(() => null));
+
+  // AND THE HEAD ROW IS UNTOUCHED BY ANY OF IT: `label` is the card's word,
+  // not a second head, so a glyph column still draws its glyph up there.
+  const heads = [...container.querySelectorAll<HTMLElement>(".grid-head > *")];
+  expect(heads.map((h) => h.textContent)).toEqual(["Id", "·", "", ""]);
+});
+
 test("one keystroke activates one grid, not every grid on the screen", () => {
   const seen: string[] = [];
   twoGrids(seen);

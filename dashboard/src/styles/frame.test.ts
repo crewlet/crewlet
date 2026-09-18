@@ -71,7 +71,12 @@ describe("the frame's layout", () => {
   // computes no layout, so the suites that render a grid stay green through
   // every value of this, and a screenshot is the only other witness.
   test("one grid owns the columns and every row adopts them", () => {
-    const css = sheet("frame.css");
+    // THE WIDE LAYOUT ALONE. Below the drawer breakpoint a row is deliberately
+    // NOT a row — the heads go and each cell draws its own label — so the
+    // narrow block unwinds this chain on purpose and would read here as the
+    // very drift this case exists to catch. See "a grid becomes labelled
+    // cards" above for the other half.
+    const css = sheet("frame.css").split("@media (max-width: 860px)")[0]!;
     expect(block(css, ".grid-wrap")).toMatch(/display:\s*grid/);
     // The track list itself is the component's, per screen — what belongs here
     // is that nothing BELOW the wrap resolves a list of its own.
@@ -176,6 +181,77 @@ describe("the frame's layout", () => {
     const inner = block(css, ".screen[data-fill] > .screen-inner");
     expect(inner).toMatch(/flex:\s*1 1 auto/);
     expect(inner).toMatch(/min-height:\s*0/);
+  });
+
+  // A ROW IS A CARD ON A PHONE, BECAUSE A GRID IS COLUMNS AND 390px HAS NONE.
+  //
+  // The audit's six columns want 808px and the work trash's twelve want more,
+  // and the wrap is `overflow: clip` — deliberately, since a scrollport is
+  // what stopped the sticky head working — so everything past the viewport was
+  // CUT OFF with nothing to scroll to.
+  //
+  // Sideways scrolling cannot rescue it, which is the half worth pinning: the
+  // flexible tracks are `minmax(0, 1fr)`, so the moment the wrap becomes a
+  // scroller its content box is the viewport, the `max-content` columns alone
+  // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
+  // to make room for a due date.
+  test("a grid becomes labelled cards below the drawer breakpoint", () => {
+    const css = sheet("frame.css");
+    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+
+    // THE SUBGRID CHAIN IS UNWOUND. The wide layout is one grid whose head,
+    // body, bands and rows adopt its tracks; a card is the opposite shape, so
+    // each goes back to a block and the row becomes its own two-column grid.
+    expect(block(narrow, ".grid-wrap")).toMatch(/display:\s*block/);
+    expect(block(narrow, ".grid-head")).toMatch(/display:\s*none/);
+    expect(block(narrow, ".grid-row")).toMatch(/display:\s*block/);
+    // ONE FLEX LINE PER CELL, not a grid track per value. `display: contents`
+    // on the cell looked right and is not: a cell's children become grid items
+    // in their own right, so a type mark beside a title lands in the value
+    // track and pushes the title onto the next row's label track — measured at
+    // 390px as four spans breaking out past the viewport.
+    expect(block(narrow, ".grid-cell")).toMatch(/display:\s*flex/);
+
+    // AND THE LABEL IS THE COLUMN'S OWN NAME, read from the attribute
+    // DataGrid.tsx sets from a string header. A cell with no such header
+    // carries no attribute, draws no label, and takes both tracks rather than
+    // leaving an empty label column beside it.
+    expect(narrow).toContain(".grid-cell[data-label]::before");
+    // AND THE LABELS LINE UP without a shared track: a fixed flex basis is
+    // what a flex line has instead of a grid column.
+    expect(narrow).toMatch(/content:\s*attr\(data-label\)/);
+    expect(narrow.slice(narrow.indexOf(".grid-cell[data-label]::before"))).toMatch(
+      /flex:\s*0 0 \d/,
+    );
+  });
+
+  // A VALUE OWNS ITS LINE IN A CARD, so the wide layout's pixel cut is wrong
+  // one level down as well. `.truncate` is right for a cell that IS one line
+  // of a fixed column; with the column gone it cut the one field the reader
+  // opened the list for and left the rest of the card empty under it —
+  // measured at 390px as "Interview three desks about hou…" on the tracker's
+  // title and "Backfill is running. 22 of 30 day…" on the audit's detail.
+  //
+  // WRAPPED RATHER THAN CLAMPED, and the clamp's own gate is why this test
+  // can say so: `text.test.ts` holds `.clamp` to a single copy in base.css, so
+  // a second one here would fail there. What bounds the value instead is the
+  // engine's own `tracker.MaxTitle`, and there is no uniform row height to
+  // protect — a card is already a stack of six to twelve labelled lines.
+  test("a card's value wraps, because the column that justified cutting it is gone", () => {
+    const css = sheet("frame.css");
+    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+
+    const cut = block(narrow, ".grid-cell .truncate");
+    // ALL THREE, and they only work together: `.truncate` is three
+    // declarations, and neutralising one of them leaves the other two cutting.
+    // `white-space` alone still hides the overflow; `overflow` alone still has
+    // nothing to wrap at.
+    expect(cut).toMatch(/white-space:\s*normal/);
+    expect(cut).toMatch(/overflow:\s*visible/);
+    expect(cut).toMatch(/text-overflow:\s*clip/);
+    // AND A VALUE WITH NO SPACE TO BREAK AT — a uuid, a key — still has to
+    // break, for the same reason `.clamp` carries this.
+    expect(cut).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   // NOTHING IN THE CHROME SITS OUTSIDE A PHONE'S VIEWPORT.

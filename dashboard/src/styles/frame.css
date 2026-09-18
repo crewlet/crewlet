@@ -1392,4 +1392,128 @@ button.histogram-bar[data-empty]:hover {
   .rail-foot > .crewlet-segmented {
     display: none;
   }
+
+  /* ---- A ROW IS A CARD ON A PHONE ---------------------------------------
+     A GRID IS COLUMNS, AND 390px DOES NOT HAVE THEM. The audit's six columns
+     want 808px and the work trash's twelve want more; the wrap is
+     `overflow: clip` — deliberately, because a scrollport is what stopped the
+     sticky head working — so everything past the viewport was CUT OFF with
+     nothing to scroll to. WHAT, TO and DETAIL simply did not exist on a phone.
+
+     AND SCROLLING SIDEWAYS IS NOT THE WAY OUT, which is worth writing down
+     because it is the obvious fix and it cannot work here. The flexible tracks
+     are `minmax(0, 1fr)`: the moment the wrap becomes a scroller its content
+     box is the viewport, the `max-content` columns alone already exceed it,
+     and every `1fr` resolves to ZERO. The title column would vanish to make
+     room for a due date. A horizontal scroller needs per-column pixel floors,
+     which is a number invented per grid, nineteen times.
+
+     So the head goes and each cell draws its own name beside its value —
+     `data-label`, set in DataGrid.tsx from the column header when that header
+     is a string. Every value is on screen, nothing is clipped, and the tracks
+     this file declares above simply do not apply at this width.
+
+     THE SUBGRID CHAIN IS UNWOUND DELIBERATELY. `.grid-wrap` above is the one
+     grid and the head, body, bands and rows adopt its tracks with `subgrid`.
+     A card layout is the opposite shape, so each of them goes back to being a
+     block and the row becomes a two-column grid of its own — label, value. */
+  .grid-wrap {
+    display: block;
+  }
+
+  /* THE HEAD GOES, and with it the sort control it carries. That is the real
+     cost of this shape and it is the right trade: a column head a reader
+     cannot see is not an affordance, and `sort=` is in the URL, so a sorted
+     list still arrives sorted from a link or from the wider layout that set
+     it. */
+  .grid-head {
+    display: none;
+  }
+
+  .grid-body,
+  .grid-band {
+    display: block;
+  }
+
+  /* THE CARD. A rule between rows rather than a border box, because a phone
+     list of bordered cards is mostly border — and the row already carries the
+     hover, selection and failure marks this file gives it. */
+  .grid-row {
+    display: block;
+    padding: var(--space-2) var(--space-3);
+    min-height: 0;
+  }
+
+  /* ONE LINE PER CELL: the column's name, then the value.
+     THE LABEL IS A FLEX ITEM, NOT A GRID TRACK. Making the row a two-column
+     grid and the cell `display: contents` looked right and is not: a cell's
+     children then become grid items in their OWN right, so a cell carrying a
+     type mark beside a title — which most of them do — put the mark in the
+     value track and pushed the title onto the next row's label track. Measured
+     at 390px: `work-type`, `work-prio` and two tag spans each broke out past
+     the viewport. A flex line per cell takes any number of children, because
+     the cell keeps the flex box it already has in the wide layout.
+     A FIXED BASIS is what lines the labels up without a shared track. 7rem
+     clears the longest head this product has at `--fs-3xs` uppercase
+     (ASSIGNEE, PRIORITY, UPDATED) and leaves the value the rest of a 390px
+     card. */
+  .grid-cell {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: 1px 0;
+    min-width: 0;
+  }
+
+  /* THE LABEL IS THE COLUMN'S NAME, drawn from the cell's own attribute so
+     nothing has to thread a second copy of the header down here. A cell whose
+     column head was a glyph or empty carries no attribute and draws no label —
+     see DataGrid.tsx — so `::before` is generated only where there is a word
+     for it, and that cell's value then spans both tracks rather than leaving
+     an empty label column. */
+  .grid-cell[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 7rem;
+    font-size: var(--fs-3xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+
+  /* `shrink` and `right` are COLUMN shapes and there are no columns here: a
+     nowrap cell in a 390px card is a value cut off at the edge, and an
+     end-aligned one is a number floating away from the name that labels it. */
+  .grid-cell.shrink,
+  .grid-cell.right {
+    white-space: normal;
+    justify-content: flex-start;
+  }
+
+  /* AND NEITHER IS `.truncate`, WHICH IS THE SAME MISTAKE ONE LEVEL DOWN. It
+     cuts at a PIXEL, which is right for a cell that is one line of a fixed
+     column and wrong for a value that now owns the width of the card: at 390px
+     the title column — the one field a reader opened the list for — came out
+     as "Interview three desks about hou…" with the rest of the card empty
+     under it, and the audit's detail as "Backfill is running. 22 of 30 day…".
+     Every cut was a cut to nothing.
+
+     WRAPPED RATHER THAN CLAMPED, which is the opposite of what prose takes in
+     a card elsewhere (`base.css`'s `.clamp`) and is deliberate. A clamp bounds
+     one value so it cannot set the height of every row in a feed of forty —
+     and there is no row height to protect here, because a card is already a
+     stack of six to twelve labelled lines each as tall as its own value. What
+     bounds this instead is the engine: a title is at most `tracker.MaxTitle`
+     (256). Writing the clamp here would also be its SECOND copy, which
+     `styles/text.test.ts` fails on purpose.
+
+     `anywhere` for the same reason `.clamp` carries it — a value can be a uuid
+     or a key with no space to break at, and `break-word` leaves the element's
+     min-content width at the whole run. */
+  .grid-cell .truncate {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
 }

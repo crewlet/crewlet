@@ -1506,6 +1506,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           Iterations
                         </span>
                       ),
+                      label: "Iterations",
                       shrink: true,
                       sortValue: (t) => t.iterations,
                       cell: (t) => <NumberCell value={t.iterations} />,
@@ -1520,6 +1521,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {
                       key: "state",
                       header: "",
+                      label: "State",
                       shrink: true,
                       cell: (t) => (
                         <span className="row gap-1">

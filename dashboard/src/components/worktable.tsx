@@ -165,6 +165,7 @@ export function TableView({
       {
         key: "type",
         header: "",
+        label: "Type",
         shrink: true,
         cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
       },
@@ -370,6 +371,7 @@ function trashColumns(
     {
       key: "restore",
       header: "",
+      label: "Restore",
       shrink: true,
       cell: (row) => <RestoreCall id={row.key} />,
     },

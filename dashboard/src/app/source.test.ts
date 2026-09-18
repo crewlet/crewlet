@@ -279,3 +279,67 @@ test("the element scanner reads a multi-line prop", () => {
   expect(found[0]?.text.includes(".join(")).toBe(true);
   expect(found[1]?.text.includes(".join(")).toBe(false);
 });
+
+/**
+ * A COLUMN WHOSE HEAD IS A GLYPH STILL HAS A NAME.
+ *
+ * `GridColumn.header` is drawn in the head row, so a column twenty pixels wide
+ * carries a mark or nothing at all — a work item's type, a row's actions, a
+ * pair of state tags. That is right for the wide table and wrong for the card a
+ * grid becomes below 860px, where the head is gone and every value draws its
+ * own name beside it: a cell with no name draws none, and the card gets a bare
+ * mark floating on a line of its own between two labelled ones. Measured on the
+ * tracker at 390px, it reads as a rendering fault rather than as a value.
+ *
+ * So the column says the word separately, in `label`. NOTHING ELSE CATCHES
+ * THIS: the field is optional by necessity — a column with a real head must not
+ * repeat it — so a new glyph column type-checks, renders, and is wrong only on
+ * a phone, which no suite in this tree has a viewport for.
+ *
+ * THE SIBLINGS ARE FOUND BY INDENTATION, which is a real invariant here rather
+ * than a guess: prettier is a gate (`make dashboard-lint`), so a literal's own
+ * properties share a column and everything nested under one is indented past
+ * it. Brace-counting would be the obvious alternative and is the worse one — a
+ * cell is JSX with children, template strings and comments in it, and a counter
+ * walking through those answers confidently and wrongly. `typescript` is not
+ * the alternative either: at 7.x the package exports its syntax tree only under
+ * `unstable/`, and a permanent gate does not rest on that.
+ */
+test("a column with no word in its head declares one", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources([".tsx"])) {
+    const lines = text.split("\n");
+    for (let at = 0; at < lines.length; at++) {
+      // A PROPERTY, NOT A TYPE MEMBER. `GridColumn`'s own `header: ReactNode;`
+      // declares the contract rather than filling it in, and prettier ends one
+      // in a semicolon and the other in a comma.
+      const head = /^(\s*)header:\s*(.*[^;])$/.exec(lines[at]!);
+      if (!head) continue;
+      seen++;
+      // A WORD IS A NON-EMPTY STRING LITERAL. `""`, a glyph and any expression
+      // are all the same thing to `attr()`: nothing to read.
+      if (/^(["'])(?!\1)\S/.test(head[2]!)) continue;
+      const indent = head[1]!;
+      const siblings: string[] = [];
+      for (const step of [-1, 1]) {
+        for (let n = at + step; n >= 0 && n < lines.length; n += step) {
+          const line = lines[n]!;
+          if (!line.trim()) continue;
+          if (!line.startsWith(indent)) break;
+          if (line[indent.length] === " ") continue;
+          siblings.push(line);
+        }
+      }
+      if (siblings.some((line) => /^\s*label:\s*["']\S/.test(line))) continue;
+      offenders.push(`${path}:${at + 1}`);
+    }
+  }
+  expect(
+    offenders,
+    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`",
+  ).toEqual([]);
+  // THE OTHER SIDE, as above: a renamed field or a broken scan makes the rule
+  // vacuous and still green. Well over a hundred columns today.
+  expect(seen, "nothing here declares a column head any more").toBeGreaterThan(80);
+});

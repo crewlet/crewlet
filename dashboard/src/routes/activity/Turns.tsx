@@ -407,6 +407,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             {
               key: "state",
               header: "",
+              label: "State",
               shrink: true,
               cell: (t) => (
                 <span className="row gap-1">
@@ -436,6 +437,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
                   Iterations
                 </span>
               ),
+              label: "Iterations",
               shrink: true,
               align: "right",
               sortValue: (t) => t.iterations,

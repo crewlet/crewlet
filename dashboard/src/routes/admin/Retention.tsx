@@ -253,6 +253,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
             {
               key: "gate",
               header: "",
+              label: "Eviction",
               shrink: true,
               cell: (n) => (
                 <Button

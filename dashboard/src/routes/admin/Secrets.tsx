@@ -637,6 +637,7 @@ export function Secrets({ name }: { name?: string }) {
               {
                 key: "act",
                 header: "",
+                label: "Actions",
                 shrink: true,
                 cell: (s) => (
                   <span className="row gap-1">

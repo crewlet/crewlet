@@ -237,6 +237,7 @@ export function DomainScreen({ name }: { name: string }) {
                     {
                       key: "state",
                       header: "",
+                      label: "State",
                       shrink: true,
                       cell: (p) => (
                         <span className="row gap-1">
