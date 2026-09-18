@@ -266,15 +266,40 @@ export function Shell({ children }: { children: ReactNode }) {
   const page: PageContext = useMemo(() => ({ setLabels, setCoverage }), [setLabels, setCoverage]);
 
   const working = agents.filter((a) => a.state === "working").length;
+
+  // WHAT THE READER CAN ACTUALLY DRIVE DOWN, which is the whole of why this
+  // badge is not `answer.unread`.
+  //
+  // `unread` counts every notice on the page, and most of a busy company's
+  // notices are things it merely told you: a task you watch moved, a sprint
+  // you are in started. Nobody answers those, so a badge built on them never
+  // reaches zero however diligent the reader is — and a number that cannot go
+  // down is read, correctly, as a broken counter. The PRIMARY half is the set
+  // a person is on the hook for (a mention, a question, work assigned to
+  // them), it is small by construction, and it goes down by answering. The
+  // engine states which reasons were applied as primary — defaulted from the
+  // person's own record — so this is the company's own split rather than one
+  // the client invented.
+  //
+  // OVER THE FIRST PAGE, and the title says so: the reader returns at most 50
+  // notices, so a badge claiming a total would be inventing a number the
+  // engine never computed. `answer.unread` and `answer.primary` are each one
+  // half of this question and neither is it, so it is counted here rather than
+  // read off a field that does not mean what it looks like.
+  const waiting = useMemo(() => {
+    const data = inbox.data;
+    if (!data) return 0;
+    const primary = new Set(data.primary_reasons);
+    return data.notices.filter((n) => !n.read && primary.has(n.reason)).length;
+  }, [inbox.data]);
+
   const badges: Partial<Record<Workspace, RailBadge | null>> = {
-    // UNREAD OVER THE FIRST PAGE, and the title says so: the reader returns at
-    // most 50 notices and counts unread over them, so a badge claiming a total
-    // would be inventing a number the engine never computed.
-    inbox: inbox.data?.unread
+    inbox: waiting
       ? {
-          text: inbox.data.unread >= 50 ? "50+" : String(inbox.data.unread),
+          text: waiting >= 50 ? "50+" : String(waiting),
           attention: true,
-          title: "unread notices on the first page — the engine counts no total",
+          title:
+            "unread notices under a reason your record counts as primary, on the first page — the engine counts no total",
         }
       : null,
     activity: working ? { text: String(working), title: `${working} seats working` } : null,

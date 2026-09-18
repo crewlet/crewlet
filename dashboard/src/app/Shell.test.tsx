@@ -135,3 +135,106 @@ describe("the state bar's coverage", () => {
     expect(screen.queryByText("This answer is incomplete")).toBeNull();
   });
 });
+
+describe("the Inbox rail badge", () => {
+  /** A frame over a socket answering a bound viewer and one page of notices. */
+  function railOver(notices: unknown[], primary_reasons: string[]) {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (
+      socket as unknown as {
+        query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).query = (what: string) => {
+      if (what === "viewer") {
+        return Promise.resolve({
+          operator_id: "U0FOUNDER",
+          operator: true,
+          handle: "ada",
+          name: "Ada",
+          kind: "human",
+        });
+      }
+      if (what === "work_inbox") {
+        return Promise.resolve({
+          handle: "ada",
+          notices,
+          primary_reasons,
+          unread: notices.filter((n) => !(n as { read: boolean }).read).length,
+          primary: notices.filter((n) => primary_reasons.includes((n as { reason: string }).reason))
+            .length,
+        });
+      }
+      return Promise.resolve({});
+    };
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <Shell>
+            <Bare />
+          </Shell>
+        </Router>
+      </ClientContext.Provider>,
+    );
+  }
+
+  function notice(reason: string, read: boolean, n: number) {
+    return {
+      record_id: `r-${n}`,
+      log_seq: n,
+      log_stream: "CREWLET_WORK_LOG",
+      log_generation: 1,
+      at: new Date().toISOString(),
+      reason,
+      primary: false,
+      addressed: false,
+      kind: "task_updated",
+      subject_id: `s-${n}`,
+      read,
+    };
+  }
+
+  // A BADGE NOBODY CAN DRIVE DOWN IS A BROKEN COUNTER.
+  //
+  // It counted `answer.unread`, which is every notice on the page — and most of
+  // a busy company's notices are things it merely told you: a task you watch
+  // moved, a sprint you are in started. Nobody answers those, so the number
+  // never reached zero however diligent the reader was, and a count that only
+  // ever grows is the first thing that makes a read-only inbox read as broken.
+  // The primary half is small by construction and goes down by answering.
+  test("counts only what the reader is on the hook for", async () => {
+    railOver(
+      [
+        notice("assignee", false, 1), // unread AND primary — the one that counts
+        notice("watcher", false, 2), // unread, not primary
+        notice("sprint_member", false, 3), // unread, not primary
+        notice("assignee", true, 4), // primary, already read
+      ],
+      ["assignee", "mention"],
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const badge = document.querySelector(".rail-badge");
+    expect(badge?.textContent).toBe("1");
+    // And NOT the three unread, nor the two primary: each of those is one half
+    // of the question and neither is it.
+    expect(badge?.textContent).not.toBe("3");
+    expect(badge?.textContent).not.toBe("2");
+  });
+
+  // NOTHING TO ANSWER IS NO BADGE AT ALL. A zero drawn in the caution hue is a
+  // mark a reader checks, and it would be there permanently on a quiet company.
+  test("a page with nothing primary and unread carries no badge", async () => {
+    railOver([notice("watcher", false, 1), notice("assignee", true, 2)], ["assignee"]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(document.querySelector(".rail-badge")).toBeNull();
+  });
+});
