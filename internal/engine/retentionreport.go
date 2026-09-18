@@ -224,8 +224,20 @@ func (r *retention) replica() statelog.ReplicaReport {
 	out := statelog.ReplicaReport{
 		RejoinWindowSeconds: r.cfg.RejoinWindow().Seconds(),
 	}
+	// THROUGH THE HANDLE'S OWN HELPER, not by reaching past Replicated() to
+	// a raw accessor. `Replicated()` answers nil legitimately — an adoption
+	// holds the peer closed between its rename and its reopen, and Close
+	// leaves it nil — and `DB.Path` has no nil guard, so this line crashed
+	// the process for anyone who asked during that window: `crewlet
+	// retention status`, the REST route and the dashboard socket all reach
+	// it. `DB.ReplicatedPath` exists for exactly this question and answers
+	// "" rather than dying, which os.Stat then reports as an error and the
+	// zero StoreBytes reads as "not measured" — see [statelog.ReplicaReport].
+	//
+	// It is the same defect as the nil-receiver crash in the trim's own tick
+	// (store.(*DB).Read on a closed peer), one accessor over.
 	if r.db != nil {
-		if info, err := os.Stat(r.db.Replicated().Path()); err == nil {
+		if info, err := os.Stat(r.db.ReplicatedPath()); err == nil {
 			out.StoreBytes = info.Size()
 		}
 	}
