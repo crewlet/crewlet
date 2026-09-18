@@ -20,9 +20,9 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Callout, Tag } from "@crewlethq/ui";
+import { Button, Callout } from "@crewlethq/ui";
 import { KeyGlyph, RefreshGlyph, TuneGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import type { CoverageFacts } from "~/components/work.tsx";
+import { CoverageTags, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
   /** The strip's own variant, in uilet's spelling: two states, both of them bad. */
@@ -105,7 +105,12 @@ export function StateBar({
     coverage.log_seq !== undefined &&
     coverage.applied_through < coverage.log_seq;
   const incomplete = coverage?.complete === false;
-  const anything = degraded || incomplete || coverage?.read_level || behind || extra;
+  // A LEVEL THIS SURFACE EXPECTS IS NOT NEWS, and the bar must not open a band
+  // for one: `stale` is the dashboard's own default, so a `read_level` test
+  // here drew an empty facts row — a rule, a background and a padding band —
+  // under the page bar of every screen in the product. See [CoverageTags].
+  const odd = oddLevel(coverage?.read_level);
+  const anything = degraded || incomplete || odd || behind || extra;
   if (!anything) return null;
 
   return (
@@ -157,29 +162,14 @@ export function StateBar({
         </Callout>
       )}
 
-      {(coverage?.read_level || behind || extra) && (
+      {(odd || behind || extra) && (
         <div className="state-facts">
-          {/* NEUTRAL, both of them. A read level and an apply position are
-              facts about the answer, not states of it — and lag alone is never
-              an alarm here, which is what the module doc above says. */}
-          {coverage?.read_level && (
-            <Tag
-              appearance="outline"
-              size="xs"
-              title="How fresh this answer is, as the engine actually served it"
-            >
-              {coverage.read_level}
-            </Tag>
-          )}
-          {behind && (
-            <Tag
-              appearance="outline"
-              size="xs"
-              title="This node holds records it has not applied yet"
-            >
-              applied through {coverage?.applied_through} of {coverage?.log_seq}
-            </Tag>
-          )}
+          {/* THE FACTS ARE `CoverageTags`', not a second copy. This bar drew
+              them as `xs` outline chips and `components/work.tsx` drew the
+              same fact at the default size inside a screen's own toolbar —
+              one answer, two renderings, and on Inbox and My work two
+              different corners of the chrome one click apart. */}
+          <CoverageTags answer={coverage} />
           {extra}
         </div>
       )}

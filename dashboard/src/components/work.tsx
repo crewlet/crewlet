@@ -380,26 +380,80 @@ export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
             : ""}
         </Callout>
       )}
-      {(answer.read_level || behind) && (
-        <span className="work-coverage">
-          {answer.read_level && (
-            <Tag
-              appearance="outline"
-              title="How fresh this answer is, as the engine actually served it"
-            >
-              {answer.read_level}
-            </Tag>
-          )}
-          {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
-              apply is visible as its own state rather than as lag. */}
-          {behind && (
-            <Tag variant="warning" appearance="outline">
-              applied through {answer.applied_through} of {answer.log_seq}
-            </Tag>
-          )}
-        </span>
-      )}
+      <CoverageTags answer={answer} />
     </>
+  );
+}
+
+/**
+ * THE LEVELS A DASHBOARD ANSWER MAY BE SERVED AT AND SAY NOTHING ABOUT.
+ *
+ * `stale` is this surface's OWN default — `internal/statelog`'s
+ * `ReadLevelDefaults` says so, and gives the reason: a screen polls, so a
+ * barrier per poll would buy a freshness nobody reads. `session` and
+ * `linearizable` are stronger still. None of the three is news.
+ *
+ * LISTED RATHER THAN EXCLUDED, so an unknown level is SHOWN. This list is a
+ * second copy of a value the engine owns, and the day a fifth level arrives
+ * the honest failure is a word a reader asks about — not a level quietly
+ * rendered as the ordinary path.
+ */
+const ORDINARY_LEVELS = ["stale", "session", "linearizable"];
+
+/** Whether a served level is one this surface did NOT expect. */
+export function oddLevel(level: string | undefined): boolean {
+  return !!level && !ORDINARY_LEVELS.includes(level);
+}
+
+/**
+ * How fresh an answer is, and how far behind the node that served it —
+ * ONE IMPLEMENTATION, because there were two.
+ *
+ * `StateBar` drew the page's answer as an `xs` outline chip under the page
+ * bar; this component drew a panel's as a default-size one inside the screen's
+ * own toolbar. Same fact, two sizes, two places — which on Inbox and My work,
+ * both reading a page-level answer, put it in two different corners of the
+ * chrome one click apart.
+ *
+ * AND THE ORDINARY PATH DRAWS NOTHING, which is the rule `ServedLevelBanner`
+ * already states one screen over: a badge that always drew the level put the
+ * word `stale` — this surface's own default — beside every healthy answer on
+ * every screen in the product, bare, with no age and no measure of how far
+ * behind. The one case that matters then arrives as a CHANGED WORD in a chip
+ * nobody reads any more. So a level is drawn only when it is not one of the
+ * three a dashboard expects, and the lag is drawn only when there is one.
+ */
+export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
+  if (!answer) return null;
+  const behind =
+    answer.applied_through !== undefined &&
+    answer.log_seq !== undefined &&
+    answer.applied_through < answer.log_seq;
+  const level = answer.read_level ?? "";
+  const odd = oddLevel(level);
+  if (!odd && !behind) return null;
+  return (
+    <span className="work-coverage">
+      {odd && (
+        <Tag
+          variant="warning"
+          appearance="outline"
+          size="xs"
+          title={`This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`}
+        >
+          age unknown
+        </Tag>
+      )}
+      {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
+          apply is visible as its own state rather than as lag. NEUTRAL: a
+          read level and an apply position are facts about the answer, not
+          states of it, and lag alone is never an alarm. */}
+      {behind && (
+        <Tag appearance="outline" size="xs" title="This node holds records it has not applied yet">
+          applied through {answer.applied_through} of {answer.log_seq}
+        </Tag>
+      )}
+    </span>
   );
 }
 

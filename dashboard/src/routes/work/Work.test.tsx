@@ -704,8 +704,12 @@ test("a removed row names who removed it, from the feed rather than the row", as
     },
   });
   mountWork();
-  await waitFor(() => expect(screen.getByText("the wrong subtree")).toBeTruthy());
-  expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0);
+  // WAITED FOR ON THE NAME, not on the row. The rows and the feed are two
+  // queries and the name comes from the SECOND — so waiting for the row and
+  // then asserting the name synchronously passes only while the feed happens
+  // to resolve in the same tick, which is what made this case flake.
+  await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
+  expect(screen.getByText("the wrong subtree")).toBeTruthy();
   // And the way back is on the row: this dashboard writes nothing, so what it
   // offers is the call an assistant would make.
   expect(screen.getByText("Restore")).toBeTruthy();

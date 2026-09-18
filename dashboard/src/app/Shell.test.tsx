@@ -96,9 +96,35 @@ function frame(child: ReactNode) {
 describe("the state bar's coverage", () => {
   test("it is drawn for the screen that published it", () => {
     frame(<Covered coverage={INCOMPLETE} />);
-    expect(screen.getByText("linearizable")).toBeDefined();
     expect(screen.getByText(/applied through 41 of 88/)).toBeDefined();
     expect(screen.getByText("This answer is incomplete")).toBeDefined();
+    // AND THE LEVEL IS NOT A WORD ON THE SCREEN. `linearizable` is stronger
+    // than this surface's own default; a chip naming it is a label nobody
+    // reads, and the one level that matters then arrives as a changed word
+    // inside it. See [CoverageTags] in components/work.tsx.
+    expect(screen.queryByText("linearizable")).toBeNull();
+  });
+
+  // AND A LEVEL THIS SURFACE DID NOT EXPECT IS SAID IN WORDS.
+  //
+  // `stale`, `session` and `linearizable` are what a dashboard answer is
+  // served at. Anything else means the node could not measure its own distance
+  // from the log — including a level a later engine invents, which is why the
+  // list is the ordinary ones rather than the odd ones: an unknown value is
+  // SHOWN.
+  test("a level this surface did not expect says what it means", () => {
+    frame(
+      <Covered
+        coverage={{
+          read_level: "consistent_prefix",
+          complete: true,
+          log_seq: 9,
+          applied_through: 9,
+        }}
+      />,
+    );
+    expect(screen.getByText("age unknown")).toBeDefined();
+    expect(screen.queryByText("consistent_prefix")).toBeNull();
   });
 
   // THE ONE THAT SHIPPED. Land on the Inbox, which publishes; click through to
@@ -109,7 +135,6 @@ describe("the state bar's coverage", () => {
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(<Bare />);
     expect(screen.getByText("the bare screen")).toBeDefined();
-    expect(screen.queryByText("linearizable")).toBeNull();
     expect(screen.queryByText(/applied through/)).toBeNull();
     expect(screen.queryByText("This answer is incomplete")).toBeNull();
   });
@@ -122,7 +147,7 @@ describe("the state bar's coverage", () => {
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(
       <AlsoCovered
-        coverage={{ read_level: "bounded", complete: true, log_seq: 9, applied_through: 9 }}
+        coverage={{ read_level: "stale", complete: true, log_seq: 9, applied_through: 4 }}
       />,
     );
     // FLUSHED, because a reset that lands LATE is the failure being excluded:
@@ -130,8 +155,8 @@ describe("the state bar's coverage", () => {
     // the incoming screen has already published and blanks it, and a
     // synchronous assertion cannot see that happen.
     await act(async () => {});
-    expect(screen.getByText("bounded")).toBeDefined();
-    expect(screen.queryByText("linearizable")).toBeNull();
+    expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
+    expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
     expect(screen.queryByText("This answer is incomplete")).toBeNull();
   });
 });
