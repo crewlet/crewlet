@@ -305,6 +305,21 @@ export function DataGrid<T>({
     else setSort(column.key);
   }
 
+  // THE TRACK LIST IS DECLARED ONCE, ON THE WRAP.
+  //
+  // The head and every row used to be a grid container of its own, each handed
+  // this same string — which looks like one layout and is not: an intrinsic
+  // track (`max-content`, and `minmax(0, 1fr)` once it is out of free space)
+  // resolves against the content of ITS OWN container, so every row sized its
+  // columns against its own cells alone. Measured against a running engine: a
+  // work table's fifth column started at 78.4px in the head and 74px in the
+  // rows, and the audit's last column sat 245px from the heading that named
+  // it. A grid whose columns do not line up is not a grid.
+  //
+  // So the wrap owns the tracks and everything between it and a cell is a
+  // `subgrid` passthrough (see `.grid-head`/`.grid-body`/`.grid-band`/
+  // `.grid-row` in frame.css) — which is also what makes a head cell and a
+  // cell twenty rows below it size the SAME track.
   const template = shownColumns
     .map((c) => c.width ?? (c.shrink ? "max-content" : "minmax(0, 1fr)"))
     .join(" ");
@@ -344,7 +359,6 @@ export function DataGrid<T>({
       isFailed?.(row) && "failed",
       cursor === at && "cursor",
     );
-    const style = { gridTemplateColumns: template } as React.CSSProperties;
     // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
     //
     // The row used to BE an `<a>` when `rowHref` was given, and a cell that
@@ -369,7 +383,6 @@ export function DataGrid<T>({
         key={key}
         id={rowHref ? rowId : undefined}
         className={className}
-        style={style}
         data-row-index={at}
         role={!rowHref && onRowActivate ? "button" : undefined}
         tabIndex={!rowHref && onRowActivate ? 0 : undefined}
@@ -392,8 +405,12 @@ export function DataGrid<T>({
     // THE POINTER IS WHAT SAYS WHICH GRID THE READER IS IN — see the registry
     // above. `pointerdown` rather than `click`, so a drag on a header or a
     // press that never becomes a click still hands the keyboard over.
-    <div className="grid-wrap" onPointerDown={claimKeyboard}>
-      <div className="grid-head" style={{ gridTemplateColumns: template }} role="row">
+    <div
+      className="grid-wrap"
+      style={{ gridTemplateColumns: template }}
+      onPointerDown={claimKeyboard}
+    >
+      <div className="grid-head" role="row">
         {shownColumns.map((column) => {
           const sorted = sort?.key === column.key;
           const className = cx(

@@ -37,7 +37,67 @@ function block(css: string, selector: string): string {
   return css.slice(from, to);
 }
 
+/**
+ * Every declaration block whose selector LIST names `selector`.
+ *
+ * `block` above wants a rule of its own; these live in a grouped selector,
+ * which is the point — the four steps of the subgrid chain have to say the
+ * same thing, so they say it once.
+ */
+function rules(css: string, selector: string): string[] {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const out: string[] = [];
+  for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1]!.split(",").some((name) => name.trim() === selector)) out.push(m[2]!);
+  }
+  expect(out.length, `${selector} is not declared at all`).toBeGreaterThan(0);
+  return out;
+}
+
 describe("the frame's layout", () => {
+  // A CELL LANDS UNDER THE HEADER THAT NAMED IT.
+  //
+  // The head and every row were separate grid containers once, each handed the
+  // same track list as an inline string. A track list is not a layout: an
+  // intrinsic track resolves against the content of ITS OWN container, so each
+  // row sized its columns against its own cells alone. Measured against a
+  // running engine at 1600px — the work table's fifth column started at 78.4px
+  // in the head and 74px in the rows, and the audit's last column sat 245px
+  // from its own heading, with nothing to the right of WHO under the right
+  // name on any line.
+  //
+  // Asserted in the SHEET because it cannot be asserted anywhere else: jsdom
+  // computes no layout, so the suites that render a grid stay green through
+  // every value of this, and a screenshot is the only other witness.
+  test("one grid owns the columns and every row adopts them", () => {
+    const css = sheet("frame.css");
+    expect(block(css, ".grid-wrap")).toMatch(/display:\s*grid/);
+    // The track list itself is the component's, per screen — what belongs here
+    // is that nothing BELOW the wrap resolves a list of its own.
+    for (const step of [".grid-head", ".grid-body", ".grid-band", ".grid-row"]) {
+      const decl = rules(css, step).join(";");
+      expect(decl, step).toMatch(/display:\s*grid/);
+      expect(decl, step).toMatch(/grid-template-columns:\s*subgrid/);
+      // A SUBGRID THAT DOES NOT SPAN THE TRACKS ADOPTS NONE OF THEM: it is a
+      // one-column grid that looks exactly like the bug it replaced.
+      expect(decl, step).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+      expect(decl, step).not.toMatch(/grid-template-columns:(?!\s*subgrid)/);
+    }
+    // And what is NOT a row of cells is one element across every column,
+    // rather than a value sized by — and sizing — the first one.
+    expect(rules(css, ".grid-wrap > *").join(";")).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    for (const full of [".grid-band-head", ".grid-band-foot"]) {
+      expect(rules(css, full).join(";"), full).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    }
+    // THE COLUMN RESET IS THE ONE THAT HAS TO SAY IT TWICE. It is a direct
+    // child, so `.grid-wrap > *` covers it — and its own `all: unset` is later
+    // in the sheet at the same specificity, so it undoes exactly that. The
+    // order inside the block is what the assertion is for.
+    expect(rules(css, ".grid-cols-reset").join(";")).toMatch(
+      /all:\s*unset[\s\S]*grid-column:\s*1\s*\/\s*-1/,
+    );
+  });
+
   test("the peek column exists only above the drawer threshold", () => {
     // Below it the rail is `position: fixed` — and a fixed grid child does NOT
     // shrink an explicitly sized track, so an unconditional fourth track

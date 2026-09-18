@@ -633,9 +633,21 @@
    what the header now sticks against, and it rides off with the bottom of the
    grid because a sticky box still cannot leave this element's box. */
 
+/* THE COLUMNS BELONG TO THE GRID, NOT TO A ROW.
+   Every row was its own grid container once, each handed the same track list
+   as a string — and a track list is not a layout: `max-content` resolves
+   against the content of ITS OWN container, so each row sized its columns
+   against its own cells alone. Measured against a running engine, a work
+   table's fifth column started at 78.4px in the head and 74px in the rows, and
+   the audit's last column drifted 245px from its own heading; from the WHO
+   column rightwards no value sat under the header that named it.
+   So the tracks are declared HERE, once, and `.grid-head`, `.grid-body`,
+   `.grid-band` and `.grid-row` are `subgrid` passthroughs that adopt them —
+   which is also what makes a cell in the head and a cell twenty rows down
+   contribute to sizing the same track. Everything that is not a row of cells
+   spans the whole width instead, below. */
 .grid-wrap {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -643,8 +655,33 @@
   background: var(--surface-1);
 }
 
-.grid-head {
+/* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
+   reset, and the empty state, which is the one child rendered when the wrap
+   carries no track list at all. A child that forgot this would land in column
+   one and be sized by it. */
+.grid-wrap > * {
+  grid-column: 1 / -1;
+}
+
+/* THE PASSTHROUGHS. Each is a grid whose columns ARE the wrap's, so a cell
+   nested three levels down still lands on the track its header sized. */
+.grid-head,
+.grid-body,
+.grid-band,
+.grid-row {
   display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+}
+
+/* And the things inside a passthrough that are NOT a row of cells: each is one
+   element across every column rather than a value in the first one. */
+.grid-band-head,
+.grid-band-foot {
+  grid-column: 1 / -1;
+}
+
+.grid-head {
   align-items: center;
   /* A REAL HEIGHT, so the band head below can be offset by it rather than by
      a number somebody measured off a screenshot. --row-h is the product's own
@@ -708,7 +745,6 @@
 }
 
 .grid-row {
-  display: grid;
   align-items: center;
   min-height: var(--row-h);
   border-bottom: 1px solid var(--border-subtle);
@@ -834,6 +870,11 @@
 
 .grid-cols-reset {
   all: unset;
+  /* AFTER the `all: unset`, which resets `grid-column` too — and this rule is
+     later in the sheet than `.grid-wrap > *` at the same specificity, so the
+     full-width band above would be undone here and the button would be sized
+     by the first column. */
+  grid-column: 1 / -1;
   padding: var(--space-1) var(--space-3);
   font-size: var(--fs-3xs);
   color: var(--accent);

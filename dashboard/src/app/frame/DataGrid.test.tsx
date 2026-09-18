@@ -148,6 +148,31 @@ function twoGrids(seen: string[]) {
   );
 }
 
+// THE TRACK LIST IS DECLARED ONCE, ON THE GRID.
+//
+// The head and every row were grid containers of their own, each handed the
+// same track list as an inline string — which looks like one layout and is
+// not: an intrinsic track resolves against the content of ITS OWN container,
+// so every row sized its columns against its own cells alone. Measured against
+// a running engine at 1600px, the work table's fifth column started at 78.4px
+// in the head and 74px in the rows, and the audit's last column sat 245px from
+// the heading that named it.
+//
+// jsdom computes no layout, so the drift itself cannot be asserted here — what
+// can is the shape that caused it: a second declaration. The geometry is
+// asserted where it is visible, in `styles/frame.test.ts`, which holds the
+// subgrid chain the wrap's tracks reach a cell through.
+test("the columns are declared on the grid, not copied onto every row", () => {
+  const { container } = grid();
+  const wrap = container.querySelector<HTMLElement>(".grid-wrap")!;
+  expect(wrap.style.gridTemplateColumns).toContain("minmax(0, 1fr)");
+  const heads = container.querySelectorAll<HTMLElement>(".grid-head");
+  const rows = container.querySelectorAll<HTMLElement>(".grid-row");
+  expect(heads).toHaveLength(1);
+  expect(rows.length).toBeGreaterThan(1);
+  for (const el of [...heads, ...rows]) expect(el.style.gridTemplateColumns).toBe("");
+});
+
 test("one keystroke activates one grid, not every grid on the screen", () => {
   const seen: string[] = [];
   twoGrids(seen);
