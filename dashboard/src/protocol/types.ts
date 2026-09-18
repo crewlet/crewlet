@@ -2395,6 +2395,23 @@ export interface WorkLink {
  *  `estimate_minutes` on a task. Inheriting them made the compiler promise
  *  fields the server never sends — which is how a Blocked badge that renders
  *  on the board silently never renders on the item it links to. */
+/** Who removed a task, when, and what removed it alongside.
+ *
+ *  A REMOVAL IS REVERSIBLE AT ANY AGE — `restore_work_item` takes it back and
+ *  there is no window — so this is a state the task is in rather than the end
+ *  of its record. `removed_with` names the parent whose removal took this one
+ *  with it, which is what tells a task somebody deleted from one that went
+ *  with its container. */
+export interface WorkTombstone {
+  by: string;
+  /** `agent`, `human` or `operator`, as every other authored row on this
+   *  wire spells it — a plain string, because an unknown value off a newer
+   *  build must decode rather than throw. */
+  kind?: string;
+  at: string;
+  removed_with?: string;
+}
+
 export interface WorkItem {
   id: string;
   key: string;
@@ -2428,6 +2445,12 @@ export interface WorkItem {
   estimate_minutes?: number;
   points?: number;
   archived?: boolean;
+  /** PRESENT ONLY WHEN THE TASK IS IN THE TRASH. The detail read does not
+   *  filter removed tasks, so a removed task's page resolves and answers
+   *  exactly like a live one's — this field is what tells the screen which it
+   *  is looking at. NOT on the row: the listing's SELECT does not read the
+   *  tombstone, so a summary never carries one. */
+  removed?: WorkTombstone;
   /** The item's own hand-off budget, spent by an agent reassigning it and
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */

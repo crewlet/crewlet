@@ -54,6 +54,14 @@ export interface Subject {
    * against what it holds.
    */
   version?: number;
+  /**
+   * The object is in the trash.
+   *
+   * It changes which call is offered rather than whether one is: "take it off
+   * the board" for something already off the board is the one call in this
+   * table that cannot do anything, and it sat where the restore belongs.
+   */
+  removed?: boolean;
 }
 
 /**
@@ -72,6 +80,24 @@ export function callsFor(subject: Subject): ToolCall[] {
   if (!id) return [];
   switch (kind) {
     case "item":
+      // A TASK IN THE TRASH IS OFFERED THE WAY BACK, not the way out. The
+      // removal is reversible at any age and there is no window, so the
+      // restore is the ordinary call for this state and nothing here is
+      // destructive: it is the live task's removal that is.
+      if (subject.removed) {
+        return [
+          {
+            tool: "restore_work_item",
+            label: "Bring it back from the trash",
+            args: { item: id },
+          },
+          {
+            tool: "comment_on_work_item",
+            label: "Say something on it",
+            args: { item: id, body: "…" },
+          },
+        ];
+      }
       return [
         {
           tool: "update_work_item",

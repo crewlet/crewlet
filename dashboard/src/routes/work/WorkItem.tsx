@@ -37,8 +37,9 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Card, EmptyState, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import { Callout, Card, EmptyState, InlineCode, Skeleton, Tabs, Tag } from "@crewlethq/ui";
 import {
+  DeleteGlyph,
   ArrowForwardGlyph,
   CheckGlyph,
   ChatGlyph,
@@ -86,6 +87,7 @@ import type {
   WorkProjectDetail,
   WorkRoutingAnswer,
   WorkSummary,
+  WorkTombstone,
 } from "~/protocol/index.ts";
 
 /**
@@ -127,11 +129,18 @@ function linkHeading(link: WorkLink): string {
  * its gap in the header row: an ordinary task would sit with a hole beside its
  * title where a state it is not in would have been.
  */
-function itemFlags(detail: WorkItemDetail): ReactNode {
+export function itemFlags(detail: WorkItemDetail): ReactNode {
   const item = detail.task;
-  if (!detail.blocked && !item.archived) return undefined;
+  if (!detail.blocked && !item.archived && !item.removed) return undefined;
   return (
     <span className="row gap-1">
+      {/* IN THE TRASH, AND SAID FIRST. The detail read does not filter removed
+          tasks, so a removed task's page resolves and answers exactly like a
+          live one's — and the wire has always carried the tombstone while this
+          screen had no field for it, so a task somebody deleted rendered as an
+          ordinary open task. A reader could comment on it, wonder why it was
+          on no board, and never be told. */}
+      {item.removed && <Tag variant="danger">In the trash</Tag>}
       {detail.blocked && (
         <Tag variant="danger" appearance="outline">
           Blocked
@@ -139,6 +148,37 @@ function itemFlags(detail: WorkItemDetail): ReactNode {
       )}
       {item.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
+  );
+}
+
+/**
+ * The removal, said in full where the reader is about to act on the task.
+ *
+ * A TAG IN THE HEADER SAYS WHICH STATE; this says who, when, and whether the
+ * task went on its own or with its container — `removed_with` names the
+ * parent whose removal took this one along, which is the difference between
+ * somebody deleting this task and somebody deleting the epic above it.
+ *
+ * AND IT SAYS THE REMOVAL IS REVERSIBLE, because that is the fact that decides
+ * what a reader does next: there is no window and nothing is destroyed, so
+ * this is a state rather than the end of the record.
+ */
+export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number }) {
+  return (
+    <Callout variant="warning" icon={<DeleteGlyph size="md" />}>
+      <span>
+        <strong>This is in the trash.</strong> {tomb.by || "somebody"}
+        {tomb.kind ? ` (${tomb.kind})` : ""} removed it {relTime(tomb.at, now)}
+        {tomb.removed_with ? (
+          <>
+            {" "}
+            along with <InlineCode>{tomb.removed_with}</InlineCode>
+          </>
+        ) : null}
+        . Removal is reversible at any age — nothing is destroyed, and the call below brings it
+        back.
+      </span>
+    </Callout>
   );
 }
 
@@ -332,6 +372,7 @@ export function WorkItem({ id }: { id: string }) {
               status={itemFlags(state.data)}
               facts={itemFacts({ detail: state.data, chrome, now })}
             />
+            {item.removed && <RemovedNote tomb={item.removed} now={now} />}
             <Coverage answer={state.data} />
             <div className="work-item">
               <div className="work-item-main">
@@ -428,6 +469,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 facts={itemFacts({ detail: state.data, chrome: inner, now })}
               />
               <div className="col gap-3">
+                {item.removed && <RemovedNote tomb={item.removed} now={now} />}
                 <Coverage answer={state.data} />
                 <ItemProps detail={state.data} chrome={inner} project={project.data} compact />
                 <ItemLinks detail={state.data} chrome={inner} flush />
@@ -700,7 +742,10 @@ export function ItemBody({
       {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
           it is what to do when somebody wants to change this, not what the
           screen is about. */}
-      <ToolCallBlock subject={{ kind: "item", id: detail.task.key }} viewer={viewer.handle} />
+      <ToolCallBlock
+        subject={{ kind: "item", id: detail.task.key, removed: Boolean(detail.task.removed) }}
+        viewer={viewer.handle}
+      />
     </>
   );
 }

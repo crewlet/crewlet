@@ -73,3 +73,30 @@ test("anything destructive is last and says so", () => {
   // disclosure.
   expect(calls[calls.length - 1]?.destructive).toBe(true);
 });
+
+// A TASK IN THE TRASH IS OFFERED THE WAY BACK, NOT THE WAY OUT.
+//
+// The item arm offered `remove_work_item` unconditionally, so a task already
+// in the trash was offered the one call in this table that cannot do anything
+// to it — and the call that CAN, `restore_work_item`, appeared nowhere at all
+// despite being a real operator tool. The screen's whole promise is that the
+// block is what to send.
+test("a removed item offers the restore instead of the removal", () => {
+  const calls = callsFor({ kind: "item", id: "ENG-42", removed: true });
+  const names = calls.map((c) => c.tool);
+  expect(names).toContain("restore_work_item");
+  expect(names).not.toContain("remove_work_item");
+  // AND NOTHING HERE IS DESTRUCTIVE. Restoring is the ordinary call for this
+  // state; it is the live task's removal that carries the warning.
+  expect(calls.some((c) => c.destructive)).toBe(false);
+});
+
+// AND A LIVE ONE IS UNCHANGED, which is the half that proves the branch is a
+// branch rather than a replacement.
+test("a live item still offers the removal, last and marked", () => {
+  const calls = callsFor({ kind: "item", id: "ENG-42" });
+  const names = calls.map((c) => c.tool);
+  expect(names).toContain("remove_work_item");
+  expect(names).not.toContain("restore_work_item");
+  expect(calls[calls.length - 1]?.destructive).toBe(true);
+});

@@ -10,6 +10,8 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import {
+  RemovedNote,
+  itemFlags,
   ItemBody,
   ItemLinks,
   ItemPeek,
@@ -477,4 +479,52 @@ test("the description keeps its own DOM across a clock tick", async () => {
   const before = container.querySelector(".prose");
   rerender(body(NOW + 1000));
   expect(container.querySelector(".prose")).toBe(before);
+});
+
+// A TASK IN THE TRASH IS SAID TO BE IN THE TRASH.
+//
+// The detail read does not filter removed tasks, so a removed task's page
+// resolves and answers exactly like a live one's — and the wire has always
+// carried the tombstone while the client type had no field for it. A task
+// somebody deleted rendered as an ordinary open task: a reader could comment
+// on it, wonder why it was on no board, and never be told.
+test("a removed task is marked, and a live one carries no such mark", () => {
+  const { container } = render(
+    <>
+      {itemFlags(
+        detail({
+          task: task({ removed: { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" } }),
+        }),
+      )}
+    </>,
+  );
+  expect(container.textContent).toContain("In the trash");
+
+  cleanup();
+  const live = render(<>{itemFlags(detail())}</>);
+  expect(live.container.textContent ?? "").not.toContain("In the trash");
+});
+
+// AND THE NOTE SAYS WHO, WHEN, AND THAT IT CAN BE UNDONE — the last being the
+// fact that decides what a reader does next. A removal is reversible at any
+// age and nothing is destroyed, so this is a state rather than the end of the
+// record.
+test("the removal note names its author and says it is reversible", () => {
+  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
+  expect(screen.getByText(/ada/)).toBeTruthy();
+  expect(screen.getByText(/reversible at any age/)).toBeTruthy();
+});
+
+// A TASK THAT WENT WITH ITS CONTAINER SAYS SO. `removed_with` names the parent
+// whose removal took this one along, which is the difference between somebody
+// deleting this task and somebody deleting the epic above it — and it decides
+// whether restoring this one alone is even the right move.
+test("a task removed alongside its parent names the parent", () => {
+  render(
+    <RemovedNote
+      tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z", removed_with: "ENG-1" }}
+      now={NOW}
+    />,
+  );
+  expect(screen.getByText("ENG-1")).toBeTruthy();
 });
