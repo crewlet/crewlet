@@ -501,9 +501,11 @@ function EngineFooter({
         {/* The dot is the shape half and the word beside it is the state —
             which is exactly StatusDot's contract, so it is `aria-hidden` and
             a screen reader reads the word once rather than twice. */}
-        <StatusDot tone={tone} />
+        <span className="rail-engine-marks">
+          <StatusDot tone={tone} />
+          {inFlight > 0 && <span className="t-num">{inFlight}</span>}
+        </span>
         {!collapsed && <span className="truncate">{word}</span>}
-        {inFlight > 0 && <span className="t-num">{inFlight}</span>}
       </a>
       {!collapsed && (
         <>

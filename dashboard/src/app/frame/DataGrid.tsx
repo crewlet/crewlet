@@ -396,21 +396,25 @@ export function DataGrid<T>({
       <div className="grid-head" style={{ gridTemplateColumns: template }} role="row">
         {shownColumns.map((column) => {
           const sorted = sort?.key === column.key;
-          return (
-            <button
-              key={column.key}
-              type="button"
-              className={cx(
-                "grid-th",
-                column.align === "right" && "right",
-                column.shrink && "shrink",
-                sorted && "sorted",
-                !column.sortValue && "plain",
-              )}
-              onClick={() => headerClick(column)}
-              aria-sort={sorted ? (sort?.desc ? "descending" : "ascending") : undefined}
-              disabled={!column.sortValue}
-            >
+          const className = cx(
+            "grid-th",
+            column.align === "right" && "right",
+            column.shrink && "shrink",
+            sorted && "sorted",
+            !column.sortValue && "plain",
+          );
+          // A COLUMN THAT CANNOT BE SORTED IS NOT A BUTTON.
+          //
+          // Every head used to be one, `disabled` where there was no order to
+          // ask for — which is the right BEHAVIOUR and the wrong element. A
+          // disabled button is still a button in the accessibility tree, so
+          // the heads whose label is a glyph or nothing at all (a type mark, a
+          // row action) were announced as "button" with no name, and a reader
+          // on a screen reader met one unnamed control per such column per
+          // grid. `role="columnheader"` is what those cells are; the sortable
+          // ones stay buttons, because a button is what they are.
+          const body = (
+            <>
               <span className="truncate">{column.header}</span>
               {sorted &&
                 (sort?.desc ? (
@@ -418,6 +422,24 @@ export function DataGrid<T>({
                 ) : (
                   <KeyboardArrowUpGlyph size="xs" />
                 ))}
+            </>
+          );
+          if (!column.sortValue) {
+            return (
+              <div key={column.key} className={className} role="columnheader">
+                {body}
+              </div>
+            );
+          }
+          return (
+            <button
+              key={column.key}
+              type="button"
+              className={className}
+              onClick={() => headerClick(column)}
+              aria-sort={sorted ? (sort?.desc ? "descending" : "ascending") : undefined}
+            >
+              {body}
             </button>
           );
         })}

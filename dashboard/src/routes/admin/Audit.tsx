@@ -56,7 +56,7 @@ import { useNow } from "~/lib/clock.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
-import type { SecretRow } from "~/protocol/index.ts";
+import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
  * The window this screen offers.
@@ -125,6 +125,56 @@ export interface AuditEntry {
   path?: string[];
   /** The one line that says what actually changed. */
   detail: string;
+}
+
+/**
+ * WHAT A TRACKER COMMIT WAS ABOUT, as a person would name it.
+ *
+ * A FEED OF UUIDS IS A FEED NOBODY READS, which is the tracker's own rule
+ * about its own history — and this screen broke it the moment it showed
+ * anything but a task. A task carries a key and a project and a person carry
+ * their own names, so those three read fine; a GOAL and a SAVED VIEW are
+ * addressed by uuid, so five rows in a row read `6dd4b0df-f455-448e-80e9-…`
+ * with nothing saying what they were.
+ *
+ * So a subject with no key is named by its KIND and linked to the page that
+ * holds it, with the id shortened to the part a person would actually use to
+ * tell two apart. The id is kept because it is what a reader pastes into a
+ * tool call; it is not what they read the row by.
+ */
+function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "path"> {
+  const kind = record.subject_kind;
+  const id = record.subject_id;
+  if (record.subject_key) {
+    return {
+      subject: record.subject_key,
+      // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
+      // the only evidence it existed, so a link here would be a NotFound on
+      // the one row a reader most wants to follow.
+      path: record.kind === "purged" ? undefined : ["work", record.subject_key],
+    };
+  }
+  switch (kind) {
+    case "goal":
+      return { subject: `goal ${short(id)}`, path: ["goals", id] };
+    case "view":
+      return { subject: `view ${short(id)}`, path: ["work", "views", id] };
+    case "person":
+      return { subject: id, path: ["company", "people", id] };
+    case "project":
+      return { subject: id, path: ["work", id] };
+    default:
+      // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
+      // tag set, a sprint, an alias. Named by its kind rather than linked,
+      // because a link to a screen the product does not have is worse than
+      // none: the row still says what was changed.
+      return { subject: kind ? `${kind} ${short(id)}` : short(id) };
+  }
+}
+
+/** The leading segment of a uuid, which is what tells two of them apart. */
+function short(id: string): string {
+  return id.length > 8 && id.includes("-") ? id.slice(0, 8) : id;
 }
 
 /**
@@ -202,14 +252,7 @@ export function Audit() {
         kind: record.kind,
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
-        subject: record.subject_key || record.subject_id,
-        // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
-        // the only evidence it existed, so a link here would be a NotFound on
-        // the one row a reader most wants to follow.
-        path:
-          record.kind === "purged" || !record.subject_key
-            ? undefined
-            : ["work", record.subject_key],
+        ...workSubject(record),
         detail: record.excerpt ?? "",
       });
     }

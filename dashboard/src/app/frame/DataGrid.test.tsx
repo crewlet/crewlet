@@ -172,3 +172,44 @@ test("the grid the reader last touched is the one the keyboard drives", () => {
   // assertion would pass on a second row it never touched.
   expect(seen).toEqual(["lower:two"]);
 });
+
+// A COLUMN HEAD WITH NO ORDER TO ASK FOR IS NOT A BUTTON.
+//
+// Every head used to be one, `disabled` where the column had no `sortValue`.
+// That is the right BEHAVIOUR — the click does nothing — and the wrong
+// element: a disabled button is still a button in the accessibility tree, so
+// the heads whose label is a glyph or nothing at all (a type mark, a row's
+// restore action) were announced as "button" with no name. Every grid in the
+// product that carries such a column shipped one unnamed control per column.
+//
+// ASSERTED THROUGH THE ROLES, because the failure is an accessibility-tree
+// shape: a `<button disabled>` with an empty label is perfectly good React and
+// perfectly good CSS, and it is invisible in a screenshot.
+test("only a sortable column head is a button, and every button is named", () => {
+  render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", sortValue: (r) => r.id, cell: (r) => r.id },
+          // The two shapes that had no name: a glyph column and an action
+          // column, both headed by nothing.
+          { key: "mark", header: "", cell: () => <span>·</span> },
+          { key: "who", header: "Who", cell: (r) => r.who },
+        ]}
+      />
+    </Router>,
+  );
+
+  const heads = screen.getAllByRole("columnheader");
+  const buttons = screen.getAllByRole("button");
+  // ONE BUTTON, and it is the sortable column.
+  expect(buttons.map((b) => (b.textContent ?? "").trim())).toEqual(["Id"]);
+  // AND THE OTHER TWO ARE STILL COLUMN HEADS, rather than being dropped: the
+  // fix must not take the heading out of the tree along with the button.
+  expect(heads.length).toBe(2);
+  for (const button of buttons) {
+    expect((button.getAttribute("aria-label") ?? button.textContent ?? "").trim()).not.toBe("");
+  }
+});

@@ -975,17 +975,35 @@
 
 /* ---- The rail's engine pill ---------------------------------------------- */
 
+/* THE PILL STACKS, exactly as `.rail-row` above does, and for the same
+   reason: the rail is 68px wide and this row carries a dot, a word and an
+   in-flight count side by side. "connected" needs about 52px at `--fs-3xs`,
+   which with the dot, the count, two gaps and the padding does not fit — so
+   `.truncate` cut the one word in the chrome that says whether the engine is
+   reachable down to "co…", permanently, on every screen. A status indicator
+   nobody can read is a status indicator that is not there.
+
+   The dot and the count share the first line because they are both marks; the
+   word takes the second, where it has the rail's whole width. */
 .rail-engine {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   width: 100%;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) 2px;
   border-radius: var(--r-sm);
   color: var(--text-muted);
   text-decoration: none;
   font-size: var(--fs-3xs);
   min-width: 0;
+}
+
+/* The marks, on one line above the word. */
+.rail-engine-marks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .rail-engine:hover {
