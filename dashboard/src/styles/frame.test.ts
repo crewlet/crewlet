@@ -327,6 +327,53 @@ describe("the frame's layout", () => {
     expect(row).toMatch(/min-width:\s*100%/);
   });
 
+  // A RESET DOES NOT TAKE THE FOCUS RING WITH IT.
+  //
+  // `all: unset` is how a <button> becomes a plain box, and `all` is every
+  // property — `outline` among them. So each of these rules sets
+  // `outline-style: none`, and `base.css`'s `:focus-visible` then loses a TIE
+  // rather than a fight: one pseudo-class against one class is the same
+  // specificity, and frame.css is imported second. The same failure the
+  // comment above that `:focus-visible` already describes for the design
+  // system's components — visible to somebody using the keyboard and to
+  // nobody else.
+  //
+  // Measured with a tab walk against a running engine: the rail's collapse
+  // control took focus with no ring on EVERY screen in the product, and the
+  // sidebar's twist on every screen that has a tree.
+  //
+  // TWO-SIDED, because the list is the whole mechanism: a sixth `all: unset`
+  // nobody adds here is a control that silently loses its ring, and a name
+  // here whose reset is gone is a rule nobody will notice has died.
+  test("every control that resets itself gets its focus ring back", () => {
+    const css = sheet("frame.css");
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    const reset = new Set<string>();
+    for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/\ball:\s*unset/.test(m[2]!)) continue;
+      for (const one of m[1]!.split(",")) reset.add(one.trim());
+    }
+    expect(reset.size, "nothing in this sheet resets itself any more").toBeGreaterThan(3);
+
+    // The one rule that hands the ring back, and what it hands back.
+    const ring = new Set<string>();
+    for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/outline:\s*2px solid var\(--focus\)/.test(m[2]!)) continue;
+      expect(m[2]!, "an offset ring is what the baseline draws").toMatch(/outline-offset:/);
+      for (const one of m[1]!.split(",")) ring.add(one.trim().replace(/:focus-visible$/, ""));
+    }
+
+    expect(
+      [...reset].filter((sel) => !ring.has(sel)),
+      "these reset their outline away and never get it back",
+    ).toEqual([]);
+    expect(
+      [...ring].filter((sel) => !reset.has(sel)),
+      "these are named as needing the ring back but no longer reset it",
+    ).toEqual([]);
+  });
+
   // A DISCLOSURE HEAD WRAPS, which is rule 15 of the design doc.
   //
   // A phase's head is up to fifteen items — the phase tag, the iteration, a

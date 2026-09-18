@@ -111,6 +111,39 @@
   }
 }
 
+/* ---- The reset does not take the focus ring with it ----------------------
+   `all: unset` is how a <button> becomes a plain box, and this file reaches for
+   it five times: the rail's collapse control, the sidebar's twist, a grid's
+   sortable column head, its more-row and a histogram bar. `all` is every
+   property, `outline` among them — so each of those rules sets
+   `outline-style: none` on the element.
+
+   THE RING THEN LOSES A TIE RATHER THAN A FIGHT, which is why nothing about
+   this looks wrong in the file. `base.css`'s `:focus-visible` is one
+   pseudo-class, specificity (0,1,0); `.rail-collapse` is one class, the same
+   (0,1,0). Frame.css is imported after base.css, so the later rule wins and
+   the ring is gone. It is the SAME failure the comment above that
+   `:focus-visible` describes for the design system's components — a tie
+   decided by import order, visible to somebody using the keyboard and to
+   nobody else.
+
+   Measured with a tab walk against a running engine: the rail's collapse
+   control took focus with no ring on every screen in the product, and the
+   sidebar's twist on every screen that has a tree.
+
+   ONE RULE RATHER THAN FIVE, and it states nothing the baseline does not —
+   it re-states exactly what `base.css` says, at a specificity the reset cannot
+   out-rank. `styles/frame.test.ts` holds the two lists together: a sixth
+   `all: unset` that is not named here fails the build. */
+.rail-collapse:focus-visible,
+.side-twist:focus-visible,
+.grid-th:focus-visible,
+.grid-cols-reset:focus-visible,
+.histogram-bar:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* ---- The global rail ---------------------------------------------------- */
 
 .rail {
