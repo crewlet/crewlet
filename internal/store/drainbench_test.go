@@ -269,21 +269,32 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 }
 
 // A FOREIGN COMMIT NEVER ABORTS AN APPLIER TRANSACTION, which is the fact the
-// applier's whole occupancy model rests on and the one this repository could
-// not previously answer.
+// applier's whole occupancy model rests on.
 //
-// It is a test as well as a benchmark because the answer is an INVARIANT
-// rather than a magnitude: if a driver bump made this driver's conflict
-// detection database-level, every apply under load would burn its eight
-// attempts and fail the batch — and the symptom would be a fleet that stops
-// applying exactly when it is busiest, with nothing naming the cause.
+// # What makes it true, and what it used to rest on
 //
-// SLOWING IS NOT ABORTING, and the two are what this separates. A writer
-// sharing the applier's file still commits while the applier's transaction is
-// open — a hundred or so times, in the runs this logs — but far more slowly
-// than the same writer against the other estate, which the benchmark above
-// prices. The slowdown is what the two-file split removes; a RETRY is what
-// would have broken the design, and it does not happen.
+// It is true BY CONSTRUCTION now, and it was not when this test was written.
+// The driver's own BeginTx discards its options and issues a plain, DEFERRED
+// begin, under which a read-then-write is aborted by any commit landing
+// anywhere in the file between the read and the write — and the applier reads
+// its rows, decides, then writes. So this assertion was a hope, and it failed
+// twice in CI on the two slowest runners the suite has seen, reporting
+// "attempts != 1" with no way to say which of three causes had fired.
+//
+// internal/store/begin.go is what changed: a write transaction takes the lock
+// at BEGIN, so nobody else's commit can land in that window at all. An
+// applier that loses the race now loses it HAVING DONE NOTHING and waits,
+// rather than discovering the loss at its first write and replaying four
+// thousand rows.
+//
+// SLOWING IS NOT ABORTING, and the two are still what this separates. A
+// writer sharing the applier's file commits far more slowly than the same
+// writer against the other estate, which the benchmark above prices. The
+// slowdown is what the two-file split removes; a RETRY is what would break
+// the design, and the begin mode is why it does not happen.
+//
+// It remains a test as well as a benchmark: a driver that gained MVCC, or a
+// begin mode that stopped being applied, would show up here first.
 func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs a 4 000-row apply against a concurrent writer")
@@ -340,9 +351,12 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Errorf("the applier's transaction ran %d times against a writer that "+
-			"committed %d times to a table it never touches: this driver aborts "+
-			"a write transaction because of commits elsewhere in the file, and "+
-			"every apply under load will burn its retry budget",
+			"committed %d times to a table it never touches.\n"+
+			"\tthe begin mode (internal/store/begin.go) takes the write lock at "+
+			"BEGIN, so the only ways to reach a second attempt are a lock wait "+
+			"that outlasted the busy timeout or a begin mode that is no longer "+
+			"being applied — check the store_tx_retry WARN's cause field, which "+
+			"names which",
 			attempts, foreign.Load())
 	}
 	t.Logf("%d foreign commit(s) in total, %d of them while the applier's "+

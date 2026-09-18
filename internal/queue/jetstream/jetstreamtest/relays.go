@@ -1,6 +1,7 @@
 package jetstreamtest
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -41,7 +42,10 @@ type Relays struct {
 // It reserves all three port sets TOGETHER, for the reason [freePorts] gives:
 // taking them one at a time can hand out the same number twice, and the
 // collision does not surface until a member silently forms no route.
-func StartRelays(t *testing.T, n int) *Relays {
+// ctx BOUNDS THE MESH START, and a caller inside its own retry loop passes
+// that loop's attempt context: see [withFreshPorts] for why a nested budget
+// must share the outer one rather than stack beside it.
+func StartRelays(ctx context.Context, t *testing.T, n int) *Relays {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("StartRelays(%d): a partition needs at least two members, or "+
@@ -59,8 +63,8 @@ func StartRelays(t *testing.T, n int) *Relays {
 	// The classification it needs lives at the bind itself now, in
 	// [listenErr], which is the only place that can tell those apart.
 	var mesh *Relays
-	withFreshPorts(t, "relay mesh", func() (*Cluster, error) {
-		r, err := startRelaysOnce(t, n)
+	withFreshPorts(ctx, t, "relay mesh", func(ctx context.Context) (*Cluster, error) {
+		r, err := startRelaysOnce(ctx, t, n)
 		mesh = r
 		return r.c, err
 	})
@@ -73,9 +77,9 @@ func StartRelays(t *testing.T, n int) *Relays {
 // [StartCluster]'s factory gives: the relays that DID bind hold their
 // listeners until the test ends, and [withFreshPorts] is what takes them down
 // between attempts. Only the embedded cluster is meaningful on an error.
-func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
+func startRelaysOnce(ctx context.Context, t *testing.T, n int) (*Relays, error) {
 	t.Helper()
-	ports := freePorts(t, n+n*(n-1)+n)
+	ports := freePorts(ctx, t, n+n*(n-1)+n)
 	routePorts, relayPorts, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
 	c := &Cluster{}
@@ -97,7 +101,15 @@ func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 	// fails and the route is retried, which is the ordinary case NATS
 	// already handles.
 	for _, f := range c.forwarders {
-		if err := f.start(t.Context()); err != nil {
+		// ON WithoutCancel: a forwarder is a LISTENER that serves for
+		// the whole case, while ctx ends when the bring-up does.
+		// Bound to the attempt it was torn down the instant the attempt
+		// succeeded, so every member came up into a mesh whose relays
+		// were already cut — measured as
+		// TestAPartitionedMemberIsSilentRatherThanSlow failing all four
+		// attempts on "routed to [] (want 1 peers)". The values are
+		// inherited; only the cancellation is not.
+		if err := f.start(context.WithoutCancel(ctx)); err != nil {
 			// RETURNED, NOT FATAL. A relay listener loses its port to
 			// the same race a member's does — this reserves n(n-1)+2n
 			// of them, so it loses MORE often — and the retry above
@@ -134,12 +146,13 @@ func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 //
 // So a case that partitions takes [StartRelays] and pays for it. Everything
 // else takes this.
-func StartDirectMesh(t *testing.T, n int) *Relays {
+// ctx bounds the port reservation, for [StartRelays]'s reason.
+func StartDirectMesh(ctx context.Context, t *testing.T, n int) *Relays {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("StartDirectMesh(%d): use one member's own config for a solo node", n)
 	}
-	return &Relays{ports: freePorts(t, n), direct: true}
+	return &Relays{ports: freePorts(ctx, t, n), direct: true}
 }
 
 // Stop releases everything this mesh holds — the relay listeners, and with
@@ -150,7 +163,7 @@ func StartDirectMesh(t *testing.T, n int) *Relays {
 // A harness that RETRIES a cluster start has to reserve fresh ports for each
 // attempt, because the whole reason an attempt lost is that somebody else took
 // a number this one was given, and asking for the same number again is asking
-// for the same answer (see [clusterStartAttempts], whose remedy is explicitly
+// for the same answer (see [ClusterStartAttempts], whose remedy is explicitly
 // "trying again with different numbers"). A mesh per attempt means the failed
 // attempt's relays have to go down when that attempt does — `t.Cleanup` runs
 // when the TEST ends, which is after every attempt, so it is the wrong moment

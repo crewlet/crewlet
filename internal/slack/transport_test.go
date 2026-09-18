@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -122,18 +123,13 @@ func (w *workspace) lastBody(method string) map[string]any {
 // The API base is a package constant, so the fake is reached by giving the
 // transport an http.Client whose RoundTripper rewrites the host — which is
 // also what proves the client builds the right PATH for each method.
-func rewriting(target string) *http.Client {
-	return &http.Client{Timeout: 5 * time.Second, Transport: rewriteHost(target)}
-}
-
-type rewriteHost string
-
-func (r rewriteHost) RoundTrip(req *http.Request) (*http.Response, error) {
-	rewritten := req.Clone(req.Context())
-	base := strings.TrimPrefix(string(r), "http://")
-	rewritten.URL.Scheme = "http"
-	rewritten.URL.Host = base
-	return http.DefaultTransport.RoundTrip(rewritten)
+//
+// IT TAKES THE SERVER, not its URL, so the pool it uses is that server's own:
+// see [httpxtest] for what sharing the process-global one costs a package
+// whose tests run in parallel, which this one's emphatically do.
+func rewriting(t *testing.T, ws *workspace) *http.Client {
+	t.Helper()
+	return &http.Client{Timeout: 5 * time.Second, Transport: httpxtest.Rewrite(t, ws.Server)}
 }
 
 func transport(t *testing.T, ws *workspace, mutate func(*slack.TransportOptions)) *slack.Transport {
@@ -144,7 +140,7 @@ func transport(t *testing.T, ws *workspace, mutate func(*slack.TransportOptions)
 			Seats:  []slack.SeatConfig{{Handle: "swe", Token: "xoxb-swe"}},
 		},
 		Follows: newFollows(),
-		HTTP:    rewriting(ws.URL),
+		HTTP:    rewriting(t, ws),
 		Now:     func() time.Time { return pinned },
 	}
 	if mutate != nil {

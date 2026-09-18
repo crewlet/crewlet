@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -352,6 +353,11 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	status := func(method, path string) int {
 		t.Helper()
+		// A POOL OF THIS TEST'S OWN rather than http.DefaultClient's: this
+		// binary holds eight httptest servers and over a hundred parallel
+		// tests, and every one of their cleanups sweeps the shared pool —
+		// see [github.com/crewlet/crewlet/internal/httpx/httpxtest].
+		probe := httpxtest.Pool(t)
 		deadline := time.Now().Add(10 * time.Second)
 		for {
 			req, reqErr := http.NewRequestWithContext(t.Context(), method, base+path,
@@ -359,7 +365,7 @@ func TestASeatsNodeWithoutIngressServesOnlyItsToolBridge(t *testing.T) {
 			if reqErr != nil {
 				t.Fatal(reqErr)
 			}
-			res, doErr := http.DefaultClient.Do(req)
+			res, doErr := probe.Do(req)
 			if doErr == nil {
 				_ = res.Body.Close()
 				return res.StatusCode
@@ -508,9 +514,11 @@ func freePort(t *testing.T) int {
 
 func getJSON(t *testing.T, url string) map[string]any {
 	t.Helper()
+	// Its own pool, for [httpxtest]'s reason.
+	probe := httpxtest.Pool(t)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := http.Get(url) //nolint:noctx // a test against its own listener
+		res, err := probe.Get(url) //nolint:noctx // a test against its own listener
 		if err != nil {
 			time.Sleep(20 * time.Millisecond)
 			continue

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // region is a Datadog a client can be run against.
@@ -48,27 +49,12 @@ func (reg *region) client(t *testing.T) *datadog.Client {
 	// out rather than by teaching the client about test servers.
 	c, err := datadog.NewClient(datadog.ClientOptions{
 		Site: "datadoghq.com",
-		HTTP: &http.Client{Transport: rewriteHost{to: reg.Listener.Addr().String()}},
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, reg.Server)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
-}
-
-type rewriteHost struct {
-	to   string
-	next http.RoundTripper
-}
-
-func (r rewriteHost) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.URL.Scheme = "http"
-	req.URL.Host = r.to
-	next := r.next
-	if next == nil {
-		next = http.DefaultTransport
-	}
-	return next.RoundTrip(req)
 }
 
 const creds = "api-key/app-key"

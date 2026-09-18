@@ -26,6 +26,8 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 func TestMain(m *testing.M) {
@@ -258,7 +260,12 @@ func (c *countingTransport) count() int {
 func TestASuppliedHTTPClientIsTheOneUsed(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("hi")) })
-	counter := &countingTransport{inner: &http.Client{}}
+	// A POOL OF ITS OWN, not the nil-Transport default: an
+	// &http.Client{} is http.DefaultTransport under another spelling,
+	// and every httptest.Server.Close in this binary sweeps it — see
+	// [github.com/crewlet/crewlet/internal/httpx/httpxtest]. This
+	// package's own comment already records that flake biting it once.
+	counter := &countingTransport{inner: httpxtest.Pool(t)}
 	p := newProvider(t, url, func(c *Config) { c.HTTPClient = counter })
 	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
 		t.Fatalf("Complete: %v", err)

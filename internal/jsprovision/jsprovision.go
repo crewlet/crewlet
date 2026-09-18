@@ -143,11 +143,22 @@ func SequenceBudget(clustered bool) time.Duration {
 //
 // A ceiling rather than one request's deadline, because an unanswered lookup
 // is re-issued like any other metadata request: the reply is usually destroyed
-// rather than late, and [Ask] carries the server's own three drop paths. Two
-// attempts at [AskTerm]'s clustered fifteen seconds plus the [ReAsk] second
-// between them is thirty-one, so thirty buys a full second attempt against a
-// group that has had a complete election (maxElectionTimeout is 9s) to produce
-// the leader the first attempt was missing.
+// rather than late, and [Ask] carries the server's own three drop paths.
+//
+// THE SECOND ATTEMPT IS DELIBERATELY TRUNCATED, and the arithmetic says so
+// rather than rounding it away. A full first attempt at [AskTerm]'s clustered
+// fifteen seconds plus the [ReAsk] second between them leaves FOURTEEN of the
+// thirty for the second, not another fifteen. Fourteen is still past both
+// numbers the term is anchored to — maxElectionTimeout is 9s and
+// lostQuorumInterval is 10s — so the second attempt still spans a complete
+// election and still outlasts the point at which a leaderless group starts
+// answering. It buys everything a full term would; it is one second short of
+// symmetric, which is a property of the ceiling and not a defect in it.
+//
+// Thirty-one would make the two attempts equal and buy nothing: what the
+// second attempt needs is to reach a group that has settled, and it does that
+// at fourteen. A round ceiling that states its own truncation is better than
+// an odd one chosen to hide it.
 //
 // A third attempt would add no evidence. What changes between attempts is
 // which member holds the metadata group, and that is settled within one

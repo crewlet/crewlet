@@ -259,19 +259,22 @@ func (o *Onboarding) Mark(ctx context.Context, m Marker, at time.Time) error {
 // re-reading the same pages and writing the same conventions — and not
 // running one costs a turn.
 //
-// The claim is ONE statement, and that is a decision about what the LOSER is
-// told. A read-then-write inside store.Tx is not unsafe — store.Tx begins
-// DEFERRED, both claimants take their snapshot before either writes, and the
-// second commit is refused rather than silently overwriting the first
-// (measured, TestWhyTheClaimIsOneStatement: turso answers "database snapshot
-// is stale"). But the loser
-// learns it lost through an ERROR, and an error is the one thing this package
-// keeps distinct from a definite answer. Both shapes skip the pass, so the
-// difference never surfaces as a duplicate onboarding; it surfaces as a store
-// that looks broken every time two turns race one seat. The conditional
-// upsert evaluates its predicate under the write lock instead, so the loser
-// gets (Pass{}, nil) — definitely somebody else's — and an error keeps
-// meaning what it means everywhere else here.
+// The claim is ONE statement, and what that decision is about has changed
+// once already — so it is worth stating why it still holds. It used to be
+// about what the LOSER is told: store.Tx began DEFERRED, both claimants took
+// their snapshot before either wrote, and the loser learned it lost through
+// an ERROR, which is the one thing this package keeps distinct from a
+// definite answer. internal/store/begin.go removed that: a write transaction
+// takes the lock at BEGIN, so claimants serialise and the loser's read simply
+// sees the winner's lease.
+//
+// What the single statement buys now is the LOCK HOLD. A read-then-write
+// claim is correct, but it holds the database's one write lock across its
+// read, its decision and its write, for every claimant in the queue — on a
+// store whose write lock excludes every table in the file. The conditional
+// upsert evaluates the same predicate under that lock in one statement, so
+// the loser still gets (Pass{}, nil) — definitely somebody else's — without
+// the queue behind it paying a round trip each.
 //
 // A claim for a never-marked seat INSERTS the row with an empty chain_hash,
 // which Onboarded reads correctly as "not onboarded" — the lease and the

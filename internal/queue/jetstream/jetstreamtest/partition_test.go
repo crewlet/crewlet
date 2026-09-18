@@ -266,10 +266,10 @@ func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
 	var startedPort, attempts int
 	freeOnRetry := false
 
-	c := withFreshPorts(t, "partial-teardown probe", func() (*Cluster, error) {
+	c := withFreshPorts(t.Context(), t, "partial-teardown probe", func(ctx context.Context) (*Cluster, error) {
 		attempts++
 		if attempts > 1 {
-			free, err := PortFree(t.Context(), "127.0.0.1", startedPort)
+			free, err := PortFree(ctx, "127.0.0.1", startedPort)
 			if err != nil {
 				t.Fatalf("probe the first attempt's route port: %v", err)
 			}
@@ -280,10 +280,10 @@ func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
 		// member it is up to, never on the first, so the value it hands
 		// back is never empty. That is the whole defect.
 		partial := &Cluster{}
-		startedPort = freePorts(t, 1)[0]
+		startedPort = freePorts(ctx, t, 1)[0]
 		cfg := memberConfig(js.Config{}, 0, 1, startedPort, []string{routeURL(startedPort)})
 		cfg.ClusterHost = "127.0.0.1"
-		if err := partial.start(t, cfg, 0); err != nil {
+		if err := partial.start(ctx, t, cfg, 0); err != nil {
 			t.Fatalf("start the member this case needs: %v", err)
 		}
 		// Retryable on purpose: errNotRetryable would end the run here
@@ -330,10 +330,10 @@ func TestAFailedStartCanHandBackWhatItStarted(t *testing.T) {
 	// before it can fail on the member after, so the value a factory
 	// discards is never empty — which is the whole defect.
 	partial := &Cluster{}
-	port := freePorts(t, 1)[0]
+	port := freePorts(t.Context(), t, 1)[0]
 	cfg := memberConfig(js.Config{}, 0, 1, port, []string{routeURL(port)})
 	cfg.ClusterHost = "127.0.0.1"
-	if err := partial.start(t, cfg, 0); err != nil {
+	if err := partial.start(t.Context(), t, cfg, 0); err != nil {
 		t.Fatalf("start a member: %v", err)
 	}
 	if len(partial.Servers) != 1 {

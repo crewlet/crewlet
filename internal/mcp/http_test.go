@@ -359,7 +359,11 @@ func TestAnOversizedErrorBodyIsStreamedRatherThanBuffered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	rt := &httpIdentity{base: http.DefaultTransport, log: discardLogger()}
+	// THE SERVER'S OWN POOL. This request goes straight to srv, so no
+	// rewrite is needed — but the base must still not be the
+	// process-global transport that every neighbour's t.Cleanup sweeps;
+	// see [github.com/crewlet/crewlet/internal/httpx/httpxtest].
+	rt := &httpIdentity{base: srv.Client().Transport, log: discardLogger()}
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
@@ -396,7 +400,11 @@ func TestAnOrdinaryErrorBodyIsReplayedWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	rt := &httpIdentity{base: http.DefaultTransport, log: discardLogger()}
+	// THE SERVER'S OWN POOL. This request goes straight to srv, so no
+	// rewrite is needed — but the base must still not be the
+	// process-global transport that every neighbour's t.Cleanup sweeps;
+	// see [github.com/crewlet/crewlet/internal/httpx/httpxtest].
+	rt := &httpIdentity{base: srv.Client().Transport, log: discardLogger()}
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)

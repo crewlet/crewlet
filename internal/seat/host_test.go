@@ -1066,6 +1066,61 @@ func TestTheHeartbeatFollowsTheConfiguredTTL(t *testing.T) {
 	}
 }
 
+// A HEALTHY NODE IS NEVER STALE BY CONSTRUCTION, which is the other half of
+// the ratio above and the half that was wrong.
+//
+// [Host.MayStart] refuses a delivery when `elapsed > h.heartbeat`, and the
+// heartbeat loop runs its pass every ticksPerPass × beatInterval(). Those are
+// the same quantity read from opposite ends, so the pass period must fit
+// inside the window — and it did not: ticksPerPass rounded UP to a whole
+// number of watchdog beats while MayStart compared against the unrounded
+// heartbeat. Whenever the beat did not divide the heartbeat, the difference
+// was a window in every cycle where a node holding a live lease, renewing on
+// time, refused work it was entitled to run. Measured at a 3 s TTL: renews
+// every 1.200 s against a 1.000 s window, MayStart false in 16.1 % of
+// samples.
+//
+// The cost is not cosmetic. internal/node defers such a delivery and calls
+// NoteDeliveryDeferred, which quiesces that seat's consumer until the next
+// successful renew re-fires OnAdmission — so the seat stops taking work for
+// the rest of the cycle rather than for the width of the sample.
+//
+// OVER A RANGE, because the shipped default hides it: 45 s gives a 15 s
+// heartbeat and a 1 s beat, which divides exactly. The TTLs that bite are the
+// small ones somebody lowers to, which is exactly when this matters.
+func TestAHealthyNodeNeverRefusesItsOwnSeat(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	for _, ttl := range []time.Duration{
+		time.Second, 3 * time.Second, 5 * time.Second, 9 * time.Second,
+		10 * time.Second, 20 * time.Second, 30 * time.Second, 45 * time.Second,
+		90 * time.Second, 10 * time.Minute,
+	} {
+		h := f.newHost(fmt.Sprintf("fits-%s", ttl), Config{TTL: ttl})
+		// THROUGH THE PRODUCTION ARITHMETIC, never a copy of it. A
+		// version of this case that recomputed the rounding itself
+		// passed with the bug restored — it was asserting about its own
+		// expression rather than about the loop's.
+		beat := h.beatInterval()
+		period := time.Duration(h.ticksPerPass()) * beat
+		if period > h.heartbeat {
+			t.Errorf("ttl %v: the renew pass runs every %v but MayStart refuses "+
+				"past %v, so a healthy node refuses its own seat for %v of every "+
+				"cycle (%.1f%%)", ttl, period, h.heartbeat, period-h.heartbeat,
+				100*float64(period-h.heartbeat)/float64(period))
+		}
+		// AND THE LEASE IS STILL LIVE at the far edge of that window: the
+		// bound MayStart admits on has to leave room for the renew that
+		// follows it, or a delivery is admitted onto a lease that lapses
+		// before the turn starts.
+		if h.heartbeat+beat >= h.ttl {
+			t.Errorf("ttl %v: heartbeat %v plus one beat %v reaches the TTL, so a "+
+				"delivery admitted at the edge of the window runs on a lease that "+
+				"may already be gone", ttl, h.heartbeat, beat)
+		}
+	}
+}
+
 func TestTheHeartbeatAlwaysFitsInsideTheLease(t *testing.T) {
 	t.Parallel()
 	// The invariant the ratio exists to keep, stated over a range rather
