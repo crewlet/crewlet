@@ -206,3 +206,48 @@ func TestTheSprintResolutionAsksForWhatItHasToSee(t *testing.T) {
 			reader.sprintQuery.Project, reader.sprintQuery.Number)
 	}
 }
+
+// A LIST'S ROWS ARE THE ROWS THAT MATCH.
+//
+// # What was wrong
+//
+// The query grammar's default subtask mode is `collapsed`, where the filter is
+// a predicate on the ROOT task and its whole subtree rides along UNFILTERED.
+// That is right for a board, which draws a tree; it is wrong for an answer a
+// model reads as a list, and nothing on the answer says which rows matched and
+// which came for the ride.
+//
+// Measured against a running engine: `list_work_items assignee=agent-cto`
+// answered nine rows, six of them assigned to `backend-engineer` — the
+// subtasks of an epic the CTO owns — while `assignee=backend-engineer`
+// answered three, a DISJOINT set that did not include any of the six. So a
+// seat asking what is on its plate counted somebody else's work, and the same
+// seat's own query could not find it.
+//
+// # Why overruled rather than defaulted
+//
+// One grammar serves the board, the socket, the REST route and this tool, so a
+// saved `view` reaches this call carrying an answer shape somebody chose for a
+// board. A tree is board furniture, which this tool already declines along
+// with `group_by` and `totals`. The surface is the authority, exactly as it is
+// for the read level one line above.
+func TestAListsRowsAreTheRowsThatMatch(t *testing.T) {
+	t.Parallel()
+	for name, args := range map[string]map[string]any{
+		"a plain filter":       {"assignee": "ada"},
+		"a saved view's shape": {"view": "a-board-someone-saved"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+			callWork(t, reg, builtin.ListWorkItemsTool, args)
+			if got := trk.query.Subtasks; got != tracker.SubtasksSeparate {
+				t.Errorf("the list asked for subtasks=%q — under any other mode "+
+					"the filter is a predicate on the ROOT and its whole "+
+					"subtree rides along unfiltered, so the answer carries "+
+					"rows that do not match and says nothing about which", got)
+			}
+		})
+	}
+}

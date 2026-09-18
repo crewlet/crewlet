@@ -732,6 +732,25 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// A guard that only filled an empty field would enforce nothing the
 	// day something populated it; see [statelog.LevelFor].
 	q.Level = statelog.LevelFor(statelog.SurfaceSeat, q.Level)
+	// AND THE ROWS ARE THE ROWS THAT MATCH, which is the one promise this
+	// tool makes and the default took away.
+	//
+	// The grammar's default is [tracker.SubtasksCollapsed], where the filter
+	// is a predicate on the ROOT and its whole subtree rides along
+	// UNFILTERED. That is right for a board, which draws a tree. It is wrong
+	// for an answer a model reads as a list: measured against a running
+	// engine, `assignee=agent-cto` came back with nine rows of which six were
+	// assigned to backend-engineer — they were subtasks of an epic the CTO
+	// owns — and nothing on the answer says which rows matched and which rode
+	// along, so a model counting its own queue counted somebody else's work.
+	//
+	// OVERRULED RATHER THAN DEFAULTED, for the reason the level above is: one
+	// grammar serves the board, the socket, the REST route and this tool, and
+	// a saved `view` carries an answer shape chosen for a board. A tree IS
+	// board furniture, which this tool already declines along with `group_by`
+	// and `totals` — see the passthrough list above. A model that wants a
+	// subtree asks with `parent`, which the mode does not apply to at all.
+	q.Subtasks = tracker.SubtasksSeparate
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):

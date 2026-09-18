@@ -464,7 +464,20 @@ export function SeatScreen({ handle }: { handle: string }) {
   // their own seat, or an operator, is entitled to.
   const items = useQuery(
     "work_items",
-    { assignee: handle, status_group: "not_started,active", sort: "-priority,updated", limit: 50 },
+    {
+      assignee: handle,
+      status_group: "not_started,active",
+      // EVERY ROW FILTERED ON ITS OWN. The grammar's default is `collapsed`,
+      // where the filter is a predicate on the ROOT and its whole subtree
+      // rides along UNFILTERED — right for the board, which draws a tree, and
+      // wrong for a card headed "Assigned and open" whose empty state reads
+      // "Nothing open is assigned to them". Measured against a running
+      // engine: @agent-cto's card said 9 and listed six tasks assigned to
+      // Backend Engineer, which are the subtasks of an epic the CTO owns.
+      subtasks: "separate",
+      sort: "-priority,updated",
+      limit: 50,
+    },
     { enabled: tab === "work", pollMs: 30_000 },
   );
   // THE SEVEN CLAIMS, and only where the reader may have them. `work_my_work`
