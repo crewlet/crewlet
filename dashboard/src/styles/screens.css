@@ -338,11 +338,18 @@
   border-radius: var(--r-sm);
   flex: none;
 }
-.attention-row[data-severity="critical"] .attention-icon {
+/* THE TINT IS ON THE ICON, whatever contains it. Two of the three used to be
+   reachable only through `.attention-row`, so the same mark on the Inbox — the
+   one screen where every one of these conditions is drawn — rendered critical
+   and caution untinted while info alone was coloured. A severity that shows on
+   one screen and not the next is worse than no severity at all. */
+.attention-row[data-severity="critical"] .attention-icon,
+.attention-icon[data-severity="critical"] {
   background: var(--critical-soft);
   color: var(--critical-ink);
 }
-.attention-row[data-severity="caution"] .attention-icon {
+.attention-row[data-severity="caution"] .attention-icon,
+.attention-icon[data-severity="caution"] {
   background: var(--caution-soft);
   color: var(--caution-ink);
 }
@@ -350,6 +357,16 @@
 .attention-icon[data-severity="info"] {
   background: var(--info-soft);
   color: var(--info-ink);
+}
+/* The geometry too, for the same reason. */
+.attention-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  flex: none;
 }
 
 /* ---- Seat cards --------------------------------------------------------- */
@@ -3142,4 +3159,194 @@ a.work-cal-chip:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: all;
+}
+
+/* ---- The Inbox ---------------------------------------------------------- */
+
+/* THE PULSE STRIP. The first fold of the landing screen, and the reason a
+   healthy company does not render as a blank page — see `routes/inbox/Pulse.tsx`
+   for the argument. It is a row that WRAPS rather than a grid: these are eight
+   facts read left to right, and a grid would change their reading order with
+   the viewport. */
+.pulse {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+.pulse-fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  /* THE ONLY TRANSITION ON THIS STRIP, and it is on colour. The figures
+     re-render on every push, and a transition on anything geometric would
+     make a number arriving look like the strip moving. */
+  transition: background var(--dur-fast) var(--ease);
+}
+.pulse-fact:hover {
+  background: var(--surface-hover);
+  text-decoration: none;
+}
+.pulse-fact:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.pulse-glyph {
+  display: flex;
+  align-self: center;
+  color: var(--text-faint);
+}
+.pulse-value {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  /* TABULAR, AND WITH A FLOOR. A figure going from 9 to 10 on a poll would
+     otherwise widen its own cell and shove the seven facts to its right along
+     by a character. Two digits of room is where the jitter stops being
+     visible; a wider number simply grows, once. */
+  font-variant-numeric: tabular-nums;
+  min-width: 2ch;
+  text-align: right;
+}
+.pulse-value[data-tone="caution"] {
+  color: var(--caution-ink);
+}
+.pulse-value[data-tone="critical"] {
+  color: var(--critical-ink);
+}
+.pulse-label {
+  font-size: var(--fs-2xs);
+}
+
+/* TWO PANES. The list keeps its width when the detail changes, because the
+   detail column is present from the first paint — a pane that appears on the
+   first click reflows the list under the pointer, so the row a reader clicked
+   is no longer the row they are looking at. 46% is the plan's own split. */
+.inbox-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 46fr) minmax(0, 54fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.inbox-detail {
+  position: sticky;
+  /* Under whatever band the page already parks at the top of the scroller. */
+  top: var(--sticky-top);
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* ONE PANE UNDER THE PLAN'S PHONE WIDTH. A human teammate answering an ask
+   from their phone is this product's second named reader, and this is the one
+   screen drawn for them: the list first, the detail under it. */
+@media (max-width: 860px) {
+  .inbox-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .inbox-detail {
+    position: static;
+  }
+}
+
+.inbox-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.inbox-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.inbox-band-count {
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 2ch;
+}
+/* A BAND WITH NOTHING IN IT STILL SAYS WHAT IT IS. Drawn as a quiet block
+   rather than as an empty state, because an empty state is a whole screen's
+   worth of furniture and there are two of these on one page. */
+.inbox-quiet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+.inbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background var(--dur-fast) var(--ease);
+}
+.inbox-row:last-child {
+  border-bottom: none;
+}
+.inbox-row:hover {
+  background: var(--surface-hover);
+}
+.inbox-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* THE SELECTED ROW, which is the one the pane beside it is showing. The bar is
+   inside the padding rather than a border, so selecting a row does not move
+   its text by a pixel. */
+.inbox-row[aria-current] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* Read is quieter, never hidden: an inbox you have read is still the record of
+   what reached you. */
+.inbox-row[data-read] .inbox-row-body {
+  color: var(--text-muted);
+}
+.inbox-row-body {
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+/* A FIXED CELL, filled or not. Rendered only when unread it was a dot that
+   came and went as a poll landed, and every row's text stepped sideways with
+   it. */
+.inbox-unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: none;
+}
+.inbox-unread[data-on] {
+  background: var(--accent);
 }

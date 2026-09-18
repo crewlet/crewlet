@@ -191,6 +191,60 @@ img {
   }
 }
 
+/* ---- Pointer-driven surfaces --------------------------------------------
+   EVERY SURFACE THAT LIGHTS UP UNDER THE POINTER, easing rather than
+   snapping — one declaration, because it was none.
+
+   Almost every interactive thing in this product changed its fill on the
+   frame the pointer crossed it: the rail's rows, the sidebar's links, a grid
+   row, a crumb, the viewer chip, a work row, a turn row, a feed row, an
+   integration card. None of them was wrong about WHICH colour; they were all
+   instant, and a whole product of instant fills reads as a thing that jerks
+   rather than a thing that responds. The 24 selectors it takes to say that
+   are exactly why it had never been said: at one `transition:` per rule it is
+   24 places to forget, and the ones that had it (five, scattered) had already
+   drifted to three different durations.
+
+   IT IS A CONTROL STATE, NOT A DATA PUSH, which is the line this product
+   draws: the properties here are the ones a POINTER or a FOCUS changes, and
+   the rule is attached to the hovered surface rather than to its contents, so
+   a status cell whose tone changes because the engine said something still
+   changes on the frame it is told. `border-color` rides along because a
+   bordered control's hover moves both and easing one of them looks like a
+   fault.
+
+   `prefers-reduced-motion` above zeroes every duration in the document, this
+   one included, so there is nothing to opt out of here. */
+.rail-row,
+.rail-engine,
+.rail-collapse,
+.side-link,
+.side-twist,
+.crumb-link,
+.viewer-chip,
+.peek-grip,
+.grid-row,
+.grid-th:not(.plain),
+.list-row.clickable,
+.attention-row.clickable,
+.work-row,
+.turn-row,
+.wl-row,
+.feed-row,
+.thread-entry.as-row,
+.phase-head,
+.toolcall-toggle,
+.org-node,
+.tl-chip,
+.tl-name,
+a.seat-chip,
+button.histogram-bar {
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
 /* ---- Type utilities -----------------------------------------------------
    Named for what they MEAN, not for their size, so a change of scale is one
    edit here rather than a search for `font-size: 11px`. */

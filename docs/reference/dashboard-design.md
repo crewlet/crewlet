@@ -247,7 +247,7 @@ because every single-modifier combination worth having is already the browser's.
 
 | Route | Page | Tabs / views |
 |---|---|---|
-| `#/` → `#/inbox` | **Inbox** — the landing screen | `band=decisions\|notices` · `state=unread\|all\|snoozed` · `reason=` |
+| `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
 | `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
 | `#/work` | **All work** | `view=list\|board\|calendar\|timeline` + the filter grammar |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
@@ -509,13 +509,58 @@ Both of these shipped wrong once, and neither is visible in a URL.
 ### The Inbox is the landing screen
 
 A dashboard's home used to be a summary of the company. What a person opening
-this actually wants to know is whether anything is waiting on them.
+this actually wants to know is whether anything is waiting on them — but a home
+that is ONLY that queue has a failure mode that arrives on the first day: a
+company where nothing is wrong renders as a blank page, and a reader cannot
+tell that from a dashboard that is broken.
 
-**Two bands, and the split is the engine's.** `work_inbox` reports the
-`primary_reasons` that were APPLIED — defaulted from the person's own record —
-so a company that has re-decided what counts as primary gets its own split
-without the client knowing anything about it. **Decisions** is what is waiting
-on somebody; **Notices** is what merely reached them.
+**So the first fold is the company, and the queue is under it.** The pulse
+strip is eight facts on one line — seats working, runs parked, open, overdue,
+blocked, the active sprint closing soonest and its days left, tokens, alarms —
+each a link into the workspace that owns it, each carrying the scope of its own
+claim in its title. Every one of them is true whatever the queue holds, so an
+empty band below then MEANS something: nothing is waiting on you, on a company
+that is visibly running. A figure whose query has not answered draws an em
+dash, never a `0`: "your company has no open work" is a claim, and it is a
+false one for as long as the read is in flight. `tokens` is deliberately not
+labelled "today" — the window is the engine's and the screen was not given one,
+so the strip names the figure and puts the window it covers on hover.
+
+**Two bands, stacked on one screen, never two tabs.** **Needs a decision** is
+what the engine derived — a run parked on a question, a seat it stopped, a
+budget refusing, a node past its lease. **Notices** is the person's own inbox:
+what reached them, and why. They are never interleaved, because one fused list
+ordered by time would eventually rank a backup-age alarm above the CEO seat
+asking whether to hold a release. And they are never a toggle: a tab hides the
+engine's state behind a control the reader has to press, which is exactly what
+the landing screen cannot afford — the founder's first glance is the whole of
+what this screen is for. A band with nothing in it still draws its own heading
+and says why it is quiet, because a band that disappears takes its name with it
+and a reader cannot then tell "nothing is waiting on you" from "this product
+does not have that".
+
+**Two panes, and the right one is there before it is needed.** Reading one row
+IS the activity here, so the detail sits beside the list rather than behind a
+navigation, and the column is present from the first paint: a pane that appears
+on the first click reflows the list under the pointer, so the row a reader
+clicked is no longer the row they are looking at. Under 860px it is one pane,
+list then detail — a human teammate answering an ask from their phone is this
+product's second named reader, and this is the one screen drawn for them.
+
+**The reason facets narrow client-side, which is what makes their counts
+honest.** Sent to the engine, the filter narrowed the ANSWER — so the page the
+counts were derived from became the page one facet had selected, every other
+count went to nothing, and the whole rail unmounted under the pointer. Over the
+loaded page the chips and the rows are the same set by construction, which is
+what `over="loaded"` on the rail already promised. They are ordered by NAME and
+never by count, because a count-ordered row reorders itself on a poll and the
+chip a reader is reaching for moves between the decision to press it and the
+press.
+
+`work_inbox` still reports the `primary_reasons` that were APPLIED — defaulted
+from the person's own record — and the rail badge counts those, so a company
+that has re-decided what counts as primary gets its own badge without the
+client knowing anything about it.
 
 **The wake reason opens every row.** The applier records, per change and per
 recipient, the ONE reason of twenty under which that person heard about it.
@@ -1066,6 +1111,28 @@ rescued a lot.
 **Nothing animates on a data push.** A list that re-flows every time a
 tool-loop round lands is a list nobody can read while it is running, and
 `agents` is pushed twice per round.
+
+**A control state is the other half of that rule, and it DOES ease.** The
+distinction is what the pointer did: a fill that changes because somebody moved
+onto a row is a response and should look like one, and a fill that changes
+because the engine said something must land on the frame it is told. Almost
+every interactive surface in the frame — the rail's rows, the sidebar's links,
+a grid row, a crumb, the viewer chip, a work row, a turn row, a feed row — used
+to snap, and a whole product of instant fills reads as a thing that jerks
+rather than a thing that responds. It is ONE declaration in `base.css` naming
+those surfaces rather than a `transition:` on each of them: written per rule it
+was 24 places to forget, and the five that had one had already drifted to three
+different durations. `prefers-reduced-motion` zeroes every duration in the
+document, so there is nothing to opt out of.
+
+**A control must not move under the pointer either**, which is the same rule
+one level up. A figure that resizes its own cell when it goes from 9 to 10
+shifts everything beside it, so every live number sits in a tabular cell with a
+floor; a count that lives inside a heading's text resizes the heading, so it is
+its own element; a mark drawn only in one state (an unread dot) is a fixed cell
+that is filled or not; and a filter chip ordered by a live count reorders itself
+on a poll, so chip rows are ordered by name. Each of those was a real defect on
+the Inbox before it was the landing screen's own suite.
 
 ---
 
