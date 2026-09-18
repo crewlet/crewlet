@@ -112,6 +112,8 @@ const (
 	ViewKeyBoard    = "board"
 	ViewKeyCalendar = "calendar"
 	ViewKeyTimeline = "timeline"
+	ViewKeyTable    = "table"
+	ViewKeyTrash    = "trash"
 	ViewKeySprint   = "sprint"
 	ViewKeyBacklog  = "backlog"
 )
@@ -211,7 +213,7 @@ func viewScope(container Container) statelog.ScopeSet {
 	}}.Normalised()
 }
 
-// implicitViews is the four every container has, plus the two a sprinting
+// implicitViews is the six every container has, plus the two a sprinting
 // project adds.
 func implicitViews(ctx context.Context, tx *sql.Tx, container Container) ([]ViewRow, error) {
 	rows := []ViewRow{
@@ -226,6 +228,28 @@ func implicitViews(ctx context.Context, tx *sql.Tx, container Container) ([]View
 		{Key: ViewKeyTimeline, Name: "Timeline", Type: ViewTimeline,
 			Container: container, Builtin: true,
 			Params: map[string]string{"sort": "start"}},
+		{Key: ViewKeyTable, Name: "Table", Type: ViewTable, Container: container, Builtin: true},
+		// THE TRASH IS A QUERY, NOT A RENDERING, which is why it is a
+		// builtin VIEW of the table shape rather than a sixth [ViewType]:
+		// what makes it the trash is `removed=true`, and a renderer keyed
+		// on the TYPE would then have a shape whose meaning depended on a
+		// parameter it could be saved without. Any view carrying that
+		// parameter is a trash listing and a client may treat it as one.
+		//
+		// `show_closed` travels with it because a removed task is very
+		// often a finished one, and the group predicate is ANDed
+		// unconditionally otherwise (see [Query.ShowClosed]): without it
+		// the one tab whose whole job is "what did my assistant delete"
+		// hides every deletion of anything already done.
+		//
+		// NO `sort`, deliberately, unlike the timeline: [sortTerms]
+		// already orders a removed listing by `removed_at DESC`, which is
+		// the one order this tab wants and the only index over these rows.
+		// Naming it here would be a second copy of that decision, and the
+		// two would drift.
+		{Key: ViewKeyTrash, Name: "Trash", Type: ViewTable,
+			Container: container, Builtin: true,
+			Params: map[string]string{"removed": "true", "show_closed": "true"}},
 	}
 	if container.Kind != ContainerProject || container.ID == "" {
 		return rows, nil

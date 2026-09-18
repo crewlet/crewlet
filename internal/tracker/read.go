@@ -1326,6 +1326,12 @@ var sortColumns = map[string]sortColumn{
 	// every undated one ahead of the one due tomorrow.
 	"due":   {Column: "t.due_at", Nullable: true},
 	"start": {Column: "t.start_at", Nullable: true},
+
+	// AND THE TRASH'S OWN COLUMN, which is nullable because NULL is what
+	// "not removed" IS: on every listing but the trash this orders one
+	// value, so the id tiebreak decides and the answer is the default
+	// order — which is honest, since a live task has no removal to sort by.
+	"removed": {Column: "t.removed_at", Nullable: true},
 }
 
 // EVERY KEY HERE IS ONE [sortKeys] ADMITS, and the two are checked against
@@ -1333,9 +1339,14 @@ var sortColumns = map[string]sortColumn{
 // holds and the parser refuses is unreachable, and one the parser admits and
 // this map lacks is DROPPED by [sortTerms] — the answer then comes back in the
 // default order with nothing saying the caller's own ordering was ignored.
-// `removed` was the first kind: it sat here with a comment about the trash's
-// order, while the trash is ordered by [sortTerms]'s own default branch and
-// `sort=removed` was refused by the parser before it could ever be read.
+// `removed` was the first kind and is now the counter-example: it sat here for
+// a long time with a comment about the trash's order while the parser refused
+// `sort=removed`, so it was unreachable and was deleted. It is back because
+// the trash became a TAB — [ViewKeyTrash] — and a tab whose one natural column
+// cannot be clicked is a column that lies about being sortable. The default
+// order [sortTerms] gives a removed listing is unchanged and is still what an
+// unsorted trash gets; this is the key that lets a reader ask for the oldest
+// removal instead of the newest.
 
 // sortTerms compiles the sort, ALWAYS ENDING IN THE ID.
 //

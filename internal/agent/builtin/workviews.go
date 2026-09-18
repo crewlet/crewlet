@@ -123,19 +123,18 @@ func (t *saveWorkView) Parameters() map[string]any {
 				"type": "string",
 				"description": "The shape: `list` for what is there, " +
 					"`board` for what is moving, `calendar` for what is due, " +
-					"`timeline` for how it lies against a date axis.",
-				// THE FOUR THE ENGINE ACCEPTS, and a test holds this list
-				// against [tracker.ViewType.Valid] because nothing else does.
-				// It offered three: a seat could not save a timeline view
-				// although the validator takes one, the refusal names it as
-				// one of four, and the tracker ships a builtin timeline — so
-				// the shape was reachable by reading and unreachable by
-				// writing, with the tool's own schema as the only thing
-				// saying otherwise.
-				"enum": []string{
-					string(tracker.ViewList), string(tracker.ViewBoard),
-					string(tracker.ViewCalendar), string(tracker.ViewTimeline),
-				},
+					"`timeline` for how it lies against a date axis, " +
+					"`table` for one field per column, compared down it. " +
+					"Saving a table with `removed: true` in `params` is a " +
+					"trash listing, which is what the builtin `trash` tab is.",
+				// THE ENGINE'S OWN CLOSED SET, read from it rather than
+				// copied. This was a literal naming three of the four the
+				// validator took: a seat could not save a timeline view
+				// although the refusal named it as one of them and the
+				// tracker ships a builtin timeline — the shape was reachable
+				// by reading and unreachable by writing, with the tool's own
+				// schema as the only thing saying otherwise.
+				"enum": tracker.ViewTypeNames(),
 			},
 			"params": map[string]any{
 				"type":                 "object",

@@ -407,7 +407,7 @@ handed a riddle.
 
 ## Views
 
-A **view** is a saved query with a shape. Four shapes:
+A **view** is a saved query with a shape. Five shapes:
 
 - **`list`** — rows, sorted and grouped, which is what you want when the
   question is "what is there".
@@ -423,6 +423,14 @@ A **view** is a saved query with a shape. Four shapes:
   question is "how does this lay out". It is the one shape that can show a
   task **spanning** time rather than sitting on a day, and the only one that
   draws the dependencies between two tasks as a line from one to the other.
+- **`table`** — one field per column, which is what you want when the question
+  is about a *field* rather than about a task: "which of these is the biggest",
+  "who holds the overdue ones", "what is unestimated". A list draws each task
+  as a block you read one at a time, so comparing one field down it means
+  finding the same badge at a different place on every row; a table puts every
+  value of a column at one place and sorts at its head. The sort it writes is
+  the query's own `sort=`, so it orders the **whole set** rather than the page
+  that happens to be loaded.
 
 ### The timeline
 
@@ -460,12 +468,25 @@ two views can never both claim it. A protected view cannot be edited by anyone
 but its owner, which is what stops a shared board being rearranged under
 everybody.
 
-**Four of them exist without anybody saving one.** Every container has a list,
-a board, a calendar and a timeline, and none of the four is an object: a fresh project
-needs no setup gesture, a container can never be left without a way to look at
-it, and nothing has to guard against somebody deleting the last view. A project
-running sprints has two more — a sprint board and a backlog — because those are
-the two questions a sprint creates and neither is expressible as a default.
+**Six of them exist without anybody saving one.** Every container has a list,
+a board, a calendar, a timeline, a table and a trash, and none of the six is an
+object: a fresh project needs no setup gesture, a container can never be left
+without a way to look at it, and nothing has to guard against somebody deleting
+the last view. A project running sprints has two more — a sprint board and a
+backlog — because those are the two questions a sprint creates and neither is
+expressible as a default.
+
+**The trash is a query, not a shape.** It is a table carrying `removed=true`
+and `show_closed=true`, which is why it is a builtin *view* rather than a sixth
+rendering: what makes a listing the trash is the parameter, so any view you
+save with `removed=true` is one too and is read the same way. `show_closed`
+travels with it because a removed task is very often a finished one, and
+without it the one tab whose job is "what did my assistant delete" would hide
+every deletion of anything already done. It is ordered by **when work was
+removed**, newest first, and `sort=removed` asks for the other end of it — a
+removed task's rank is its position on a board it has left, so ordering the
+trash by rank orders it by a stale number. What a removal, a deletion and a
+purge each mean is [below](#removing-deleting-and-purging).
 
 **A view is a set of defaults, never a lock.** Opening one loads its
 parameters and every key you then set overrides them, so picking a different
@@ -744,9 +765,9 @@ somebody to a number covering work the answer does not show.
 
 ## What a person can do
 
-**The dashboard** renders the board, the list, the calendar and the timeline over the same
-queries a seat's tools use, against this node's own copy. Every answer says how
-far behind that copy is.
+**The dashboard** renders the board, the list, the calendar, the timeline, the
+table and the trash over the same queries a seat's tools use, against this
+node's own copy. Every answer says how far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
 `/operator/mcp`. It serves the same work tools above, twelve more no seat is
@@ -1083,7 +1104,9 @@ Three different gestures, and the difference matters:
 - **Remove** hides a task. Its rows stay and a restore brings it back — and
   `removed=true` is how you find one to restore: every other query excludes
   removed work, which is what a board means, so the trash is a filter rather
-  than a screen.
+  than a screen. It is a filter every container ships a **tab** for
+  ([Views](#views)), because the one thing a person needs after an assistant
+  removes the wrong subtree is to see what was removed.
 - **Delete** writes a marker. Every node drops every record about that task for
   ever, which is what stops a redelivery months later resurrecting it.
 - **Purge** removes the rows. Its report comes back in **three groups**: what

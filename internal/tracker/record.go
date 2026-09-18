@@ -1319,10 +1319,10 @@ type TagSet struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// ViewType is the four renderings, and there are no others.
+// ViewType is the five renderings, and there are no others.
 type ViewType string
 
-// The four, and each constant IS the wire value a saved view stores: the type
+// The five, and each constant IS the wire value a saved view stores: the type
 // is what a client picks a renderer by, so these spellings are read by the
 // dashboard as well as by this package.
 //
@@ -1332,12 +1332,33 @@ type ViewType string
 // of them can show that a task spans three weeks, or that it cannot start
 // until another finishes. It is what [TaskRow.Start], [TaskRow.Due] and
 // [TaskRow.WaitingOn] are on the row for.
+//
+// [ViewTable] is the one read by COLUMN rather than by row. A list draws each
+// task as a block a person reads one at a time — title, badges, dates, the
+// seat — which is the right shape for "what is this task" and the wrong one
+// for "which of these forty is the biggest": comparing a field down a list
+// means finding the same badge at a different x on every row. A table puts one
+// field per column and every value at one x, which is what makes a column
+// scannable and sortable at its own head. Same rows, same query, same page —
+// only the arrangement differs, which is exactly what a view TYPE is.
 const (
 	ViewList     ViewType = "list"
 	ViewBoard    ViewType = "board"
 	ViewCalendar ViewType = "calendar"
 	ViewTimeline ViewType = "timeline"
+	ViewTable    ViewType = "table"
 )
+
+// ViewTypes is that closed set as a value, in the order a strip draws them.
+//
+// ONE LIST rather than a switch beside two hand-kept copies of it. There were
+// three places that had to agree about which renderings exist — [ViewType.Valid],
+// `save_work_view`'s `type` enum and the gate holding those two together — and
+// each was a literal naming four shapes. That gate is what caught the enum
+// offering three; it could not catch a FIFTH shape arriving, because its own
+// "every shape the engine takes is offered" half was the same literal. A
+// rendering added here is offered, accepted and asserted with no second edit.
+var ViewTypes = []ViewType{ViewList, ViewBoard, ViewCalendar, ViewTimeline, ViewTable}
 
 // Container names where an object lives.
 type Container struct {

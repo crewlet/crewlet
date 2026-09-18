@@ -247,7 +247,7 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 
 	want := []string{
 		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
-		tracker.ViewKeyTimeline,
+		tracker.ViewKeyTimeline, tracker.ViewKeyTable, tracker.ViewKeyTrash,
 	}
 	for _, container := range []tracker.Container{
 		{Kind: tracker.ContainerWorkspace},
@@ -326,7 +326,8 @@ func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	strip := r.strip(tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}, "")
 	want := []string{
 		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
-		tracker.ViewKeyTimeline, tracker.ViewKeySprint, tracker.ViewKeyBacklog,
+		tracker.ViewKeyTimeline, tracker.ViewKeyTable, tracker.ViewKeyTrash,
+		tracker.ViewKeySprint, tracker.ViewKeyBacklog,
 	}
 	if got := stripKeys(strip); !slices.Equal(got, want) {
 		t.Fatalf("a sprinting project offers %v, want %v", got, want)

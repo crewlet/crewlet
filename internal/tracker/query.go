@@ -950,7 +950,7 @@ func (q *Query) parseGrouping(p Params) error {
 // sortKeys are the orderings a caller may ask for.
 var sortKeys = []string{
 	"rank", "updated", "due", "start", "priority", "created", "title",
-	"estimate", "points", "spend", "status_entered",
+	"estimate", "points", "spend", "status_entered", "removed",
 }
 
 func (q *Query) parseSort(p Params) error {

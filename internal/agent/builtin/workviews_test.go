@@ -179,10 +179,11 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 		}
 	}
 	// AND EVERY SHAPE THE ENGINE TAKES IS OFFERED. This is the direction the
-	// drift actually went.
-	for _, want := range []tracker.ViewType{
-		tracker.ViewList, tracker.ViewBoard, tracker.ViewCalendar, tracker.ViewTimeline,
-	} {
+	// drift actually went — and this half was itself a literal naming four
+	// shapes, so it could only ever catch a shape LEAVING the enum. Read from
+	// [tracker.ViewTypes], the two halves are the same list and a rendering
+	// added to the engine is asserted the moment it exists.
+	for _, want := range tracker.ViewTypes {
 		if !slices.Contains(offered, string(want)) {
 			t.Errorf("the engine accepts the shape %q and the tool does not offer it — "+
 				"an enum is a closed set to the model reading it, so this shape is "+
