@@ -302,6 +302,51 @@ describe("the frame's layout", () => {
     expect(open).toMatch(/transform var\(--dur\) var\(--ease\)/);
   });
 
+  // A FIXED-COLUMN FIGURE BLOCK IS REACHABLE.
+  //
+  // The turn page's prompt weights are three `.num-col` figures at 5.5rem
+  // under their own headings, beside a phase tag: 370px in the 332px a phone
+  // leaves inside the card, so the tokens column was cut off — and lining the
+  // three up under their headings is the entire reason `.num-col` exists.
+  //
+  // SIDEWAYS HERE, where a grid gets a card. The shapes take opposite answers
+  // for a reason: a grid's flexible tracks resolve to zero the moment its wrap
+  // becomes a scroller and its cells are prose, while a fixed figure column
+  // has no such collapse and wrapping it would break the alignment outright —
+  // the header row and each value row would break at different points.
+  test("the figure block scrolls rather than cutting a column off", () => {
+    const css = sheet("components.css");
+    expect(block(css, ".num-block")).toMatch(/overflow-x:\s*auto/);
+    // `max-content` IS THE HALF THAT MAKES IT WORK: a flex line inside a
+    // scrollport is otherwise sized to the port, so its items shrink or
+    // overflow and the headings stop lining up with the figures they head.
+    const row = block(css, ".num-block > .row");
+    expect(row).toMatch(/width:\s*max-content/);
+    // And the min-width is what leaves the spacer able to push the figures
+    // right on a screen the block already fits in.
+    expect(row).toMatch(/min-width:\s*100%/);
+  });
+
+  // A DISCLOSURE HEAD WRAPS, which is rule 15 of the design doc.
+  //
+  // A phase's head is up to fifteen items — the phase tag, the iteration, a
+  // delegated task id, a worker template, a role, then the decision, the round
+  // cap, the empty-answer count, the rescue, the sandbox, the failure, the live
+  // dot, the model, the rounds, the tokens, the duration and the time — and
+  // every one is a tag or a `nowrap` figure that cannot break its own label.
+  //
+  // Nothing wrapped and `.phase-card` hides its overflow, so at 390px the head
+  // was 690px of content in a 330px box: everything from the decision chip
+  // rightward was CUT OFF rather than off-screen, a hidden box being a
+  // scrollport whose offset nothing can move. The half that went is the half
+  // the card is opened for.
+  test("a turn and a phase head wrap rather than cutting their own tail off", () => {
+    const css = sheet("screens.css");
+    for (const head of [".turn-head", ".phase-head"]) {
+      expect(rules(css, head).join(" "), `${head} does not wrap`).toMatch(/flex-wrap:\s*wrap/);
+    }
+  });
+
   // AND WHAT IS INVISIBLE TAKES NO SPACE ANYWHERE.
   //
   // `.sr-only` is `position: absolute` with no offset, so its box sits at its

@@ -739,7 +739,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  */
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
-    <div className="col gap-1">
+    <div className="col gap-1 num-block">
       <div className="row gap-2">
         <span className="t-label spacer">Prompt sent</span>
         <span className="t-label num-col">System</span>

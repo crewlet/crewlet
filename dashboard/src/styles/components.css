@@ -50,6 +50,33 @@
   text-align: right;
 }
 
+/* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because three of them at 5.5rem
+   plus a phase tag is 370px and a phone is 390 with the card's own padding
+   taken out of it — measured at 332px of room, so the tokens column was cut
+   off, and `.num-col` exists precisely to make these three line up.
+
+   SIDEWAYS HERE, where a grid gets a card instead (see frame.css). The two
+   shapes take opposite answers for a reason: a grid's flexible tracks resolve
+   to ZERO the moment its wrap becomes a scroller, and its cells are prose. A
+   fixed 5.5rem figure column has no such collapse and no prose in it, and the
+   whole value of the block is that the three figures sit under their own
+   headings — which wrapping them would destroy, since the header row and each
+   value row would break at different points.
+
+   `max-content` ON THE ROWS is the half that makes it work: without it a flex
+   line inside a scrollport is still sized to the port, its items shrink or
+   overflow, and the header stops lining up with the values it heads. The
+   `min-width` is what keeps the spacer able to push the figures right on a
+   screen where the block already fits. */
+.num-block {
+  overflow-x: auto;
+}
+
+.num-block > .row {
+  width: max-content;
+  min-width: 100%;
+}
+
 /* A count beside a section title. Neutral by design: a coloured count is a
    claim about severity that a number alone cannot support. */
 .count-chip {

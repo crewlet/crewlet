@@ -20,9 +20,29 @@
 .turn-card.failed {
   box-shadow: inset 2px 0 0 var(--critical);
 }
+/* A HEAD WRAPS, which is rule 15 of the design doc and the one place in this
+   file that was not keeping it. A phase's head is up to fifteen items — the
+   phase tag, the iteration, a delegated task id, a worker template, a role,
+   then the decision, the round cap, the empty-answer count, the rescue, the
+   sandbox, the failure, the live dot, the model, the rounds, the tokens, the
+   duration and the time — and every one of them is a tag or a `nowrap` figure
+   that cannot break its own label.
+
+   Nothing wrapped, and `.phase-card` hides its overflow, so at 390px the head
+   was 690px of content in a 330px box: everything from the decision chip
+   rightward was CUT OFF rather than merely off-screen, since a hidden box is a
+   scrollport whose offset nothing can move. The half that went is the half the
+   card is opened for — which model ran, how many rounds, how many tokens, how
+   long, when.
+
+   AT EVERY WIDTH rather than at a breakpoint, because the overflow is a
+   property of the content: a long model name or four warning tags reach the
+   same place on a laptop. The `.spacer` still right-aligns the tail on a line
+   that fits, so nothing moves where everything already fitted. */
 .turn-head,
 .phase-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
