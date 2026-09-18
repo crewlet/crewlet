@@ -152,6 +152,49 @@ const ClusterStartAttempts = 4
 // re-asking it.
 const ClusterStartBudget = 3 * time.Minute
 
+// ClusterStartTerm is what ONE attempt may spend, and it is the half
+// [ClusterStartBudget] alone does not buy.
+//
+// The budget bounds the SEQUENCE, for the reason its own doc gives and cites
+// [jsprovision.SequenceBudget] for: n attempts at an unbounded cost each is a
+// product nobody declared. But a ceiling on the sequence with no term per
+// attempt is the SAME defect wearing the other face — the first attempt is
+// handed the whole remaining budget, so one that hangs consumes every retry
+// before any of them runs.
+//
+// Measured on this repository's own CI, which is what makes this a fix rather
+// than a tidy: `TestAFleetAgreesAboutOneCompany` failed after 181.05s with
+// "no cluster came up within 3m0s (1 OF 4 ATTEMPTS)". Member 0's broker spent
+// the entire ceiling retrying a route to a port where nothing was listening
+// ("Error trying to connect to route (attempt 178): connection refused"), and
+// the three attempts that exist precisely to absorb that never ran. The
+// harness's own remedy — "what DOES fix it is noticing and trying again with
+// DIFFERENT NUMBERS" — was unreachable from inside the failure it is for.
+//
+// THE BUDGET DIVIDED BY THE ATTEMPTS, so nothing new is chosen: the ceiling
+// stays exactly three minutes and all four tries are real. At 45s it is still
+// far above any healthy bring-up — the same doc records a two-member fleet
+// booting, asserting and tearing down in about ten seconds on a four-vCPU
+// host, and the slowest cluster case at 63s end to end, of which this bounds a
+// fraction. A legitimate bring-up that did exceed it loses a slow attempt and
+// gets a fresh one with new ports, which is the trade this loop is built on.
+const ClusterStartTerm = ClusterStartBudget / ClusterStartAttempts
+
+// StartAttemptEnd is when one bring-up attempt must give up: the sooner of
+// what is left of the whole budget and this attempt's own term.
+//
+// PURE OVER VALUES, for the reason `internal/textindex` and
+// `internal/solo/partition` keep their arithmetic out of the I/O: a rule that
+// can only be exercised by standing up three brokers is a rule nobody
+// re-measures, and both retry loops — this package's and [internal/e2e]'s —
+// read this one so the two cannot drift.
+func StartAttemptEnd(now, deadline time.Time) time.Time {
+	if term := now.Add(ClusterStartTerm); term.Before(deadline) {
+		return term
+	}
+	return deadline
+}
+
 // errNotRetryable marks a start failure that a fresh set of ports cannot
 // change: the same input answering the same way every time.
 //
@@ -224,7 +267,12 @@ func withFreshPorts(ctx context.Context, t *testing.T, what string,
 	// comment, not a bound.
 	deadline := time.Now().Add(ClusterStartBudget)
 	for attempt := 1; attempt <= ClusterStartAttempts; attempt++ {
-		attemptCtx, cancelAttempt := context.WithDeadline(ctx, deadline)
+		// THE SOONER OF THE CEILING AND THIS ATTEMPT'S OWN TERM. Handed the
+		// whole remaining budget — which is how this was written — attempt one
+		// could spend all of it and the other three never ran. See
+		// [ClusterStartTerm].
+		attemptCtx, cancelAttempt := context.WithDeadline(ctx,
+			StartAttemptEnd(time.Now(), deadline))
 		c, err := start(attemptCtx)
 		cancelAttempt()
 		if err == nil {
