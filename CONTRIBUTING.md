@@ -159,6 +159,29 @@ you add one, check the case is covered somewhere: the two defects this gate was
 written after were both cases that ran NOWHERE, and each looked like an
 ordinary capability skip from inside the one run that saw it.
 
+**Reading the stream means owning what reaches the log.** The gate buffers a
+test's output and prints it when that test fails, which is what plain
+`go test` does — and a test binary that *dies* does not report, so for a while
+its panic was buffered and then dropped. CI run 35312291605 on main is what
+that costs: `internal/engine` went red with one line of evidence,
+`FAIL …/internal/engine 133.609s`, no test named and no trace, under a verdict
+reading "0 test(s) failed in 1 package(s)".
+
+Two things reach the log now. A test that never reported at all is flushed
+beside its own package's result line, so the account sits with the `FAIL` it
+explains rather than at the bottom of a 200-package run. And anything that
+arrives *after* a test's own `--- PASS:` line is flushed too — `go test -json`
+keeps filing output under the last test it framed, so a goroutine that panics
+just after a test returns lands under a test that then passes, and a passing
+test's buffer is dropped. Parked tests are counted, not printed: when a binary
+dies every `t.Parallel()` test is waiting on `=== PAUSE` with nothing to say,
+and 340 headers for those buried the one that mattered.
+
+Read the name as *where the stream stopped*, not as the culprit — with tests
+in parallel it is often a bystander, and the stack names the goroutine. A run
+that finished leaves nothing buffered, so none of this costs a green log
+anything.
+
 Why this had to exist: `go test` prints nothing about a skipped subtest without
 `-v`, and the suite job has never passed it, so every skip this repository has
 taken was absent from every CI log. Under that, an API gate that read a

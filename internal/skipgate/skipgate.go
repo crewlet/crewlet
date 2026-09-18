@@ -37,6 +37,35 @@
 // Neither is visible in a CI log. `go test` prints nothing about a skipped
 // subtest without -v, and the suite job does not pass it.
 //
+// # Rendering is a promise, and it was broken once here
+//
+// Reading the stream means OWNING what reaches the log, and a gate that eats
+// the one thing a reader needs has done more damage than the convention it
+// enforces ever prevented. That happened: per-test output was buffered and
+// released only by that test's OWN terminal record, and a dying binary
+// satisfies neither of the two ways out.
+//
+// CI run 35312291605 on main is the measurement: internal/engine failed with
+// one line, `FAIL github.com/crewlet/crewlet/internal/engine 133.609s`, no
+// test named, no panic, no trace, under a verdict reading "0 test(s) failed
+// in 1 package(s)".
+//
+// There are two exits and the fix takes both, because closing one and
+// measuring it against a case that went out the other is how a rescue looks
+// finished and is not:
+//
+//   - the test the binary stopped in never reports at all, so its buffer is
+//     still there when the stream ends — [flushOrphans];
+//   - or it had ALREADY reported, because `--- PASS: TestX` is itself a frame
+//     test2json keeps filing under, and a passing test's buffer is dropped
+//     whole — [flushTails].
+//
+// [report.parked] is the third thing that had to be decided: a binary that
+// dies leaves every t.Parallel() test sitting on `=== PAUSE` with an empty
+// account, and 340 headers for those bury the one that carries the panic.
+// A clean run prints exactly what it printed before — measured byte-identical
+// over ordinary passes, failures, subtests and parallel logs.
+//
 // # Why an allowlist rather than a count or a ban
 //
 // A blanket ban is wrong, and CLAUDE.md says so about the tree's best skips:
@@ -60,6 +89,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -90,6 +120,34 @@ type report struct {
 	// that does not build. Measured before this field existed: a package with
 	// an undefined symbol in a _test.go file went through here and exited 0.
 	failedPkgs []string
+	// unfinished is every test that produced output and never reported a
+	// result, and it is the residue of a test binary that DIED rather than
+	// failed. A panic in a goroutine no tRunner is recovering, a race report,
+	// a runtime fatal, an OOM kill: the process stops where it stands, so the
+	// test that was current never reaches a pass, fail or skip record —
+	// while test2json has been attributing the dying binary's own output to
+	// it the whole time. The package still reports `fail`, so the run is red
+	// either way; what this names is the one account of WHY, which nothing
+	// else in the stream carries.
+	//
+	// Measured on main: CI run 35312291605 failed with exactly one line of
+	// evidence, `FAIL github.com/crewlet/crewlet/internal/engine 133.609s`,
+	// under a verdict reading "0 test(s) failed in 1 package(s)". The panic
+	// was in the buffer and this program dropped it.
+	unfinished []string
+	// parked is how many orphans held nothing but test2json's own framing:
+	// tests sitting between `=== PAUSE` and a resume that never came, which
+	// is what every parallel test in the binary is at the moment one dies.
+	// A count rather than names — 340 of them say one thing, which is that
+	// the process stopped mid-run.
+	parked int
+	// afterResult is every test the binary talked over: it reported its own
+	// result and then had more attributed to it, because test2json keeps
+	// filing under the last test it saw framed and a `--- PASS:` line is a
+	// frame. See [flushTails] — it is the same swallow as
+	// [report.unfinished] reached by the other exit, and a passing test's
+	// buffer used to be dropped whole.
+	afterResult []string
 	// tests is how many NAMED tests reported a result — passed, failed or
 	// skipped.
 	//
@@ -123,9 +181,15 @@ type report struct {
 // would print a line per passing subtest and make a CI log tens of times
 // longer than it was before this was in the pipeline. A gate that does that is
 // a gate somebody takes back out, and then the skips are invisible again. So
-// per-test output is BUFFERED and flushed only when that test fails, which is
-// what `go test` without -v does; package-level records are printed as they
-// come, and those carry the `ok  pkg  1.234s` lines.
+// per-test output is BUFFERED and flushed when that test fails, which is what
+// `go test` without -v does; package-level records are printed as they come,
+// and those carry the `ok  pkg  1.234s` lines.
+//
+// AND FLUSHED AT END OF STREAM if the test never reported at all, which is the
+// one case plain `go test` renders and a buffer alone cannot. A binary that
+// dies where it stands leaves its panic in that buffer under the name of
+// whichever test was current, and nothing afterwards asks for it. See
+// [report.unfinished].
 //
 // A line that is not JSON is passed through rather than rejected: `go test`
 // writes build errors and toolchain chatter around the stream, and a gate that
@@ -133,6 +197,7 @@ type report struct {
 func read(in *bufio.Scanner, out *os.File) report {
 	r := report{ran: map[string]bool{}, measuredSeen: map[string]bool{}}
 	buffered := map[string][]string{}
+	tails := map[string][]tail{}
 
 	for in.Scan() {
 		line := in.Bytes()
@@ -161,6 +226,27 @@ func read(in *bufio.Scanner, out *os.File) report {
 			if e.Action == "fail" {
 				r.failedPkgs = append(r.failedPkgs, short(e.Package))
 			}
+			// BESIDE ITS OWN RESULT LINE, not at the end of the log.
+			// `go test` interleaves package blocks — measured over three
+			// packages at -p 4, the order was i1, i2, i1, i2, i3, … — so a
+			// drain that only ran at end of stream would put a panic the
+			// whole length of a 200-package run away from the `FAIL pkg`
+			// line it belongs to. This package is finished, so anything
+			// still buffered under it never will be.
+			if e.Action == "pass" || e.Action == "fail" || e.Action == "skip" {
+				flushOrphans(out, &r, buffered, e.Package)
+				// ONLY A FAILING PACKAGE HAS ANYTHING TO EXPLAIN. On a
+				// green one this drops what it held, which is the whole
+				// difference between a diagnostic and 94 lines of noise
+				// — measured, over one `make test`: that many tests have
+				// a goroutine still logging after they pass, and every
+				// one of them printed a header before this branch
+				// existed.
+				if e.Action == "fail" {
+					flushTails(out, &r, tails[short(e.Package)])
+				}
+				delete(tails, short(e.Package))
+			}
 			continue
 		}
 
@@ -177,6 +263,7 @@ func read(in *bufio.Scanner, out *os.File) report {
 		switch e.Action {
 		case "skip":
 			r.skipped = append(r.skipped, Skip{Package: short(e.Package), Test: e.Test})
+			keepTail(tails, e.Package, e.Test, buffered[key])
 			delete(buffered, key)
 		case "pass":
 			// A DECLARED MEASUREMENT PRINTS ON A GREEN RUN. Every other
@@ -186,6 +273,8 @@ func read(in *bufio.Scanner, out *os.File) report {
 				for _, o := range buffered[key] {
 					fmt.Fprint(out, o)
 				}
+			} else {
+				keepTail(tails, e.Package, e.Test, buffered[key])
 			}
 			delete(buffered, key)
 		case "fail":
@@ -196,7 +285,97 @@ func read(in *bufio.Scanner, out *os.File) report {
 			delete(buffered, key)
 		}
 	}
+
+	// THE BACKSTOP. Everything above drains a package as it finishes, so on
+	// any run that got that far this is empty — but a producer killed
+	// mid-package never emits that record, and its buffer is exactly the
+	// account of why it died.
+	flushOrphans(out, &r, buffered, "")
+	// A PACKAGE THAT NEVER REPORTED did not pass, so whatever it printed
+	// after a test of its own is still owed to the reader — this is the
+	// truncated-stream case the backstop above is for, one level down.
+	for _, pkg := range slices.Sorted(maps.Keys(tails)) {
+		flushTails(out, &r, tails[pkg])
+	}
 	return r
+}
+
+// tail is what one test had attributed to it after its own result line,
+// under a name already qualified by its package.
+type tail struct {
+	test  string
+	lines []string
+}
+
+// keepTail holds a test's aftermath until its package reports, because
+// whether it is worth printing is a fact about the PACKAGE rather than about
+// the test: see the branch in [read] that spends it.
+func keepTail(tails map[string][]tail, pkg, test string, said []string) {
+	t := afterResult(said)
+	if !spoke(t) {
+		return
+	}
+	tails[short(pkg)] = append(tails[short(pkg)], tail{test: short(pkg) + " " + test, lines: t})
+}
+
+// flushOrphans renders every buffered test that never reported a result, and
+// takes it out of the buffer. pkg scopes it to one package; "" is whatever is
+// left when the stream ends.
+//
+// On a run that finished this does nothing at all: every terminal per-test
+// action above either flushes that test's buffer or deletes it, so there is
+// no clean-log cost to pay — measured byte-identical over a 45-package,
+// 4305-test run.
+//
+// SORTED, because map order is random and a diagnostic whose sections move
+// between runs is one nobody can compare across two of them.
+//
+// The header goes to `out` beside the output it introduces rather than to
+// stderr with this program's other diagnostics: the two streams are
+// interleaved by whoever runs make, and a header that can land pages away
+// from its body is worse than no header at all.
+func flushOrphans(out *os.File, r *report, buffered map[string][]string, pkg string) {
+	for _, key := range slices.Sorted(maps.Keys(buffered)) {
+		p, test, _ := strings.Cut(key, "\x00")
+		if pkg != "" && p != pkg {
+			continue
+		}
+		said := buffered[key]
+		delete(buffered, key)
+		// A PARKED TEST HAS NO ACCOUNT, and on a dying binary almost every
+		// orphan is one. When the process stopped, every test that had
+		// called t.Parallel() was sitting between `=== PAUSE` and a resume
+		// it never got; their buffers hold test2json's own framing and
+		// nothing else. Measured on the real failure: 341 orphans, 340 of
+		// them parked, and printing a header for each buried the one that
+		// carried the panic under a page of noise — which is the same
+		// defect as swallowing it, arrived at from the other side.
+		//
+		// They are still COUNTED, because "the binary stopped with 340
+		// tests in flight" is a fact about when it died, and one number
+		// says it where 340 names do not.
+		if !spoke(said) {
+			r.parked++
+			continue
+		}
+		r.unfinished = append(r.unfinished, short(p)+" "+test)
+		// THE NAME IS WHERE THE STREAM STOPPED, NOT NECESSARILY THE
+		// CULPRIT, and saying so is the difference between a diagnostic
+		// and a wrong diagnosis. test2json tags output with the last test
+		// it saw FRAMED (`=== RUN` / `=== CONT`), and clears that only on
+		// the binary's own closing PASS/FAIL line, which a dying binary
+		// never prints. Under -parallel the framed test is routinely a
+		// bystander: measured, a panic leaked by TestParC came back tagged
+		// TestParB. The stack names the goroutine; this names the frame.
+		fmt.Fprintf(out, "\nskipgate: %s %s never reported a result — the test "+
+			"binary stopped while it was the one framed, and everything it "+
+			"printed follows. That name is where the stream stopped rather than "+
+			"a verdict: with tests in parallel it can be a bystander, and the "+
+			"stack below is what names the goroutine.\n", short(p), test)
+		for _, o := range said {
+			fmt.Fprint(out, o)
+		}
+	}
 }
 
 func main() {
@@ -295,7 +474,8 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 		// rather than that it passed.
 		return 1, fmt.Sprintf("\nskipgate: the test command exited %v without reporting "+
 			"a failure, so the run did not finish — its stream ends after %d "+
-			"package(s). Nothing here can say the suite passed.", producer, len(r.ran))
+			"package(s). Nothing here can say the suite passed.%s",
+			producer, len(r.ran), died(r))
 
 	case len(r.failed) > 0 || len(r.failedPkgs) > 0:
 		// DECIDED BEFORE "not one test ran", because a build failure is both:
@@ -306,8 +486,18 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 		// with no failing test in it — that is what a build error looks like
 		// from here, and reporting only named tests would pass a tree that
 		// does not compile.
-		return 1, fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s)",
-			len(r.failed), len(r.failedPkgs))
+		return 1, fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s)%s",
+			len(r.failed), len(r.failedPkgs), died(r))
+
+	case len(r.unfinished) > 0 || r.parked > 0 || len(r.afterResult) > 0:
+		// A TEST STOPPED MID-RUN AND NOTHING ELSE CALLED THE RUN FAILED. The
+		// branch above catches this whenever the package reported `fail`,
+		// which is the ordinary case; this is the same residue in a stream
+		// that never got that far, and it is the [Verdict] doctrine applied
+		// one level down — a run that did not finish is not a pass, and that
+		// holds for one test binary exactly as it holds for the whole
+		// command.
+		return 1, fmt.Sprintf("\nskipgate: every package reported, and%s", died(r))
 
 	case r.tests == 0:
 		// NOT ONE TEST RAN. A toolchain error, an unusable package list, a
@@ -333,6 +523,134 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 		return 0, fmt.Sprintf("skipgate: %d skip(s) of %d test(s) across %d package(s), all declared",
 			len(r.skipped), r.tests, len(r.ran))
 	}
+}
+
+// flushTails renders what was attributed to a test AFTER it had already
+// reported its own result, for a package that went on to FAIL.
+//
+// THE OTHER HALF OF THE SAME HOLE, and the one that hid the panic in the
+// experiment written to prove the first half. [flushOrphans] rescues a test
+// that never reported; this rescues one that reported and was then talked
+// over. test2json keeps attributing to the last test it saw framed, and a
+// `--- PASS: TestX` line IS a frame, so a goroutine that panics a moment
+// after TestX returned has its whole banner filed under TestX — which then
+// reaches a perfectly ordinary `pass`, and a passing test's buffer is
+// dropped. Measured: a package whose TestLeaksAPanickingGoroutine returned
+// and then segfaulted printed, through this gate, one `FAIL dying 0.306s`
+// and nothing else.
+//
+// Anything past that result line is the PROCESS talking rather than the
+// test's own report — but plenty of processes talk harmlessly. Measured over
+// one `make test`: 94 passing tests have a goroutine still logging after they
+// return, so printing every tail would have added 94 headers to a green log
+// and made this the gate somebody takes back out. [keepTail] holds them and
+// only a package that FAILED spends them, because only a failure has
+// something to explain.
+func flushTails(out *os.File, r *report, held []tail) {
+	for _, t := range held {
+		r.afterResult = append(r.afterResult, t.test)
+		fmt.Fprintf(out, "\nskipgate: %s had already reported its own result when "+
+			"the binary printed this under its name, so this is the process "+
+			"talking rather than the test. The stack below is what names the "+
+			"goroutine.\n", t.test)
+		for _, l := range t.lines {
+			fmt.Fprint(out, l)
+		}
+	}
+}
+
+// afterResult returns the lines following a test's own result line.
+//
+// The LAST such line, because a parent's buffer can carry its subtests'
+// indented results behind its own. No result line at all means the test never
+// reported one, which is [flushOrphans]'s case rather than this one.
+func afterResult(said []string) []string {
+	lines := flatten(said)
+	cut := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "--- ") {
+			cut = i
+		}
+	}
+	if cut < 0 {
+		return nil
+	}
+	return lines[cut+1:]
+}
+
+// flatten turns buffered Output fields into whole lines, keeping the newline
+// so a flush reproduces the bytes `go test` would have written.
+func flatten(said []string) []string {
+	var out []string
+	for _, chunk := range said {
+		for {
+			i := strings.IndexByte(chunk, '\n')
+			if i < 0 {
+				break
+			}
+			out = append(out, chunk[:i+1])
+			chunk = chunk[i+1:]
+		}
+		if chunk != "" {
+			out = append(out, chunk)
+		}
+	}
+	return out
+}
+
+// spoke reports whether a buffer holds anything the BINARY said, as opposed
+// to test2json's own frame lines.
+//
+// `=== RUN`, `=== PAUSE`, `=== CONT` and `=== NAME` are the converter
+// narrating which test it is attributing to; plain `go test` prints them only
+// under -v. A buffer of nothing else is a test that was parked when the
+// process stopped, and it has nothing to tell anybody.
+func spoke(lines []string) bool {
+	for _, l := range lines {
+		for _, one := range strings.Split(l, "\n") {
+			one = strings.TrimSpace(one)
+			if one != "" && !strings.HasPrefix(one, "=== ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// died renders the unfinished tests as a clause, or nothing when there are
+// none. It is separate so both failure branches of [Verdict] say it the same
+// way: the count in the note above is the number a reader will try to
+// reconcile with the log, and "0 test(s) failed in 1 package(s)" with no
+// explanation is precisely the line that explained nothing.
+func died(r report) string {
+	var parked string
+	if r.parked > 0 {
+		parked = fmt.Sprintf("\n%d further test(s) were in flight and printed "+
+			"nothing — parked on t.Parallel() when the process stopped.", r.parked)
+	}
+	var talked string
+	if len(r.afterResult) > 0 {
+		talked = fmt.Sprintf("\nThe binary also printed under the name of %d test(s) "+
+			"that had already reported: %s", len(r.afterResult),
+			strings.Join(r.afterResult, ", "))
+	}
+	switch {
+	case len(r.unfinished) == 0 && r.parked == 0 && len(r.afterResult) == 0:
+		return ""
+	case len(r.unfinished) == 0 && r.parked == 0:
+		return talked
+	case len(r.unfinished) == 0:
+		return "\nA test binary stopped rather than finished and said nothing " +
+			"about why. That is what a kill from outside looks like — an OOM, a " +
+			"runner going away — and equally what an os.Exit from inside looks " +
+			"like, so read the exit status above: seat.Watchdog's hard exit is " +
+			"75." + parked + talked
+	}
+	return fmt.Sprintf("\n%d test(s) never reported a result, so a test binary "+
+		"stopped rather than finished: %s\nWhat each of them printed is above, "+
+		"beside its package's own result line. Those names are where the stream "+
+		"stopped, not a verdict.%s",
+		len(r.unfinished), strings.Join(r.unfinished, ", "), parked+talked)
 }
 
 // Judge splits observed skips into the ones nothing declared, and the [Always]

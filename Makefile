@@ -106,7 +106,9 @@ GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 # every skip this repository has ever taken was absent from every CI log. The
 # gate renders the stream back to ordinary output as it reads, so a log looks
 # unchanged, and then fails on a skip nothing declared. `go doc ./internal/skipgate`
-# has the two defects that were found by measuring rather than by reading.
+# has the two defects that were found by measuring rather than by reading, and
+# the third that was found in the gate itself — a test binary that DIES reports
+# nothing, so its panic sat in the gate's own buffer and went nowhere.
 #
 # IT RUNS `go test` RATHER THAN CONSUMING A PIPE. As a pipeline the gate was
 # the last command, so make saw only ITS status and `go test`'s was lost — and
