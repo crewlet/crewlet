@@ -206,7 +206,17 @@ export function People() {
   const sandboxes = useSandboxes();
   const org = useOrg();
   const [view, setView] = useTab("view", VIEWS);
-  const [group, setGroup] = useTab("group", GROUPINGS);
+  // A GROUPING IS A FILTER, not a section, which is `tabs.ts`'s own
+  // distinction: a section is the page you are on and takes the number keys,
+  // a filter narrows what is on it and leaves them alone. Declared as a
+  // section it bound the digits a SECOND time on this one screen —
+  // `useKeyChords` installs one window listener per call and each returns
+  // after its own first match, so there is no precedence and both fired:
+  // `1` set the view AND regrouped, `2` set the view AND regrouped, and `3`,
+  // which is past the end of the two views, moved the grouping alone. It also
+  // put every regroup in the history, so Back walked groupings instead of
+  // leaving the screen.
+  const [group, setGroup] = useTab("group", GROUPINGS, "filter");
   const [q, setQ] = useParam("q", "");
 
   const index = useMemo(() => indexOrg(org), [org]);
