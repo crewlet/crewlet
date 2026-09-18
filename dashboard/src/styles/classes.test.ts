@@ -547,6 +547,11 @@ const ALLOWED: Allowed[] = [
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",
   },
+  {
+    name: "crewlet-tabs--pill",
+    why: "uilet's Tabs writes it for its default variant. styles/screens.css bounds it at its container and makes it scroll, which the package already does for its underline row and not for this one: `.crewlet-tabs` is `display: inline-flex` and the pill variant is `width: fit-content`, and neither caps — a flex row of nowrap labels has a min-content width equal to the sum of them. Measured on the tracker at 390px, the view switcher stood 497px wide and took the document to 642, so the reader dragged the whole page to reach a tab past the edge. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
 ];
 
 /**

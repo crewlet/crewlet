@@ -267,6 +267,113 @@ describe("the frame's layout", () => {
   // Asserted in the SHEET for the same reason as everything else in this file:
   // jsdom computes no layout, and a media query is invisible to every suite
   // that renders the frame.
+  // A CLOSED DRAWER IS OUT OF REACH, NOT MERELY OUT OF SIGHT.
+  //
+  // The workspace sidebar becomes a drawer under 960px and leaves on a
+  // `transform`, which moves pixels and nothing else. Closed, it still held
+  // EIGHT TAB STOPS — the filter box, the four section links and every project
+  // in the tree — so a reader tabbing the page lost focus into a panel 260px
+  // off the left edge with no scroll that could reach it, and a screen reader
+  // read out a whole navigation nobody could see. On twenty of the
+  // twenty-four screens.
+  //
+  // Asserted in the SHEET because that is where the fact lives: jsdom computes
+  // no layout, applies no media query and gives `visibility` no effect on
+  // `document.activeElement`, so a render test would pass either way.
+  test("the drawer that is closed is out of the focus order, not just off-screen", () => {
+    const css = sheet("frame.css");
+    const narrow = css.slice(css.indexOf("@media (max-width: 960px)"));
+    const shut = block(narrow, ".workspace-side");
+    const open = block(narrow, '.workspace-side[data-open="true"]');
+
+    // VISIBILITY IS THE PROPERTY THAT DOES IT. `opacity` and `transform` leave
+    // a subtree focusable; `display` would skip the slide outright.
+    expect(shut).toMatch(/visibility:\s*hidden/);
+    expect(open).toMatch(/visibility:\s*visible/);
+
+    // AND IT IS DELAYED ONE WAY AND NOT THE OTHER, which is the whole reason
+    // it can sit beside a slide: hidden only once the drawer has finished
+    // leaving, visible the moment it starts arriving.
+    expect(shut).toMatch(/visibility 0s linear var\(--dur\)/);
+    expect(open).toMatch(/visibility 0s(?!\s+linear)/);
+    // A SHORTHAND STILL CARRIES THE SLIDE. Writing `transition: visibility ...`
+    // alone would replace it and the drawer would jump.
+    expect(shut).toMatch(/transform var\(--dur\) var\(--ease\)/);
+    expect(open).toMatch(/transform var\(--dur\) var\(--ease\)/);
+  });
+
+  // AND WHAT IS INVISIBLE TAKES NO SPACE ANYWHERE.
+  //
+  // `.sr-only` is `position: absolute` with no offset, so its box sits at its
+  // STATIC position — and an absolutely positioned box contributes to the
+  // scrollable overflow of its containing block, which with no positioned
+  // ancestor is the page. One inside a horizontal SCROLLER therefore sits at
+  // the scroller's own content coordinate rather than anywhere the viewport
+  // can see, and stretches the document to reach it.
+  //
+  // Measured on the tracker board at 390px: four 1px spans inside the second
+  // lane's priority marks sat at x=573 and took the page to 574, so the
+  // heading, the filters and the fixed bottom bar all dragged sideways to
+  // reach a span nobody can see. The lanes themselves were contained the whole
+  // time, which is what made it unreadable from the markup.
+  test("a screen-reader-only box cannot stretch the page", () => {
+    const only = block(sheet("base.css"), ".sr-only");
+    expect(only).toMatch(/position:\s*absolute/);
+    // BOTH AXES. A vertical scroller has the same hole, and an offset on one
+    // axis leaves the box at its static position on the other.
+    expect(only).toMatch(/left:\s*0/);
+    expect(only).toMatch(/top:\s*0/);
+  });
+
+  // A TAB ROW SCROLLS RATHER THAN PUSHING THE WHOLE SCREEN SIDEWAYS.
+  //
+  // uilet states this rule for its underline row and not for its pill one: a
+  // `.crewlet-tabs` is `display: inline-flex` and the pill variant is
+  // `width: fit-content`, and neither caps at the container, because a flex
+  // row of nowrap labels has a MIN-content width equal to the sum of them.
+  //
+  // Measured on the tracker at 390px: the view switcher stood 497px wide and
+  // took the DOCUMENT to 642, so the reader dragged the page — heading,
+  // filters and summary card with it — to reach a Table tab past the edge.
+  // The set is data-driven there (`views.map`), so it is not five tabs by
+  // construction: a founder who pins two more makes it worse at every width.
+  //
+  // `max-width` is the half that matters, and the reason `overflow-x` alone
+  // changes nothing: without it the box is still as wide as its content and a
+  // scrollport has nothing to hide.
+  test("a pill tab row is bounded by its container, not by its content", () => {
+    const pill = block(sheet("screens.css"), ".crewlet-tabs--pill");
+    expect(pill).toMatch(/max-width:\s*100%/);
+    expect(pill).toMatch(/overflow-x:\s*auto/);
+  });
+
+  // AND THE ONE TABLE LEFT IN THE PRODUCT STACKS THERE TOO.
+  //
+  // The retention screen's per-domain terms are a real `<table>` — a block
+  // that already titled itself, with no header row and nothing to sort — and
+  // four columns, two of them whole sentences, do not have 390px between them.
+  // Measured at 536px wide inside a 390px page, with no scroller anywhere
+  // above it, so 146px of every remedy was simply gone: on the one screen
+  // whose subject is "what is blocking the trim and what do I do about it".
+  //
+  // A `<table>` IGNORES ITS CHILDREN'S DISPLAY unless the table itself stops
+  // being one — blocking only the rows leaves the anonymous table box in place
+  // and the columns come straight back — which is why all four levels are
+  // asserted rather than just the row.
+  test("the one remaining table stacks on a phone", () => {
+    const css = sheet("components.css");
+    const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
+    expect(narrow, "components.css has no phone breakpoint").toContain(".table");
+    for (const level of [".table", ".table tbody", ".table tr", ".table td"]) {
+      expect(rules(narrow, level).join(" "), `${level} still lays out as a table at 390px`).toMatch(
+        /display:\s*block/,
+      );
+    }
+    // A RULE BETWEEN TERMS, since a row is no longer a line. Between rather
+    // than under, so the last term does not draw one against the block's edge.
+    expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
+  });
+
   test("the page bar wraps rather than pushing the chrome off a phone", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));

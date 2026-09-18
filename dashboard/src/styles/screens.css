@@ -1076,6 +1076,36 @@
   gap: var(--space-2);
 }
 
+/* A PILL ROW SCROLLS RATHER THAN PUSHING THE SCREEN SIDEWAYS, which is the
+   rule uilet already states for its underline row and not for this one. A
+   `.crewlet-tabs` is `display: inline-flex` and the pill variant is
+   `width: fit-content`, and neither caps: a flex row of nowrap labels has a
+   MIN-content width equal to the sum of them, so `fit-content` resolves to
+   the whole row and the box simply grows past its container.
+
+   Measured on the tracker at 390px: the view switcher stood 497px wide and
+   the DOCUMENT went to 642, so the reader scrolled the page — the heading,
+   the filters and the summary card with it — to reach a Table tab that was
+   past the edge with nothing else to drag. The set is data-driven there
+   (`views.map`), so it is not five tabs by construction; a founder who pins
+   two more makes it worse on every screen size.
+
+   `max-width` is the half that matters and the reason `overflow-x` alone
+   would change nothing: without it the box is still the width of its content
+   and there is nothing for a scrollport to hide. The scrollbar goes for the
+   package's own reason — it would sit on the baseline the pills are drawn on,
+   and the row answers the arrow keys either way. What uilet needs is this on
+   `.crewlet-tabs--pill` upstream, after which this rule goes. */
+.crewlet-tabs--pill {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.crewlet-tabs--pill::-webkit-scrollbar {
+  display: none;
+}
+
 /* A phase whose text is arriving right now. The ring is what the seat page
    needed: a running turn that looks different from a finished one at a
    glance, rather than only by reading its badge. */

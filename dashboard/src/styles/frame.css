@@ -988,12 +988,36 @@
     width: var(--sidebar-w);
     z-index: var(--z-drawer);
     transform: translateX(-110%);
-    transition: transform var(--dur) var(--ease);
     box-shadow: var(--shadow-2);
+
+    /* AND OUT OF REACH, NOT MERELY OUT OF SIGHT. A transform moves pixels and
+       nothing else: the closed drawer kept EIGHT TAB STOPS — the filter box,
+       the four section links and every project in the tree — so a reader
+       tabbing the page lost focus into a panel 260px off the left edge, with
+       no scroll that could bring it back, and a screen reader read out a whole
+       navigation nobody could see. On twenty of the twenty-four screens.
+
+       `visibility` is the property that takes a subtree out of the focus order
+       AND out of the accessibility tree, and it animates in DISCRETE steps,
+       which is what makes it usable beside a slide: delayed by the slide's own
+       duration on the way out, so the drawer is still drawn while it leaves,
+       and switched with no delay on the way in, so it is reachable the moment
+       it starts arriving. `display: none` cannot do either half — it would
+       skip the animation outright — and `inert` cannot be spelled here at all,
+       because whether this aside is a drawer is a fact about the VIEWPORT and
+       the markup is the same at every width. */
+    visibility: hidden;
+    transition:
+      transform var(--dur) var(--ease),
+      visibility 0s linear var(--dur);
   }
 
   .workspace-side[data-open="true"] {
     transform: none;
+    visibility: visible;
+    transition:
+      transform var(--dur) var(--ease),
+      visibility 0s;
   }
 }
 

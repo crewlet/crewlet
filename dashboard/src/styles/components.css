@@ -153,6 +153,47 @@ a.org-node:hover {
   white-space: nowrap;
 }
 
+/* AND ON A PHONE ITS ROW IS A BLOCK, for the reason `DataGrid`'s row is a card
+   at the same width (see frame.css): four columns, two of them whole
+   sentences, do not have 390px between them. Measured there at 536px wide with
+   the page at 390 — and unlike the grid there is no scroller anywhere above
+   it, so 146px of every remedy was simply GONE, which on the one screen whose
+   subject is "what is blocking the trim and what do I do about it" takes the
+   answer off the screen.
+
+   NO LABELS, unlike the grid's cards: these four cells are a term's name in
+   code, its sequence or state, what was read, and what to do — each one reads
+   as itself, and the name at the top of the block is what the other three are
+   about. The rule between rows is what separates one term from the next; the
+   table had none, because a row was a line.
+
+   `display: block` ON EVERY LEVEL, because a `<table>` element ignores its
+   children's display unless the table itself stops being one: leaving `.table`
+   as a table and blocking only the rows leaves the anonymous table box in
+   place, and the columns come back. */
+@media (max-width: 860px) {
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+  }
+  .table tr {
+    padding: var(--space-2) 0;
+  }
+  .table tr + tr {
+    border-top: 1px solid var(--border-subtle);
+  }
+  .table td {
+    padding: 1px 0;
+  }
+  /* THE NAME IS THE BLOCK'S HEAD, so it keeps its own line and its nowrap —
+     a term name is an identifier and breaking it mid-word helps nobody. */
+  .table td:first-child {
+    padding-bottom: var(--space-1);
+  }
+}
+
 /* ---- List row -----------------------------------------------------------
    The non-tabular list: an activity feed, a search result, a conversation. */
 

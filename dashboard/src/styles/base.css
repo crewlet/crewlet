@@ -371,9 +371,30 @@ button.histogram-bar {
 }
 
 /* Available to a screen reader, invisible to everyone else. Used wherever a
-   mark carries meaning that colour alone would otherwise have to. */
+   mark carries meaning that colour alone would otherwise have to.
+
+   AND INVISIBLE INCLUDES "TAKES NO SPACE ANYWHERE", which the usual recipe
+   does not give you. Without an offset an absolutely positioned box sits at
+   its STATIC position, and an absolutely positioned box contributes to the
+   scrollable overflow of its containing block — which, with no positioned
+   ancestor, is the page. So one of these inside a horizontal SCROLLER is at
+   the scroller's own content coordinate rather than at anything the viewport
+   can see, and it stretches the document to reach it: measured on the tracker
+   board at 390px, four 1px spans inside the second lane's priority marks sat
+   at x=573 and took the whole page to 574 — the heading, the filters and the
+   fixed bottom bar dragging sideways with them to reach a span nobody can
+   see. The board's own lanes were contained correctly the entire time.
+
+   PINNED TO THE CONTAINING BLOCK'S ORIGIN, therefore. Nothing here is ever
+   revealed on focus — there is no skip link in this product — so the static
+   position carries no meaning, and the reading order a screen reader follows
+   is the DOM's rather than the layout's. `margin: -1px` then puts the box at
+   -1, whose right edge is 0: contained, and never a source of overflow in the
+   other direction either. */
 .sr-only {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   padding: 0;
