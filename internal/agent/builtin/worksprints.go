@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -148,6 +149,55 @@ func (t *manageSprint) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"credential manages its sprints — starting one changes what the "+
 			"whole team is expected to work on, and closing one decides what "+
 			"counted.", project)), nil
+	}
+
+	// AND THE SPRINT IS RESOLVED BEFORE ANYTHING IS PUBLISHED, which is the
+	// gesture every other write tool here already makes — `update_work_item`
+	// reads its item and answers "There is no work item ENG-999" rather than
+	// publishing a record whose decide will refuse.
+	//
+	// WITHOUT IT THE THREE-VALUED ANSWER COLLAPSED. The writer's decide sees
+	// only this node's own rows inside its transaction, so an absent sprint
+	// is ambiguous there — it may be one no record ever minted, or one this
+	// node has not applied yet — and it says the second: "sprint ENG.9 is not
+	// on this node: statelog: unavailable", wrapping [statelog.ErrUnavailable],
+	// which every reader of that sentinel is entitled to read as "retry, or
+	// try another node". Measured against a running engine, `start` on a
+	// sprint nobody had minted answered exactly that, and no retry anywhere
+	// would ever have made it true.
+	//
+	// A READ CAN TELL THEM APART where the decide cannot: it is served at a
+	// level that waits for this node to be caught up, and it reports its own
+	// COVERAGE separately from its freshness. Complete and empty is "there is
+	// no such sprint", definitively; incomplete is the genuine third value,
+	// and it says so in those words instead of inviting a retry that cannot
+	// help.
+	reader, ok := t.deps.Reader.(ProjectReader)
+	if !ok || t.deps.Reader == nil {
+		return unconfigured(tracker.ManageSprintTool), nil
+	}
+	// ARCHIVED INCLUDED, because an archived sprint EXISTS: refusing it here
+	// as "there is no sprint 3" would be the same false permanent answer one
+	// case over. What an archived sprint may become is the record's own state
+	// machine to refuse, in its own words.
+	listing, err := reader.Sprints(ctx, tracker.SprintQuery{
+		Project: project, Number: number, Archived: true, Level: seatReadLevel,
+	}, t.deps.now())
+	switch {
+	case errors.Is(err, tracker.ErrNoProject):
+		return failed(fmt.Sprintf("There is no project %q — list_projects "+
+			"reports the keys.", clip(project))), nil
+	case err != nil:
+		return failed(readFailure(tracker.ManageSprintTool, err)), nil
+	case !listing.Complete:
+		return failed(fmt.Sprintf("%s could not establish whether sprint %s.%d "+
+			"exists. %s", tracker.ManageSprintTool, project, number,
+			incompleteNote(listing.Incomplete))), nil
+	case len(listing.Sprints) == 0:
+		return failed(fmt.Sprintf("There is no sprint %d in %s. Sprints are "+
+			"minted by the engine from the project's own policy, not by this "+
+			"tool — sprint_report lists the ones that exist, with their "+
+			"numbers.", number, project)), nil
 	}
 
 	writer := t.deps.SprintWriter(actor)

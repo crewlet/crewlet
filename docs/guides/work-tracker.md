@@ -279,6 +279,16 @@ a team made together, so starting one changes what everybody is expected to
 work on and closing one decides what counted. A seat that could do either would
 be deciding its own team's plan; a person is not a seat.
 
+It resolves the sprint **before** it writes anything, and its refusals are
+three different answers rather than two. A sprint number nobody minted is
+`There is no sprint 9 in ENG` — permanent, and it names `sprint_report` as the
+way to find the ones that exist. A project that is not there is named the same
+way. And a node that holds records it cannot read whose scope reaches the
+question says exactly that instead of either: it does not know whether the
+sprint exists, so it claims neither. Without the resolution the writer answered
+all three as *"sprint ENG.9 is not on this node"* — a transient failure, which
+invites a retry that cannot succeed.
+
 **Capacity.** `sprints.capacity` is what each seat can take in a sprint, keyed
 by handle and stated in that project's own measure — `{"ada": {"points": 8}}`.
 A seat named there is compared against it, in the sprint report and on the

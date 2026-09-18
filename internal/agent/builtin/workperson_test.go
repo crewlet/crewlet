@@ -418,7 +418,13 @@ func TestAnOperatorCarriesTheAuthorityToManageASprint(t *testing.T) {
 			reg := tools.NewRegistry()
 			for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 				Work: builtin.WorkDeps{
-					Reader:       newFakeTracker(),
+					// THE SPRINT EXISTS, which this case is not about
+					// and every case needs: the tool resolves the
+					// sprint before it writes, so a reader answering
+					// nothing refuses on the wrong ground and the
+					// authority under test is never reached. See
+					// worksprints_test.go for what that resolution is.
+					Reader:       trackerHoldingSprint("ENG", 1),
 					Writer:       newFakeTracker().as,
 					SprintWriter: func(builtin.Actor) builtin.SprintWriter { return sprints },
 					Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
