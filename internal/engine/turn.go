@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -363,6 +365,25 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		// decides what to do with the delivery, and `err != nil` does not
 		// say. See [Abandon].
 		if !result.Acted {
+			// THE SAME CONDITION THE SCREENING ABOVE REFUSES, detected a
+			// phase later: the seat's grant moved while the turn was
+			// running and its fence closed. That is a healthy delivery a
+			// successor is already entitled to, not a broken turn, so it
+			// gets the disposition the screening gives it — deferred,
+			// which hands it on at zero accrued redeliveries and quiesces
+			// this attachment, rather than naked, which spends one of the
+			// trigger's twenty-five deliveries on a node that has nothing
+			// to do with the seat any more. Detected in two places because
+			// the window is open the whole length of a turn; answered in
+			// one way, because it is one condition.
+			if errors.Is(err, seat.ErrSeatMoved) {
+				if d.NoteDeferred != nil {
+					d.NoteDeferred(handle)
+				}
+				log.InfoContext(ctx, "turn_seat_moved", "seat", handle,
+					"work_key", req.WorkKey, "error", err.Error())
+				return queue.Defer("the seat moved to another node mid-turn")
+			}
 			// Nothing this turn did can be proven to have left the
 			// engine, so a redelivery really does run it cleanly. This
 			// is the sentence the old comment claimed for every failure.
@@ -391,8 +412,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 // is the honest price and the reason this needs proof rather than suspicion:
 // the record is [turn.Acted], which counts only calls a tool's own annotations
 // prove reached outside. Everything else — a provider that never answered, a
-// runner that could not be built, a refused budget, a seat handed to another
-// node mid-call — proves nothing, keeps today's NAK and keeps its retry.
+// runner that could not be built, a refused budget — proves nothing and keeps
+// its retry. A seat handed to another node mid-turn keeps its retry too, but
+// as a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence]
+// for what detects it.
 //
 // It is not silent. The turn has already published its own completion marked
 // failed (see [Engine.publishTurnCompleted], which fires on the error path),

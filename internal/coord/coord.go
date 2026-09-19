@@ -29,12 +29,22 @@
 //
 // Three rules carry the correctness of everything above:
 //
-//  1. Every write on behalf of a resource is fenced by the epoch.
-//     TryAcquire returns it; callers thread it into their conditional
-//     writes. A zombie's late write bounces instead of corrupting state.
-//     The epoch is therefore MONOTONIC FOR THE LIFETIME OF THE RESOURCE —
-//     releasing a lease must not reset it, because a counter that restarts
-//     hands the next owner a token the previous one is still using.
+//  1. The epoch is the fencing token, and TryAcquire returns it so callers
+//     can thread it into their conditional writes. It is MONOTONIC FOR THE
+//     LIFETIME OF THE RESOURCE — releasing a lease must not reset it,
+//     because a counter that restarts hands the next owner a token the
+//     previous one is still using.
+//
+//     What is actually fenced BY THE WRITE is every coordination write here
+//     and the sandbox run state, whose rows carry an owner_epoch a lower
+//     one cannot outrank. A seat-scoped SQL write is not: those are made
+//     safe by being keyed on the work rather than on the writer, and the
+//     per-table inventory is in docs/concepts/seat-ownership.md rather
+//     than restated here. What stops the zombie MAKING them is the seat
+//     fence — [seat.Host.Fence], checked at the top of every tool-loop
+//     round and before each of that round's calls — which is a different
+//     guarantee from a write that bounces, and the difference is the
+//     window between two checks.
 //
 //  2. A lapsed lease cannot be renewed, only re-acquired — and re-acquiring
 //     bumps the epoch even for the same owner. During the gap the owner's

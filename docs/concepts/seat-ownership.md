@@ -98,7 +98,19 @@ That also gives the right answer during a database blip. The lease row is untouc
 
 ## Fencing: what it protects, and what it cannot
 
-The epoch is threaded into the **sandbox run state** — every mutation on a live run record is refused when the record's `owner_epoch` outranks the writer's — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
+The epoch is threaded into the **sandbox run state**: every mutation on a live run record is refused when the record's `owner_epoch` outranks the writer's. Beside it, the **seat fence** (`seat.Host.Fence`) is checked in the turn loop at the top of every round and again before each of that round's tool calls. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops before its next tool call.
+
+The fence exists because admission and the work it admits are minutes apart. `MayStart` proves the seat was held when the turn *started*; the turn then calls models, fires tools, posts to chat and writes to the tracker long after that, and the queue contract is explicit that nothing else closes the gap — a detach "does NOT wait for a running handler". The commonest trigger is not even a lost lease: the placement sweep hands a seat back voluntarily when the fleet grows, a peer claims it within a sweep interval, and without the fence the previous owner goes on being that seat until its turn happens to end.
+
+It closes on the **epoch**, not on membership, because a seat can be lost and re-claimed here within one heartbeat and the re-claim is a different grant. Three things deliberately do **not** close it:
+
+| | Why not |
+|---|---|
+| An unreachable coordination store | Says nothing about ownership, so the heartbeat keeps the seat. Closing here would tear a healthy company's turns down over a two-second blip during which no peer could have claimed anything — the three-valued rule paying for itself |
+| A seat whose teardown could not be proven | The lease is kept and renewed precisely so no peer can take it, so the grant has not moved and the in-flight turn is racing nobody |
+| A detached run — a coding CLI in agent mode, or a sandbox job | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds |
+
+A turn the fence stops is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back at zero accrued redeliveries. The one exception is a turn whose own record proves it already wrote outside the engine — that is acked and recorded instead, because a successor would repeat the write.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 

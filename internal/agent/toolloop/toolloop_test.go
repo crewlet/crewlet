@@ -684,6 +684,43 @@ func TestTheFenceRunsBeforeAnythingIsSpent(t *testing.T) {
 	}
 }
 
+func TestTheFenceRunsBetweenARoundsCalls(t *testing.T) {
+	t.Parallel()
+	// A round is ONE model turn and MANY tool calls, and the calls are what
+	// reach outside the engine. Checking only at the top of the round lets
+	// a node that lost the seat run out every remaining call in the round
+	// it was already in — which is the chat post, the tracker write and
+	// the sandbox launch, serially, on a seat a peer is now running.
+	sentinel := errors.New("seat lost")
+	p := &scriptedProvider{turns: []llm.Completion{{
+		Content: "working",
+		ToolCalls: []llm.ToolCall{
+			toolCall("1", "read"), toolCall("2", "read"), toolCall("3", "read"),
+		},
+	}}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+
+	// Open for the first call and closed from then on, which is a lease
+	// that moved while the round's tools were running.
+	calls := 0
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5,
+		Fence: func() error {
+			calls++
+			if calls <= 2 {
+				return nil
+			}
+			return sentinel
+		},
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want the caller's own sentinel unwrapped", err)
+	}
+	if len(s.ran) != 1 {
+		t.Errorf("tools ran past a fence that closed after the first call: %v", s.ran)
+	}
+}
+
 // --- progress --------------------------------------------------------------
 
 func TestProgressIsPublishedTwicePerRound(t *testing.T) {
