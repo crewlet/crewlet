@@ -228,6 +228,53 @@ test("a cell carries its column's name, and only when that name is a word", () =
   expect(heads.map((h) => h.textContent)).toEqual(["Id", "·", "", ""]);
 });
 
+// A SHRINK COLUMN CANNOT STARVE THE ONES THE LIST IS FOR.
+//
+// `max-content` is not "shrink to content" — it is GROW to content, with no
+// ceiling, and grid resolves it before it gives anything to a `minmax(0, 1fr)`.
+// So one long value in a narrow column takes whatever it likes and every
+// flexible column collapses to ZERO.
+//
+// Measured against a running engine, and it is the flexible columns that go:
+// the schedules grid in an 822px content column drew Wakes at 502px with Name
+// and Task at 0px, and still ran to 1139px inside a box that clips. The work
+// table at 1000px drew Assignee at 220px with TITLE at zero — a tracker whose
+// title column is invisible.
+//
+// jsdom computes no layout, so what is asserted is the TEMPLATE: the string
+// the wrap is handed, which is where the decision is.
+test("a shrink column is capped and a flexible one is not", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", shrink: true, cell: (r) => r.id },
+          { key: "title", header: "Title", cell: (r) => r.id },
+          // AN EXPLICIT WIDTH STILL WINS, because a caller that named a number
+          // has already answered this question.
+          { key: "fixed", header: "Fixed", shrink: true, width: "7rem", cell: (r) => r.id },
+        ]}
+      />
+    </Router>,
+  );
+  const wrap = container.querySelector<HTMLElement>(".grid-wrap");
+  const template = wrap?.style.gridTemplateColumns ?? "";
+
+  // THE CAP IS A FRACTION rather than a pixel count: it has to mean the same
+  // thing on a phone and on a wide screen, where a pixel cap is a desktop's
+  // proportions pinned onto a laptop.
+  expect(template).toMatch(/fit-content\(\d+%\)/);
+  // AND `fit-content`, not `max-content`: a column under the cap keeps sizing
+  // to its own content and only one that would take more gives way.
+  expect(template).not.toMatch(/max-content/);
+  // The flexible column keeps its floor of zero — it is the one that may give
+  // way, and a floor here would make the grid overflow instead.
+  expect(template).toContain("minmax(0, 1fr)");
+  expect(template).toContain("7rem");
+});
+
 test("one keystroke activates one grid, not every grid on the screen", () => {
   const seen: string[] = [];
   twoGrids(seen);

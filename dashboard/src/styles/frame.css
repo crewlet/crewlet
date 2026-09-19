@@ -896,11 +896,21 @@
 
 /* A column that shrinks to its content and never wraps — a key, a timestamp,
    a status. It was declared on the table this grid replaced, and the grid has
-   named it since it was written: the track is already `max-content` (see the
-   template), so what this adds is that the CELL does not wrap inside it. */
+   named it since it was written: the track sizes to the cell's content up to a
+   cap (see `SHRINK_CAP` in DataGrid.tsx), so what this adds is that the CELL
+   does not wrap inside it.
+
+   AND THAT IT DOES NOT PAINT OUTSIDE IT, which the cap made reachable: a
+   nowrap cell whose track is capped is a cell narrower than its own content,
+   and a flex row of tags has no ellipsis to give. Measured on the schedules
+   grid at 1000px — a 128px track holding 164px of tags, the last one spilling
+   36px over the column beside it. `clip` rather than `hidden` for the reason
+   `.grid-wrap` gives above: a scrollport here would be one nothing can scroll,
+   and it would cut the sticky head off at the cell. */
 .grid-th.shrink,
 .grid-cell.shrink {
   white-space: nowrap;
+  overflow: clip;
 }
 
 .grid-cell.right {

@@ -369,6 +369,19 @@ the reader had touched. A name rather than an index, because an index is a fact
 about the source order and inserting a grid above would move every link's
 meaning by one.
 
+**A `shrink` column is capped, because `max-content` is not "shrink to
+content" — it is *grow* to content, with no ceiling.** Grid resolves an
+intrinsic track before it gives anything to a flexible one, so a single long
+value takes whatever it likes and every flexible column collapses to zero. The
+schedules grid drew its Wakes column at 502px of an 822px grid with **Name and
+Task at 0px** — at every width, not just a narrow one — and still ran 317px
+past a box that clips; the work table at 1000px drew Assignee at 220px with the
+**title** at zero. A shrink track is `fit-content` of a fraction of the grid
+now, so a column under the cap is untouched and only one that would take more
+than its share gives way. One fraction for every grid rather than a pixel floor
+per column, which is a number that would have to be invented nineteen times and
+re-invented at every width.
+
 **Below 860px a row is a card, because 390px has no columns.** The audit's six
 want 808px between them and the work trash's twelve want more, and the grid's
 wrap is `overflow: clip` — the same decision that keeps the head sticky — so

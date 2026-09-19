@@ -327,6 +327,26 @@ describe("the frame's layout", () => {
     expect(row).toMatch(/min-width:\s*100%/);
   });
 
+  // AND A CAPPED CELL DOES NOT PAINT OUTSIDE ITS TRACK.
+  //
+  // `shrink` means the cell never wraps, and `SHRINK_CAP` in DataGrid.tsx means
+  // its track can now be narrower than its content — so the two together make a
+  // cell that spills sideways over the column beside it, and a flex row of tags
+  // has no ellipsis to give. Measured on the schedules grid at 1000px: a 128px
+  // track holding 164px of tags, the last one 36px into its neighbour.
+  //
+  // `clip` rather than `hidden`, for the same reason `.grid-wrap` gives: a
+  // scrollport here is one nothing can scroll, and it would confine the sticky
+  // head to the cell.
+  test("a cell narrower than its content is cut, not spilled", () => {
+    const shrink = rules(sheet("frame.css"), ".grid-cell.shrink").join(" ");
+    expect(shrink).toMatch(/white-space:\s*nowrap/);
+    expect(shrink).toMatch(/overflow:\s*clip/);
+    expect(shrink, "`hidden` makes it a scrollport and kills the sticky head").not.toMatch(
+      /overflow:\s*hidden/,
+    );
+  });
+
   // A LABEL THE RAIL CANNOT HOLD GOES WITH THE REST OF THEM.
   //
   // `Shell.tsx` drops the engine's word when the READER collapses the rail,

@@ -90,6 +90,25 @@ function compare(a: string | number, b: string | number): number {
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
 }
 
+/**
+ * The most of a grid one `shrink` column may take.
+ *
+ * A cap has to leave room for the flexible columns that are the point of the
+ * list — a title, a subject, a name — and a grid's widest shrink column is
+ * routinely a status pill, a handle or a timestamp, all of which sit far under
+ * this. What it bites on is the value that had no business being a column of
+ * its own width: the schedules grid's Wakes at 502px of an 822px grid, the
+ * work table's Assignee at 220px of 644.
+ *
+ * 20% rather than a pixel count because it has to hold at every width — a
+ * fraction of the grid is the same promise on a phone and on a wide screen,
+ * where a pixel cap is a desktop's proportions pinned onto a laptop. Two
+ * shrink columns at the cap still leave three fifths of the grid, and a grid
+ * carrying five columns that each want a fifth of it is one whose author has
+ * to choose, which is what `optional` is for.
+ */
+const SHRINK_CAP = "20%";
+
 /** `sort=-updated` → `{key: "updated", desc: true}`. */
 export function parseSort(raw: string): { key: string; desc: boolean } | null {
   if (!raw) return null;
@@ -326,8 +345,27 @@ export function DataGrid<T>({
   // `subgrid` passthrough (see `.grid-head`/`.grid-body`/`.grid-band`/
   // `.grid-row` in frame.css) — which is also what makes a head cell and a
   // cell twenty rows below it size the SAME track.
+  // AND A SHRINK COLUMN IS CAPPED, because `max-content` is not "shrink to
+  // content" — it is GROW to content, without a ceiling, and grid resolves it
+  // before it gives anything to a `minmax(0, 1fr)`. So one long value in a
+  // narrow column starves every flexible one to ZERO and still overflows.
+  //
+  // Measured against a running engine, and it is the flexible columns that
+  // vanish: the schedules grid in an 822px content column drew Wakes at 502px
+  // — sixty per cent of the grid — with Name and Task at 0px, and STILL ran to
+  // 1139px of content inside a box that clips. The work table at 1000px drew
+  // Assignee at 220px with TITLE at zero. A tracker whose title column is
+  // invisible is not a list.
+  //
+  // `fit-content(<percentage>)` is `min(max-content, max(min-content, <cap>))`
+  // — so a column under the cap is untouched and keeps sizing to its content,
+  // and only one that would take more than its share gives way. ONE FRACTION
+  // FOR EVERY GRID rather than a pixel floor per column, which is a number
+  // that would have to be invented nineteen times and re-invented at every
+  // width. It resolves against the grid's own content box, so it scales with
+  // the window instead of pinning a laptop to a desktop's proportions.
   const template = shownColumns
-    .map((c) => c.width ?? (c.shrink ? "max-content" : "minmax(0, 1fr)"))
+    .map((c) => c.width ?? (c.shrink ? `fit-content(${SHRINK_CAP})` : "minmax(0, 1fr)"))
     .join(" ");
 
   if (flat.length === 0 && empty) {
