@@ -231,7 +231,37 @@ func TestADetachedRunsRowKeepsThePartitionAndTheConversationApart(t *testing.T) 
 	}
 }
 
-// Bookkeeping fails open on both paths: the turn has already delivered, and// Bookkeeping fails open on both paths: the turn has already delivered, and
+// AND A RESUME READS THEM BACK OUT OF THE ROW INTO THE RIGHT FIELDS.
+//
+// The launch's mapping had a test; the resume's did not, and it is the same
+// crossed pair in the other direction — the row's ConversationKey is the
+// IDENTITY, so reading it as the partition collapses the two into one value
+// the moment a run parks a second time. A re-parked row then carries the bare
+// DM channel where its first launch carried the thread, and
+// sandbox.ConversationRef.Best loses the one fact that tells two questions on
+// one direct-message line apart.
+func TestAResumeKeepsThePartitionAndTheConversationApart(t *testing.T) {
+	t.Parallel()
+	company := &Company{Org: &org.Organization{
+		Name:  "Acme",
+		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
+	}}
+
+	tel := (&Engine{}).describeResume(context.Background(), company,
+		resumed(theDM, theDMThread))
+
+	if tel.convKey != theDM {
+		t.Errorf("the resumed turn's conversation = %q, want the DM line the "+
+			"person answers on", tel.convKey)
+	}
+	if tel.partKey != theDMThread {
+		t.Errorf("the resumed turn's partition = %q, want the batch the run "+
+			"was launched from: a run that suspends again writes this back "+
+			"onto its row", tel.partKey)
+	}
+}
+
+// Bookkeeping fails open on both paths: the turn has already delivered, and
 // an engine with no conversation ledger at all is the ordinary single-node
 // case rather than a fault.
 func TestRecordingAResumeNeverFailsTheRun(t *testing.T) {

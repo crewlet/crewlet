@@ -443,8 +443,19 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// to and is answered on, while the partition it was launched from
 		// is carried forward so a run that suspends AGAIN writes the same
 		// pair a first launch would.
+		//
+		// PartitionKey rather than ConversationKey for the second one,
+		// which is the whole of it: the row's ConversationKey is the
+		// IDENTITY — that is the field the split moved the name onto —
+		// so reading it here collapsed the pair the moment a run parked
+		// twice. A re-parked row then held the bare DM channel where its
+		// first launch held the thread, and [sandbox.ConversationRef.Best]
+		// lost the one fact that tells two questions on one direct
+		// message apart: with no partition to agree with, both rows fall
+		// through to recency and the reply to the question in one thread
+		// resumes the run waiting in the other.
 		convKey:   in.Run.Conversation(),
-		partKey:   in.Run.ConversationKey,
+		partKey:   in.Run.PartitionKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,
