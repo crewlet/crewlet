@@ -1,5 +1,5 @@
 /**
- * The Builder lens of the Org chart screen (`#/org?lens=builder`): editing the
+ * The Builder lens of the Org chart screen (`#/company?lens=builder`): editing the
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
@@ -105,6 +105,7 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
+import { screenPath } from "./dialogParts.tsx";
 import {
   type GlyphProps,
   AccountTreeGlyph,
@@ -1539,7 +1540,7 @@ function Lens({
                   <ButtonLink
                     size="small"
                     variant="tertiary"
-                    href={href(["config"], {
+                    href={href(screenPath("config"), {
                       lens: "diff",
                       revision: conflict.currentRevisionId,
                       against: state.base.revision,
@@ -1955,7 +1956,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
             {p.link === "integrations" && (
               <>
                 {" "}
-                <a className="t-link" href={href(["integrations"])}>
+                <a className="t-link" href={href(screenPath("integrations"))}>
                   Open Integrations
                 </a>
               </>
@@ -1963,7 +1964,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
             {p.link === "schedules" && (
               <>
                 {" "}
-                <a className="t-link" href={href(["schedules"])}>
+                <a className="t-link" href={href(screenPath("schedules"))}>
                   Open Schedules
                 </a>
               </>

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -624,5 +625,65 @@ func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 				"nobody signed is one an audit cannot attribute",
 				rel.CreatedBy, rel.CreatedAt)
 		}
+	}
+}
+
+// A BLOCKER CAN STILL BE EDITED — and until this existed, it could not be.
+//
+// The apply rewrites `blocker_open` and `cleared_at` on every row naming this
+// task as a blocker, on EVERY task apply: `maintainDeps` runs out of
+// `explodeTask`, which nothing gates on what the patch changed. The writer
+// widened its scope to those dependents only when the patch carried a STATUS,
+// so a patch to anything else claimed a scope short of what its own apply
+// writes — and [ScopeSet.covers] inside the decide refused it.
+//
+// The refusal was PERMANENT while reading as transient: it wraps
+// `statelog.ErrConflict` and tells the caller to re-run, and the re-run took
+// the same gate and came up short again. So a task somebody waited on could
+// never be retitled, re-assigned, re-pointed, given a due date or moved into
+// a sprint, for as long as the edge existed.
+func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	inSprint(t, r, "dep", nil)
+	inSprint(t, r, "blk", nil)
+	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
+		Note: "needs the schema first",
+	}, fixedLeads{project: "eng-lead"}); err != nil {
+		t.Fatalf("Depend: %v", err)
+	}
+	r.drain()
+
+	// NOT A STATUS PATCH — that one always worked, and asserting it would
+	// be asserting the half that was never broken.
+	//
+	// THE SPRINT IS MINTED FIRST, because a task may only be filed into one
+	// the project has: this case is about what a BLOCKER accepts, so it has
+	// to hand the writer an edit that is otherwise unimpeachable.
+	sprint := 3
+	seedSprintWindow(t, r, sprint, tracker.SprintFuture,
+		time.Now().UTC().Add(24*time.Hour), time.Now().UTC().Add(15*24*time.Hour), nil)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "blk", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Title: ptr("the blocker, retitled"), Sprint: &sprint,
+		}, tracker.ChangeSprint, nil); err != nil {
+		t.Fatalf("editing a blocker: %v — a task somebody waits on takes an "+
+			"ordinary edit like any other", err)
+	}
+	r.drain()
+
+	blk := r.task(t, "blk")
+	if blk.Task.Title != "the blocker, retitled" {
+		t.Errorf("title = %q, want the edit to have landed", blk.Task.Title)
+	}
+	if blk.Task.Sprint == nil || *blk.Task.Sprint != 3 {
+		t.Errorf("sprint = %v, want 3", blk.Task.Sprint)
+	}
+	// AND THE EDGE SURVIVED IT. The apply that took the edit is the same
+	// one that maintains the dependency rows, so a widened scope must not
+	// have cost the dependent its block.
+	if dep := r.task(t, "dep"); !dep.Blocked {
+		t.Error("the dependent is no longer blocked after its blocker was edited")
 	}
 }

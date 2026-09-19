@@ -50,7 +50,7 @@ export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: b
                 </li>
               ))}
             </ul>
-            <ScreenLink to={["secrets"]}>Open Secrets</ScreenLink>
+            <ScreenLink to="secrets">Open Secrets</ScreenLink>
           </div>
         </Callout>
       )}

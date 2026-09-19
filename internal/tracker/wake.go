@@ -3,6 +3,7 @@ package tracker
 import (
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -379,6 +380,35 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	add("project", before.Project, after.Project)
 	add("type", before.Type, after.Type)
 	add("tags", strings.Join(before.Tags, ", "), strings.Join(after.Tags, ", "))
+	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
+	// nothing here could observe it: a due date, an estimate, a size and a
+	// sprint had no producer in the tree, so their absence from this list
+	// was invisible. With one, a sprint move or a re-estimate wrote a
+	// history row and a notification card carrying NO deltas at all —
+	// which renders as the bare kind, and reads as a change that lost what
+	// it changed.
+	add("sprint", sprintText(before.Sprint), sprintText(after.Sprint))
+	// THE WHOLE INSTANT, which is [instantText] — the same helper a GOAL's
+	// due and start deltas already take, for the same two field names.
+	//
+	// A DAY IS NOT A DELTA. Rendered as a calendar day these compared
+	// equal whenever a move stayed inside one, so pulling a due time from
+	// 09:00 to 17:00 produced NO entry at all: the history row and the
+	// notification card carried the change's kind and nothing it changed,
+	// which is the exact failure the block above this one was added to
+	// end. The day form was also wrong about WHICH day for any company
+	// east or west of UTC — an all-day due date is stored as the
+	// company's own midnight, so truncating it in UTC moved it a day —
+	// and a delta written by the APPLIER cannot consult the company's
+	// zone to fix that: these rows are the state log's N identical
+	// copies, and text derived from live configuration would differ
+	// between two nodes at different epochs. The instant is the value
+	// that is both lossless and the same everywhere; rendering a day from
+	// it belongs to a surface, which knows the zone.
+	add("due", instantText(before.DueAt), instantText(after.DueAt))
+	add("start", instantText(before.StartAt), instantText(after.StartAt))
+	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
+	add("points", pointsText(before.Points), pointsText(after.Points))
 	if len(moved) == 0 {
 		return nil
 	}
@@ -432,4 +462,53 @@ func without(all, muted []string) []string {
 		}
 	}
 	return out
+}
+
+// The four schedule values, as the TEXT a delta carries.
+//
+// AN ABSENT VALUE IS THE EMPTY STRING, which every renderer of a delta already
+// draws as an em-dash — so "no due date → 16 Apr" reads the way "— → jun"
+// already does for an assignee.
+//
+// AND A ZERO IS ABSENT for a sprint, an estimate and a size, because in this
+// package it is the only absence those three have. [Task.StartAt] and
+// [Task.DueAt] are pointers and can be nil; [Task.EstimateMinutes] and
+// [Task.Points] are a plain int and a plain float64 over NOT NULL columns
+// defaulting to 0, and every reader of them already spends that zero as
+// "unsized" — a workload sums it, a burndown adds it, and a sprint's capacity
+// map skips the handle entirely. Rendering 0 as "0m" here would put a number
+// on the one surface that disagreed with all of them.
+//
+// The obvious alternative is to make "sized at nothing" its own fact by giving
+// the two fields the pointer this repo's zero-value rule calls for. It is not
+// wanted: nothing downstream can act on the distinction, and it would buy a
+// nullable column, a migration and a nil check in every sum to separate two
+// states that mean the same thing to a person reading a card. What a fold here
+// would cost — a size being CLEARED reported as no change at all — is not what
+// it costs: clearing 3 points renders "3" → "", which differs and is a delta
+// like any other. Only 0 → 0 folds, and that is not a change.
+
+// sprintText is the number, or empty for the backlog.
+func sprintText(n *int) string {
+	if n == nil || *n == 0 {
+		return ""
+	}
+	return strconv.Itoa(*n)
+}
+
+// minutesText is the estimate in minutes, or empty when there is none.
+func minutesText(minutes int) string {
+	if minutes == 0 {
+		return ""
+	}
+	return strconv.Itoa(minutes) + "m"
+}
+
+// pointsText is the size, trimmed of a trailing zero so a half point still
+// prints as one: a scale with halves in it is a scale somebody chose.
+func pointsText(points float64) string {
+	if points == 0 {
+		return ""
+	}
+	return strconv.FormatFloat(points, 'f', -1, 64)
 }

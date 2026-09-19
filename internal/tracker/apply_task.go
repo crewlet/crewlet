@@ -44,7 +44,8 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// and its own guard makes THAT idempotent.
 		// NO DELTAS: this record changed no document, so there is
 		// nothing for the history row to say moved.
-		return a.writeHistory(ctx, tx, c, current.Project, nil)
+		return a.writeHistory(ctx, tx, c,
+			subjectKeys{Project: current.Project, Key: current.Key}, nil)
 	}
 
 	next, err := mergeTask(current, held, c)
@@ -85,6 +86,17 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 
+	// AND SO IS THE SIZE HISTORY, which every sprint figure about a past
+	// instant is valued from. Stamped after the sprint stay rather than
+	// before, so a record that moves both writes the measure span the
+	// NEW stay opens against — the two share one effective instant, so
+	// the order does not change a value, only which comment a reader
+	// meets first.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := stampMeasure(&next, current, held, c); err != nil {
+		return 0, err
+	}
+
 	document, err := json.Marshal(next)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
@@ -113,7 +125,8 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		before = Task{}
 	}
 	applied := TaskDeltas(before, next)
-	history, err := a.writeHistory(ctx, tx, c, next.Project, applied)
+	history, err := a.writeHistory(ctx, tx, c,
+		subjectKeys{Project: next.Project, Key: next.Key}, applied)
 	if err != nil {
 		return 0, err
 	}
@@ -352,6 +365,121 @@ func capStays(stays []SprintStay, dropped int) ([]SprintStay, int) {
 	return stays, dropped
 }
 
+// stampMeasure records a task's SIZE changing, as one span per value.
+//
+// # Why the measure needs a history at all
+//
+// Every sprint figure is a statement about a past instant — `committed` is
+// what was in the sprint when it STARTED, `added` what arrived after — and
+// each of them summed the task's CURRENT `points` or `estimate_min`. So
+// re-estimating a task from 3 to 8 on day 5 moved what day 1 had already
+// reported: `committed` rose by five points nobody committed. The burndown
+// was worse, because change in time is its whole subject: it read each
+// member's measure ONCE before walking the sprint's instants, so a sprint
+// that delivered exactly what it took on drew as one handed more work.
+//
+// # Derived here, like the sprint stay above, and for one of the same reasons
+//
+// A span is a pair of INSTANTS, and an instant this engine derives comes from
+// the broker (see [effectiveOf]) rather than from whoever wrote the record.
+//
+// It does NOT share the stay's other reason — a writer genuinely could carry
+// its own size, since it is setting it. What a writer cannot do is close the
+// PREVIOUS span: that needs the value the task held before this record, read
+// in the same transaction the new one is written in, which is exactly what an
+// applier has and a writer does not.
+//
+// Deliberately not recomputed from `tracker_history` the way the status spans
+// are, although the symmetry is inviting. A history row's `fields_json`
+// carries what a PERSON reads — `points` as "8", `estimate` as "90m", an
+// empty string for unset — and a number parsed back out of display text is
+// not the number this engine stored; and [MaxDeltas] trims a record carrying
+// more than thirty-two field changes, so a large patch can drop the points
+// delta outright. A figure cannot rest on a row allowed to omit it.
+//
+// # The shape
+//
+// One span per value, closed when either measure moves. A task's FIRST apply
+// opens one even when nothing is estimated, because a zero is a real size
+// here — it is what "nobody has estimated this" is stored as and what
+// `unestimated` counts — so a sprint that committed an unestimated task has a
+// span to value it at rather than a gap.
+func stampMeasure(next *Task, current Task, held bool, c applyContext) error {
+	if held && current.Points == next.Points &&
+		current.EstimateMinutes == next.EstimateMinutes &&
+		len(next.MeasureHistory) > 0 {
+
+		return nil
+	}
+	at, err := effectiveOf(c)
+	if err != nil {
+		return err
+	}
+	spans := slices.Clone(next.MeasureHistory)
+	// CLOSE WHATEVER IS OPEN, and there is at most one: a task has one
+	// size at a time, unlike its sprints. A span already closed at this
+	// instant is left alone, which is what makes a redelivery a no-op.
+	for i := range spans {
+		if spans[i].To == nil {
+			spans[i].To = &at
+		}
+	}
+	spans = append(spans, MeasureStay{
+		From: at, Points: next.Points, EstimateMin: next.EstimateMinutes,
+	})
+	next.MeasureHistory, next.MeasureSpansDropped = capMeasureSpans(spans,
+		next.MeasureSpansDropped)
+	return nil
+}
+
+// capMeasureSpans drops the oldest CLOSED spans past [MaxMeasureSpans].
+//
+// The same rule as [capStays] and the same reason for it: the open span is the
+// task's size NOW, so dropping it would make the current measure unreadable
+// from the history. Order is preserved, so the history stays oldest-first and
+// "the measure at instant T" is a walk from the end.
+func capMeasureSpans(spans []MeasureStay, dropped int) ([]MeasureStay, int) {
+	for len(spans) > MaxMeasureSpans {
+		cut := -1
+		for i := range spans {
+			if spans[i].To != nil {
+				cut = i
+				break
+			}
+		}
+		if cut < 0 {
+			break
+		}
+		spans = append(spans[:cut], spans[cut+1:]...)
+		dropped++
+	}
+	return spans, dropped
+}
+
+// MeasureAt is what a task was worth at one instant, in both measures.
+//
+// THE SPAN COVERING IT, and before the first span the FIRST span's value
+// rather than zero: a report may ask about an instant older than the history
+// the cap kept, and answering zero there would say the task was unestimated
+// when what is true is that this node no longer knows. The oldest value it
+// does know is the honest answer, and it is also the one that makes a capped
+// history degrade towards the old behaviour rather than towards a lie.
+//
+// A task with no history at all answers zeros, which is what a task carries
+// before its first apply under this build.
+func MeasureAt(spans []MeasureStay, at time.Time) (points float64, estimateMin int) {
+	if len(spans) == 0 {
+		return 0, 0
+	}
+	best := 0
+	for i := range spans {
+		if !spans[i].From.After(at) {
+			best = i
+		}
+	}
+	return spans[best].Points, spans[best].EstimateMin
+}
+
 // effectiveOf is the instant a stamp derived from this record takes.
 //
 // THE BROKER'S, never a clock: the applier reads no clock at all, which is
@@ -441,6 +569,31 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	return Task{}, fmt.Errorf("tracker: %s is not an operation on a task", c.record.Op)
 }
 
+// clearableInstant is a patched date, with the zero value read as a clear.
+func clearableInstant(at *time.Time) *time.Time {
+	if at == nil || at.IsZero() {
+		return nil
+	}
+	return at
+}
+
+// Patched is [applyPatch] under an exported name, for the ONE caller outside
+// this package that has to answer the same question: a tool composing the
+// WAKE that announces a write it is about to make.
+//
+// EXPORTED RATHER THAN REIMPLEMENTED, because the second implementation is
+// what this exists to end. The tool kept its own field-by-field copy of this
+// merge, and every field added to [TaskPatch] since had to be remembered in
+// two places — so when the schedule fields arrived, the durable row took them
+// and the wake's snapshot did not. The delta was then computed between a task
+// and itself, and every due date, estimate, size and sprint a seat moved
+// reached its notification as a change that changed nothing.
+//
+// The caller still layers what is genuinely ITS own on top: a wake's
+// recipient list reflects the watch gesture in flight, which the durable sets
+// settle later inside the writer's transaction.
+func Patched(task Task, patch TaskPatch) Task { return applyPatch(task, patch) }
+
 // applyPatch is the pointer-semantics merge.
 //
 // A NIL FIELD IS UNCHANGED and a non-nil one carries its COMPLETE new value —
@@ -486,11 +639,17 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.Sprint = &sprint
 		}
 	}
+	// A ZERO INSTANT IS HOW A PATCH SPELLS "CLEAR IT", exactly as a zero
+	// sprint number does above and for the same reason: an absent field
+	// means "leave it alone", so a clear has to be a VALUE. Stored
+	// verbatim, a zero would be a due date in January of year one — which
+	// every overdue predicate in the tracker reads as the most overdue
+	// task the company has ever had.
 	if patch.StartAt != nil {
-		task.StartAt = patch.StartAt
+		task.StartAt = clearableInstant(patch.StartAt)
 	}
 	if patch.DueAt != nil {
-		task.DueAt = patch.DueAt
+		task.DueAt = clearableInstant(patch.DueAt)
 	}
 	if patch.DueAllDay != nil {
 		task.DueAllDay = *patch.DueAllDay
@@ -691,6 +850,26 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 					return []any{task.ID, v.Sprint, task.Project,
 						store.EncodeTime(v.From), nullableTime(v.To),
 						nullableInt(v.RolledTo)}
+				})
+		}},
+		{"tracker_measure_spans", func() (int, error) {
+			// ONE ROW PER SPAN of the task's size, which is what every
+			// sprint figure about a past instant is valued from. The
+			// document's own history exploded, rebuilt on every apply
+			// like every other collection here, so a reprocess
+			// converges rather than accumulating.
+			return insertMany(ctx, tx, c.maxVariables, `
+				INSERT INTO tracker_measure_spans
+					(task_id, from_at, to_at, points, estimate_min)
+				VALUES`,
+				`(?,?,?,?,?)`,
+				`ON CONFLICT (task_id, from_at) DO UPDATE SET
+					to_at = excluded.to_at,
+					points = excluded.points,
+					estimate_min = excluded.estimate_min`,
+				task.MeasureHistory, func(v MeasureStay) []any {
+					return []any{task.ID, store.EncodeTime(v.From),
+						nullableTime(v.To), v.Points, v.EstimateMin}
 				})
 		}},
 		{"tracker_relations", func() (int, error) {
@@ -1114,6 +1293,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_sprints WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_measure_spans WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
@@ -1154,7 +1334,8 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
-	history, err := a.writeHistory(ctx, tx, c, task.Project, nil)
+	history, err := a.writeHistory(ctx, tx, c,
+		subjectKeys{Project: task.Project, Key: task.Key}, nil)
 	if err != nil {
 		return 0, err
 	}

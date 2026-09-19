@@ -1,7 +1,7 @@
 # The Org Builder
 
-The dashboard's Org chart screen has a **Builder** lens
-(`#/org?lens=builder`) for editing the organization of a running company, and
+The dashboard's Company screen has a **Builder** lens
+(`#/company?lens=builder`) for editing the organization of a running company, and
 for creating the company on an engine that has none. It edits the same
 company document `GET /config` serves and `PATCH /config` writes, so every
 change it makes is an ordinary configuration revision: stored, activated,
@@ -528,7 +528,7 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the Chart, Directory and Charter lenses still draw the previous
+applied it, the Chart and Charter lenses still draw the previous
 organization, and say so.
 
 The strip under the toolbar follows the revision:

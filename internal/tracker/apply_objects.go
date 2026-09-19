@@ -53,7 +53,9 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 			return 0, err
 		}
 	}
-	history, err := a.writeHistory(ctx, tx, c, "", nil)
+	// A PROJECT, A VIEW, A PERSON OR A GOAL — none of which has an
+	// item key or a containing project, so both are honestly empty.
+	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, nil)
 	if err != nil {
 		return 0, err
 	}

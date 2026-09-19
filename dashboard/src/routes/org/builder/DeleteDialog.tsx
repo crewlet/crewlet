@@ -331,7 +331,7 @@ function OutsideTheChart({
           {fallbackSeat.data.name} is the Datadog fallback, and the engine refuses a Datadog
           fallback that names no agent seat. This removal would leave no agent seat to take it over,
           so add one first, or disconnect Datadog.{" "}
-          <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+          <ScreenLink to="integrations">Open Integrations</ScreenLink>
         </Callout>
       ) : (
         <ConfigField

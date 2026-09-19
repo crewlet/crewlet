@@ -5,6 +5,38 @@
 /dist/
 /build/
 
+# THE OTHER FIVE COMMANDS, which drop their own binaries in exactly the same
+# place for exactly the same reason: `go build ./<dir>` on a `package main`
+# writes an executable named after that directory into the working directory.
+# Only `cmd/crewlet` was listed, so the five below were uncovered -- and one
+# of them landed: a 4 MB `skipgate` sat untracked in the root of this PUBLIC
+# repository after a `go build ./internal/skipgate`, which is one `git add -A`
+# from a commit that cannot be unpublished.
+#
+# They are the ones a contributor actually builds. `make check` and ci.yml run
+# the gate through `go run ./internal/skipgate`, which drops nothing -- so the
+# way to meet this is to reach for `go build` while debugging the gate itself,
+# which is precisely when nobody is reading `git status`.
+#
+# A LIST RATHER THAN A PATTERN, and not for want of trying: there is no glob
+# that means "the basename of every main package in this module", and the
+# nearest approximations (`/*` with negations, or ignoring extensionless root
+# files) would swallow LICENSE, DCO, Makefile and every future root file --
+# which is the failure this file already records twice, under __pycache__ and
+# node_modules, where an untracked path nobody's eye is drawn to reached a
+# branch through a `git add`.
+#
+# So it grows when a command is added, and that is acceptable here for one
+# reason: unlike the two incidents above, this failure is NOT silent. An
+# uncovered binary shows up in `git status` as an untracked file, which is how
+# this one was caught. Keep it in step with
+# `go list -f '{{if eq .Name "main"}}{{.Dir}}{{end}}' ./...`.
+/skipgate
+/partition
+/alarmgen
+/gen
+/notices
+
 # Python bytecode. This tree has not held a `.py` file since the Go rewrite,
 # which is exactly why the rule was missing and exactly why it is needed: the
 # pre-Go checkout left `__pycache__` directories behind as UNTRACKED debris,

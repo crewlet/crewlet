@@ -29,7 +29,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { screenScroller } from "~/app/router.tsx";
+
+import { screenScroller } from "./scroller.ts";
 
 /** How near the top counts as "watching the feed". */
 export const TOP_SLACK_PX = 24;

@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,23 +19,35 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	query       tracker.Query
-	answer      tracker.Answer
-	detail      tracker.TaskDetail
-	views       tracker.ViewQuery
-	listing     tracker.ViewListing
-	goalQuery   tracker.GoalQuery
-	goals       tracker.GoalListing
-	personQuery tracker.PersonQuery
-	person      tracker.PersonState
+	inbox        tracker.InboxAnswer
+	inboxQuery   tracker.InboxQuery
+	routing      tracker.RoutingAnswer
+	routingQuery tracker.RoutingQuery
+	ranked       []tracker.Ranked
+	searchText   string
+	searchLimit  int
+	query        tracker.Query
+	answer       tracker.Answer
+	detail       tracker.TaskDetail
+	views        tracker.ViewQuery
+	listing      tracker.ViewListing
+	goalQuery    tracker.GoalQuery
+	goals        tracker.GoalListing
+	personQuery  tracker.PersonQuery
+	person       tracker.PersonState
 
-	projectQuery tracker.ProjectQuery
-	projects     tracker.ProjectListing
-	detailQuery  tracker.ProjectDetailQuery
-	project      tracker.ProjectDetail
-	sprintQuery  tracker.SprintQuery
-	sprints      tracker.SprintListing
+	projectQuery  tracker.ProjectQuery
+	projects      tracker.ProjectListing
+	detailQuery   tracker.ProjectDetailQuery
+	project       tracker.ProjectDetail
+	sprintQuery   tracker.SprintQuery
+	sprints       tracker.SprintListing
+	burnQuery     tracker.BurndownQuery
+	workloadQuery tracker.WorkloadQuery
+	burndown      tracker.Burndown
+	workload      tracker.WorkloadAnswer
 
+	expandViewer  tracker.Viewer
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
 	myWorkQuery   tracker.MyWorkQuery
@@ -43,6 +56,7 @@ type stubWork struct {
 	catalogueQuery tracker.CatalogueQuery
 	taskLevel      statelog.ReadLevel
 	taskFresh      statelog.Freshness
+	taskWants      tracker.DetailWants
 
 	err error
 }
@@ -68,6 +82,20 @@ func (s *stubWork) Sprints(_ context.Context, q tracker.SprintQuery,
 	return s.sprints, s.err
 }
 
+func (s *stubWork) Burndown(_ context.Context, q tracker.BurndownQuery,
+	_ time.Time) (tracker.Burndown, error) {
+
+	s.burnQuery = q
+	return s.burndown, s.err
+}
+
+func (s *stubWork) Workload(_ context.Context, q tracker.WorkloadQuery,
+	_ time.Time) (tracker.WorkloadAnswer, error) {
+
+	s.workloadQuery = q
+	return s.workload, s.err
+}
+
 func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,
 	_ time.Time) (tracker.ActivityAnswer, error) {
 
@@ -88,8 +116,12 @@ func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewLi
 }
 
 func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
 
+	// RECORDED, because the viewer is the one input to this call that the
+	// parsed query does not carry: it is a property of the surface rather
+	// than a filter, so a handler that dropped it would still return rows.
+	s.expandViewer = viewer
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
@@ -110,15 +142,37 @@ func (s *stubWork) Person(_ context.Context, q tracker.PersonQuery, _ time.Time)
 	return s.person, s.err
 }
 
+func (s *stubWork) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (tracker.InboxAnswer, error) {
+	s.inboxQuery = q
+	return s.inbox, s.err
+}
+
+func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Time) (
+	tracker.RoutingAnswer, error) {
+
+	s.routingQuery = q
+	return s.routing, s.err
+}
+
+// Search is the stub's half of the SEPARATE search seam — see
+// [queries.WorkSearcher]. It is on this type for the harness's convenience
+// only; the surface takes the two independently, and a case that wants a node
+// with a board and no index leaves `WorkSearch` nil.
+func (s *stubWork) Search(_ context.Context, text string, limit int) ([]tracker.Ranked, error) {
+	s.searchText, s.searchLimit = text, limit
+	return s.ranked, s.err
+}
+
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	s.query = q
 	return s.answer, s.err
 }
 
-func (s *stubWork) Task(_ context.Context, _ string, _ tracker.DetailWants,
+func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 	fresh statelog.Freshness) (tracker.TaskDetail, error) {
 
 	s.taskLevel, s.taskFresh = fresh.Level, fresh
+	s.taskWants = want
 	return s.detail, s.err
 }
 
@@ -135,6 +189,16 @@ type stubPages struct {
 	// fresh is the whole ask, so a route that carried the level and
 	// dropped the bounds or the floor beside it is visible too.
 	fresh statelog.Freshness
+
+	// activity and revision are what the two newest reads were asked, so a
+	// case can prove a filter reached the reader rather than only that
+	// rows came back.
+	activity     pages.PageActivityQuery
+	changes      []pages.PageChange
+	revision     pages.Revision
+	revisionHeld bool
+	askedPage    string
+	askedVersion int
 }
 
 func (s *stubPages) List(_ context.Context, f pages.Filter,
@@ -153,9 +217,40 @@ func (s *stubPages) Get(_ context.Context, _ string,
 
 func (s *stubPages) Containers(_ context.Context,
 	fresh statelog.Freshness,
-) ([]pages.Container, error) {
+) ([]pages.ContainerListing, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
+}
+
+func (s *stubPages) Activity(_ context.Context, q pages.PageActivityQuery) (
+	pages.PageActivity, error) {
+
+	s.activity = q
+	s.level, s.fresh = q.Freshness.Level, q.Freshness
+	return pages.PageActivity{
+		Changes: s.changes, Level: q.Freshness.Level, Complete: true,
+	}, s.err
+}
+
+func (s *stubPages) Revision(_ context.Context, pageID string, version int,
+	fresh statelog.Freshness,
+) (pages.Revision, bool, error) {
+	s.askedPage, s.askedVersion = pageID, version
+	s.level, s.fresh = fresh.Level, fresh
+	return s.revision, s.revisionHeld, s.err
+}
+
+// personalQuestions are the four scoped by the caller's own seat — see
+// Sources.viewerHandle. They refuse an anonymous caller who names somebody
+// else, so a sweep that walks every native question has to present a
+// credential for these four. Named once rather than per sweep: the set grew
+// from one to four, and each sweep that spelled it as `== "work_my_work"`
+// silently stopped covering the rest.
+var personalQuestions = map[string]bool{
+	"work_my_work":  true,
+	"work_person":   true,
+	"work_inbox":    true,
+	"conversations": true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -224,6 +319,77 @@ func TestAMissingRecordIsNotFound(t *testing.T) {
 	_, err = askNative(t, queries.Sources{Pages: p}, "page", map[string]any{"id": "nope"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing page answered %v, want not-found", err)
+	}
+}
+
+// THE ITEM QUERY ASKS FOR EVERY PART, the custom fields included.
+//
+// A detail read without them rendered a task filed with a severity as one that
+// carried none — confidently, in a properties panel, beside a board that had
+// just filtered on that very field. The four are asked for together because
+// one screen draws all four and a second read for the fields would be a second
+// answer that can disagree with the first.
+func TestTheItemQueryAsksForEveryPart(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_item",
+		map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
+	if w.taskWants != want {
+		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
+	}
+}
+
+// A BURNDOWN NAMES BOTH A PROJECT AND A SPRINT, and defaults neither.
+//
+// A sprint is numbered per project, so a number with no key names one sprint
+// per team — and defaulting the number to "the active one" would make a link
+// somebody bookmarked mean a different sprint every fortnight, which is the
+// one thing a chart with a URL must not do.
+func TestABurndownRefusesToGuessItsSprint(t *testing.T) {
+	for _, params := range []map[string]any{
+		{"sprint": 4},
+		{"project": "ENG"},
+		{"project": "ENG", "sprint": 0},
+	} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_burndown", params)
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("work_burndown(%v) answered %v, want a refusal naming the "+
+				"key it needs", params, err)
+		}
+	}
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
+		map[string]any{"project": "ENG", "sprint": 4}); err != nil {
+		t.Fatalf("work_burndown: %v", err)
+	}
+	// BOTH KEYS REACH THE READER. Normalising the key is the READER's —
+	// `Burndown` runs it through `ProjectKey` exactly as `Sprints` does —
+	// so a second spelling of that rule here would be the copy that stops
+	// matching. What this surface owes is that neither key is dropped.
+	if w.burnQuery.Project != "ENG" || w.burnQuery.Sprint != 4 {
+		t.Errorf("the reader was asked for %+v, want ENG sprint 4", w.burnQuery)
+	}
+	// AND THE CALLER'S OWN FRESHNESS, resolved to this surface's default
+	// like every other native question — a burndown that silently took a
+	// linearizable read would put a chart's poll on the raft log.
+	if w.burnQuery.Level != statelog.ReadStale {
+		t.Errorf("the burndown was read at %q, want the dashboard's own stale "+
+			"default", w.burnQuery.Level)
+	}
+}
+
+// A SPRINT NOBODY HAS MINTED IS NOT FOUND, never an empty series: a chart
+// drawn from an empty answer is a sprint in which nothing happened, which is
+// a different thing from a sprint that does not exist.
+func TestAnUnmintedSprintIsNotFound(t *testing.T) {
+	w := &stubWork{err: tracker.ErrNoSprint}
+	_, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
+		map[string]any{"project": "ENG", "sprint": 99})
+	if !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("an unminted sprint answered %v, want not-found", err)
 	}
 }
 
@@ -424,7 +590,10 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			w := &stubWork{}
-			if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+			// AS AN OPERATOR, because naming somebody else's
+			// handle is what the credential buys — see
+			// TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName.
+			if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
 				map[string]any{"container": tc.raw, "viewer": "ana"}); err != nil {
 				t.Fatalf("work_views: %v", err)
 			}
@@ -448,6 +617,63 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("container=%q answered %v, want a bad-parameter refusal", raw, err)
 		}
+	}
+}
+
+// A STRIP IS ONLY PERSONALISED BY A VIEWER THE CALLER MAY NAME.
+//
+// `viewer=` selects WHOSE pins and personal views order the strip, and nothing
+// checked it: on a node with `api.allow_anonymous_read` a reader could take
+// the handles out of `org` and page through every seat's pinned views. The
+// scope rule is the one the other personal questions take — your own, or an
+// operator credential for anybody else's.
+//
+// THE ABSENT CASE IS THE POINT OF THE SEPARATE RULE. A question ABOUT
+// somebody refuses when the caller names nobody and has no seat; a strip is
+// about a CONTAINER, so naming nobody is the shared strip, which is what the
+// sidebar and the board poll for. Refusing that would have taken the strip off
+// two screens for every reader whose token is not bound to a seat.
+func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
+	t.Parallel()
+
+	// SOMEBODY ELSE'S, with no credential: refused, and as an
+	// authorization failure rather than a bad parameter — the remedy is a
+	// different credential, not a different handle.
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); !errors.Is(
+		err, queries.ErrUnauthorized) {
+
+		t.Errorf("an anonymous caller naming another seat's handle answered %v, "+
+			"want an authorization refusal", err)
+	}
+	// AND THE READER WAS NEVER ASKED, which is the half a refusal
+	// returned after the read would not have bought.
+	if w.views.Viewer != "" {
+		t.Errorf("the refused handle reached the reader as %q", w.views.Viewer)
+	}
+
+	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
+	// these records in the first place.
+	w = &stubWork{}
+	if _, err := askAsOperator(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
+		t.Fatalf("an operator naming a seat's handle: %v", err)
+	}
+	if w.views.Viewer != "ada-okonkwo" {
+		t.Errorf("an operator's viewer reached the reader as %q, want ada-okonkwo",
+			w.views.Viewer)
+	}
+
+	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
+	// answer with an empty viewer, never a refusal.
+	w = &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_views",
+		map[string]any{"container": "workspace"}); err != nil {
+		t.Fatalf("the shared strip, asked anonymously: %v", err)
+	}
+	if w.views.Viewer != "" {
+		t.Errorf("an unnamed viewer reached the reader as %q, want empty", w.views.Viewer)
 	}
 }
 
@@ -531,6 +757,10 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 		// credential in front of it.
 		{"work_my_work", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }},
+		{"work_routing", map[string]any{"record_id": "r-1"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }},
 		{"pages", map[string]any{},
 			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
 		{"page", map[string]any{"id": "p1"},
@@ -545,7 +775,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			work, pages := &stubWork{}, &stubPages{}
 			src := queries.Sources{Work: work, Pages: pages}
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			if _, err := ask(t, src, tc.what, tc.args); err != nil {
@@ -652,6 +882,10 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.myWorkQuery.MaxLag, w.myWorkQuery.MaxLagSeq)
 			}},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.inboxQuery.MaxLag, w.inboxQuery.MaxLagSeq)
+			}},
 		{"pages", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
 			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
 		}},
@@ -691,12 +925,16 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.activityQuery.MaxLag, w.activityQuery.MaxLagSeq)
 			}},
+		{"work_routing", map[string]any{"record_id": "r-1"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.routingQuery.MaxLag, w.routingQuery.MaxLagSeq)
+			}},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			work, pages := &stubWork{}, &stubPages{}
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			all := map[string]any{}
@@ -757,10 +995,16 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
 		{"work_sprints", map[string]any{"project": "ENG"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.sprintQuery.MinPosition }},
+		{"work_burndown", map[string]any{"project": "ENG", "sprint": 1},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.burnQuery.MinPosition }},
 		{"work_activity", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
 		{"work_my_work", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.inboxQuery.MinPosition }},
+		{"work_routing", map[string]any{"record_id": "r-1"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.routingQuery.MinPosition }},
 		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
 		{"page", map[string]any{"id": "p1"},
 			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
@@ -769,7 +1013,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {
@@ -804,5 +1048,100 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 				t.Errorf("%s took min_position=4711, answering %v", tc.what, err)
 			}
 		})
+	}
+}
+
+// THE VIEWER IS A PROPERTY OF THE SURFACE, NOT A FILTER THE TRACKER PARSES.
+//
+// `workItems` read the viewer out of the parameters to build `tracker.Viewer`
+// and then handed the WHOLE bag — `viewer` still in it — to `ExpandedQuery`,
+// whose `ParseQuery` runs `checkKeys` over the merged map. `viewer` is not in
+// `tracker.QueryKeys`, and `checkKeys` refuses a key nothing parses rather
+// than ignoring it, so every `work_items` call that named a viewer came back
+// `bad_params`.
+//
+// Two things that made it invisible. The refusal is a 400 with a message about
+// an unknown parameter, which reads like the caller's fault; and the one
+// surface that sends a viewer — the board's view strip — is also the one whose
+// handler comment asserts the opposite, so the code documented the behaviour it
+// did not have.
+//
+// It also made `preset=my_queue` unreachable here, which is the case below:
+// the preset expands from `viewer.Handle` (internal/tracker/expand.go), so it
+// is answerable only on a surface that HAS a viewer, and this was the surface.
+func TestABoardMayNameItsViewer(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+		"viewer": "ada", "assignee": "ada",
+	}); err != nil {
+		t.Fatalf("work_items naming a viewer: %v", err)
+	}
+	// AND THE VIEWER STILL REACHED THE EXPANSION. Dropping the key is only
+	// correct if the value survives as what it is — otherwise the fix would
+	// be the bug's mirror, with `me` and every preset resolving to nobody.
+	if got := w.query.Assignee; len(got) != 1 || got[0] != "ada" {
+		t.Errorf("assignee = %v, want [ada]", got)
+	}
+}
+
+// AND THE VIEWER STILL ARRIVES AS A VIEWER, which is the half a test on the
+// refusal alone cannot see. Dropping the key is only correct if the value
+// survives as what it is — the expansion resolves `f.<slug>=me` and every
+// personal preset from `Viewer.Handle`, and a fix that deleted the key without
+// threading the value would have made those resolve to nobody, which is a
+// quieter wrong answer than the refusal it replaced.
+//
+// ASSERTED ON WHAT THE HANDLER PASSED rather than on a resolved `me`: `me` is
+// a custom-field operator (`resolveViewerKeys` only substitutes `f.`-prefixed
+// keys) and its resolution is the tracker's own, covered in that package. Here
+// the question is whether this surface hands the viewer over at all.
+func TestAViewerNamedByTheSurfaceReachesTheExpansion(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_items", map[string]any{
+		"viewer": "ada",
+	}); err != nil {
+		t.Fatalf("work_items naming a viewer: %v", err)
+	}
+	if got := w.expandViewer.Handle; got != "ada" {
+		t.Errorf("expansion viewer = %q, want ada", got)
+	}
+}
+
+// AN ACTOR KIND OFF THE WIRE IS CHECKED AT THIS SURFACE, and it is the only
+// place that can check it.
+//
+// `work_activity` builds its `Kinds` by trusting whatever it was handed —
+// [tracker.ChangeKind] over an arbitrary string — and an unknown change kind
+// simply matches nothing, which is a filter that answers empty. That is
+// survivable for a change kind and is not for the ACTOR kind, because it is
+// the filter the audit screen is made of: an empty audit reads as a company
+// nobody has touched, and a filter quietly ignored reads as one where
+// everybody is an operator. The reader takes typed values and cannot tell a
+// kind the caller invented from one this build was compiled without, so the
+// refusal belongs here, at the edge where the string still exists.
+func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+		"container": "workspace", "actor_kinds": "root",
+	}); err == nil {
+		t.Fatal("work_activity accepted actor_kinds=root — nothing is written " +
+			"under it, so the feed answers empty and the screen reads as a " +
+			"company nobody has touched")
+	}
+	if got := w.activityQuery.ActorKinds; len(got) != 0 {
+		t.Errorf("the refused query still reached the reader as %v", got)
+	}
+
+	// AND THE KINDS THE ENGINE DOES WRITE UNDER ALL ARRIVE, in the order
+	// they were named — a gate that refused everything would pass the case
+	// above and take the screen with it.
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+		"container": "workspace", "actor_kinds": "operator, human",
+	}); err != nil {
+		t.Fatalf("work_activity naming two real actor kinds: %v", err)
+	}
+	want := []tracker.AuthorKind{tracker.AuthorOperator, tracker.AuthorHuman}
+	if got := w.activityQuery.ActorKinds; !slices.Equal(got, want) {
+		t.Errorf("the reader was asked for %v, want %v", got, want)
 	}
 }

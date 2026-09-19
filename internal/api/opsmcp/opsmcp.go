@@ -273,11 +273,22 @@ func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 	}, nil
 }
 
-// PageActor is [WorkActor] for the knowledge base.
+// PageActor is [WorkActor] for the knowledge base, and records the SAME
+// operator under the SAME name.
+//
+// THE HANDLE IS THE TOKEN'S OWN NAME, exactly as above. It used to be left
+// empty here, and `pages.Actor.Name` falls back to `"operator:" + OperatorID`
+// for an actor with no handle — so one person writing through one surface was
+// recorded as `founder` on a work commit and `operator:founder` on a page
+// commit. The kind is already on the row, in its own column, so the prefix was
+// a second encoding of a fact the row carries; what it bought was that the
+// audit feed, which is the one screen that reads both histories, showed the
+// same person as two people three rows apart, and that a reader filtering on
+// a name matched half of what they did.
 func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
 	id, ok := auth.OperatorFrom(ctx)
 	if !ok || id == "" {
 		return pages.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
 	}
-	return pages.Actor{Kind: pages.AuthorOperator, OperatorID: id}, nil
+	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
 }

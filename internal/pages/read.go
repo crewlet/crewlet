@@ -528,21 +528,84 @@ func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]
 	return chain, nil
 }
 
+// ContainerListing is one container plus the figure a browser needs beside it.
+//
+// A DERIVED COUNT rather than a field on [Container], because the container
+// document is what a writer wrote and this is a fact about OTHER rows: putting
+// it on the document would mean every page create rewrites its container, and
+// two writers adding a page to one space would contend on a counter neither of
+// them touched.
+type ContainerListing struct {
+	Container
+
+	// Pages is how many pages this container holds, live ones only.
+	//
+	// Counted in the SAME TRANSACTION as the containers, so a browser's
+	// rail cannot show a count from one instant beside a list from
+	// another — the same rule the tracker's own listings follow.
+	Pages int `json:"pages"`
+}
+
 // Containers is every container this node knows about.
 //
 // THE DOMAIN IS ITS SCOPE, because a container list is about all of them —
 // which is exactly what [ReadScope] returns for a read that names none.
-func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) ([]Container, error) {
+func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
+	[]ContainerListing, error) {
+
 	if fresh.Level == "" {
 		return nil, errors.New("pages: this read names no level")
 	}
-	var out []Container
+	var out []ContainerListing
 	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), true), func(tx *sql.Tx) error {
-		var err error
-		out, err = r.containers(ctx, tx)
-		return err
+		containers, err := r.containers(ctx, tx)
+		if err != nil {
+			return err
+		}
+		counts, err := r.pageCounts(ctx, tx)
+		if err != nil {
+			return err
+		}
+		out = make([]ContainerListing, 0, len(containers))
+		for _, c := range containers {
+			out = append(out, ContainerListing{Container: c, Pages: counts[c.Key]})
+		}
+		return nil
 	})
 	return out, err
+}
+
+// pageCounts is how many pages each container holds.
+//
+// ONE GROUP BY rather than a count per container: a company with forty spaces
+// would otherwise take forty round trips to draw one rail, and every one of
+// them inside the read transaction the containers were listed in.
+//
+// TRASHED PAGES ARE NOT COUNTED. A trashed page is invisible to every default
+// listing this reader serves, so counting it would put a number on the rail
+// that the list beside it cannot account for — a reader clicks "12" and finds
+// nine. The predicate restates the status rather than reading `trashed_at`,
+// because the container index is on `(container, status, title)` and this walk
+// is meant to use it.
+func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT container, COUNT(*) FROM pages_heads
+		  WHERE status != ?
+		  GROUP BY container`, string(StatusTrashed))
+	if err != nil {
+		return nil, fmt.Errorf("pages: count pages per container: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var key string
+		var n int
+		if err := rows.Scan(&key, &n); err != nil {
+			return nil, fmt.Errorf("pages: scan a container's page count: %w", err)
+		}
+		out[key] = n
+	}
+	return out, rows.Err()
 }
 
 func (r *Reader) containers(ctx context.Context, tx *sql.Tx) ([]Container, error) {

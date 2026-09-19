@@ -27,9 +27,10 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
-import { useRecheck } from "~/routes/recheck.ts";
+import { useRecheck } from "~/routes/admin/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
+import { screenPath } from "./dialogParts.tsx";
 import {
   CheckGlyph,
   CloseGlyph,
@@ -202,7 +203,7 @@ export function AfterSaveStrip({
               <ButtonLink
                 size="small"
                 variant="tertiary"
-                href={href(["config"], {
+                href={href(screenPath("config"), {
                   lens: "diff",
                   revision: saved.revisionId,
                   against: saved.parentRevisionId,
@@ -213,7 +214,7 @@ export function AfterSaveStrip({
             ) : (
               // The company's first revision has no parent to differ from:
               // all of it is what the save wrote.
-              <ButtonLink size="small" variant="tertiary" href={href(["config"])}>
+              <ButtonLink size="small" variant="tertiary" href={href(screenPath("config"))}>
                 View the configuration
               </ButtonLink>
             )}
@@ -221,7 +222,7 @@ export function AfterSaveStrip({
               Copy as YAML
             </Button>
             {state.showFleet && (
-              <ButtonLink size="small" variant="tertiary" href={href(["fleet"])}>
+              <ButtonLink size="small" variant="tertiary" href={href(screenPath("fleet"))}>
                 Open the fleet
               </ButtonLink>
             )}

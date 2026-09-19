@@ -212,7 +212,13 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   engine.script = () => json({ error: "unauthorized" }, 401);
   mountBuilder({ engine });
   await screen.findByText("Editing the organization needs an operator token.");
-  expect(kept()).toBeNull();
+  // WAITED FOR, NOT READ ON THE SPOT. The refusal is rendered from state and
+  // the draft is dropped by the EFFECT that state schedules, so the message
+  // is in the DOM one commit before the storage is cleared. Reading it in the
+  // same tick passed on a quiet runner and failed under a loaded one, which
+  // is a flake rather than a claim. The claim is that the draft is forgotten,
+  // and it still fails if it never is.
+  await waitFor(() => expect(kept()).toBeNull());
 });
 
 test("storage that refuses says the draft will not survive a reload", async () => {
@@ -288,16 +294,16 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
   const start = location.hash;
 
   act(() => {
-    location.hash = "#/org?lens=builder&view=table";
+    location.hash = "#/company?lens=builder&view=table";
   });
-  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company?lens=builder&view=table"));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
     location.hash = "#/people";
   });
   const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company?lens=builder&view=table"));
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 

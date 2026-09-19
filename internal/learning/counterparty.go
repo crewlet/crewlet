@@ -256,6 +256,83 @@ func (c *Counterparties) Get(ctx context.Context, observer string, subject Subje
 	return p, true, nil
 }
 
+// List returns every profile one observer holds, most recently updated first.
+//
+// THE ONLY MEMORY OBJECT THAT IS ABOUT SOMEBODY ELSE. A diary is what a seat
+// thought, an episode is what it did, a skill is what it learnt to do — and a
+// counterparty profile is what it learnt about a person it works with. It was
+// written by the learning loop, read by the Plan-phase prefetch one subject at
+// a time through [Counterparties.Get], and there was no way to ask what a seat
+// had accumulated: the memory surface seeded the field with an empty slice
+// because nothing could fill it.
+//
+// ORDERED BY LAST UPDATE rather than by interaction count, because the
+// question a reader has is "who is this seat working with", and a colleague it
+// spoke to a hundred times last quarter is not the answer.
+//
+// LIMITED, and by a constant rather than a parameter: a seat's counterparties
+// are the people it has met, which is bounded by the company and its
+// correspondents rather than by anything that grows with time. A seat with
+// more than this many is one whose profile list is a report rather than a
+// panel, and the cap is what keeps the panel from becoming one silently.
+func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, error) {
+	if c == nil || c.db == nil || observer == "" {
+		return nil, nil
+	}
+	rows, err := c.db.SQL().QueryContext(ctx, `
+		SELECT observer_handle, subject_handle, subject_external_id, subject_platform,
+			subject_name, traits, first_seen_at, last_updated_at,
+			last_corroborated_at, interaction_count, last_work_key
+		FROM counterparty_profiles
+		WHERE observer_handle = ?
+		ORDER BY last_updated_at DESC
+		LIMIT ?`, observer, MaxProfilesListed)
+	if err != nil {
+		return nil, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
+	}
+	defer rows.Close()
+
+	var out []Profile
+	for rows.Next() {
+		var (
+			p                                Profile
+			traits                           string
+			firstSeen, updated, corroborated int64
+		)
+		if err := rows.Scan(&p.Observer, &p.Subject.Handle, &p.Subject.ExternalID,
+			&p.Subject.Platform, &p.Subject.Name, &traits, &firstSeen, &updated,
+			&corroborated, &p.InteractionCount, &p.LastWorkKey); err != nil {
+			return nil, fmt.Errorf("learning: scan profile for %s: %w", observer, err)
+		}
+		p.FirstSeenAt = store.DecodeTime(firstSeen)
+		p.LastUpdatedAt = store.DecodeTime(updated)
+		p.LastCorroboratedAt = store.DecodeTime(corroborated)
+		if err := json.Unmarshal([]byte(traits), &p.Traits); err != nil {
+			// ONE UNREADABLE ROW MUST NOT COST THE LIST, for the reason
+			// the conversation ledger gives for the same choice: the
+			// other profiles are still what the reader asked for. The
+			// traits are dropped rather than the person.
+			log.WarnContext(ctx, "counterparty_traits_undecodable",
+				"observer", observer, "error", err)
+			p.Traits = map[string]any{}
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
+	}
+	return out, nil
+}
+
+// MaxProfilesListed bounds [Counterparties.List].
+//
+// TWO HUNDRED, which is the size of the company this engine is built for plus
+// the correspondents one seat accumulates on the surfaces it works — an issue
+// tracker's reporters, a chat channel's members. Below it a seat's whole set
+// is one answer; above it the set is a report, and a panel rendering the first
+// two hundred of five thousand would be claiming to be the whole list.
+const MaxProfilesListed = 200
+
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }

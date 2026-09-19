@@ -74,13 +74,14 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
-| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
+| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
+| `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per hour or day, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
@@ -98,19 +99,22 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge. **Operator-only**, and absent rather than 503 on a build with no tracker |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
-| `GET` | `/work/views` | One container's **view strip**: the three every container has without anybody saving one, the two more a sprinting project adds, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip |
+| `GET` | `/work/views` | One container's **view strip**: the three every container has without anybody saving one, the two more a sprinting project adds, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
 | `GET` | `/work/goals` | The company's **goals**, each with what its targets say. `?owner=` narrows to the goals a handle owns **or** contributes to, `?group=` to the free-text label they are filed under, and `?archived=true` includes the archived ones. Every percentage in the answer is computed from the work at read time and stored nowhere |
 | `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
 | `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — the maintained `open`/`done`/`closed` columns, never an aggregate per poll — its chart-owned unit, its lead and its sprint state. `?q=` narrows by a word in the key, the name or the purpose; `?unit=` to the projects one unit owns; `?archived=true` includes the retired ones; `?limit=` caps at 200, which is also the default. A set read, so it carries `complete` and its `incomplete` beside the read level |
 | `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit; its sprint policy, the sprint that is running with what it is at, and the last five with the team's average velocity. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three |
 | `GET` | `/work/sprints` | One project's **sprints** with every figure derived from the stays: `committed` is what the sprint held when it started, `added` arrived after, `removed` was pulled out without carrying, `done` is what entered a delivered status inside the sprint's own window, and `remaining` is what is still open at its end — each in the project's own `measure`, with `unestimated` beside them. `?project=` is required; `?sprint=` reports one; `?sprints=` covers 3 to 10 (default 5) and the answer names how many closed sprints fell below that window |
 | `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days |
-| `GET` | `/work/my-work` | **Operator-only.** Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose |
-| `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
+| `GET` | `/work/burndown` | One sprint's **series**: `scope`, `remaining` and `delivered` at each instant of its own window, plus the `ideal` the reference line falls from. `project` and `sprint` are both required and neither defaults — a sprint is numbered per project. The series stops at the caller's own instant for a running sprint, because an unlived day is not a measurement |
+| `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own seat** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's handle is operator-only |
+| `GET` | `/work/inbox` | One person's **inbox**: the notices a change wrote to them, each naming the ONE [reason](../guides/work-tracker.md) of twenty it found them under, whether it **asks** something or merely informs, whether it arrived only because nobody better was found, and their own read and snooze marks. Same scope rule as `/work/my-work`. `?unread=`, `?primary_only=`, `?include_snoozed=` (a snooze means *not now*, so they are hidden by default), `?reasons=` (comma-separated, refused naming the twenty), `?limit=` ≤50, `?cursor=`, and `?since=` — a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what `seen_through` reports back, never a bare sequence: the comparison is on the packed `(generation << 40) | seq`, so a sequence with no generation re-delivers everything after a reanchor |
+| `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. Same scope rule as `/work/my-work`, with the handle always named here because it is the path: your own seat's needs no credential, anybody else's is operator-only. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
-| `GET` | `/containers` | Every knowledge container this node knows about |
+| `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
+| `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -412,12 +416,13 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on |
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `public_base_url` answers `present` and `resolved` separately — set and set to something are different facts, and a `${VAR}` nobody exported is `present: true, resolved: false` with the variable named in `reference` |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
+| `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
@@ -1264,7 +1269,12 @@ turn](../concepts/turn-engine.md#what-streams-during-a-turn).
 Each phase publishes an opening
 `agent_turn_progress` (`round_num = -1`) before its first provider call
 carrying the prompt, so the live row shows what the agent was asked while
-it is still answering.  `agent_turn_progress` is *stream-only*
+it is still answering.  The field is otherwise ZERO-BASED, so the round a
+reader counts is `round_num + 1`, and `-1` is neither a round nor a missing
+value — it is a turn that has begun and is waiting.  A surface drawing it
+resolves both through `lib/seats.ts`'s `roundLabel`, which answers "starting"
+for the sentinel and `round N+1` otherwise; the roster drew a bare dash and
+two of five working seats read "round —" with nothing saying why.  `agent_turn_progress` is *stream-only*
 (never written to the event store); carrying `live_call` in the
 snapshot means a tab that refreshes or reconnects mid-call re-renders
 the live row immediately instead of waiting for the next progress
@@ -1328,7 +1338,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "sandboxes": [ { /* in-flight detached coding run */ }, ... ],
-  "tools":     [ { "name": "...", "description": "...", "source": "..." } ],
+  "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
   "budget":    { /* the live org-wide token meter, or {} — see below */ },
@@ -1449,6 +1459,45 @@ page holding 2 matches reads as "only 2 exist". Its vocabulary is a closed
 set of ten values, and which event type lands under which is in
 [Deployment § What gets stored](../guides/deployment.md#what-gets-stored-and-under-which-category).
 
+### The event log's time axis
+
+`GET /events/series` counts the matching rows per bucket over a window. It
+takes every filter `GET /events` takes bar the cursor and `agent` (see
+below), plus:
+
+| Name | Default | Description |
+|------|---------|-------------|
+| `bucket` | *(required)* | `minute`, `hour` or `day`. A closed set rather than a duration, for the reason the spend series gives for its two: an axis with an arbitrary bucket width is one nobody can label. The log has `minute` and the spend series does not, because "what just happened" is the commonest question asked of a log and an hour is the whole of that answer's window. An unknown value is refused naming what is accepted, never defaulted. |
+| `since` / `until` | (the retention window, to now) | RFC 3339 instants, half-open. Both edges are snapped **outward** to whole buckets, so the first and last bars are whole ones — a partial bar has a height that means something different from its neighbours' and a reader has no way to know. The answer is labelled with the window it actually covers. |
+
+The answer is `{bucket, since, until, bars, total, by_category}`. `bars`
+is **every** bucket in the window including the empty ones, so a quiet
+hour is a gap of full width rather than a bar the chart squeezed out.
+
+`by_category` is how many rows each category would give, with the
+**category filter lifted** and every other one applied. That is the only
+meaning a facet count can have: counted through its own filter, every value
+but the selected one reads zero. A category with no rows is absent from the
+map, so a caller rendering the closed set reads a missing key as the zero it
+is.
+
+It is counted over the window **that was asked for**, not the snapped one
+`since` and `until` report: a chip says how many rows choosing it would
+show, and the rows come from `GET /events`, which takes the caller's own
+edges. So the chips need not sum to `total` — `total` describes the bars,
+which are whole buckets.
+
+Two refusals, both **400** rather than a smaller answer:
+
+- **`related_agent`** is not accepted. That filter over-fetches and
+  post-filters (see above), so a count over the predicate alone is a
+  smaller set than the listing shows — and a bar that disagrees with its
+  own rows is the one thing this axis exists not to be.
+- **A window of more than 1,500 buckets** is refused naming the bucket and
+  the span. Truncating would put a month's heading over a day of bars and
+  coarsening would answer a different question from the one the axis is
+  labelled with; the caller's fix is a coarser bucket or a shorter window.
+
 ### The live token meter
 
 > **Not populated in this build.** The projection builds `budget`, the
@@ -1475,14 +1524,22 @@ up.
   (re)connect, and lets a slow consumer miss frames rather than hold
   them. So a report at or below the held `seq` is dropped rather than
   merged, and a gap is closed by the next report rather than replayed.
-- `refused_at` — when the cap last turned a charge away. That, and not
-  `used >= max`, is what "exhausted" means: a refused charge increments
-  nothing, so the counter stops short of the cap by the size of the round
-  that would not fit.
-- `{}` means no engine is reporting one, which in this build is always
-  the case (see the note above). Per-agent, `budget: null` means the same, or that the seat
-  has no per-agent cap at all — the engine seeds one only for a non-zero
-  `token_budget`.
+- **There is no `refused_at`.** It was on this payload, read by the
+  dashboard to draw a "refusing charges" badge, and never written — so
+  the badge was unreachable on every company. It could not have been
+  written from here either: this report is built per NODE from the
+  fleet's shared counter, and a refusal happens inside one node's tool
+  loop, so a node that refused nothing would report no refusal while the
+  company next door was turning charges away. A refused charge also
+  increments nothing, which is why the counter itself cannot carry the
+  fact. What a refusal DOES leave is durable and fleet-wide: the phase
+  records its outcome as `budget_exhausted` in the event log, with the
+  seat, the turn and the instant.
+- `{}` means no engine is reporting one — in this build always the case
+  (see the note above), and permanently so for the standalone API, which
+  has no meter of its own. Per-agent, `budget: null` means the same, or
+  that the seat has no per-agent cap at all — the engine seeds one only
+  for a non-zero `token_budget`.
 
 It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
@@ -1532,7 +1589,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
 | `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
+| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
@@ -1552,15 +1609,20 @@ REST route calls, so the two surfaces cannot diverge:
 | `what` | `params` | Answers with |
 |--------|----------|--------------|
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
-| `agent_memory` | `{id}` | `GET /agents/{id}/memory` |
+| `agent_memory` | `{id}` | `GET /agents/{id}/memory`. Four collections: the diary, the episodes, the synthesized skills (with `skills_total` beside them, because the listing is a page of a set), and the COUNTERPARTY PROFILES — what this seat has learned about the colleagues it works with. Each profile carries both instants and they measure different cadences: `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits actually changed, so a colleague seen daily whose profile has not moved in months is one this seat has stopped learning about. `traits` is a bag whose keys the model invents, never a fixed schema. The diary is keyed on the derived agent id and the other three on the HANDLE; both are asked with the one identifier a caller has, and the half that does not recognise it answers nothing |
+| `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. Same scope rule as `work_my_work` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
-| `events` | `{limit, type, source, category, trace_id, actor, agent, before_time, before_id}` | `GET /events` |
+| `events` | `{limit, type, source, category, trace_id, actor, agent, turn_id, since, until, before_id, before_time}` | `GET /events` |
+| `event_series` | `{bucket, since, until, type, source, category, trace_id, actor, turn_id}` | `GET /events/series`. THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one |
+| `turns` | `{days, role, agent_id, model, failed, before, limit}` | `GET /turns`. ONE ROW PER UNIT OF WORK — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the task come from the completion record's own payload, read from the one row per turn that carries it. `complete` says whether a completion record exists — a turn with none is running or died mid-flight — and `duration_ms` is the turn's OWN measurement, which is not the span of its events: the span covers the reflection pass that publishes afterwards. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list. The cursor is on the turn's START, which is what the listing is ordered by; a keyset on any one event pages a turn twice |
 | `turn` | `{turn_id}` | Every event of ONE unit of agent work, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning |
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
-| `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
+| `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
+| `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
+| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | — | `GET /schedules` |
-| `fleet` | none | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. A lease store that cannot be read answers `query_failed` (the REST twin answers `500` with the same code) |
+| `fleet` | none | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease store that cannot be read answers `query_failed` (the REST twin answers `500` with the same code) |
 | `sandbox_runs` | none | `GET /sandbox-runs`; `unknown_query` on a process with no pending-run store |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
@@ -1575,17 +1637,23 @@ of every stay, so a carry-over stays out of it. Membership is a STAY rather
 than a column, because a task that carried over is in two sprints and a column
 could name one. Everything but `none` names a sprint of ONE project — they are
 numbered and named per project — and is refused at company scope naming the
-container key that fixes it. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
-| `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links, blocked}` plus the same coverage half. `blocked` is on the ANSWER rather than on `task` because it is DERIVED — an open dependency edge, computed in the same transaction as the task, so the badge here and the badge on the board row cannot disagree; `links` say what the relations are, not whether any blocker is still open |
+container key that fixes it. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend` and `status_entered`, each reversible with a leading `-`. **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
+| `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links, fields, blocked}` plus the same coverage half. `blocked` is on the ANSWER rather than on `task` because it is DERIVED — an open dependency edge, computed in the same transaction as the task, so the badge here and the badge on the board row cannot disagree; `links` say what the relations are, not whether any blocker is still open. `fields` are the task's CUSTOM fields resolved against the company's catalogue — each carrying its declared name, type and whether its declaration was archived — because a stored choice is an option's UUID and a panel rendering the raw value would print it under a heading |
 | `work_goals` | `{id, owner, group, archived}` | `GET /work/goals`. `id` asks for exactly one. Each goal carries its targets, and each target its own `progress` — a fraction from 0 to 1, or ABSENT when the target measures nothing: a `tasks` target whose tasks were all purged, a numeric one that starts where it ends. The goal's own `progress` is the unweighted mean of the targets that do measure something, and is likewise absent when none do — "nothing has happened" and "there is nothing to measure" are different facts. A `tasks` target also carries `finished_tasks` and `total_tasks`, because "7 of 12" is the number a person acts on |
 | `work_catalogue` | `{archived}` | `GET /work/catalogue`. Answers `{types, fields, policy_version, types_version, fields_version}` plus the coverage half. `policy_version` moves on every *fields* edit and is what a task's policy stamp records having validated against; a *types* edit does not move it, because the two are separate objects on separate subjects so an unrelated edit never invalidates every task's stamp |
 | `work_projects` | `{q, unit, archived, limit}` | `GET /work/projects`. `task_counts` is read from `tracker_projects.open_count/done_count/closed_count`, MAINTAINED by the task apply whenever a status group changes or a task enters, leaves or is removed — never aggregated per poll, which over every task in every project is what a sixty-second refresh used to cost. `unit.resolved` is a FIELD rather than an absence: "this project names a unit the chart no longer has" is a finding, and an absent unit would be indistinguishable from a project that names none |
 | `work_project` | `{key, for_type}` | `GET /work/projects/{key}`. A SET read, not a point read: its shape is dominated by aggregates over task rows — the counts, the active sprint's figures, the velocity — so it carries `complete`/`incomplete` under the same contract every set answer takes, and its closure is the project's container plus both catalogues. `shadowed` names the workspace field ids this project redeclares, which is what a field in the middle of a move between scopes looks like |
 | `work_sprints` | `{project, sprint, sprints, archived}` | `GET /work/sprints`. Every figure is a predicate over `tracker_task_sprints` — one row per STAY — except `done`, which reads `tracker_status_spans`: delivery is not membership, and a task can sit in a sprint the whole way through without finishing or finish in one it joined an hour before the close. The window ends where the sprint DID (its close, or its planned end), so a closed sprint does not keep gaining velocity as its leftovers land. `velocity_avg` is the mean over the CLOSED sprints and is ABSENT when none has closed — zero would read as a team that delivers nothing |
-| `work_activity` | `{task, container, kinds, actor, assignee, q, notified, since, from, to, limit, cursor}` | `GET /work/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced — `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the thirty-two change kinds and nothing else. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. The `q` gate is on what the query would SCAN, never on which keys were named — `container=workspace&q=` and a five-year `since` both name a key and narrow nothing |
-| `work_my_work` (operator) | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object |
-| `work_person` | `{handle}` | `GET /work/people/{handle}`. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
-| `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first; absent is the shared strip. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
+| `work_workload` | `{unit, read_level, …}` | `GET /work/workload`. Who is carrying how much, for everybody at once. It counts OPEN work — every task assigned to somebody, in or out of a sprint — where `work_sprints` answers what one project committed inside one fortnight; the two numbers are deliberately different. The CAPACITY is summed from every project whose sprint is RUNNING, in that project's own measure, because a capacity is a statement about a fortnight and one from a dormant project holds somebody to a number nobody is working to. `capacity` is ABSENT when no policy names them — an unset capacity is not a capacity of zero, which would render every person in a company that never set one permanently over — and `capacity_from` says how many projects it came from, so a caller can tell a whole week's number from part of one. A person whose projects size in DIFFERENT measures gets no capacity and `mixed_measures` instead: points are not minutes, and "nobody said" and "it cannot be added up" are different facts. Beside the total it carries `blocked`, `overdue` and `unscheduled`, because a person at capacity whose whole queue is blocked has a different problem from one who is simply busy. Ordered heaviest first and capped, with `truncated` when the cap was reached. `unit=` narrows the tasks and the capacities TOGETHER — narrowing only the first would hold somebody to a number covering work the answer does not show |
+| `work_activity` | `{task, container, kinds, actor, actor_kinds, assignee, q, notified, since, from, to, limit, cursor}` | `GET /work/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced — `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the thirty-two change kinds and nothing else. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. `actor_kinds` is a CSV of `agent`, `human`, `operator` and `system` and narrows to WHO WAS WRITING rather than to which handle — which is not the same question and cannot be asked as a set of handles, since an `operator` commit carries a token's own label where an `agent` one carries a seat handle, and the set of people is the roster, which changes. It is REFUSED when it names a kind this build does not have, unlike `kinds`: a filter silently ignored answers a wider question than the caller asked, and on an audit feed that reads as a company where everybody is an operator. The `q` gate is on what the query would SCAN, never on which keys were named — `container=workspace&q=` and a five-year `since` both name a key and narrow nothing |
+| `work_my_work` | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object  `handle` DEFAULTS to the caller's own seat and naming anybody else's needs an operator credential — see below |
+| `work_inbox` | `{handle, unread, primary_only, include_snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of twenty it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the twenty. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence. Same scope rule as `work_my_work` |
+| `work_search` | `{q, limit}` | `GET /work/search`. The company's work RANKED against a phrase — BM25 over the engine's own inverted list, which is the same ranking a seat gets from `search_work`. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered only where this node HOLDS an index, which is separate from holding the board: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. A score is comparable WITHIN one answer and nowhere else, because the statistics it is computed against are this corpus's |
+| `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of twenty that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
+| `viewer` | — | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
+| `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
+| `work_burndown` | `{project, sprint}` | `GET /work/burndown`. One series per instant over a sprint's own window: `scope` (what is in the sprint), `remaining` (what is in it and in an OPEN status group) and `delivered`. REMAINING IS AN OPEN GROUP RATHER THAN "NOT DELIVERED", which is the whole arithmetic — counting cancelled work as remaining makes a sprint that was descoped run flat and read as a team that shipped nothing. Membership comes from the STAYS and status from the SPANS, both read through `tracker_task_sprints` rather than through a span's own `sprint_number`, because the applier stamps a span with the task's CURRENT sprint and a task that moved would carry its history with it. The series stops at the caller's own instant for a running sprint — an unlived day is not a measurement. BOTH KEYS ARE REQUIRED and neither defaults: a sprint is numbered per project, so a number with no key names one sprint per team, and defaulting the number to "the active one" would make a bookmarked chart mean a different sprint every fortnight |
+| `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the three (five, on a sprinting project) nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
 
 **Every tracker answer carries how far this node had got, and both halves
 matter.** `read_level` is the level the read was ACTUALLY served at, never the
@@ -1642,11 +1710,41 @@ that renders `read_level` and swallows `complete` looks confidently right.
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
 | `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
+| `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
+| `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
 | `stream` | none | The health envelope (`GET /health`), on demand over the socket. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
 | `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
+
+### Whose record a personal question answers for
+
+Four questions answer about **one person** rather than about the company:
+`work_my_work`, `work_inbox`, `work_person` and `conversations`. Every one of
+them takes a `handle`, and the rule for whose is the same, in one place:
+
+1. **No handle** answers for the seat the caller's own credential is bound to.
+2. **Your own handle** is the same thing said explicitly.
+3. **Anybody else's handle** needs an operator credential.
+
+The binding is a chain of two, and neither link is new. Tier A's
+`api.auth.tokens` maps a presented credential to an **operator id**; a human
+seat claims one with `contact.crewlet_operator_id`. `viewer` is the question
+that walks it, and it lives on the seat rather than in Tier A deliberately —
+Tier A is the root of trust and holds the keys to the secret store, so it
+resolves with `EnvOnly` and may never read a value out of Tier B.
+
+A caller with no seat behind their credential is refused `bad_params`, not
+`unauthorized`. Nobody was denied anything: there is no person to answer about,
+and the remedy is a line of company configuration rather than a different
+token. A surface that reported it as an authorization failure would send
+somebody looking for a credential that does not exist.
+
+These were registered **operator-only** until recently, which made the one
+screen a human teammate lives on unreachable to them — and, for an operator,
+a stranger's day: the dashboard had no viewer at all, so "my work" fell back
+to the alphabetically first seat in the chart.
 
 ### Wiring
 
@@ -2047,7 +2145,7 @@ is three per-node facts attributed to a fleet.
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
       "prose": "Nothing is being trimmed on tracker: ...",
-      "terms": [{"name": "applied", "state": "known", "seq": 918279004, "detail": "..."}]
+      "terms": [{"name": "applied", "state": "ok", "seq": 918279004, "detail": "..."}]
     }
   ],
   "nodes": [...],
@@ -2057,6 +2155,15 @@ is three per-node facts attributed to a fleet.
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
 }
 ```
+
+A term's `state` is one of four, and `seq` is an answer in exactly one of them:
+`ok` carries the sequence the term permits, `unknown` is a term that could not
+be evaluated (which blocks), `n/a` is one this domain does not have, and
+`unbounded` is one that was read and binds nothing — no hold pins the log, or a
+solo fleet takes no snapshots. `seq` is `0` in the other three rather than
+absent, so a term permitting nothing *yet* — the state that holds a young
+fleet's trim, and the one worth reading — is distinguishable from a term with
+no sequence to give.
 
 `register_readable` is the field that keeps an empty `nodes` block honest: "this
 fleet has no nodes" cannot happen, and "coordination could not be listed"
@@ -2224,6 +2331,13 @@ Read from the lease table, so every node gives the same answer: node
 presence carries each node's `node.roles` and `node.labels`, seat and
 worker leases name their holder, and the per-node config epoch comes from
 the control plane's apply status.
+
+**It needs a token, reads included**, like every other answer the
+dashboard's Admin workspace draws. What it describes is the DEPLOYMENT
+rather than the company's work — the node ids, which node holds which
+seat, the lease epochs, how far a rollout has reached — so it is scoped
+the way `/integrations` beside it always has been, and
+`api.allow_anonymous_read` does not open it.
 
 Presence also carries what each node is **doing** — `in_flight`,
 `draining`, `posture` and `started_at` — because only the node running a
@@ -2684,15 +2798,22 @@ auxiliary worker, agent, and turn.
 
 | Name | Default | Description |
 |------|---------|-------------|
-| `since_days` | `7` | Window in days. Clamped to `[1, 30]` — the event store keeps 30 days. The **whole** window is folded: there is no row cap, so the number is the window's real total rather than a prefix of it. |
+| `since` / `until` | (the `since_days` window) | RFC 3339 instants, and the pair a time-range control produces. The window is **half-open** — `[since, until)` — so two adjacent windows share their boundary instant without either losing it or counting it twice, and one that ends where it begins is refused rather than answered as a quiet company. `since` is floored at the store's 30-day retention. The same pair `GET /tokens/series` takes, so a reader scrubbing a range sees the figures and the chart move together. |
+| `since_days` | `7` | The same window as a count of days back from now, for a caller that has no instants. Clamped to `[1, 30]` — the event store keeps 30 days. Ignored when `since` or `until` is given. The **whole** window is folded either way: there is no row cap, so the number is the window's real total rather than a prefix of it. |
 | `agent_role` | (none) | Restrict to one role. Used by the agent detail page's per-phase summary. |
 | `recent_turns` | `50` | Cap on the per-turn list. |
+
+The answer is labelled with the window it actually **covered**, never with the
+one that was asked for: a request further back than the retention is floored,
+and a rollup headed with a year over a month of rows is a lie about the numbers
+beside it.
 
 **Response**
 
 ```json
 {
-  "since_days": 7,
+  "since": "2026-06-08T12:00:00Z",
+  "until": "2026-06-15T12:00:00Z",
   "agent_role": "",
   "totals": {
     "input_tokens": 17700, "output_tokens": 2750,
@@ -2768,6 +2889,151 @@ Notes:
 - Returns the same skeleton with zero totals (and an empty
   `aggregated_through`) when the event store is unavailable rather than
   erroring.
+- Every bucket — the totals, each row, and each nested `by_phase` entry —
+  also carries `cost_usd` and `priced_calls`. **Two numbers, because zero
+  dollars is two different facts**: only a subscription coding CLI reports
+  a price, so a `cost_usd` of 0 over `priced_calls: 0` means nobody said
+  what this cost, while 0 over 3 means three runs were billed nothing.
+  Rendering the first as `$0.00` states a price nobody quoted. Only a
+  POSITIVE price is summed — a negative one is a bad payload, not a
+  rebate, and summing it would silently reduce a company's reported spend.
+
+### `GET /tokens/series`
+
+The same spend with a **time axis**: one bucket per hour or per day over a
+window, each split into bands on one dimension.
+
+**Query parameters**
+
+| Name | Default | Description |
+|------|---------|-------------|
+| `group` | `phase` | The dimension the bands are: `phase`, `model`, `seat`, `unit`, `worker` or `turn`. Anything else is refused naming the set. `unit` resolves through the org chart's DIRECT unit for each seat — not the chain, because a band per nesting level would count the same spend for the team and again for the department above it. A record carries no project and no work item at all; that attribution is the tracker's own per-item counters. |
+| `bucket` | `hour` | `hour` or `day`, in **UTC**. Two, deliberately: a chart with an arbitrary bucket width has an x axis nobody can label. |
+| `since` / `until` | (the `since_days` window) | RFC 3339 instants. The window is **half-open** — `[since, until)` — so two adjacent windows share their boundary instant without either losing it or counting it twice. `since` is floored at the store's 30-day retention, and the answer is labelled with the window it actually COVERED rather than the one asked for. An absent `until` runs to now, so a company quiet for six hours has six empty buckets rather than a chart that stops where the spending did. |
+| `previous` | `false` | Shift the window back by its own length, for compare-to-previous. Needs both edges — the window before an open-ended one has no length. Computed here rather than in the browser: a client subtracting in local time produces two windows of different lengths across a DST boundary, and the chart then reports a change nobody made. |
+| `groups` | `5` | How many bands before the rest fold into the residual. Capped at 20. Five is how many distinguishable hues the design system has. |
+| `agent_role` | (none) | Restrict to one seat. Accepts a handle or a role name. |
+
+**Response**
+
+```json
+{
+  "group": "phase",
+  "bucket": "hour",
+  "since": "2026-06-14T12:00:00Z",
+  "until": "2026-06-14T15:00:00Z",
+  "series": [
+    { "at": "2026-06-14T12:00:00Z",
+      "input_tokens": 60, "output_tokens": 20, "total_tokens": 80,
+      "calls": 1, "cost_usd": 0, "priced_calls": 0,
+      "groups": { "plan": { "total_tokens": 80, "calls": 1, ... } },
+      "other":  { "total_tokens": 0, "calls": 0, ... } },
+    { "at": "2026-06-14T13:00:00Z", "total_tokens": 0, "calls": 0,
+      "groups": {}, "other": { "total_tokens": 0, ... }, ... },
+    ...
+  ],
+  "by_group": [
+    { "group": "execute", "other": false, "folded": 0,
+      "total_tokens": 16000, "calls": 2, "cost_usd": 0.74, "priced_calls": 2 },
+    { "group": "", "other": true, "folded": 12,
+      "total_tokens": 300, "calls": 9, "cost_usd": 0, "priced_calls": 0 }
+  ],
+  "totals":  { "total_tokens": 20450, "calls": 6, ... },
+  "grouped": { "total_tokens": 16300, "calls": 5, ... }
+}
+```
+
+Notes:
+
+- **Every bucket in the window is present, including the empty ones.** A
+  series with holes is a chart the client has to repair, and repairing it
+  in the browser is the copy of this bucketing the engine exists to have
+  written once. A quiet hour is a gap of full height, not a column the
+  chart squeezed out.
+- `by_group` is the **legend and the grid**: each band's total over the
+  whole window, biggest first, with the residual last. Which bands survive
+  the cap is decided over the WHOLE window, never per bucket — a per-bucket
+  decision would put a band in the chart for the hours it happened to lead
+  and in the residual for the rest, which reads as spend that stopped.
+- The residual carries an **empty `group` and `other: true`**, rather than
+  a reserved name: a phase, model or seat genuinely called `other` must not
+  be mistaken for the fold. `folded` is how many distinct groups it stands
+  for, so a legend can say "other (12)".
+- `totals` is every record in the window, **including the ones this
+  grouping places in no band at all** — grouping by `worker` leaves out
+  every phase that is not a worker's, and by `turn` every phase that
+  carried no turn id. `grouped` is what the bands do cover, so the gap is a
+  number rather than an inference a reader has to make by subtracting.
+- `at` is the bucket's **start**, never its middle or its end. A bucket
+  reaches from `at` to `at` plus one hour or one day.
+- A window longer than 1000 buckets keeps the **newest** of them and
+  reports `since` as what it drew: a cost explorer is read from its
+  right-hand edge, and dropping the oldest silently would put a year's
+  heading over a month of bars.
+
+---
+
+## Webhook Deliveries
+
+Every verified delivery writes one row to the event log under
+`category: "webhook"`, so the listing answers "what has been arriving" without
+reading a payload:
+
+| Field | What it carries |
+|---|---|
+| `type` | `webhook:<event>`, or `forge:<event>` for an Atlassian Cloud relay |
+| `source` | The integration the **payload** belongs to — the route for six of the seven, and the relayed product for Forge |
+| `summary` | The delivery in one sentence |
+| `tags.recipient` | The seat a per-seat delivery was addressed to, absent for a company-wide one. It is one of the four keys the log indexes as a **party**, so `GET /events?agent=<handle>` also returns what reached that seat from outside |
+| `tags.delivery_key` | The provider's own delivery id, absent for the providers that send none — what an operator has in front of them in the provider's console |
+| `payload` | The **raw body the provider sent**, on `GET /events/{event_id}` only. A listing never carries a payload, so a deliveries screen is one request rather than one per row |
+
+Note that a row exists only for a delivery that was **verified, claimed and
+queued**. A refusal — a bad signature, an unset secret, a body too large — is
+answered at the edge and appears in the engine's log rather than here.
+
+---
+
+## The Tool Catalogue
+
+Carried by `GET /tools`, by the `tools` push, and inside the socket snapshot.
+One row per registered tool:
+
+```json
+{
+  "name": "post_message",
+  "description": "Post a message to a channel",
+  "source": "slack",
+  "title": "Post message",
+  "annotations": {
+    "read_only": "no",
+    "destructive": "no",
+    "idempotent": "unknown",
+    "open_world": "yes"
+  },
+  "delivers": "slack",
+  "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] }
+}
+```
+
+- **Every hint is a WORD, never a bool**, and the third word is the point:
+  `unknown` means the server did not advertise the hint, which is a different
+  fact from `no`. A bool cannot hold the difference — an absent hint would
+  arrive as `false` and read as a positive denial, so a fresh MCP server's
+  unannotated tools would look like proven reads on the one screen an
+  operator audits them on. The engine's own delivery fence has always read
+  them this way (see [`Registry.KnownReads`](../guides/tools-and-mcp.md)): an
+  unannotated tool is **not** a known read.
+- `delivers` names **where** calling this tool puts something in front of
+  somebody outside the turn, and is empty for a tool that reaches nobody. It
+  is the registry's own predicate, not "was this served by MCP": a proven
+  read-only MCP tool delivers nowhere, and the native tracker's comment tool
+  delivers although it is a builtin.
+- `title` is the human-readable name a server advertised, omitted when it
+  advertised none.
+- `input_schema` is the JSON Schema the model is offered, verbatim. It is
+  **absent** when the tool takes no arguments, which is not the same as `{}`:
+  only the first means this build did not send one.
 
 ---
 

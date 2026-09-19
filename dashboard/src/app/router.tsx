@@ -4,7 +4,7 @@
  * Hash routing, deliberately: the shell is served from a Go binary at `/` and
  * `/dashboard`, behind whatever path a reverse proxy chose, and a path router
  * would need a rewrite rule on every one of those deployments. It also keeps
- * every link anyone has already bookmarked — `#/seats/pm?tab=llm` — working.
+ * every link anyone has already bookmarked working across a proxy path change.
  *
  * The interesting part is not parsing, it is WHAT LEAVES A HISTORY ENTRY. The
  * Back button reads the session stack, not the URL, and three rules cover
@@ -12,14 +12,6 @@
  *
  *   | Move                                   | Stack    | Why
  *   |----------------------------------------|----------|-------------------
- *   | a MOVED path (an old route redirecting)| replaces | the entry names a
- *   |                                        |          | route that no longer
- *   |                                        |          | exists; leaving it
- *   |                                        |          | means Back lands on
- *   |                                        |          | it, it redirects
- *   |                                        |          | forward, and you
- *   |                                        |          | arrive where you
- *   |                                        |          | started
  *   | a SECTION — a lens, a tab              | pushes   | the reader calls
  *   |                                        |          | these screens; Back
  *   |                                        |          | after three should
@@ -30,10 +22,26 @@
  *   |                                        |          | list", not "untick
  *   |                                        |          | one"
  *
- * All three shipped wrong once and none of them is visible in a URL: from a
- * redirected route Back could not escape at all, Back from a screen's fourth
- * lens left the screen entirely, and Back to a list the reader had scrolled
- * halfway down landed at the top.
+ * Both shipped wrong once and neither is visible in a URL: Back from a
+ * screen's fourth lens left the screen entirely, and Back to a list the reader
+ * had scrolled halfway down landed at the top.
+ *
+ * A MOVE TO ANOTHER ENTRY CAN BE HELD. A surface holding work that exists
+ * nowhere else — the org builder's draft, a node editor's typed form —
+ * registers a guard, and every push, link, Back and Forward is put to it
+ * before it is made. A replace is never held: it stays on the entry, so there
+ * is nothing to lose. Back cannot be PREVENTED, only undone, so each entry
+ * carries its PLACE in the session beside its scroll key, and the distance
+ * between where the reader landed and where the router stood is exactly the
+ * number of entries a held traversal is walked back by.
+ *
+ * THERE IS NO REDIRECT TABLE. There was one, for the routes an earlier shape
+ * of this dashboard had — and it was always a liability: a redirect whose old
+ * path is now a live route sends every reader of that route somewhere else,
+ * for ever, with the address bar agreeing with them. No `v*` tag has ever
+ * shipped a route from this tree, so there is nobody holding an old link and
+ * nothing for a redirect to rescue. `NotFound` names the screen and offers the
+ * palette, which is the honest answer to an address that does not exist.
  *
  * SCROLL IS A PROPERTY OF A HISTORY ENTRY, NOT OF A URL. The same screen
  * reached twice is two places the reader has been, and keying a position by
@@ -41,15 +49,6 @@
  * `history.state` and files the outgoing position under it; an entry with NO
  * key is exactly the test for "somewhere new", which is the only case that
  * starts at the top.
- *
- * WORK THAT EXISTS NOWHERE ELSE IS NOT LEFT BEHIND UNASKED. A surface holding
- * it (an editor with typed changes) registers a leave guard, and every move
- * to ANOTHER ENTRY is put to it first: a push from code, a link, and Back or
- * Forward. A replace is never held, by the table above: it stays on the
- * entry. Back has already happened by the time a page hears of it, so a held
- * one is undone at once and made again only if the reader agrees, which is
- * why each entry carries its place in the session (`crewletIndex`) as well as
- * its key. A reload or a closed tab gets the browser's own prompt.
  */
 
 import {
@@ -62,6 +61,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+
+import { screenScroller } from "~/lib/scroller.ts";
 
 export interface Route {
   /** Path segments, already decoded. `#/seats/pm` → `["seats", "pm"]`. */
@@ -78,11 +79,6 @@ export function useRoute(): Route {
   const route = useContext(RouteContext);
   if (!route) throw new Error("useRoute outside a Router");
   return route;
-}
-
-/** The current screen's first segment, or "" for the overview. */
-export function useScreen(): string {
-  return useRoute().path[0] ?? "";
 }
 
 /**
@@ -154,80 +150,6 @@ export function buildHash(
 }
 
 // ---------------------------------------------------------------------------
-// Moved routes
-// ---------------------------------------------------------------------------
-
-/**
- * Old path → new path, applied on the FIRST segment (and the second where a
- * route carried an id).
- *
- * These links are in bookmarks, in chat threads and in other people's notes. A
- * redirect costs one `hashchange`; a dead link costs the reader the thing they
- * were looking for.
- */
-const MOVED: Record<string, (path: string[], query: URLSearchParams) => string[] | null> = {
-  // The seat list left the org screen and became a screen of its own.
-  agents: (p) => (p.length > 1 ? ["seats", p[1] as string] : ["people"]),
-  people: () => null, // already current — listed so the intent is explicit
-  // NOT `work`. It redirected to `#/runs` back when "work" meant a coding
-  // run, and the work board took the name — so the entry would have sent
-  // every reader of a live route to a different screen, for ever, with the
-  // address bar agreeing with them. A redirect whose old path is now a real
-  // route is strictly worse than a dead link: the dead link is visible.
-  // The "no redirect claims a path a live screen now owns" test beside
-  // this holds the rule.
-  tokens: () => ["spend"],
-  company: () => ["org"],
-  audit: () => ["config"],
-  // `#/events` was the feed; `#/events/{id}` is still one event.
-  events: (p) => (p.length > 1 ? null : ["activity"]),
-};
-
-/**
- * The first segments a redirect claims, so a test can hold them apart from
- * the ones a live screen owns. Exported for that test alone — see
- * `router.test.ts`, and the `work` entry that is deliberately absent above.
- */
-export const MOVED_PATHS: string[] = Object.keys(MOVED).filter(
-  (key) => MOVED[key]?.([key], new URLSearchParams()) !== null,
-);
-
-/**
- * A LENS can move too, and it does not look like a moved route: the path is
- * still live, so the screen would simply fall back to its default lens and
- * silently put the reader somewhere else.
- */
-const MOVED_LENSES: Record<string, string[]> = {
-  "org?seats": ["people"],
-  "org?people": ["people"],
-};
-
-interface Redirect {
-  path: string[];
-  query: URLSearchParams;
-}
-
-function redirectFor(route: Route): Redirect | null {
-  const head = route.path[0] ?? "";
-  const lens = route.query.get("lens");
-  if (lens) {
-    const moved = MOVED_LENSES[`${head}?${lens}`];
-    if (moved) {
-      const query = new URLSearchParams(route.query);
-      query.delete("lens");
-      return { path: moved, query };
-    }
-  }
-  const rule = MOVED[head];
-  if (!rule) return null;
-  const next = rule(route.path, route.query);
-  if (!next) return null;
-  const query = new URLSearchParams(route.query);
-  if (head === "audit") query.set("lens", "audit");
-  return { path: next, query };
-}
-
-// ---------------------------------------------------------------------------
 // Scroll memory
 // ---------------------------------------------------------------------------
 
@@ -284,24 +206,6 @@ function adoptEntry(): void {
 // Navigation
 // ---------------------------------------------------------------------------
 
-/**
- * The ONE scroll container: the shell's main region, named by its id.
- *
- * Exported because two other things read it, and a second spelling of it is a
- * second thing that stops matching when the shell moves: the settled list asks
- * whether the reader is at the top before it splices rows in, and the palette
- * has the same reason the router does for scrolling this element directly
- * rather than calling `scrollIntoView`, which scrolls every scrollable
- * ancestor it can find.
- */
-export function screenScroller(): HTMLElement | null {
-  return document.getElementById("screen-scroll");
-}
-
-function scrollTarget(): HTMLElement | null {
-  return screenScroller();
-}
-
 function go(hash: string, replace: boolean, agreed = false): void {
   // A PUSH IS A MOVE TO ANOTHER ENTRY, which a surface holding work may hold
   // until the reader agrees. A replace stays on the entry, and is never held.
@@ -310,7 +214,7 @@ function go(hash: string, replace: boolean, agreed = false): void {
   // File the outgoing position under the entry we are leaving, before the
   // entry changes.
   const from = stateKey();
-  const el = scrollTarget();
+  const el = screenScroller();
   if (from && el) positions.set(from, el.scrollTop);
 
   // THE PLACE IS THE ENTRY'S OWN. A screen can navigate in its first effect,
@@ -471,7 +375,8 @@ export interface Navigator {
   section: (key: string, value: string) => void;
   /** A chip, a sort, a search box. Replaces — it is the same screen. */
   filter: (patch: Record<string, string | null>) => void;
-  /** A moved path. Replaces, so Back cannot land on a route that redirects. */
+  /** The same place said differently — a canonical form, a resolved default.
+   *  Replaces, so Back does not land on the spelling the reader never chose. */
   replace: (path: string[], query?: URLSearchParams | Record<string, string>) => void;
   back: () => void;
 }
@@ -484,103 +389,16 @@ export function useNavigator(): Navigator {
   return nav;
 }
 
-/** An href for an anchor, so a link is a real link: middle-clickable. */
+/** An href for an anchor, so a link is a real link — middle-clickable. */
 export function href(path: string[], query?: Record<string, string>): string {
   return buildHash(path, query);
 }
 
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Revealing what a link points at
-// ---------------------------------------------------------------------------
-
-/**
- * An entry the reader has just ARRIVED at, and whether a reveal may still
- * move the page for it.
- *
- * `open` closes on the first reveal and on the first sign the reader is
- * reading: a wheel, a touch, a pointer or a key on the scroller. The page
- * moves only when the reader is not reading.
- */
-interface Arrival {
-  hash: string;
-  open: boolean;
-}
-
-interface Arrivals {
-  current: { value: Arrival | null };
-  /** Reveal attempts to run the moment the router has settled an arrival. */
-  attempts: Set<() => void>;
-}
-
-const ArrivalContext = createContext<Arrivals | null>(null);
-
-/**
- * Scroll an element into view when the reader arrives at a NEW entry.
- *
- * For a link that names a thing inside a screen (`#/org?unit=Backend`): the
- * reader followed it to see that thing, and a long chart that opens at the
- * top has put it somewhere they have to hunt for.
- *
- * THREE RULES, each of which the obvious implementation breaks:
- *
- *  - IT RUNS AFTER THE ROUTER'S SCROLL RESET. A screen's own effect runs
- *    before this component's (React runs a child's passive effects first), so
- *    a screen that scrolled on its own was scrolled straight back to the top
- *    by the reset for a new entry.
- *  - ONLY FOR SOMEWHERE NEW, never while a Back restore is pending. Back to a
- *    chart the reader had scrolled means back to where they were, and a
- *    reveal fighting the restore for its frames is a page that jumps twice.
- *    A filter change replaces the entry and restores its position too, so it
- *    never reveals: the reader is already looking at what they changed.
- *  - IT SCROLLS `#screen-scroll` DIRECTLY. `scrollIntoView` scrolls every
- *    scrollable ancestor it finds, including ones this layout does not own,
- *    and jsdom does not implement it at all. The element's own
- *    `scroll-margin-top` is honoured, so the stylesheet says how much room to
- *    leave above it.
- *
- * The element may not exist yet on arrival (the org projection arrives on the
- * socket after the route does), so an arrival stays open and the hook tries
- * again on every render until it finds the element or the reader moves.
- * `null` reveals nothing.
- */
-export function useRevealOnArrival(elementId: string | null): void {
-  const arrivals = useContext(ArrivalContext);
-  const route = useContext(RouteContext);
-  const latest = useRef({ elementId, hash: route?.hash ?? "" });
-  latest.current = { elementId, hash: route?.hash ?? "" };
-
-  const attempt = useCallback(() => {
-    const arrival = arrivals?.current.value;
-    const { elementId: id, hash } = latest.current;
-    if (!id || !arrival || !arrival.open || arrival.hash !== hash) return;
-    const scroller = scrollTarget();
-    const target = document.getElementById(id);
-    if (!scroller || !target || !scroller.contains(target)) return;
-    arrival.open = false;
-    const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
-    const offset = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-    scroller.scrollTop += offset - margin;
-  }, [arrivals]);
-
-  useEffect(() => {
-    if (!arrivals) return;
-    arrivals.attempts.add(attempt);
-    return () => {
-      arrivals.attempts.delete(attempt);
-    };
-  }, [arrivals, attempt]);
-
-  // Every render, deliberately: the element appears when the data does, and
-  // the attempt is one lookup that does nothing once the arrival has closed.
-  useEffect(attempt);
-}
-
 export function Router({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
   const pending = useRef<string | null>(null);
-  const arrivals = useMemo<Arrivals>(() => ({ current: { value: null }, attempts: new Set() }), []);
 
   useEffect(() => {
     adoptEntry();
@@ -601,9 +419,11 @@ export function Router({ children }: { children: ReactNode }) {
     window.addEventListener("crewlet:route", read);
     // A SCREEN CAN MOVE IN ITS OWN FIRST EFFECT, and React runs a child's
     // effects before its parent's, so the listeners above did not exist when
-    // it did: a table correcting a page past the end of its rows wrote the
-    // corrected page into the URL and this state never heard of it, leaving
-    // the reader on a page the link no longer names and no rows on it.
+    // it did. The org builder is the one that does it here: its selection
+    // effect reconciles `?unit=`/`?seat=` against the node the chart has, and
+    // a correction made on mount wrote the corrected query into the URL while
+    // this state kept the one the reader arrived with — an address and a
+    // screen disagreeing about which node is open, with nothing to say so.
     read();
     return () => {
       window.removeEventListener("hashchange", follow);
@@ -611,17 +431,6 @@ export function Router({ children }: { children: ReactNode }) {
       window.removeEventListener("crewlet:route", read);
     };
   }, []);
-
-  // Redirects run as an effect rather than during render: a redirect is a
-  // history mutation, and doing it in a render body makes the first paint of
-  // the dead route real.
-  useEffect(() => {
-    const r = redirectFor(route);
-    if (!r) return;
-    const next = buildHash(r.path, r.query);
-    if (next === route.hash) return;
-    go(next, true);
-  }, [route]);
 
   const nav = useMemo<Navigator>(
     () => ({
@@ -653,31 +462,18 @@ export function Router({ children }: { children: ReactNode }) {
   // lands short — and abandoned the moment the reader touches the page.
   useEffect(() => {
     const key = stateKey();
-    const el = scrollTarget();
-    arrivals.current.value = null;
+    const el = screenScroller();
     if (!el) return;
-    // Somewhere new starts at the top, and is the one case a link may then
-    // reveal what it points at. See [useRevealOnArrival].
-    const arrive = () => {
-      el.scrollTop = 0;
-      const arrival: Arrival = { hash: route.hash, open: true };
-      arrivals.current.value = arrival;
-      const reading = () => {
-        arrival.open = false;
-      };
-      const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
-      for (const type of events) el.addEventListener(type, reading, { once: true, passive: true });
-      for (const attempt of arrivals.attempts) attempt();
-      return () => {
-        for (const type of events) el.removeEventListener(type, reading);
-      };
-    };
     if (!key) {
       stampKey();
-      return arrive();
+      el.scrollTop = 0;
+      return;
     }
     const want = positions.get(key);
-    if (want == null) return arrive();
+    if (want == null) {
+      el.scrollTop = 0;
+      return;
+    }
     pending.current = key;
     let tries = 0;
     const settle = () => {
@@ -695,13 +491,11 @@ export function Router({ children }: { children: ReactNode }) {
       el.removeEventListener("wheel", abandon);
       el.removeEventListener("touchstart", abandon);
     };
-  }, [route.hash, arrivals]);
+  }, [route.hash]);
 
   return (
     <RouteContext.Provider value={route}>
-      <NavContext.Provider value={nav}>
-        <ArrivalContext.Provider value={arrivals}>{children}</ArrivalContext.Provider>
-      </NavContext.Provider>
+      <NavContext.Provider value={nav}>{children}</NavContext.Provider>
     </RouteContext.Provider>
   );
 }

@@ -29,6 +29,12 @@ import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import { runState, stateLabel, toneOf } from "~/lib/seats.ts";
+// THROUGH THE ONE TRANSLATION. `toneOf` answers in the ENGINE's tone
+// vocabulary and uilet spells three of those six differently; a wrong
+// variant renders the neutral dot rather than failing, so a critical seat
+// would draw as "nothing in particular" with nothing to say so. See
+// [uiletTone].
+import { uiletTone } from "~/ui/primitives.tsx";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
@@ -187,7 +193,7 @@ export function LiveState({
     const said = stateLabel(state);
     return (
       <span className="bnode-state" title={said}>
-        <StatusDot tone={toneOf(state)} />
+        <StatusDot tone={uiletTone(toneOf(state))} />
         <VisuallyHidden>{said}</VisuallyHidden>
       </span>
     );

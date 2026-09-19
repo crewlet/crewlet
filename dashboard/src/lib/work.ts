@@ -1,0 +1,1150 @@
+/**
+ * The tracker's vocabulary and arithmetic, over values.
+ *
+ * NO REACT AND NO DOM, for the reason `textindex`'s ranking and the tracker's
+ * own coercion table are pure on the engine's side: a rule that can only be
+ * exercised by rendering a screen is a rule nobody re-measures, and every
+ * judgement here — what a status is called, which column a filter builds, which
+ * day a due date lands on — has a wrong form that reads as a different fact
+ * rather than as a missing one.
+ *
+ * It also exists because the screens now SHARE these answers. A board, a list,
+ * a calendar, a peek panel, an item page, My work and the sprint report all
+ * draw the same task, and the previous screen's helpers lived inside the one
+ * file that happened to need them first — which is how the sprint report came
+ * to import a change renderer from the board.
+ */
+
+// THE ABSENT MARK IS THE DESIGN SYSTEM'S, for the reason `lib/format.ts`
+// gives at its own copy of this import: spelled here as a literal it is a
+// SECOND glyph beside `EmptyValue`'s en dash, and the work screens drew both
+// at once. The constant rather than the component, because this module has
+// no React in it and must not acquire any.
+import { EMPTY_VALUE } from "@crewlethq/ui";
+import { browserDay, fmtDate, fmtDateTime, humanize, parseUTC, plural } from "./format.ts";
+// THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
+// rule above: `plainText` is a pure string→string function that happens to live
+// beside the grammar it has to agree with. A private stripper here instead would
+// be a second copy of markdown's rules, which is the drift `textcut` and `whsec`
+// each record.
+import { plainText } from "./markdown.ts";
+import type { MarkName } from "~/ui/glyph.tsx";
+import type {
+  WorkActivityRecord,
+  WorkChange,
+  WorkFieldDef,
+  WorkFieldValue,
+  WorkGroup,
+  WorkProjectRow,
+  WorkProjectTag,
+  WorkStatus,
+  WorkStatusDef,
+  WorkSummary,
+  WorkTypeDef,
+  WorkView,
+  WorkViewShape,
+} from "~/protocol/index.ts";
+
+export type Tone = "neutral" | "positive" | "caution" | "critical" | "info";
+
+// ---------------------------------------------------------------------------
+// The closed sets
+// ---------------------------------------------------------------------------
+
+/**
+ * The tracker's SIX statuses, in the order a board draws them.
+ *
+ * `blocked` is deliberately not among them: a blocker is DATA carried beside
+ * the status, because a task can be both in progress and blocked and a single
+ * field cannot say so. `cancelled` is here and reads as "finished without
+ * being delivered", which is the whole of what a close reason used to say.
+ */
+export const STATUSES: { value: WorkStatus; label: string; group: string }[] = [
+  { value: "todo", label: "To do", group: "not_started" },
+  { value: "in_progress", label: "In progress", group: "active" },
+  { value: "in_review", label: "In review", group: "active" },
+  { value: "done", label: "Done", group: "done" },
+  { value: "cancelled", label: "Cancelled", group: "done" },
+  { value: "closed", label: "Closed", group: "closed" },
+];
+
+/** A status is a STATE, which is the one thing colour is spent on here. */
+export const STATUS_TONE: Record<string, Tone> = {
+  todo: "neutral",
+  in_progress: "info",
+  in_review: "caution",
+  done: "positive",
+  cancelled: "neutral",
+  closed: "neutral",
+};
+
+/**
+ * What a status is called, preferring the PROJECT's own label.
+ *
+ * A company may rename what it calls each of the six, and a screen that
+ * rendered the slug would be showing a word the team does not use — while a
+ * screen that rendered only the project's would have nothing to say on a board
+ * that spans projects. So: the project's label, then the shipped one, then the
+ * slug itself, which is what a status this build has never heard of renders as
+ * rather than vanishing.
+ */
+export function statusLabel(status: string, defs?: WorkStatusDef[]): string {
+  const declared = defs?.find((d) => d.status === status);
+  if (declared?.label) return declared.label;
+  return STATUSES.find((s) => s.value === status)?.label ?? humanize(status);
+}
+
+export const PRIORITIES = ["none", "low", "normal", "high", "urgent"] as const;
+
+/**
+ * The icon a task type is drawn with.
+ *
+ * AN ICON RATHER THAN A HUE, which is the product's own rule: a type is
+ * identity, and identity is carried by a name, a mark and a position. Seven
+ * slugs ship with the engine; a company's own type falls through to the
+ * neutral box rather than to a generated anything.
+ */
+export const TYPE_ICON: Record<string, MarkName> = {
+  task: "check_circle",
+  bug: "bug_report",
+  epic: "bolt",
+  story: "book_2",
+  spike: "explore",
+  chore: "build",
+  milestone: "flag",
+};
+
+export function typeIcon(slug: string | undefined): MarkName {
+  return TYPE_ICON[slug ?? ""] ?? "package_2";
+}
+
+/** What a type is called, preferring the company's own declaration. */
+export function typeName(slug: string | undefined, types?: WorkTypeDef[]): string {
+  if (!slug) return "";
+  return types?.find((t) => t.slug === slug)?.name ?? humanize(slug);
+}
+
+/**
+ * The engine's thirty-two change kinds, each with the mark it is drawn as and
+ * the phrase a person reads.
+ *
+ * A MARK RATHER THAN A HUE, which is this file's own rule for a task type a few
+ * declarations above: a kind is identity, and identity is carried by a name, a
+ * mark and a position. The item's history drew ONE mark on every row, so a
+ * comment and a field edit were the same picture — while the cross-item feed,
+ * which renders the kind as a tag in a column of its own, never had the problem.
+ * This is that column, in the only form a dense one-line row has room for.
+ *
+ * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
+ * "ada watchers". Only the kinds an apply can compare two documents for produce
+ * deltas — `tracker.TaskDeltas` covers twelve task fields and nothing else — so
+ * `watchers`, `relations`, `checklist`, `archived`, `reparented` and the whole
+ * comment family reach the reader through this column alone.
+ *
+ * ONE DECLARATION, held against `tracker.ChangeKinds` by
+ * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
+ * and the dashboard cannot import, and a kind that lands in Go without landing
+ * here draws the fallback mark and a bare word for ever, silently.
+ */
+export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
+  { kind: "created", mark: "add", phrase: "created it" },
+  { kind: "fields", mark: "tune", phrase: "changed a field" },
+  { kind: "status", mark: "cached", phrase: "moved it" },
+  { kind: "assignee", mark: "person", phrase: "reassigned it" },
+  { kind: "collaborators", mark: "group", phrase: "changed the collaborators" },
+  { kind: "watchers", mark: "visibility", phrase: "changed the watchers" },
+  { kind: "tags", mark: "tag", phrase: "changed the tags" },
+  { kind: "relations", mark: "link", phrase: "changed a relation" },
+  { kind: "routed", mark: "fork_right", phrase: "routed it" },
+  { kind: "moved", mark: "move_item", phrase: "moved it to another project" },
+  { kind: "reparented", mark: "account_tree", phrase: "changed its parent" },
+  { kind: "sprint", mark: "calendar_clock", phrase: "changed the sprint" },
+  { kind: "checklist", mark: "list", phrase: "changed a checklist" },
+  { kind: "archived", mark: "package_2", phrase: "archived it" },
+  { kind: "comment", mark: "chat", phrase: "commented" },
+  { kind: "comment_edited", mark: "edit", phrase: "edited a comment" },
+  { kind: "comment_resolved", mark: "check", phrase: "resolved a comment" },
+  { kind: "comment_removed", mark: "close", phrase: "removed a comment" },
+  { kind: "removed", mark: "remove", phrase: "removed it" },
+  { kind: "restored", mark: "settings_backup_restore", phrase: "restored it" },
+  { kind: "purged", mark: "delete", phrase: "purged it" },
+  { kind: "project_created", mark: "create_new_folder", phrase: "created the project" },
+  { kind: "project_updated", mark: "folder", phrase: "changed the project" },
+  { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
+  { kind: "sprint_minted", mark: "calendar_today", phrase: "minted a sprint" },
+  { kind: "sprint_started", mark: "bolt", phrase: "started the sprint" },
+  { kind: "sprint_closed", mark: "check_circle", phrase: "closed the sprint" },
+  { kind: "goal_updated", mark: "target", phrase: "changed a goal" },
+  { kind: "view_saved", mark: "save", phrase: "saved a view" },
+  { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
+  { kind: "prioritised", mark: "arrow_upward", phrase: "reordered somebody's priorities" },
+  { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
+];
+
+const BY_KIND = new Map(CHANGES.map((change) => [change.kind, change]));
+
+/**
+ * The mark a change of this kind is drawn as.
+ *
+ * `difference` — "something changed", claimed by none of the thirty-two — for a
+ * kind a NEWER PEER wrote. The event envelope evolves additive-only, so a
+ * rolling upgrade puts kinds this build has never heard of on the wire, and a
+ * row that drew nothing for one would read as a rendering fault.
+ */
+export function changeMark(kind: string): MarkName {
+  return BY_KIND.get(kind)?.mark ?? "difference";
+}
+
+/** What a change of this kind is called, after the actor's name. */
+export function changePhrase(kind: string): string {
+  // The raw kind for one from a newer peer — lower-cased and unpunctuated rather
+  // than `humanize`d, because this lands mid-sentence after a name.
+  return BY_KIND.get(kind)?.phrase ?? kind.replaceAll("_", " ");
+}
+
+/**
+ * A goal's health, and what each value is called.
+ *
+ * HERE RATHER THAN ON THE SCREEN THAT DRAWS IT. These were declared inside
+ * `routes/work/Goals.tsx` and a `health` delta needs the same four words in a
+ * sentence — two copies of one vocabulary is the shape this file exists to end
+ * (see its own doc). The TONE stays with the screen: a tone is a drawing
+ * decision and a sentence has no room for one.
+ *
+ * A VALUE THIS BUILD HAS NEVER HEARD OF RENDERS AS ITSELF, humanized, which is
+ * the same last resort [statusLabel] takes.
+ */
+export const GOAL_HEALTHS: { value: string; label: string }[] = [
+  { value: "on_track", label: "On track" },
+  { value: "at_risk", label: "At risk" },
+  { value: "off_track", label: "Off track" },
+  { value: "done", label: "Done" },
+];
+
+export function healthLabel(health: string): string {
+  return GOAL_HEALTHS.find((h) => h.value === health)?.label ?? humanize(health);
+}
+
+/**
+ * An estimate as a person reads it.
+ *
+ * A MARKED ABSENCE FOR AN ABSENT ONE, never "0m": zero is a measurement and an
+ * unestimated task is one nobody has sized, which is the difference a sprint
+ * report spends a whole column on.
+ */
+export function fmtMinutes(minutes: number | undefined): string {
+  if (!minutes) return EMPTY_VALUE;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${rest}m`;
+  if (rest === 0) return `${hours}h`;
+  return `${hours}h ${rest}m`;
+}
+
+// ---------------------------------------------------------------------------
+// Grouping
+// ---------------------------------------------------------------------------
+
+export interface LabelContext {
+  statuses?: WorkStatusDef[];
+  types?: WorkTypeDef[];
+  tags?: WorkProjectTag[];
+  seatName?: (handle: string) => string;
+}
+
+/**
+ * What a board column is headed, per axis.
+ *
+ * THE EMPTY KEY IS A REAL COLUMN on every axis — "nobody is assigned" is a
+ * question a board answers rather than a row it hides — and it is the one the
+ * server cannot label, because the label depends on what the axis MEANS: an
+ * empty assignee is "Unassigned" and an empty sprint is "No sprint", and
+ * rendering either as a blank heading leaves a column of work nobody can name.
+ */
+export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {}): string {
+  const key = group.key;
+  if (group.label) return group.label;
+  switch (axis) {
+    case "status":
+      return key ? statusLabel(key, ctx.statuses) : "No status";
+    case "status_group":
+      return key ? humanize(key) : "No group";
+    case "assignee":
+      return key ? (ctx.seatName?.(key) ?? key) : "Unassigned";
+    case "priority":
+      return key ? humanize(key) : "No priority";
+    case "type":
+      return key ? typeName(key, ctx.types) : "No type";
+    case "tag":
+      return key ? (ctx.tags?.find((t) => t.slug === key)?.label ?? key) : "Untagged";
+    case "sprint":
+      return key ? `Sprint ${key}` : "No sprint";
+    case "parent":
+      return key || "No parent";
+    default:
+      return key || EMPTY_VALUE;
+  }
+}
+
+/** The axes a board may be cut on, with what each is called in the picker. */
+export const GROUP_AXES: { value: string; label: string; projectOnly?: boolean }[] = [
+  { value: "status", label: "Status" },
+  { value: "status_group", label: "Status group" },
+  { value: "assignee", label: "Assignee" },
+  { value: "priority", label: "Priority" },
+  { value: "type", label: "Type" },
+  { value: "tag", label: "Tag" },
+  { value: "sprint", label: "Sprint", projectOnly: true },
+];
+
+/** The orderings a list may ask for. */
+export const SORTS: { value: string; label: string }[] = [
+  { value: "rank", label: "Manual order" },
+  { value: "-updated", label: "Recently updated" },
+  { value: "due", label: "Due soonest" },
+  { value: "-priority", label: "Most important" },
+  { value: "-created", label: "Newest" },
+  { value: "title", label: "Title" },
+];
+
+// ---------------------------------------------------------------------------
+// Rendering a change
+// ---------------------------------------------------------------------------
+
+/**
+ * One commit in a sentence, for the activity feed.
+ *
+ * FROM THE DELTAS where there are any, because "todo → in_progress" is what
+ * every reader of a change wants and the kind alone does not say it. The
+ * excerpt is the fallback, and the kind is the last resort — a row with
+ * neither is still a real commit, and rendering it blank would make it look
+ * like a rendering bug.
+ */
+export function describeChange(record: WorkActivityRecord, ctx: LabelContext): string {
+  const moved = Object.entries(record.fields ?? {});
+  if (moved.length > 0) {
+    return moved.map(([field, d]) => deltaClause(field, d.from, d.to, ctx)).join(", ");
+  }
+  // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
+  // comment or a description, both markdown by contract, and this string is
+  // drawn in a one-line cell — so an unflattened one printed `## Understanding
+  // the work` with the hashes in it.
+  if (record.excerpt) return plainText(record.excerpt);
+  return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * One entry of a task's own history, in a sentence.
+ *
+ * A DIFFERENT SHAPE FROM THE FEED'S, and that is not duplication: a history
+ * entry's `fields` is the notification SNAPSHOT, whose values are sometimes a
+ * from/to pair and sometimes the state the change produced — the applier writes
+ * the deltas where it can compare two documents and the notification's own
+ * fields where it cannot (a comment, a mention, an ask). A renderer that assumed
+ * one shape printed `[object Object]` on the other.
+ *
+ * THE EXCERPT IS DELIBERATELY NOT A RUNG. It used to be the one below the
+ * deltas, and for the whole comment family the excerpt IS the comment body:
+ * `tracker.Wake.excerpt` copies it verbatim, cut to six hundred bytes. So the
+ * History tab printed the Thread tab back, one clipped line per comment, and the
+ * row never said what the change WAS. What the item's history is for is what
+ * MOVED; what was said is one click away on the tab beside it, whole and
+ * threaded. The excerpt is still rendered where it is not a copy of something
+ * already on the screen — the trash band reads `record.excerpt` for a purge line
+ * no row survives to carry, and the Woke tab's routing pane shows what each
+ * recipient was actually told.
+ *
+ * So the ladder is two rungs: what moved, else what happened. The KIND's own
+ * mark is drawn beside it, which is what makes the two distinguishable at a
+ * glance rather than only on a careful read.
+ */
+export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
+  const moved = Object.entries(entry.fields ?? {});
+  const said: string[] = [];
+  for (const [field, raw] of moved) {
+    const delta = raw as { from?: unknown; to?: unknown } | null;
+    if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
+      said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
+      continue;
+    }
+    const value = deltaValue(field, scalar(raw), ctx);
+    said.push(value ? `${humanize(field)}: ${value}` : humanize(field));
+  }
+  if (said.length > 0) return said.join(", ");
+  return changePhrase(entry.kind);
+}
+
+/**
+ * ONE FIELD'S VALUE, in the word the rest of the product uses for it.
+ *
+ * A DELTA IS STORED AS THE LOG'S OWN TEXT. `tracker.TaskDeltas` writes
+ * `in_review`, a bare handle and a whole RFC3339 instant; the item's header chip
+ * reads "In review", its assignee chip reads the seat's name and its Due row
+ * reads "Sep 19, 2026". The history was the ONE surface in this product printing
+ * the stored form — six inches under the properties rail printing the other —
+ * and a reader comparing the two lines could not tell they were about the same
+ * value.
+ *
+ * WHY THE ENGINE CANNOT DO THIS. The delta is the state log's: N nodes write it
+ * identically, so it may not carry a rendering that depends on the company's
+ * live vocabulary or on this reader's zone. `internal/tracker/wake.go` says
+ * exactly that from the other end — "rendering a day from it belongs to a
+ * surface, which knows the zone". This is that surface.
+ *
+ * AN UNKNOWN FIELD RENDERS ITS VALUE UNTOUCHED, and `humanize` is deliberately
+ * not the default: a title and a comment are prose, so "update config.yaml"
+ * would come back "Update config yaml".
+ */
+function deltaValue(field: string, value: string, ctx: LabelContext): string {
+  if (!value) return "";
+  // THE ENGINE JOINS A LIST WITH ", " BEFORE IT STORES IT (wake.go, goals.go),
+  // so it splits back on the same separator.
+  const people = (handles: string) =>
+    handles
+      .split(", ")
+      .map((h) => ctx.seatName?.(h) ?? h)
+      .join(", ");
+  switch (field) {
+    case "status":
+      return statusLabel(value, ctx.statuses);
+    case "type":
+      return typeName(value, ctx.types);
+    case "assignee":
+    case "owners":
+    case "members":
+    case "mentions":
+      return people(value);
+    case "tags":
+      return value
+        .split(", ")
+        .map((slug) => ctx.tags?.find((t) => t.slug === slug)?.label ?? slug)
+        .join(", ");
+    // THE RAIL'S OWN ROW READS "Sprint / Sprint 3", so the clause does too.
+    case "sprint":
+      return `Sprint ${value}`;
+    // [fmtDate], which is what the Plan group of the rail renders Start and Due
+    // with. Not [fmtDateCompact]: dropping the year is for a COLUMN of dates,
+    // where the one date not in this year is what has to stand out.
+    case "due":
+    case "start":
+      return fmtDate(value);
+    // THE STORED FORM IS `90m` (minutesText) and the rail reads "1h 30m". A form
+    // this build does not recognise passes through rather than being guessed at.
+    case "estimate":
+      return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
+    case "health":
+      return healthLabel(value);
+    // The checkbox vocabulary [fieldValueText] already uses. "false" is a real
+    // side of this delta — an UN-archive — so both sides render.
+    case "archived":
+      return value === "true" ? "Yes" : "No";
+    default:
+      return value;
+  }
+}
+
+/**
+ * One field's move, as one clause.
+ *
+ * AN EMPTY SIDE IS AN EM DASH on either end: "Assignee:  → Ada" reads as a
+ * rendering bug where "Assignee: — → Ada" reads as an assignment.
+ *
+ * AND A DELTA NEVER RENDERS AS NO CHANGE. `tracker.TaskDeltas` compares the
+ * WHOLE instant precisely so that pulling a due time from 09:00 to 17:00 is a
+ * change at all; rendered as a day, both sides of that move print "Sep 19, 2026"
+ * and the line claims a field moved to where it already was — the exact failure
+ * that comment was written against, handed back from the rendering end. So a
+ * pair that collapses onto one string is promoted: a date to its instant,
+ * anything else to what the engine stored, which differs by construction because
+ * the engine only records a delta when it does.
+ */
+function deltaClause(field: string, from: string, to: string, ctx: LabelContext): string {
+  let a = deltaValue(field, from, ctx);
+  let b = deltaValue(field, to, ctx);
+  if (from !== to && a === b) {
+    if (field === "due" || field === "start") {
+      a = from ? fmtDateTime(from) : "";
+      b = to ? fmtDateTime(to) : "";
+    } else {
+      a = from;
+      b = to;
+    }
+  }
+  return `${humanize(field)}: ${a || EMPTY_VALUE} → ${b || EMPTY_VALUE}`;
+}
+
+/** One value of a snapshot as text. Objects and arrays are rare and shallow. */
+function scalar(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.map(scalar).filter(Boolean).join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/**
+ * A custom field's value, in the word a person reads.
+ *
+ * THE OPTION'S NAME RATHER THAN ITS ID. A choice field stores the option's id
+ * — which is what lets a company rename an option without orphaning every task
+ * that chose it — so a panel that rendered the stored value would print a uuid
+ * under a field heading. The id is the fallback for an option the declaration
+ * no longer carries, because a value nobody can explain is still a value
+ * somebody set.
+ */
+export function fieldValueText(
+  field: WorkFieldValue,
+  defs: Map<string, WorkFieldDef>,
+  seatName: (handle: string) => string = (h) => h,
+): string {
+  const value = field.value;
+  if (value === null || value === undefined || value === "") return EMPTY_VALUE;
+  const def = defs.get(field.id);
+  const options = def?.config?.options ?? [];
+  const named = (id: unknown) => options.find((o) => o.id === id)?.name ?? String(id);
+
+  switch (field.type) {
+    case "checkbox":
+      return value === true ? "Yes" : "No";
+    case "date":
+      return def?.config?.time ? fmtDateTime(String(value)) : fmtDate(String(value));
+    case "number":
+    case "progress":
+    case "rollup": {
+      const unit = def?.config?.unit ? ` ${def.config.unit}` : "";
+      return `${value}${unit}`;
+    }
+    case "dropdown":
+      return named(value);
+    case "labels":
+      return Array.isArray(value) ? value.map(named).join(", ") : named(value);
+    case "people":
+      return Array.isArray(value)
+        ? value.map((h) => seatName(String(h))).join(", ")
+        : seatName(String(value));
+    case "relationship":
+      return Array.isArray(value) ? value.map(String).join(", ") : String(value);
+    default:
+      return typeof value === "object" ? JSON.stringify(value) : String(value);
+  }
+}
+
+/** The one-word state a field value is in, or empty for an ordinary one. */
+export function fieldValueState(field: WorkFieldValue): string {
+  if (field.undeclared) return "undeclared";
+  if (field.foreign) return "from another tracker";
+  if (field.hidden) return "archived";
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+/**
+ * The renderings, which are the WIRE's — [WorkViewShape], where the gate that
+ * holds them against the engine's closed set reads them.
+ *
+ * An alias rather than a second union: a view's `type` IS the shape, so two
+ * spellings of one closed set would be two lists that can disagree, in one
+ * build, about which tab renders anything.
+ */
+export type Shape = WorkViewShape;
+
+/** The shape a view is drawn in. */
+export function shapeOf(viewKey: string, views: WorkView[]): Shape {
+  const view = views.find((v) => v.key === viewKey);
+  if (view) return view.type;
+  // A KEY NOTHING RESOLVES DRAWS THE BOARD rather than nothing: a strip that
+  // has not arrived yet is the ordinary state of the first paint, and a body
+  // that waited for it would flash empty on every navigation.
+  return "board";
+}
+
+/**
+ * The tab a container lands on.
+ *
+ * ONE ROW MAY CARRY `default` and the applier settles that in the same
+ * transaction as the write, so there is never a second claim to fall back
+ * from. Absent, the board: it is the shape that answers "what is moving",
+ * which is the question somebody opening a tracker has.
+ */
+export function defaultView(views: WorkView[]): string {
+  return views.find((v) => v.default)?.key ?? "board";
+}
+
+/** A view's saved query, or an empty set of defaults. */
+export function viewParams(viewKey: string, views: WorkView[]): Record<string, string> {
+  return views.find((v) => v.key === viewKey)?.params ?? {};
+}
+
+// ---------------------------------------------------------------------------
+// The query a screen builds
+// ---------------------------------------------------------------------------
+
+export interface TrackerFilters {
+  q: string;
+  status: string;
+  type: string;
+  priority: string;
+  assignee: string;
+  sprint: string;
+  /** `open` (the default), `closed`, or empty for everything. */
+  scope: string;
+  groupBy: string;
+  group: string;
+  sort: string;
+  blocked: boolean;
+  overdue: boolean;
+}
+
+export const NO_FILTERS: TrackerFilters = {
+  q: "",
+  status: "",
+  type: "",
+  priority: "",
+  assignee: "",
+  sprint: "",
+  scope: "open",
+  groupBy: "",
+  group: "",
+  sort: "",
+  blocked: false,
+  overdue: false,
+};
+
+/** Whether anything is narrowing the rows, so a Clear control can appear. */
+export function anyFilter(f: TrackerFilters): boolean {
+  return Boolean(
+    f.q ||
+    f.status ||
+    f.type ||
+    f.priority ||
+    f.assignee ||
+    f.sprint ||
+    f.groupBy ||
+    f.group ||
+    f.sort ||
+    f.blocked ||
+    f.overdue ||
+    f.scope !== "open",
+  );
+}
+
+/**
+ * The `work_items` parameters one screen state asks for.
+ *
+ * # A view is a set of DEFAULTS and every explicit key overrides it
+ *
+ * Which is what makes picking a different assignee on a saved board give you
+ * that board with one key changed, rather than a board that silently stops
+ * being the saved one. Storing the view's id and letting it win instead would
+ * make the filter controls lie about what is on screen the moment somebody
+ * touched one.
+ *
+ * # The four shapes ask four different questions of one grammar
+ *
+ * A board is `group_by` and no cursor — across a set of columns there is no
+ * single order to be after. A list is a page with a sort. A calendar is a DATE
+ * RANGE and no grouping at all, because its own axis is the month it is
+ * drawing and a column inside a day is not a thing. A timeline is a big
+ * unpaged page ordered by start: its axis is derived from the rows present, so
+ * a second page would redraw the first one's window.
+ */
+export function buildItemsParams(args: {
+  container: string;
+  shape: Shape;
+  view: Record<string, string>;
+  filters: TrackerFilters;
+  /** The calendar's own bounds, as `YYYY-MM-DD` — see [gridRange]. */
+  range?: { from: string; to: string };
+}): Record<string, unknown> {
+  const { container, shape, view, filters, range } = args;
+  const params: Record<string, unknown> = { ...view, container };
+  const inProject = container.startsWith("project:");
+
+  const set = (key: string, value: string) => {
+    if (value) params[key] = value;
+  };
+  set("q", filters.q);
+  set("status", filters.status);
+  set("type", filters.type);
+  set("priority", filters.priority);
+  set("assignee", filters.assignee);
+
+  // A SPRINT NAMES ONE OF A PROJECT'S OWN, so the engine refuses every value
+  // but `none` at the workspace — dropping it here rather than sending a
+  // query that comes back as a refusal the screen would have to explain.
+  if (inProject || filters.sprint === "none") set("sprint", filters.sprint);
+  else if (!inProject) delete params.sprint;
+
+  // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
+  // what every rule in the tracker is written at, and `done` and `closed` are
+  // two of them rather than one negation. The third segment deletes the key,
+  // including one a view brought with it.
+  //
+  // AND THE TWO SEGMENTS THAT INCLUDE FINISHED WORK NEED `show_closed`, because
+  // the group alone cannot widen the answer. `internal/tracker/read.go` ANDs an
+  // unconditional `t.status_group IN ('not_started','active')` unless this key
+  // is set, so sending `done,closed` without it asks for the intersection of
+  // two disjoint halves — the Closed segment returned nothing at all, on every
+  // company, and All returned exactly what Open did. Measured against a seeded
+  // company through a running engine: 0 rows and 14 where the answers are 1
+  // and 15.
+  //
+  // IT IS A FLOOR, NOT AN OVERRIDE. A saved view may carry its own
+  // `show_closed` — `recent:168h` is "finished in the last week" — and that is
+  // a NARROWER window its author chose, inside the same segment. Writing
+  // `true` over it turns their view into "everything ever closed" the moment
+  // the segment is derived from their own `status_group`, which is a scope
+  // nobody picked. So the segment supplies the key only where nothing else
+  // did, and never deletes one.
+  //
+  // Which is also why `open` touches it at all: under `not_started,active`
+  // every value of `show_closed` is inert, since each of the three arms in
+  // that switch either adds nothing or adds a predicate the group already
+  // implies. Measured, all three answer identically.
+  if (filters.scope === "open") {
+    params.status_group = "not_started,active";
+  } else if (filters.scope === "closed") {
+    params.status_group = "done,closed";
+    if (!params.show_closed) params.show_closed = "true";
+  } else {
+    delete params.status_group;
+    if (!params.show_closed) params.show_closed = "true";
+  }
+
+  if (filters.blocked) params.blocked = true;
+  if (filters.overdue) params.due = "overdue";
+
+  const axis = filters.groupBy || (typeof view.group_by === "string" ? view.group_by : "");
+
+  if (shape === "board") {
+    params.group_by = axis || "status";
+    params.group_limit = 50;
+    delete params.limit;
+    delete params.cursor;
+    delete params.group;
+  } else if (shape === "calendar") {
+    // THE CALENDAR HAS ITS OWN AXIS, so a grouping brought in by a view is
+    // dropped rather than sent: a grouped answer replaces the rows with
+    // columns, and a month drawn from columns has nothing in its cells.
+    delete params.group_by;
+    delete params.group;
+    delete params.group_limit;
+    // AND ITS AXIS IS THE `due` KEY ITSELF, which the grammar has exactly one of
+    // — so the grid's window and the Overdue chip cannot both be asked for. The
+    // window wins, and the chip is therefore not offered on this shape at all
+    // (see `Work.tsx`): a pressed control whose narrowing is overwritten on the
+    // way to the wire is how a reader concludes their filter matched everything.
+    // Overdue work inside the window is already tinted in place.
+    //
+    // WRITTEN AS A DROP RATHER THAN LEFT TO THE OVERWRITE two branches above.
+    // The old form worked only because `due = "overdue"` happened to be assigned
+    // first; it is invisible to a reader of this function and to anyone who
+    // reorders it.
+    //
+    // AND NO WINDOW MEANS NO CALENDAR QUESTION. Without one, `sort=due` over the
+    // whole backlog returns the five hundred soonest-due tasks in the company —
+    // which the grid cannot draw and the toolbar would count as if the reader
+    // had asked for them.
+    if (range) params.due = `range:${range.from}..${range.to}`;
+    else delete params.due;
+    params.limit = 500;
+    params.sort = "due";
+    return params;
+  } else if (shape === "timeline") {
+    // THE TIMELINE KEEPS ITS GROUPING, unlike the calendar: a band per
+    // assignee or per status is one axis stacked on the other, which is the
+    // arrangement the view is for — where a month drawn from columns has
+    // nothing in its cells.
+    if (axis) {
+      params.group_by = axis;
+      params.group_limit = 100;
+      set("group", filters.group);
+    } else {
+      delete params.group_by;
+      delete params.group;
+    }
+    // MORE ROWS THAN A LIST, because a bar is one line where a list row is
+    // three or four and the window is derived from the rows present: a
+    // timeline paged at a hundred would draw a different axis on every page.
+    params.limit = 500;
+    // AND IT ARRIVES IN THE AXIS'S OWN ORDER unless the reader asked
+    // otherwise, so the bars descend rather than zig-zag. The builtin view
+    // carries the same value; this is what holds when a saved view or a
+    // filter change drops it.
+    params.sort = filters.sort || "start";
+    return params;
+  } else {
+    // THE LIST AND THE TABLE ASK THE SAME QUESTION. They are two arrangements
+    // of one answer — the same rows, the same grouping, the same page — and
+    // the whole difference is where a field is drawn, so a second arm here
+    // would be a second copy of one paging rule.
+    if (axis) {
+      params.group_by = axis;
+      params.group_limit = 100;
+      set("group", filters.group);
+    } else {
+      delete params.group_by;
+      delete params.group;
+    }
+    params.limit = 100;
+  }
+
+  // THE SORT IS OMITTED where nobody asked for one, so the engine's own
+  // default applies — the manual order inside a project and the most recently
+  // touched across the company, which are two different right answers and
+  // neither is something a client should hard-code.
+  if (filters.sort) params.sort = filters.sort;
+  return params;
+}
+
+/** Where a board column's overflow lands: the same rows as a list. */
+export function filterPatchForGroup(axis: string, key: string): Record<string, string> {
+  return { view: "list", group_by: axis, group: key };
+}
+
+// ---------------------------------------------------------------------------
+// Rows
+// ---------------------------------------------------------------------------
+
+/**
+ * EVERY ROW ON SCREEN, grouped or flat.
+ *
+ * A grouped answer carries NO flat `items` by construction — `groups` replaces
+ * them, because returning both would be the same rows twice — so everything
+ * derived from `items` alone reported a fully populated board as empty: the
+ * header read 0 shown, 0 in progress, 0 blocked, and the panel at the foot of
+ * the screen drew "No work has been filed yet" underneath the board's own
+ * columns.
+ *
+ * The top-level rows are enough and subgroup rows are deliberately NOT added:
+ * a subgroup's rows are a slice of its own column's, so folding them in would
+ * count the same task twice.
+ */
+export function shownRows(items: WorkSummary[], groups: WorkGroup[]): WorkSummary[] {
+  if (groups.length === 0) return items;
+  return groups.flatMap((group) => group.rows);
+}
+
+/**
+ * The project filter's options: the COMPANY's own listing, falling back to
+ * whatever is on the page.
+ *
+ * The listing is the honest set — a filter built from the rows can only offer
+ * the projects that happen to be on them, so a board already narrowed to one
+ * offered exactly one choice and no way back. The fallback is not decoration:
+ * the listing is a separate poll, and a filter that empties while it is in
+ * flight is a control that flickers every time the board is re-read.
+ */
+export function projectKeys(listed: WorkProjectRow[] | undefined, shown: WorkSummary[]): string[] {
+  if (listed && listed.length > 0) return listed.map((p) => p.key);
+  const keys = new Set<string>();
+  for (const item of shown) keys.add(item.project);
+  return [...keys].sort();
+}
+
+/** The engine's own count against what is on screen. */
+export function totalHint(hint: number, shown: number, capped?: boolean): string {
+  if (hint <= 0) return "";
+  // THE ENGINE SAYS WHETHER IT COUNTED THAT FAR, and the threshold is not
+  // repeated here: comparing the hint against a ceiling of our own was a
+  // second copy of the engine's, wrong at exactly one value — a set of
+  // exactly ten thousand is EXACT and read as "10000+".
+  if (capped) return `of ${hint}+ matching`;
+  // SILENT WHEN IT ADDS NOTHING. "15 items of 15 matching" states one
+  // number twice; the hint exists to say there is MORE than what is on
+  // screen, and when there is not, the row count already said it.
+  if (hint <= shown) return "";
+  return `of ${hint} matching`;
+}
+
+/**
+ * WHAT THE COUNT IS A COUNT OF, and the one shape where that is not obvious.
+ *
+ * Four shapes draw this indicator in the same corner of the same bar, in the
+ * same words, over the same question: how many items match the filters you set.
+ * The calendar does not. [buildItemsParams] bounds its fetch to the days the
+ * grid draws, and `internal/tracker/read.go` compiles that to `due_at IS NOT
+ * NULL AND due_at >= ? AND due_at < ?` — so the same filters answered "6 items"
+ * beside a list saying "17", with eleven tasks gone and nothing on screen saying
+ * where. A number that means two things in one place is worse than no number: a
+ * reader compares the two and concludes work disappeared.
+ *
+ * AND [totalHint] CANNOT COVER IT, which is why this is a second helper rather
+ * than a wider one. The engine's `total_hint` is counted over the same predicate
+ * as the rows (`countHint`, same `where`, same transaction), so on a windowed
+ * answer it EQUALS the row count and `totalHint` correctly falls silent. It says
+ * "there is more of what you asked for"; this says "you asked for less than you
+ * think".
+ *
+ * DERIVED FROM THE PARAMS THAT WERE SENT, never from the shape. Which shapes
+ * narrow is written in exactly one place, and a second copy of that list here is
+ * a copy that stops matching — the day another shape bounds its own axis this
+ * sentence goes quietly wrong again, in precisely the way it is being fixed for.
+ * It also makes a SAVED view's own `due=range:` window say the same thing on a
+ * list, which is true there too.
+ *
+ * It UNDER-states rather than over-states where it cannot tell: the engine's
+ * date aliases (`due=thismonth`) resolve to a range server-side, and that table
+ * belongs to `internal/tracker/dates.go` — a copy of it here is the drift
+ * `internal/clientsource` exists to catch. A view carrying one gets the plain
+ * count, which is vague rather than wrong.
+ */
+export function countedLabel(shown: number, params: Record<string, unknown>): string {
+  const label = plural(shown, "item");
+  const due = typeof params.due === "string" ? params.due : "";
+  return due.startsWith("range:") ? `${label} due in this window` : label;
+}
+
+/**
+ * The month the calendar draws, and a fallback for anything that is not one.
+ *
+ * `month=` is a URL parameter, so it is whatever the address bar holds — and
+ * [calendarWeeks] over an unparseable one returns NO WEEKS AT ALL: `Number`
+ * gives `NaN`, `??` does not catch `NaN`, the cell count is `NaN` and the loop
+ * never runs. An empty grid then takes [buildItemsParams] down the calendar
+ * branch with no range, which is the one state that branch must never be in. A
+ * mangled month is a bad address, not a company whose work has no dates.
+ */
+export function monthOrNow(month: string, now: number): string {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : monthOf(now);
+}
+
+/**
+ * A count over one PAGE of an answer, and whether that page is the whole of it.
+ *
+ * `Card.Header count=` renders through the design system's `Count`, which prints
+ * its value verbatim and carries no scope of its own — so a caller handing it
+ * `records.length` over a read IT capped draws a number a reader takes for a
+ * total. The tracker's activity strip asked the engine for twenty commits and
+ * drew "20" whether the company had made twenty changes or twenty thousand.
+ *
+ * THE SECOND ARGUMENT IS REQUIRED, and that is the whole of the rule.
+ * `FacetRail` made "over what is loaded or over what exists" a required prop
+ * rather than a caption somebody remembers, for exactly this hazard. A header
+ * count is the same number in a different slot; an optional flag here would be a
+ * rule nobody fills in, which is the state it was already in.
+ *
+ * `+` RATHER THAN A WORD, because this product already spells "at least this
+ * many" that way: [totalHint] renders the tracker's own capped total as `of
+ * 10000+ matching`. A second spelling would make one screen's `20+` and
+ * another's `20 (more)` read as two different facts.
+ */
+export function pageCount(shown: number, more: boolean): string {
+  return more ? `${shown.toLocaleString()}+` : shown.toLocaleString();
+}
+
+/**
+ * What a capped page says for itself, and "" when it is the whole set.
+ *
+ * EMPTY RATHER THAN A REASSURANCE. A note that always drew would put "and that
+ * is all of them" under every healthy card in the product, which is how the one
+ * case that matters arrives as a changed word nobody reads.
+ *
+ * The caller passes it on to a `subtitle`, which must be `undefined` and never
+ * `""`: the empty string still renders the subtitle's own element.
+ */
+export function pageNote(shown: number, more: boolean, one: string, many?: string): string {
+  return more ? `The newest ${plural(shown, one, many)}; there are more.` : "";
+}
+
+/** A view's `status_group` mapped back onto the three segments. */
+export function scopeOf(group: string | undefined): string {
+  if (group === "not_started,active") return "open";
+  if (group === "done,closed") return "closed";
+  return "";
+}
+
+/**
+ * The segment a view OPENS on, which is the other half of that round trip.
+ *
+ * TWO DIFFERENT ABSENCES land on the same segment for different reasons. A
+ * view naming no `status_group` at all is not a view asking for everything —
+ * the tracker opens on unfinished work — so it seeds `open`. A view naming a
+ * group the three segments cannot express (`active` alone) seeds `open` too,
+ * because [buildItemsParams] overwrites `status_group` from the segment
+ * whichever one it is: there is no reading that answers such a view as saved,
+ * only a choice of which wider set to show. `open` adds the rest of open work;
+ * the empty segment would add every closed task as well. Both are honest —
+ * the control and the query agree about which set is on screen — and `open`
+ * is the one nearer to what the view's author asked for.
+ *
+ * EXCEPT WHERE THE VIEW ITSELF WIDENED. `show_closed` with no `status_group`
+ * is a view whose author asked for finished work explicitly, and seeding
+ * `open` over it writes `status_group=not_started,active`, which excludes
+ * exactly the half they widened to. `recent:168h` — "and whatever finished
+ * this week" — answered as open work alone; the builtin TRASH tab, which is
+ * removed work whatever state it was in when it was removed, answered as the
+ * removed tasks that were still open, silently hiding every removal of
+ * anything already done. So a view in that shape opens on the empty segment,
+ * which deletes the key and lets the view's own `show_closed` stand.
+ *
+ * `show_closed: "false"` is NOT that: it is an author excluding finished work
+ * on purpose, so it keeps the `open` seed and the control agrees with the
+ * query rather than saying "All" over a query that shows less.
+ *
+ * TAKES THE WHOLE PARAMS rather than the one key, because that is the
+ * information the decision needs — passed `status_group` alone it could not
+ * see the widening and this was not expressible at all.
+ *
+ * HERE RATHER THAN AT THE CALL SITE so it can be asserted over. Spelled
+ * `scopeOf(group) || "open"` inside the screen, it was the one step of the
+ * round trip no test could reach: deleting it left every suite green while the
+ * tracker opened on every closed task the company has.
+ */
+export function seededScope(view: Record<string, string> | undefined): string {
+  const group = view?.status_group;
+  const scope = scopeOf(group);
+  if (scope) return scope;
+  const widened = (view?.show_closed ?? "").trim();
+  if (!group && widened && widened !== "false") return "";
+  return "open";
+}
+
+// ---------------------------------------------------------------------------
+// The calendar
+// ---------------------------------------------------------------------------
+
+export interface CalendarCell {
+  /** The local `YYYY-MM-DD` this cell is, which is also its row key. */
+  key: string;
+  day: number;
+  inMonth: boolean;
+  today: boolean;
+}
+
+/** The month an instant falls in, locally, as `YYYY-MM`. */
+export function monthOf(now: number): string {
+  return browserDay(new Date(now)).slice(0, 7);
+}
+
+export function shiftMonth(month: string, by: number): string {
+  const [y, m] = month.split("-").map(Number);
+  const at = new Date(y ?? 1970, (m ?? 1) - 1 + by, 1);
+  return browserDay(at).slice(0, 7);
+}
+
+export function monthLabel(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, 1).toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/**
+ * One cell's full date, for a reader the colour never reaches.
+ *
+ * THE GRID'S DISTINCTION IS A COLOUR and a colour is not available to
+ * everybody: `31` in the Monday cell of April's first row is March's, and the
+ * quieter ground and ink that say so reach nobody on a screen reader. A grid
+ * also holds two cells with the SAME numeral — April 2031 runs 31 March to 4 May,
+ * so `1` and `4` each appear twice — which is the case a label has to separate
+ * and a tint cannot.
+ *
+ * Built with `new Date(y, m - 1, d)` like [calendarWeeks] rather than through
+ * [fmtDate], which parses an INSTANT: `2031-03-31` read as UTC midnight and
+ * rendered west of Greenwich is the 30th, so the spoken label would name a
+ * different day from the numeral beside it.
+ */
+export function dayLabel(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/** Monday first, because the engine's own relative week tokens start there. */
+export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/**
+ * The month's grid, Monday first, with the neighbouring days that fill it.
+ *
+ * MONDAY because `internal/tracker/dates.go` pins the week's start there — the
+ * relative tokens a saved view can carry (`sow`, `eow`) mean Monday, and a
+ * calendar that started on Sunday would draw "this week" across two of its own
+ * rows.
+ *
+ * Five rows or six, as the month needs. A fixed six leaves an empty row on
+ * most months, and an empty row of a calendar reads as a week in which nothing
+ * is due rather than as a week that is not there.
+ */
+export function calendarWeeks(month: string, todayKey: string): CalendarCell[][] {
+  const [y, m] = month.split("-").map(Number);
+  const year = y ?? 1970;
+  const index = (m ?? 1) - 1;
+  const first = new Date(year, index, 1);
+  const lead = (first.getDay() + 6) % 7;
+  const days = new Date(year, index + 1, 0).getDate();
+  const cells = Math.ceil((lead + days) / 7) * 7;
+
+  const weeks: CalendarCell[][] = [];
+  for (let i = 0; i < cells; i++) {
+    const at = new Date(year, index, 1 - lead + i);
+    const key = browserDay(at);
+    if (i % 7 === 0) weeks.push([]);
+    weeks[weeks.length - 1]?.push({
+      key,
+      day: at.getDate(),
+      inMonth: at.getMonth() === index,
+      today: key === todayKey,
+    });
+  }
+  return weeks;
+}
+
+/**
+ * The half-open range the grid covers, as the date filter spells it.
+ *
+ * THE GRID'S OWN BOUNDS rather than the month's, and that is the whole point:
+ * the first and last rows carry days of the neighbouring months, and a query
+ * bounded by the month would draw those cells permanently empty. It also
+ * absorbs the one offset nothing else can: the engine resolves a bare date in
+ * the COMPANY's zone and the cells are bucketed in the READER's, so a due date
+ * within a day of either edge is inside the asked-for range either way.
+ */
+export function gridRange(weeks: CalendarCell[][]): { from: string; to: string } {
+  const first = weeks[0]?.[0]?.key ?? "";
+  const lastRow = weeks[weeks.length - 1];
+  const last = lastRow?.[lastRow.length - 1]?.key ?? "";
+  const after = new Date(`${last}T00:00:00`);
+  after.setDate(after.getDate() + 1);
+  return { from: first, to: browserDay(after) };
+}
+
+/** The local `YYYY-MM-DD` an instant falls on, or empty when it is unreadable. */
+export function dayKey(ts: string | undefined): string {
+  const at = parseUTC(ts);
+  return at ? browserDay(at) : "";
+}
+
+/**
+ * The rows of each day, ordered the way a day is read.
+ *
+ * ROWS WITHOUT A DUE DATE ARE DROPPED rather than bucketed under today: a
+ * calendar is about when work is due, and putting undated work on the current
+ * day would invent a deadline nobody set. The screen says so beneath the grid,
+ * because a reader who cannot see the omission reads the month as the whole
+ * backlog.
+ */
+export function bucketByDay(rows: WorkSummary[]): Map<string, WorkSummary[]> {
+  const out = new Map<string, WorkSummary[]>();
+  for (const row of rows) {
+    const key = dayKey(row.due);
+    if (!key) continue;
+    const day = out.get(key);
+    if (day) day.push(row);
+    else out.set(key, [row]);
+  }
+  for (const day of out.values()) {
+    day.sort((a, b) => (a.due ?? "").localeCompare(b.due ?? "") || a.key.localeCompare(b.key));
+  }
+  return out;
+}
+
+/** How many chips a calendar cell draws before it folds the rest into a count. */
+export const CALENDAR_CELL_CHIPS = 3;

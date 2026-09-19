@@ -209,6 +209,17 @@ const (
 	// TermAbsent — this domain does not have the term at all. `n/a`
 	// rather than `0`, on the rule that runs through the whole framework.
 	TermAbsent TermState = "n/a"
+
+	// TermUnbounded — the term was read and BINDS NOTHING: no hold pins the
+	// log, or a solo fleet takes no snapshots. It is not a fourth value so
+	// much as the honest rendering of a sequence that was never a position:
+	// [SeqUnbounded] is the identity for the trim's own minimum, chosen to
+	// lose a comparison, and a screen printing it says
+	// `18446744073709552000` beside "nothing is pinning the log". Separate
+	// from TermKnown because the number is meaningless, and separate from
+	// TermAbsent because this domain DOES have the term — it simply permits
+	// everything today, which is a state that can change.
+	TermUnbounded TermState = "unbounded"
 )
 
 // TermReport is one of the six terms, with the remedy for it.
@@ -218,7 +229,14 @@ type TermReport struct {
 
 	// Seq is what the term permits, and is meaningless unless State is
 	// TermKnown.
-	Seq uint64 `json:"seq,omitempty"`
+	//
+	// ALWAYS WRITTEN. It carried `omitempty`, which drops exactly the value
+	// a young fleet's binding term has: a term permitting removal up to 0 —
+	// the state that holds the trim and is therefore the one worth
+	// reading — went onto the wire indistinguishable from a term with no
+	// sequence at all, and a reader could only recover it by assuming the
+	// absence meant zero, which for an unreadable term it does not.
+	Seq uint64 `json:"seq"`
 
 	// Detail is what was read, named: which node, which holder, how old.
 	Detail string `json:"detail,omitempty"`
@@ -488,10 +506,21 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		out.HeadroomFraction = Frac(free / float64(d.MaxBytes))
 	}
 	for _, t := range d.Decision.Terms {
+		state := termState(t)
+		// A SEQUENCE ONLY GOES OUT WHERE IT IS ONE. Every other state's
+		// number is meaningless by this type's own documentation, and one
+		// of them — unbounded — is meaningless in a way a reader cannot
+		// tell from a real position: 2^64-1 is a twenty-digit figure that
+		// a JSON float64 cannot even carry exactly, so it reached the
+		// screen wrong as well as wrong.
+		seq := t.Seq
+		if state != TermKnown {
+			seq = 0
+		}
 		out.Terms = append(out.Terms, TermReport{
 			Name:   t.Name,
-			State:  termState(t),
-			Seq:    t.Seq,
+			State:  state,
+			Seq:    seq,
 			Detail: t.Detail,
 			Remedy: in.remedy(t.Name),
 		})
@@ -513,17 +542,24 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 	return out
 }
 
-// termState is the three-valued rendering of one term.
+// termState is the rendering of one term, and the only place [SeqUnbounded] is
+// turned back into words.
 //
 // ABSENT IS CHECKED FIRST. A term a domain does not have is also a term
 // nobody read, so the other order would report every compacted domain's wake
 // feed as unreadable and block-looking on a screen where nothing is wrong.
+//
+// AND UNBOUNDED IS CHECKED BEFORE KNOWN, because it IS known — the sentinel
+// only ever reaches here with Known set, and reporting it as an ordinary
+// sequence is what put 2^64-1 on the retention screen.
 func termState(t Term) TermState {
 	switch {
 	case t.Absent:
 		return TermAbsent
 	case !t.Known:
 		return TermUnreadable
+	case t.Seq == SeqUnbounded:
+		return TermUnbounded
 	default:
 		return TermKnown
 	}

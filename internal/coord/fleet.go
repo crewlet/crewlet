@@ -581,6 +581,22 @@ type Channels interface {
 	// draws two closes on a dashboard.
 	OpenChannels(ctx context.Context) ([]Channel, error)
 
+	// AllChannels returns every channel this store still holds, open and
+	// closed alike, by id.
+	//
+	// SEPARATE FROM OpenChannels RATHER THAN A FLAG ON IT, because the two
+	// have opposite correctness rules and one signature would let a caller
+	// pick the wrong one. The idle sweep must see ONLY the open ones — a
+	// closed channel re-reported is a second close for one channel — while
+	// a READ SURFACE must see both, or the record a company keeps until
+	// the purge horizon is one nothing can ever show. The retained history
+	// was reachable only through the event log, one event at a time.
+	//
+	// Bounded by the same purge the open listing is: a closed channel is
+	// deleted once it is older than the horizon, so this is the same walk
+	// with one fewer predicate rather than an unbounded one.
+	AllChannels(ctx context.Context) ([]Channel, error)
+
 	// PurgeChannels deletes channels closed before cutoff, returning the
 	// count. An open channel is never purged however old, or a long
 	// running ask loses its authorization record while its answer is still

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -135,10 +138,36 @@ func TestSchedulesProjectsWhatIsConfigured(t *testing.T) {
 type fakeRuns struct {
 	runs []schedule.Run
 	err  error
+
+	// asked records the narrowed read's arguments, so a case about the
+	// per-schedule listing can prove the identity reached the ledger
+	// rather than only that some rows came back.
+	asked struct {
+		scope   types.ScheduleScope
+		scopeID string
+		name    string
+		limit   int
+	}
 }
 
-func (f fakeRuns) Recent(context.Context, int) ([]schedule.Run, error) {
+func (f *fakeRuns) Recent(context.Context, int) ([]schedule.Run, error) {
 	return f.runs, f.err
+}
+
+func (f *fakeRuns) RecentFor(_ context.Context, scope types.ScheduleScope,
+	scopeID, name string, limit int) ([]schedule.Run, error) {
+
+	f.asked.scope, f.asked.scopeID = scope, scopeID
+	f.asked.name, f.asked.limit = name, limit
+	// THE STUB FILTERS TOO, so a case cannot pass by handing back rows
+	// the narrowing would have excluded.
+	out := []schedule.Run{}
+	for _, run := range f.runs {
+		if run.Scope == scope && run.ScopeID == scopeID && run.ScheduleName == name {
+			out = append(out, run)
+		}
+	}
+	return out, f.err
 }
 
 func TestSchedulesCarriesTheDispatchHistory(t *testing.T) {
@@ -146,7 +175,7 @@ func TestSchedulesCarriesTheDispatchHistory(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		Runs: fakeRuns{runs: []schedule.Run{{
+		Runs: &fakeRuns{runs: []schedule.Run{{
 			FireKey: schedule.FireKey{
 				Scope: "role", ScopeID: "ceo", ScheduleName: "standup",
 				FireLabel: "20260823T0900", TargetHandle: "ceo",
@@ -177,7 +206,7 @@ func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		Runs:    fakeRuns{err: context.DeadlineExceeded},
+		Runs:    &fakeRuns{err: context.DeadlineExceeded},
 	}, "schedules", nil))
 
 	if rows, _ := body["schedules"].([]any); len(rows) != 1 {
@@ -403,6 +432,53 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 	if len(names) != 2 {
 		t.Fatalf("unmanned = %v, want ingress and workers", names)
+	}
+}
+
+// EVERY ANSWER THE ADMIN WORKSPACE DRAWS NEEDS AN OPERATOR CREDENTIAL.
+//
+// The dashboard's rail marks all five Admin destinations `guarded: true`: it
+// draws a lock on the row and its palette says "needs a token". That flag is
+// presentation — the only thing that actually refuses is this registry — and
+// `fleet` was registered public while its siblings were operator-only, so the
+// client promised a guard the server did not keep. On a node with
+// `api.allow_anonymous_read` an anonymous GET read the node ids, which node
+// held which seat, the lease epochs and the rollout's progress.
+//
+// The two here are the two this registry gates by these sources;
+// Configuration's four are [TestTheConfigQueryIsOperatorOnly] and Credentials
+// is `/secrets`, a prefix guarded whole. Named rather than derived, because
+// the mapping from a screen to the question it asks lives in each screen's own
+// `useQuery` call and no gate can see across the two languages — so the
+// registration check below is what stops this list going quiet: a name nothing
+// registers fails rather than passing as "gated".
+func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{
+		Coord:   coordmemory.New(),
+		NodeID:  "node-a",
+		Company: func() *config.Company { return cfg },
+	})
+	for _, what := range []string{"fleet", "integrations"} {
+		// REGISTERED AT ALL, first. A question this registry does not
+		// hold answers ErrUnknown to everybody, which is not the same
+		// fact and would make the assertion below vacuous.
+		if !slices.Contains(r.Names(), what) {
+			t.Errorf("%s is not registered, so this case asserts nothing about it", what)
+			continue
+		}
+		if !r.RequiresOperator(what) {
+			t.Errorf("%s is an Admin answer the rail locks, but the registry "+
+				"serves it to any caller", what)
+		}
+		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(
+			err, queries.ErrUnauthorized) {
+
+			t.Errorf("%s answered %v without a credential, want an "+
+				"authorization refusal", what, err)
+		}
 	}
 }
 
@@ -1985,5 +2061,221 @@ func jsonInt(t *testing.T, v any) int {
 	default:
 		t.Fatalf("%v is not a number (%T)", v, v)
 		return 0
+	}
+}
+
+// AN EPOCH IS A NUMBER AND NOT A REVISION, and the fleet view carried only
+// the number.
+//
+// `coord.NodeApply.RevisionID` is written by every node and stored by the
+// plane precisely so a mid-transition read can name it — its own doc says "a
+// node still on the previous revision is exactly what an operator is looking
+// for" — and the answer dropped it. So a screen could say "node-b is two
+// epochs behind" and not which revision it was behind, when that revision was
+// activated, or what whoever activated it wrote about it.
+func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
+	t.Parallel()
+	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
+	backend := coordmemory.New()
+	for _, node := range []string{"node-a", "node-b"} {
+		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plane := coordmemory.NewFleet()
+	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: pinned,
+		Summary: "raise the CTO's budget",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ONE NODE ON THE TARGET, one still on its predecessor — which is the
+	// state the revision id exists to make visible.
+	if err := plane.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-a", Epoch: published.Epoch, RevisionID: "rev-2",
+		Status: string(configplane.StatusOK), UpdatedAt: pinned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plane.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: published.Epoch - 1, RevisionID: "rev-1",
+		Status: string(configplane.StatusOK), UpdatedAt: pinned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, Plane: plane, NodeID: "node-a",
+	}, "fleet", nil))
+
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	if got := byID["node-a"]["config_revision_id"]; got != "rev-2" {
+		t.Errorf("node-a is on %v, want rev-2", got)
+	}
+	if got := byID["node-b"]["config_revision_id"]; got != "rev-1" {
+		t.Errorf("node-b is on %v, want the predecessor it is still running", got)
+	}
+
+	// AND WHAT THE TARGET EPOCH STANDS FOR, beside the number every row is
+	// compared against.
+	activation, ok := body["activation"].(map[string]any)
+	if !ok {
+		t.Fatalf("activation = %#v, want the pointer's own record", body["activation"])
+	}
+	switch {
+	case activation["revision_id"] != "rev-2":
+		t.Errorf("activation names %v, want rev-2", activation["revision_id"])
+	case activation["summary"] != "raise the CTO's budget":
+		t.Errorf("activation summary = %v", activation["summary"])
+	case activation["at"] == "" || activation["at"] == nil:
+		t.Error("the activation carries no instant, so a screen cannot say when")
+	}
+	// ONE READ, so the two cannot disagree: an activation landing between
+	// two reads would put "target 42" beside "revision r-41" and describe a
+	// fleet that never existed.
+	if body["target_epoch"] != activation["epoch"] {
+		t.Errorf("target_epoch = %v and activation.epoch = %v — read twice, "+
+			"they can describe different fleets", body["target_epoch"],
+			activation["epoch"])
+	}
+}
+
+// A FLEET WITH NO ACTIVATION CARRIES NO ACTIVATION RECORD, rather than an
+// object of empty strings: a screen given one would render a revision named ""
+// activated at the zero time, which is a worse answer than none.
+func TestAFleetWithNoActivationCarriesNoRecord(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, Plane: coordmemory.NewFleet(), NodeID: "node-a",
+	}, "fleet", nil))
+	if body["activation"] != nil {
+		t.Errorf("activation = %#v on a fleet nobody has activated", body["activation"])
+	}
+	if body["target_epoch"] != float64(0) {
+		t.Errorf("target_epoch = %v, want 0 so the client makes no comparison",
+			body["target_epoch"])
+	}
+}
+
+// HOW FAR A NODE'S OWN COPY HAS COME UP is a different question from its
+// config epoch: a node can hold the current revision and still be hydrating
+// the state it derives from the log, and only one of those makes its seats
+// servable. The presence heartbeat has carried both counts since it existed
+// and the fleet answer dropped them.
+//
+// ABSENT RATHER THAN ZERO for a node that published none, which is the rule
+// `in_flight` already follows: a confident 0 of 0 reads as "ready" for a
+// process that is simply not saying.
+func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	claim := func(node string, meta map[string]any) {
+		t.Helper()
+		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute, Meta: meta},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// UNDER THE STATUS KEY, which is where the presence heartbeat puts it
+	// and where [coord.StatusFromMeta] looks.
+	claim("node-a", map[string]any{coord.StatusKey: coord.NodeStatus{
+		ProjectionsReady: 2, ProjectionsTotal: 3,
+	}.Meta()})
+	claim("node-b", map[string]any{coord.StatusKey: coord.NodeStatus{}.Meta()})
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	if got := byID["node-a"]["projections_ready"]; got != float64(2) {
+		t.Errorf("node-a reports %v of its projections ready, want 2", got)
+	}
+	if got := byID["node-a"]["projections_total"]; got != float64(3) {
+		t.Errorf("node-a reports a total of %v, want 3", got)
+	}
+	if _, present := byID["node-b"]["projections_total"]; present {
+		t.Error("a node that published no projection counts carries a total " +
+			"anyway, so a screen draws 0 of 0 — which reads as ready")
+	}
+}
+
+// ONE SCHEDULE'S HISTORY, which the company-wide ledger cannot be.
+//
+// `schedules.recent_runs` is fifty rows across EVERY schedule, so a company
+// with twenty hourly ones fills it in two and a half hours: "did the standup
+// fire this week" was unanswerable while every row of the answer sat in the
+// table, and a screen paging the company's and filtering is exactly how a
+// reader concludes a schedule stopped running.
+func TestOneSchedulesRunsAreReadableOnTheirOwn(t *testing.T) {
+	t.Parallel()
+	fired := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+	ledger := &fakeRuns{runs: []schedule.Run{
+		{FireKey: schedule.FireKey{
+			Scope: types.ScheduleScopeRole, ScopeID: "ceo",
+			ScheduleName: "standup", FireLabel: "20260608T0900", TargetHandle: "ceo",
+		}, ScheduledAt: fired, FiredAt: fired, Outcome: schedule.OutcomeFired},
+		// A SECOND UNIT DECLARING THE SAME NAME, which is what makes the
+		// scope part of the identity rather than decoration.
+		{FireKey: schedule.FireKey{
+			Scope: types.ScheduleScopeUnit, ScopeID: "platform",
+			ScheduleName: "standup", FireLabel: "20260608T0900", TargetHandle: "eng",
+		}, ScheduledAt: fired, FiredAt: fired, Outcome: schedule.OutcomeFired},
+	}}
+
+	body := asMap(t, answer(t, queries.Sources{Runs: ledger}, "schedule_runs",
+		map[string]any{"scope_type": "role", "scope_id": "ceo", "name": "standup"}))
+
+	got := rows(t, body["runs"])
+	if len(got) != 1 {
+		t.Fatalf("%d runs, want the role's alone: %#v", len(got), body["runs"])
+	}
+	if got[0]["scope_id"] != "ceo" {
+		t.Errorf("the run is %v's", got[0]["scope_id"])
+	}
+	// THE IDENTITY REACHED THE LEDGER, rather than the answer filtering a
+	// company-wide read in the surface.
+	if ledger.asked.scope != types.ScheduleScopeRole || ledger.asked.scopeID != "ceo" ||
+		ledger.asked.name != "standup" {
+
+		t.Errorf("the ledger was asked about %+v", ledger.asked)
+	}
+	if ledger.asked.limit != queries.MaxScheduleRuns {
+		t.Errorf("the ledger was asked for %d rows, want the cap %d",
+			ledger.asked.limit, queries.MaxScheduleRuns)
+	}
+}
+
+// A SCHEDULE'S IDENTITY IS ALL THREE PARTS, and every one of them is required:
+// a name alone would merge two teams' histories, and a scope this build does
+// not know is refused naming the two rather than read as a filter that matches
+// nothing.
+func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
+	t.Parallel()
+	src := queries.Sources{Runs: &fakeRuns{}}
+	for _, params := range []map[string]any{
+		{"scope_id": "ceo", "name": "standup"},
+		{"scope_type": "role", "name": "standup"},
+		{"scope_type": "role", "scope_id": "ceo"},
+		{"scope_type": "team", "scope_id": "ceo", "name": "standup"},
+	} {
+		if _, err := askNative(t, src, "schedule_runs", params); !errors.Is(
+			err, queries.ErrBadParams) {
+
+			t.Errorf("%v answered %v, want bad params", params, err)
+		}
 	}
 }

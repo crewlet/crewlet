@@ -38,15 +38,38 @@ var namedRoutes = []struct {
 	path map[string]string
 }{
 	{method: "GET", pattern: "/agents/{id}/memory", what: "agent_memory", path: map[string]string{"id": "id"}},
+	// One seat's external threads. Under /agents/{id}/ beside its memory,
+	// because it is the same kind of fact — what this seat has said and
+	// remembered — rather than a company-wide listing.
+	{method: "GET", pattern: "/agents/{id}/conversations", what: "conversations", path: map[string]string{"id": "handle"}},
 	{method: "GET", pattern: "/agents/{id}", what: "agent", path: map[string]string{"id": "id"}},
 	// The literal segment beats the wildcard, so /events/trace/{id} is not
 	// read as an event whose id is "trace" — net/http resolves the more
 	// specific pattern rather than the first registered.
 	{method: "GET", pattern: "/events/trace/{trace_id}", what: "trace", path: map[string]string{"trace_id": "trace_id"}},
+	// THE LOG'S OWN TIME AXIS, beside the listing rather than a parameter
+	// of it: the two answers have different shapes, and one route returning
+	// either would make every caller branch on what came back. The literal
+	// segment beats the wildcard below, so this is not read as an event
+	// whose id is "series".
+	{method: "GET", pattern: "/events/series", what: "event_series"},
 	{method: "GET", pattern: "/events/{id}", what: "event", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/events", what: "events"},
+	// THE LIST OF TURNS. Not under /events/: a turn is not an event, and
+	// filing it there would put the unit of work under the log that
+	// records it.
+	{method: "GET", pattern: "/turns", what: "turns"},
 	{method: "GET", pattern: "/tokens/breakdown", what: "tokens"},
+	// THE SAME SPEND WITH A TIME AXIS. Beside the breakdown rather than a
+	// parameter of it: the two answers have different shapes, and one route
+	// returning either would make every caller branch on what came back.
+	{method: "GET", pattern: "/tokens/series", what: "token_series"},
 	{method: "GET", pattern: "/schedules", what: "schedules"},
+	// ONE SCHEDULE'S OWN HISTORY. Three path segments because a schedule's
+	// identity is all three — two units may each declare a "standup", and a
+	// role and a unit may both — so a name alone would merge two teams'
+	// histories into one list.
+	{method: "GET", pattern: "/schedules/{scope_type}/{scope_id}/{name}/runs", what: "schedule_runs", path: map[string]string{"scope_type": "scope_type", "scope_id": "scope_id", "name": "name"}},
 	{method: "GET", pattern: "/fleet", what: "fleet"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
@@ -59,17 +82,39 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
 	{method: "GET", pattern: "/work/projects", what: "work_projects"},
 	{method: "GET", pattern: "/work/sprints", what: "work_sprints"},
+	{method: "GET", pattern: "/work/workload", what: "work_workload"},
+	// THE SERIES, beside the figures. Documented since the query shipped
+	// and never wired, which is the one way a missing route is worse than
+	// no route at all: /work/{id} below matches the path, so a reader
+	// following the published table got a 404 about a TASK called
+	// "burndown" rather than anything naming the endpoint they asked for.
+	{method: "GET", pattern: "/work/burndown", what: "work_burndown"},
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
+	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
+	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
+	// there gives: a literal segment beats the wildcard, so neither is read
+	// as a task whose key is "search" or "routing".
+	{method: "GET", pattern: "/work/search", what: "work_search"},
+	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
 	{method: "GET", pattern: "/work/goals", what: "work_goals"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
 	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
 	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/work", what: "work_items"},
+	// The page ACTIVITY and one REVISION's body. Both above /pages/{id},
+	// for the reason the work routes give: a literal segment beats the
+	// wildcard, so neither is read as a page whose id is "activity".
+	{method: "GET", pattern: "/pages/activity", what: "page_activity"},
+	{method: "GET", pattern: "/pages/{id}/revisions/{version}", what: "page_revision", path: map[string]string{"id": "page", "version": "version"}},
 	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
+	// WHO IS ASKING. Not under /work/: the answer is the caller's own
+	// identity rather than anything the tracker holds, and a node with no
+	// native tracker still has a viewer.
+	{method: "GET", pattern: "/viewer", what: "viewer"},
 }
 
 // mountReads registers the named read routes.

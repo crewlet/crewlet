@@ -90,17 +90,40 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// The faces are embedded rather than fetched, which is what makes the
 	// dashboard render identically on a closed network. A missing one falls
 	// back silently to a system font.
-	for _, face := range []string{
-		"fonts/inter-latin.woff2",
-		"fonts/inter-latin-ext.woff2",
-		"fonts/jetbrains-mono-latin.woff2",
-		"fonts/jetbrains-mono-latin-ext.woff2",
-		// The licence travels with the files it covers.
-		"fonts/OFL.txt",
-	} {
-		if _, err := os.Stat(filepath.Join(servedTree, face)); err != nil {
-			t.Errorf("%s is missing from the built tree: %v", face, err)
+	//
+	// ASKED FOR AND PRESENT, rather than a list of names. The names used to be
+	// written out here and the faces lived at a fixed `fonts/` path this
+	// repository controlled; they are the design system's now, emitted under
+	// `assets/` with a content hash, so a spelled list would be a second copy
+	// of a filename a bundler chooses. Reading them out of the stylesheet is
+	// also the stronger claim: a hardcoded list cannot see a face the CSS asks
+	// for and the build did not emit, which is the failure that renders a
+	// fallback font with nothing missing from the tree.
+	sheetPath := string(sheet.FindSubmatch(shell)[1])
+	css, err := os.ReadFile(filepath.Join(servedTree, strings.TrimPrefix(sheetPath, "/static/dashboard/")))
+	if err != nil {
+		t.Fatalf("the shell names %s and the tree does not have it: %v", sheetPath, err)
+	}
+	faces := regexp.MustCompile(`url\(([^)]*\.woff2)\)`).FindAllSubmatch(css, -1)
+	// A FLOOR, because a stylesheet that asks for no face at all passes every
+	// assertion below it — which is exactly what dropping the font import
+	// would look like. Two families at two subsets each is four.
+	if len(faces) < 4 {
+		t.Errorf("the stylesheet asks for %d faces; two families at two subsets each is four", len(faces))
+	}
+	for _, face := range faces {
+		ref := strings.Trim(string(face[1]), `"'`)
+		if _, err := os.Stat(filepath.Join(servedTree, strings.TrimPrefix(ref, "/static/dashboard/"))); err != nil {
+			t.Errorf("the stylesheet asks for %s and the built tree has no such file: %v", ref, err)
 		}
+	}
+	// The licence travels with the files it covers, and both are inside what
+	// the binary embeds. `fonts/OFL.txt` rather than a copy at the root: the
+	// build emits it from `@crewlethq/tokens`' own `fonts/OFL.txt`, beside the
+	// faces that package ships, so a font bump cannot leave the notice and the
+	// files it covers describing different things.
+	if _, err := os.Stat(filepath.Join(servedTree, "fonts", "OFL.txt")); err != nil {
+		t.Errorf("the built tree carries embedded typefaces and no OFL notice: %v", err)
 	}
 
 	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,

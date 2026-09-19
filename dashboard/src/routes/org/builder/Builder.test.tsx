@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { clearToken, storeToken, type OrgProjection } from "~/protocol/index.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
+import { href } from "~/app/router.tsx";
+import { seatPath } from "~/lib/seats.ts";
 import { FillRequest } from "~/app/fill.tsx";
 import {
   company,
@@ -263,7 +265,7 @@ describe("the views the lens hosts", () => {
    * second, quieter add.
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
-    mountBuilder({ engine: new Engine(company()), hash: "#/org?lens=builder&view=table" });
+    mountBuilder({ engine: new Engine(company()), hash: "#/company?lens=builder&view=table" });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
@@ -499,7 +501,7 @@ describe("the selection in the URL", () => {
 
   test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/org?lens=builder&view=visualization&seat=ceo" });
+    mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&seat=ceo" });
     await screen.findByText("No problems");
     const actions = await screen.findByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
@@ -515,9 +517,14 @@ describe("the selection in the URL", () => {
       "Delete",
     ]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
-    // The path only: this harness keeps the Builder mounted under any route,
-    // where the app replaces the whole screen.
-    await waitFor(() => expect(location.hash.split("?")[0]).toBe("#/seats/ceo"));
+    // THE SEAT'S OWN PAGE, asked for the way every other link in this tree
+    // asks: `seatPath` is the ONE place that knows where a seat lives, so
+    // this claim survives the page moving and would fail a builder that built
+    // the address itself. The path only — this harness keeps the Builder
+    // mounted under any route, where the app replaces the whole screen.
+    await waitFor(() =>
+      expect(location.hash.split("?")[0]).toBe(href(seatPath({ handle: "ceo", name: "CEO" }))),
+    );
   });
 
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
@@ -712,7 +719,7 @@ describe("the lens that fills the window", () => {
   }
 
   test("the chart lens asks the frame for the window's height", async () => {
-    const calls = asked("#/org?lens=builder&view=visualization");
+    const calls = asked("#/company?lens=builder&view=visualization");
     // Not before the engine has answered: until then the lens draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
@@ -720,7 +727,7 @@ describe("the lens that fills the window", () => {
   });
 
   test("the outline lens asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/org?lens=builder&view=table");
+    const calls = asked("#/company?lens=builder&view=table");
     // The toolbar is what both lenses draw once the engine has answered, so
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });

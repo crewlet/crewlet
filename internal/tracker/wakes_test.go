@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -721,4 +722,162 @@ func clipForTest(s string) string {
 		return s
 	}
 	return s[:80] + "..."
+}
+
+// A SCHEDULE CHANGE CARRIES WHAT IT CHANGED.
+//
+// A due date, a start, an estimate, a size and a sprint had no producer in
+// this tree until the write tools gained one, so their absence from
+// [tracker.TaskDeltas] was invisible: nothing could move them, so nothing
+// reported the move. With a producer, a sprint change or a re-estimate wrote a
+// history row and a notification card carrying NO deltas at all — which every
+// renderer falls back on the bare KIND for, so a feed showed "sprint" under a
+// badge already reading "sprint" and a card announced a change with nothing in
+// it.
+//
+// It also matters beyond display: the applier rebuilds a task's spans from the
+// history row's deltas, and a row with none is a commit the reports derived
+// from those spans cannot see.
+func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
+	t.Parallel()
+	day := func(iso string) *time.Time {
+		at, err := time.Parse(time.RFC3339, iso)
+		if err != nil {
+			t.Fatalf("parse %s: %v", iso, err)
+		}
+		return &at
+	}
+	one, two := 1, 2
+	before := tracker.Task{
+		ID: "t-1", Title: "the same title", Sprint: &one,
+		DueAt: day("2031-04-16T00:00:00Z"), EstimateMinutes: 90, Points: 3,
+	}
+	after := tracker.Task{
+		ID: "t-1", Title: "the same title", Sprint: &two,
+		DueAt: day("2031-04-23T00:00:00Z"), EstimateMinutes: 120, Points: 5.5,
+		StartAt: day("2031-04-17T00:00:00Z"),
+	}
+
+	moved := tracker.TaskDeltas(before, after)
+	for field, want := range map[string]tracker.Delta{
+		// THE WHOLE INSTANT, as a goal's own due and start deltas
+		// already carry: a day compares equal to itself whenever a
+		// move stays inside one, and it names the wrong day for any
+		// company that is not on UTC.
+		"due":      {From: "2031-04-16T00:00:00Z", To: "2031-04-23T00:00:00Z"},
+		"start":    {From: "", To: "2031-04-17T00:00:00Z"},
+		"estimate": {From: "90m", To: "120m"},
+		// A HALF POINT STILL PRINTS: a scale with halves in it is a
+		// scale somebody chose.
+		"points": {From: "3", To: "5.5"},
+		"sprint": {From: "1", To: "2"},
+	} {
+		if got := moved[field]; got != want {
+			t.Errorf("%s = %+v, want %+v", field, got, want)
+		}
+	}
+	if _, held := moved["title"]; held {
+		t.Error("the title did not move and is in the deltas")
+	}
+}
+
+// CLEARING A SIZE IS A CHANGE, although a zero renders as the absence it is.
+//
+// [tracker.Task.Points] and [tracker.Task.EstimateMinutes] are a plain float64
+// and a plain int over NOT NULL columns, so nothing anywhere in this package
+// can tell "never sized" from "sized at nothing" — a workload sums the zero, a
+// burndown adds it, a sprint's capacity map skips the handle — and a card
+// printing "0" would be the one surface claiming a fact the rest of the engine
+// does not hold. What makes the clearing visible is not a distinction between
+// two zeroes: it is that the FROM side is a number and the TO side is not, so
+// "8" → "" differs and is recorded like any other delta. Only 0 → 0 folds away,
+// and that is not a change.
+func TestClearingASizeIsAChange(t *testing.T) {
+	t.Parallel()
+	sized := tracker.Task{ID: "t-1", Points: 8, EstimateMinutes: 45}
+	cleared := tracker.Task{ID: "t-1"}
+	moved := tracker.TaskDeltas(sized, cleared)
+	if got := moved["points"]; got != (tracker.Delta{From: "8", To: ""}) {
+		t.Errorf("points = %+v, want 8 → nothing", got)
+	}
+	if got := moved["estimate"]; got != (tracker.Delta{From: "45m", To: ""}) {
+		t.Errorf("estimate = %+v, want 45m → nothing", got)
+	}
+	// And a task that never had either reports no change at all, rather
+	// than two deltas from nothing to nothing.
+	if moved := tracker.TaskDeltas(cleared, cleared); len(moved) != 0 {
+		t.Errorf("an unchanged task moved %+v", moved)
+	}
+}
+
+// A MOVE INSIDE ONE DAY IS STILL A MOVE.
+//
+// The delta is text and a field is only recorded when the two sides DIFFER, so
+// rendering a schedule instant as a calendar day made every same-day change
+// compare equal to itself: pulling a due time from the morning to the end of
+// the afternoon produced no `due` entry at all, and the history row and the
+// notification card carried the change's kind with nothing it changed. That is
+// the same failure the schedule fields were added to these deltas to end, one
+// granularity down.
+func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
+	t.Parallel()
+	at := func(iso string) *time.Time {
+		t.Helper()
+		parsed, err := time.Parse(time.RFC3339, iso)
+		if err != nil {
+			t.Fatalf("parse %s: %v", iso, err)
+		}
+		return &parsed
+	}
+	morning := at("2031-04-16T09:00:00Z")
+	evening := at("2031-04-16T17:00:00Z")
+	before := tracker.Task{ID: "t-1", DueAt: morning, StartAt: morning}
+	after := tracker.Task{ID: "t-1", DueAt: evening, StartAt: evening}
+
+	moved := tracker.TaskDeltas(before, after)
+	for _, field := range []string{"due", "start"} {
+		got, held := moved[field]
+		if !held {
+			t.Fatalf("a same-day %s move produced no delta; the change is "+
+				"absent from history and from every card", field)
+		}
+		want := tracker.Delta{
+			From: "2031-04-16T09:00:00Z",
+			To:   "2031-04-16T17:00:00Z",
+		}
+		if got != want {
+			t.Errorf("%s = %+v, want %+v", field, got, want)
+		}
+	}
+}
+
+// AND AN ALL-DAY DATE KEEPS THE DAY ITS COMPANY MEANT.
+//
+// An all-day due date is stored as the COMPANY's own midnight, so a company
+// east of UTC stores the 16th as the 15th at 22:00Z. Truncated to a UTC
+// calendar day that delta read "2031-04-15" — a day nobody chose, for every
+// company not on UTC. The instant cannot be wrong about which day it is,
+// and the applier that writes this row has no company zone to consult: these
+// rows are the state log's N identical copies, so text derived from live
+// configuration would differ between two nodes at different epochs.
+func TestAnAllDayDueDateIsNotTruncatedToTheWrongDay(t *testing.T) {
+	t.Parallel()
+	at := func(iso string) *time.Time {
+		t.Helper()
+		parsed, err := time.Parse(time.RFC3339, iso)
+		if err != nil {
+			t.Fatalf("parse %s: %v", iso, err)
+		}
+		return &parsed
+	}
+	// 2031-04-16 00:00 in Berlin, which is how an all-day date is stored.
+	berlinMidnight := at("2031-04-15T22:00:00Z")
+	before := tracker.Task{ID: "t-1"}
+	after := tracker.Task{ID: "t-1", DueAt: berlinMidnight, DueAllDay: true}
+
+	got := tracker.TaskDeltas(before, after)["due"]
+	if got.To != "2031-04-15T22:00:00Z" {
+		t.Errorf("due = %q, want the stored instant: a day rendered here is "+
+			"rendered without the zone that decided it", got.To)
+	}
 }

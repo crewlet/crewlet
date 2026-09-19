@@ -9,22 +9,29 @@
  */
 
 import { describe, expect, test } from "vitest";
+// THE ONE MARK, from the design system rather than re-spelled here. A test
+// holding its own copy of the glyph is how a second one gets into the product
+// unnoticed: it goes green on whatever is written, not on what is correct.
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
   formatPhaseLLM,
-  REDACTED,
   fmtCount,
+  fmtDate,
   fmtDuration,
   fmtPct,
   humanize,
+  inTime,
   newestFirst,
   oldestFirst,
   parseUTC,
   plural,
+  relTime,
   splitConversationKey,
   tsKey,
+  fmtElapsed,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -76,6 +83,50 @@ describe("timestamps", () => {
   });
 });
 
+describe("relative time", () => {
+  const now = Date.parse("2026-01-01T12:00:00Z");
+
+  test("reads the instant it is GIVEN, never the clock", () => {
+    // Every relative time on a screen has to agree with every other, and a
+    // component reading its own clock re-renders on its own schedule and
+    // disagrees with the row above it. It is also what makes these strings
+    // actually advance instead of freezing until an unrelated push lands.
+    expect(relTime("2026-01-01T11:56:00Z", now)).toBe("4m ago");
+    expect(relTime("2026-01-01T12:00:00Z", now)).toBe("just now");
+    expect(relTime("2026-01-01T09:00:00Z", now)).toBe("3h ago");
+  });
+
+  test("a future stamp reads forwards rather than as a negative age", () => {
+    expect(relTime("2026-01-01T12:30:00Z", now)).toBe("in 30m");
+    expect(inTime("2026-01-01T11:00:00Z", now)).toBe("due");
+  });
+
+  test("a missing stamp is an em dash, not the epoch", () => {
+    expect(relTime(undefined, now)).toBe(EMPTY_VALUE);
+    expect(inTime("", now)).toBe(EMPTY_VALUE);
+  });
+
+  // A DISTANT FUTURE INSTANT REACHES A DATE, exactly as a distant past one does.
+  //
+  // `inTime`'s own doc said "the same rules, forward" and it was one rule short:
+  // backwards, a relative reading stops at thirty days and prints the date;
+  // forwards, it counted days for ever. "in 341d" is a number nobody converts
+  // back into a month, and it is why a goal due next quarter had no date
+  // anywhere on its screen.
+  test("a distant future instant reaches a DATE, exactly as a distant past one does", () => {
+    const far = "2027-01-01T12:00:00Z";
+    expect(inTime(far, now)).not.toMatch(/^in \d+d$/);
+    expect(inTime(far, now)).toBe(fmtDate(far));
+    expect(relTime(far, now)).toBe(fmtDate(far));
+    // THE TERMINUS IS THE SAME THIRTY DAYS, and the steps below it are untouched
+    // — a forward clock and a backward one changing shape at different points
+    // would be two clocks on one screen.
+    expect(inTime("2026-01-20T12:00:00Z", now)).toBe("in 19d");
+    expect(inTime("2026-01-31T11:00:00Z", now)).toBe("in 29d");
+    expect(inTime("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
+  });
+});
+
 describe("numbers", () => {
   test("a four-digit count stays exact", () => {
     // A token count in the thousands is something an operator reads exactly;
@@ -87,17 +138,17 @@ describe("numbers", () => {
 
   test("an absent number is an em dash rather than a zero", () => {
     // Zero is a measurement. "Nobody looked" is not.
-    expect(fmtCount(null)).toBe("—");
-    expect(fmtCount(Number.NaN)).toBe("—");
-    expect(fmtPct(1, 0)).toBe("—");
+    expect(fmtCount(null)).toBe(EMPTY_VALUE);
+    expect(fmtCount(Number.NaN)).toBe(EMPTY_VALUE);
+    expect(fmtPct(1, 0)).toBe(EMPTY_VALUE);
   });
 
   test("durations pick the shortest honest unit", () => {
     expect(fmtDuration(420)).toBe("420 ms");
     expect(fmtDuration(4_200)).toBe("4.2 s");
     expect(fmtDuration(95_000)).toBe("1m 35s");
-    expect(fmtDuration(null)).toBe("—");
-    expect(fmtDuration(-1)).toBe("—");
+    expect(fmtDuration(null)).toBe(EMPTY_VALUE);
+    expect(fmtDuration(-1)).toBe(EMPTY_VALUE);
   });
 
   test("elapsed needs both ends", () => {
@@ -144,63 +195,90 @@ describe("counts and their nouns", () => {
   });
 });
 
-describe("a seat's model setting, in all three shapes the engine writes", () => {
-  test("one key and one chain are a single row for every phase", () => {
+describe("a live counter reads as a clock, not as a glitch", () => {
+  test("whole seconds — never milliseconds or tenths", () => {
+    // The live row churned through "0 ms", "1.4 s", "1.9 s" once a second.
+    expect(fmtElapsed(0)).toBe("0s");
+    expect(fmtElapsed(340)).toBe("0s");
+    expect(fmtElapsed(1400)).toBe("1s");
+    expect(fmtElapsed(1900)).toBe("1s");
+    expect(fmtElapsed(59_000)).toBe("59s");
+  });
+
+  test("a clock skew never shows a negative or a future", () => {
+    // A seat's clock and the browser's disagree by a few hundred
+    // milliseconds, and "in 1s" for something already running is the one
+    // reading that is certainly wrong.
+    expect(fmtElapsed(-800)).toBe("0s");
+  });
+
+  test("minutes and hours", () => {
+    expect(fmtElapsed(72_000)).toBe("1m 12s");
+    expect(fmtElapsed(3_800_000)).toBe("1h 3m");
+  });
+
+  test("a missing span is a dash, not a zero", () => {
+    expect(fmtElapsed(null)).toBe(EMPTY_VALUE);
+    expect(fmtElapsed(undefined)).toBe(EMPTY_VALUE);
+    expect(fmtElapsed(NaN)).toBe(EMPTY_VALUE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Values read out of the company document
+// ---------------------------------------------------------------------------
+
+// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
+// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
+// seat screen rendered the field as a React child, which drew a chain as its
+// keys glued together and THREW on the mapping, taking the whole page with it.
+describe("a seat's model setting, as rows a person reads", () => {
+  test("one key and a chain are one row covering every phase", () => {
     expect(formatPhaseLLM("fast")).toEqual([{ phase: "", chain: "fast" }]);
-    // THE ORDER IS THE MEANING of a chain, so it reads as one, not as a set.
+    // The ORDER is the whole meaning of a chain, so it reads as one.
     expect(formatPhaseLLM(["fast", "backup"])).toEqual([{ phase: "", chain: "fast, then backup" }]);
   });
 
-  test("a per-phase mapping is one row per phase, in the engine's phase order", () => {
-    // Rendered as a React child, this shape threw and blanked the whole page.
-    expect(formatPhaseLLM({ review: "big", default: ["fast", "backup"], judge: "cheap" })).toEqual([
-      { phase: "default", chain: "fast, then backup" },
-      { phase: "review", chain: "big" },
-      { phase: "judge", chain: "cheap" },
+  test("a mapping is one row per phase, in the engine's own order", () => {
+    expect(formatPhaseLLM({ judge: "tiny", default: ["big", "fast"] })).toEqual([
+      { phase: "default", chain: "big, then fast" },
+      { phase: "judge", chain: "tiny" },
     ]);
   });
 
-  test("a phase this build does not know is kept, after the known ones", () => {
-    expect(formatPhaseLLM({ planner: "big", default: "fast" })).toEqual([
-      { phase: "default", chain: "fast" },
-      { phase: "planner", chain: "big" },
-    ]);
-  });
-
-  test("nothing configured, or a shape nobody sends, is no rows rather than a throw", () => {
-    expect(formatPhaseLLM(undefined)).toEqual([]);
-    expect(formatPhaseLLM(null)).toEqual([]);
-    expect(formatPhaseLLM("")).toEqual([]);
-    expect(formatPhaseLLM([])).toEqual([]);
-    expect(formatPhaseLLM(42)).toEqual([]);
-    expect(formatPhaseLLM({ default: 7, review: [" ", 3] })).toEqual([]);
+  // THE ONE READER standing between a field a newer engine may shape
+  // differently and a render that must not throw.
+  test("anything else is no rows rather than a throw", () => {
+    for (const odd of [undefined, null, 0, true, {}, [], "", [""], { default: "" }]) {
+      expect(formatPhaseLLM(odd)).toEqual([]);
+    }
   });
 });
 
 describe("a value read from the redacted document", () => {
-  test("the mask is a literal that is set and hidden, never a value to print", () => {
-    expect(configValueKind(REDACTED)).toBe("hidden");
-  });
-
-  test("only a whole reference is a reference", () => {
-    expect(configValueKind("${SLACK_BOT_TOKEN}")).toBe("reference");
-    expect(configValueKind("Bearer ${TOKEN}")).toBe("literal");
-    expect(configValueKind("${TOKEN}${OTHER}")).toBe("literal");
-    expect(configValueKind("${TOKEN")).toBe("literal");
-  });
-
-  // DEFENCE IN DEPTH. An engine whose redaction let a partial reference
-  // through would otherwise have its literal half printed on this page.
-  test("in a credential field, anything but one whole reference is hidden", () => {
-    expect(configValueKind("Bearer sk-live-${SUFFIX}", { secret: true })).toBe("hidden");
-    expect(configValueKind("plain-token", { secret: true })).toBe("hidden");
-    expect(configValueKind("${TOKEN}", { secret: true })).toBe("reference");
-    expect(configValueKind("", { secret: true })).toBe("empty");
-  });
-
-  test("an unset field is empty, and an identity is a literal", () => {
+  test("the mask says something is set and never what", () => {
+    expect(configValueKind("__redacted__")).toBe("hidden");
     expect(configValueKind("")).toBe("empty");
     expect(configValueKind(undefined)).toBe("empty");
+  });
+
+  test("one whole reference is a reference, and part of one is not", () => {
+    expect(configValueKind("${DEV_A_SLACK_BOT_TOKEN}")).toBe("reference");
+    expect(configValueKind("  ${TOKEN}  ")).toBe("reference");
+    expect(configValueKind("Bearer sk-live-${SUFFIX}")).toBe("literal");
+  });
+
+  // A CREDENTIAL FIELD SHOWS A WHOLE REFERENCE OR NOTHING, whatever the engine
+  // sent. Its redaction took any value CONTAINING `${` for a reference, so
+  // `Bearer sk-live-${SUFFIX}` reached the wire with its literal half intact —
+  // and what this dashboard prints must not depend on every engine it talks to
+  // having got that right.
+  test("in a credential field anything but a whole reference is hidden", () => {
+    expect(configValueKind("Bearer sk-live-${SUFFIX}", { secret: true })).toBe("hidden");
+    expect(configValueKind("U0FOUNDER", { secret: true })).toBe("hidden");
+    expect(configValueKind("${TOKEN}", { secret: true })).toBe("reference");
+    // And a field that is NOT a credential still shows its literal: a contact
+    // identity is a public handle at a vendor.
     expect(configValueKind("U0FOUNDER")).toBe("literal");
   });
 });
@@ -212,10 +290,9 @@ describe("how far back the log goes", () => {
     expect(eventHistoryLabel(6 * 3600)).toBe("the store keeps 6 hours");
   });
 
+  // AN OPERATOR TOLD THE WRONG FLOOR STOPS PAGING EARLY, so the honest answer
+  // to "I do not know" is that sentence, never a number this client picked.
   test("an engine that did not report it says so rather than guessing", () => {
-    // An operator told the wrong floor stops paging early, so the honest
-    // answer to "I do not know" is that sentence, never a number this client
-    // picked.
     for (const absent of [undefined, null, 0, -1, Number.NaN]) {
       expect(eventHistoryLabel(absent)).toBe(
         "this engine did not report how far back the log goes",

@@ -96,6 +96,27 @@ var (
 	// the error carries.
 	ErrDuplicateUnit = errors.New("duplicate unit key")
 
+	// ErrDuplicateIdentity reports two seats claiming one external account.
+	//
+	// A contact identity is how an inbound message finds a person, and two
+	// seats declaring one id resolve DIFFERENTLY depending on who is
+	// asking: notification registration keys a map on the identity, so the
+	// LAST seat in chart order silently takes it, while every lookup that
+	// walks the chart answers the FIRST. The person who lost the race keeps
+	// a correct-looking config and stops receiving their own mail — and
+	// with `crewlet_operator_id` the two directions disagree outright, so a
+	// token resolves to one seat's dashboard and that person's wakes go to
+	// another's.
+	//
+	// A RUNNABLE rule (see the class note above [Organization.Validate]),
+	// like the duplicate handle it is the contact-field twin of: an
+	// identity is what an inbound message is routed by, so a company
+	// carrying a collision is not running as its author reads it — one of
+	// the two people is already unreachable. Reported as a
+	// [DuplicateError] of kind [DuplicateIdentity], naming every seat that
+	// claims the account.
+	ErrDuplicateIdentity = errors.New("duplicate contact identity")
+
 	// ErrMisplacedUnitRef reports a seat declared inside a unit whose `unit:`
 	// reference names a different unit.
 	//
@@ -211,12 +232,18 @@ const (
 	// sentinel it reports under, and for the field a caller places it at,
 	// which is the name either way.
 	DuplicateUnitName DuplicateKind = "unit_name"
+	// DuplicateIdentity is two or more seats claiming one external account:
+	// one value of one contact field. Not named for the field that carried
+	// it — every one of them is the same collision, and a kind per
+	// transport would make a caller enumerate the vendor table to ask "is
+	// this a duplicate identity".
+	DuplicateIdentity DuplicateKind = "identity"
 )
 
 // Valid reports whether k is one of the kinds this build reports.
 func (k DuplicateKind) Valid() bool {
 	switch k {
-	case DuplicateHandle, DuplicateSeatName, DuplicateUnitName:
+	case DuplicateHandle, DuplicateSeatName, DuplicateUnitName, DuplicateIdentity:
 		return true
 	}
 	return false
@@ -227,20 +254,22 @@ func (k DuplicateKind) Valid() bool {
 // used three times is one mistake rather than two pairwise ones.
 //
 // It holds EVERY entity, so a caller placing problems in a document can put
-// one beside each of them. Seats is set for a handle or a seat name, Units
-// for a unit key.
+// one beside each of them. Seats is set for a handle, a seat name or a
+// contact identity, Units for a unit key.
 type DuplicateError struct {
 	Kind DuplicateKind
-	// Key is the shared handle, seat name or unit key, and for a unit it is
-	// the spelling the key was first met in: a unit key is matched folded,
-	// a name and an id alike, and an operator searches their document for
-	// what they wrote rather than for a form nothing in it contains.
+	// Key is the shared handle, seat name, unit key or contact identity,
+	// and for a unit it is the spelling the key was first met in: a unit
+	// key is matched folded, a name and an id alike, and an operator
+	// searches their document for what they wrote rather than for a form
+	// nothing in it contains. An identity is the value as it sits after
+	// [Organization.Normalize], which is the text every consumer routes on.
 	Key   string
 	Seats []*Role
 	Units []*Unit
 	// Err is the grouped message, wrapping ErrDuplicateHandle,
-	// ErrDuplicateSeatName, or ErrDuplicateUnitName and ErrDuplicateUnit
-	// together.
+	// ErrDuplicateSeatName, ErrDuplicateIdentity, or ErrDuplicateUnitName
+	// and ErrDuplicateUnit together.
 	Err error
 }
 

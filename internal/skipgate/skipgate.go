@@ -90,6 +90,13 @@ type report struct {
 	// that does not build. Measured before this field existed: a package with
 	// an undefined symbol in a _test.go file went through here and exited 0.
 	failedPkgs []string
+	// orphaned is how many tests had output buffered and never reported a
+	// result at all, which is what a binary that DIED under a test looks like
+	// from here. The output itself is printed; this is the count, so the
+	// verdict can say whether a package that failed with no failing test said
+	// anything at all.
+	orphaned int
+
 	// tests is how many NAMED tests reported a result — passed, failed or
 	// skipped.
 	//
@@ -160,6 +167,25 @@ func read(in *bufio.Scanner, out *os.File) report {
 			}
 			if e.Action == "fail" {
 				r.failedPkgs = append(r.failedPkgs, short(e.Package))
+				// AND WHATEVER ITS TESTS WERE SAYING WHEN IT DIED.
+				//
+				// Per-test output is buffered and flushed on that test's own
+				// pass/fail/skip, which is what keeps this gate's log the
+				// length `go test` would have produced. A test that never
+				// reports one — the binary panicked under it, the race
+				// detector aborted the process, TestMain exited — leaves its
+				// buffer to be dropped, and the package then fails with a
+				// bare `FAIL pkg 103s` line and NOT ONE WORD about why.
+				//
+				// Measured: internal/engine failed exactly that way twice on
+				// one pull request, in a full CI log, with `0 test(s) failed
+				// in 1 package(s)` underneath it. A gate whose whole subject
+				// is that nothing fails invisibly cannot be the thing hiding
+				// the failure — the module doc above already says so about
+				// build errors ("a gate that swallowed those would hide the
+				// one failure nobody can debug without them"), and this is
+				// the same sentence for a crash.
+				r.orphaned += flush(out, buffered, e.Package)
 			}
 			continue
 		}
@@ -196,7 +222,48 @@ func read(in *bufio.Scanner, out *os.File) report {
 			delete(buffered, key)
 		}
 	}
+	// AND WHATEVER IS STILL HELD WHEN THE STREAM ENDS.
+	//
+	// The package branch above covers a package that reported `fail`. A
+	// TRUNCATED stream has no package record at all — a producer killed by an
+	// OOM or a signal, which the verdict's first branch exists for — and its
+	// last test's output is the only evidence of where it got to. On a run
+	// where every test reported there is nothing left here, so this costs a
+	// green log nothing.
+	for pkg := range r.ran {
+		r.orphaned += flush(out, buffered, "github.com/crewlet/crewlet/"+pkg)
+	}
+	r.orphaned += flush(out, buffered, "")
 	return r
+}
+
+// flush prints, and discards, every buffer left under a package whose tests
+// never reported a result — and says that is what they are.
+//
+// Named rather than dumped: `go test` frames its output with `=== RUN` and
+// `--- FAIL`, and a reader scanning a CI log for a test name finds nothing if
+// the lines arrive bare. The sentence on the header is the fact the reader
+// needs first, because it is the one thing `go test`'s own output never has to
+// say: this test was RUNNING when the binary stopped.
+func flush(out *os.File, buffered map[string][]string, pkg string) int {
+	prefix := pkg + "\x00"
+	names := make([]string, 0, len(buffered))
+	for key := range buffered {
+		if strings.HasPrefix(key, prefix) {
+			names = append(names, key)
+		}
+	}
+	slices.Sort(names)
+	for _, key := range names {
+		fmt.Fprintf(out, "=== ORPHANED %s %s (no pass, fail or skip was ever "+
+			"reported for it — the binary stopped here)\n",
+			short(pkg), strings.TrimPrefix(key, prefix))
+		for _, o := range buffered[key] {
+			fmt.Fprint(out, o)
+		}
+		delete(buffered, key)
+	}
+	return len(names)
 }
 
 func main() {
@@ -306,8 +373,33 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 		// with no failing test in it — that is what a build error looks like
 		// from here, and reporting only named tests would pass a tree that
 		// does not compile.
-		return 1, fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s)",
-			len(r.failed), len(r.failedPkgs))
+		//
+		// AND THE PACKAGES ARE NAMED. `0 test(s) failed in 1 package(s)` is
+		// the line this printed, twice, on a CI run nobody could diagnose: a
+		// count says a package failed and refuses to say which, in a stream
+		// covering 120 of them. The number was never the useful half.
+		note := fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s): %s",
+			len(r.failed), len(r.failedPkgs), strings.Join(r.failedPkgs, ", "))
+		if len(r.failed) == 0 {
+			// A PACKAGE FAILED WITH NO FAILING TEST, which is three
+			// different things and the reader has to be told which to look
+			// for: it does not compile, its binary died under a test (a
+			// panic, the race detector, a TestMain that exited), or it
+			// failed after its last test finished. The orphaned count is
+			// what separates the first from the rest — a build error prints
+			// its own output at package level and leaves nothing buffered.
+			note += "\nNo test in it reported a failure, so this is a package that " +
+				"did not build, a binary that stopped under a test, or a\nTestMain " +
+				"that exited non-zero."
+			if r.orphaned > 0 {
+				note += fmt.Sprintf(" %d test(s) had output and never reported "+
+					"a result;\ntheir output is above, under ORPHANED.", r.orphaned)
+			} else {
+				note += " Nothing was buffered under a test, so the output above is " +
+					"all there is."
+			}
+		}
+		return 1, note
 
 	case r.tests == 0:
 		// NOT ONE TEST RAN. A toolchain error, an unusable package list, a

@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -224,5 +225,49 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 		if got := where[turn]; got != want {
 			t.Errorf("run %s reports placement %v, want %q", turn, got, want)
 		}
+	}
+}
+
+// THE THREE FACTS A PARKED RUN HAS AND THE BOARD COULD NOT SHOW: who is
+// waiting on it, what it called through the bridge, and the identifiers that
+// find it in somebody else's system.
+//
+// `reply` is persisted precisely because the resumed turn does not see its
+// trigger; `bridge_calls` is the ONLY copy of a bridged run's tool log, since
+// those calls are made by a process outside the engine minutes apart and
+// possibly across a restart. Without them the run page's Calls tab had nothing
+// to render and "is anybody waiting on this" had no answer.
+func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
+	t.Parallel()
+	called := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t-1", Role: "Dev", Status: sandbox.StatusAwaiting,
+		Reply:     "chat:C1",
+		SessionID: "sess-9", CommandID: "cmd-3",
+		DelegationChain: []string{"agent-pm", "agent-swe"},
+		BridgeCalls: []sandbox.BridgeCall{
+			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
+		},
+		BridgeCallsElided: 4,
+	})
+	row := askRuns(t, store)[0]
+	switch {
+	case row["reply"] != "chat:C1":
+		t.Errorf("reply = %v, want who is waiting", row["reply"])
+	case row["session_id"] != "sess-9":
+		t.Errorf("session_id = %v", row["session_id"])
+	case row["command_id"] != "cmd-3":
+		t.Errorf("command_id = %v", row["command_id"])
+	case row["bridge_calls_elided"] != 4:
+		t.Errorf("bridge_calls_elided = %v — a log that silently skips is a "+
+			"log that lies about what the run did", row["bridge_calls_elided"])
+	}
+	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
+	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
+		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
+	}
+	chain, ok := row["delegation_chain"].([]string)
+	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
+		t.Fatalf("delegation_chain = %#v", row["delegation_chain"])
 	}
 }

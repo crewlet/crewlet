@@ -34,11 +34,11 @@ func TestEveryReasonIsFramedAndOnlyThePrimaryOnesAsk(t *testing.T) {
 				t.Error("the prompt names no task, and every rule in it rests " +
 					"on the seat knowing which one")
 			}
-			if got := (tracker.Prompt{}).Addressed(n); got != reason.Primary() {
+			if got := (tracker.Prompt{}).Addressed(n); got != reason.Addressed() {
 				t.Errorf("Addressed = %v and this reason is primary=%v — an "+
 					"addressed turn may not end in silence, and marking a "+
 					"watcher addressed makes a seat answer every field change "+
-					"in its unit's projects", got, reason.Primary())
+					"in its unit's projects", got, reason.Addressed())
 			}
 		})
 	}

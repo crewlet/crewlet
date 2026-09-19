@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,8 +101,13 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	// one, because a dashboard drawing "no events" for "this node has no
 	// event log" would report a quiet company during a misconfiguration.
 	r := registryOver(t, queries.Sources{})
-	if got := r.Names(); len(got) != 0 {
-		t.Errorf("names = %v, want none with no sources", got)
+	// EXCEPT THE ONES WHOSE SOURCE IS THE CALLER. `viewer` answers who
+	// presented this credential, which is a fact about the request rather
+	// than about anything this process was wired with — so a node with no
+	// sources at all still answers it, and answers "no seat", which is what
+	// lets a screen say what to bind instead of looking broken.
+	if got := r.Names(); !slices.Equal(got, []string{"viewer"}) {
+		t.Errorf("names = %v, want only the caller's own questions", got)
 	}
 	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
@@ -113,31 +119,48 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	state := livestate.New()
 	db := openStore(t)
 
-	if got := registryOver(t, queries.Sources{State: state}).Names(); len(got) != 2 {
-		t.Errorf("projection questions = %v", got)
-	}
-	// event, events, trace, turn, phases — five. `turn` is what made
-	// "everything that happened in this unit of work" askable at all (see
-	// migration 0014), and `phases` is the company-wide phase record with its
-	// payloads, which the event listing deliberately cannot serve.
-	if got := registryOver(t, queries.Sources{Events: db.Events()}).Names(); len(got) != 5 {
-		t.Errorf("event-log questions = %v", got)
-	}
-	full := registryOver(t, queries.Sources{
-		State: state, Events: db.Events(),
-		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-	})
-	for _, want := range []string{
-		"agent", "event", "events", "phases", "stream", "tokens", "trace", "turn",
+	// ALWAYS REGISTERED, whatever this process has: a credential is
+	// presented to a node with no sources at all, and "this token resolves
+	// to no seat" is the answer the screen needs in order to say what to
+	// bind. Named here so adding another is a deliberate edit to this list
+	// rather than a silent shift in every count below.
+	//
+	// THE EXACT SET, never a count with the names in a comment beside it.
+	// That was the shape here and it had already drifted: `turns` was
+	// registered, the comment still said five, and the number it compared
+	// against was the old one — so the registration this case exists to
+	// notice went unnoticed, and the failure it eventually produced named a
+	// number rather than the question that had appeared.
+	for _, c := range []struct {
+		what    string
+		sources queries.Sources
+		names   []string
+	}{
+		// `viewer` answers who presented this credential, which is a fact
+		// about the REQUEST rather than about anything this process was
+		// wired with.
+		{"a node with no sources at all", queries.Sources{}, []string{"viewer"}},
+		{"the live projection alone", queries.Sources{State: state},
+			[]string{"agent", "tokens", "viewer"}},
+		// `turn` is what made "everything that happened in this unit of
+		// work" askable at all (see migration 0014); `turns` is the list
+		// of them, which the dashboard used to fake by paging the raw
+		// feed; `phases` is the company-wide phase record WITH its
+		// payloads, which the event listing deliberately cannot serve;
+		// `token_series` is the spend with a time axis, which the
+		// breakdown has no dimension for; and `event_series` is the log's
+		// own, which a page of rows has no dimension for either.
+		{"the event log alone", queries.Sources{Events: db.Events()},
+			[]string{"event", "event_series", "events", "phases", "token_series",
+				"trace", "turn", "turns", "viewer"}},
+		{"both, plus health", queries.Sources{
+			State: state, Events: db.Events(),
+			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
+		}, []string{"agent", "event", "event_series", "events", "phases", "stream",
+			"token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
-		found := false
-		for _, got := range full.Names() {
-			if got == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%q is not registered: %v", want, full.Names())
+		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
+			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)
 		}
 	}
 }
@@ -191,7 +214,7 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	r := registryOver(t, queries.Sources{State: state})
 
 	// THE ROLLUP, not the records. store.js reads `.totals` off this and
-	// the spend view reads `.since_days`; a list of raw records fails the
+	// the spend view reads `.since`/`.until`; a list of raw records fails the
 	// first check and is discarded, which left the whole Spend room blank
 	// with the numbers sitting in memory the entire time.
 	got := askRaw(t, r, "tokens", nil).(tokens.Rollup)
@@ -204,8 +227,9 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	// The window is reported, not assumed: a reader comparing this against
 	// a different window on the same screen has to be able to tell them
 	// apart, and a number with the wrong label is worse than no label.
-	if got.SinceDays != livestate.LiveSpendWindowDays() {
-		t.Errorf("since_days = %d, want the live window", got.SinceDays)
+	if width := windowWidth(t, got); width != livestate.LiveSpendWindow {
+		t.Errorf("window = %s .. %s (%s), want the live window %s",
+			got.Since, got.Until, width, livestate.LiveSpendWindow)
 	}
 	// The high-water mark the client folds live events onto. Without it an
 	// event that is both in this baseline and redelivered on the stream is
@@ -248,8 +272,9 @@ func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
 	if got.Totals.TotalTokens != 36 || got.Totals.Calls != 3 {
 		t.Errorf("totals = %+v", got.Totals)
 	}
-	if got.SinceDays != 3 {
-		t.Errorf("since_days = %d, want the window asked for", got.SinceDays)
+	if width := windowWidth(t, got); width != 3*24*time.Hour {
+		t.Errorf("window = %s .. %s (%s), want the three days asked for",
+			got.Since, got.Until, width)
 	}
 	// Biggest first, and every dimension present.
 	if len(got.ByPhase) != 2 || got.ByPhase[0].Phase != "execute" {
@@ -297,8 +322,8 @@ func TestANodeWithNoEventStoreLabelsTheWindowItWasAsked(t *testing.T) {
 	// what a reader is looking at.
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
-	if got.SinceDays != 14 || got.Totals.Calls != 0 {
-		t.Errorf("rollup = %+v", got)
+	if width := windowWidth(t, got); width != 14*24*time.Hour || got.Totals.Calls != 0 {
+		t.Errorf("rollup = %+v (window %s)", got, width)
 	}
 	// Never nil: the client does `d.by_phase.length`, so a null throws in
 	// the browser rather than rendering an empty table.
@@ -902,5 +927,72 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	// there, which is what makes a client stop paging.
 	if got["next"] != "" {
 		t.Errorf("next = %#v on an empty page, want the empty string", got["next"])
+	}
+}
+
+// windowWidth is how long a rollup says it covers.
+func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
+	t.Helper()
+	since, err := time.Parse(time.RFC3339, got.Since)
+	if err != nil {
+		t.Fatalf("since = %q: %v", got.Since, err)
+	}
+	until, err := time.Parse(time.RFC3339, got.Until)
+	if err != nil {
+		t.Fatalf("until = %q: %v", got.Until, err)
+	}
+	return until.Sub(since)
+}
+
+func TestTokensTakeTheSameTwoInstantsTheSeriesDoes(t *testing.T) {
+	t.Parallel()
+	// THE WHOLE POINT OF THE WINDOW BEING INSTANTS. A time-range control
+	// produces two edges, and a reader who names one that ended yesterday
+	// gets a chart over it and figures above the chart over this afternoon
+	// — two facts on one screen that cannot be compared — unless the
+	// breakdown takes the same pair.
+	db := openStore(t)
+	log := db.Events()
+	at := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	write := func(id string, when time.Time, total int) {
+		payload, _ := json.Marshal(map[string]any{
+			"role": "Lead", "phase": "plan", "total_tokens": total, "turn_id": "tn-1",
+		})
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: "agent_phase_completed", Time: when,
+			Category: "system", Payload: payload,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	write("old", at.Add(-48*time.Hour), 100)
+	write("in", at.Add(time.Hour), 7)
+	write("new", time.Now().UTC(), 500)
+
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := askRaw(t, r, "tokens", map[string]any{
+		"since": at.Format(time.RFC3339),
+		"until": at.Add(24 * time.Hour).Format(time.RFC3339),
+	}).(tokens.Rollup)
+
+	if got.Totals.TotalTokens != 7 {
+		t.Errorf("totals = %+v, want only the record inside the named window", got.Totals)
+	}
+	if width := windowWidth(t, got); width != 24*time.Hour {
+		t.Errorf("window = %s .. %s (%s), want the day that was named",
+			got.Since, got.Until, width)
+	}
+}
+
+func TestATokensWindowThatEndsWhereItBeginsIsRefused(t *testing.T) {
+	t.Parallel()
+	// Half-open, so an empty window names no rows at all. The same refusal
+	// the events and series questions give, in the same words, because a
+	// reader scrubbing a range hits all three.
+	r := registryOver(t, queries.Sources{State: livestate.New()})
+	at := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.Answer(t.Context(), "tokens", map[string]any{"since": at, "until": at}, "")
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
 }

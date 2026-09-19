@@ -341,39 +341,69 @@ describe("the unsaved-changes prompt", () => {
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    history.replaceState(null, "", "#/org?lens=builder");
+    history.replaceState(null, "", "#/company?lens=builder");
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     const link = () =>
       within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
     const prompt = () => screen.findByRole("alertdialog", { name: "Discard your changes?" });
     // Untouched: the link simply goes.
     fireEvent.click(link());
-    await waitFor(() => expect(location.hash).toBe("#/integrations"));
+    await waitFor(() => expect(location.hash).toBe("#/admin/integrations"));
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     act(() => {
-      location.hash = "#/org?lens=builder";
+      location.hash = "#/company?lens=builder";
     });
-    await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
+    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
 
     type("Goal", "Ship");
     fireEvent.click(link());
     const asked = await prompt();
     expect(asked.textContent).toContain("you are leaving the builder");
     // Held, and undone: the page is where it was, and so is the form.
-    await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
+    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
+    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
     expect(view.onClose).not.toHaveBeenCalled();
 
     act(() => history.back());
     fireEvent.click(within(await prompt()).getByRole("button", { name: "Discard changes" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
     // The move the reader asked for is made: back past the entry they were on.
-    await waitFor(() => expect(location.hash).toBe("#/integrations"));
+    await waitFor(() => expect(location.hash).toBe("#/admin/integrations"));
+    cleanup();
+    history.replaceState(null, "", "#/");
+  });
+
+  /*
+   * AND A MOVE THAT IS NOT A DEPARTURE IS NOT ASKED ABOUT. Choosing the table
+   * view, or the reporting chart, is a `section` — the router PUSHES for one,
+   * so it really does reach the guard — and it keeps the lens, the draft and
+   * this form exactly as they are. A guard that asked here would be a
+   * departure prompt over a reader who chose a view, which is the shape a
+   * predicate naming the wrong screen produces for EVERY move.
+   */
+  test("a move within the lens is not a departure, and asks nothing", async () => {
+    history.replaceState(null, "", "#/company?lens=builder&view=visualization");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    type("Goal", "Ship");
+    for (const hash of [
+      "#/company?lens=builder&view=table",
+      "#/company?lens=builder&view=visualization&chart=reporting",
+      "#/company?lens=builder&view=visualization&chart=reporting&seat=ceo",
+    ]) {
+      act(() => {
+        location.hash = hash;
+      });
+      await waitFor(() => expect(location.hash).toBe(hash));
+      expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" }), hash).toBeNull();
+    }
+    // The form is still open, still changed, and was never closed.
+    expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
+    expect(view.onClose).not.toHaveBeenCalled();
     cleanup();
     history.replaceState(null, "", "#/");
   });
@@ -574,7 +604,7 @@ describe("seat fields", () => {
     expect(screen.getByText("review: smart, then fast")).toBeDefined();
     expect(
       screen.getByRole("link", { name: "Edit in the configuration document" }).getAttribute("href"),
-    ).toBe("#/config");
+    ).toBe("#/admin/config");
   });
 
   // Read only, the banner is the reason Apply is unavailable; a caption asking
@@ -643,7 +673,7 @@ describe("seat fields", () => {
       within(section).getByText("5 settings the builder shows and does not edit."),
     ).toBeDefined();
     for (const label of ["Models per phase", "Sandbox", "Workers", "Learning"]) {
-      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/config");
+      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/admin/config");
     }
     expect(section.innerHTML).not.toContain("__redacted__");
   });
@@ -675,7 +705,7 @@ describe("integrations", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     for (const tool of ["GitHub", "Slack", "Mattermost", "Jira", "Confluence"]) {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
-      expect(within(note).getByRole("link").getAttribute("href")).toBe("#/integrations");
+      expect(within(note).getByRole("link").getAttribute("href")).toBe("#/admin/integrations");
     }
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
     expect(screen.queryByLabelText(labelled("Jira project"))).toBeNull();
@@ -887,7 +917,7 @@ describe("problems", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("must not carry schedules");
     expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
-      "#/schedules",
+      "#/activity/schedules",
     );
   });
 
@@ -990,7 +1020,7 @@ describe("a unit", () => {
     ).toBeDefined();
     expect(screen.getByText("units[0].mcp_env.tracker.TOKEN")).toBeDefined();
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
-      "#/secrets",
+      "#/admin/credentials",
     );
     expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
   });

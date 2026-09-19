@@ -8,13 +8,16 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { App } from "./App.tsx";
-import { buildHash, Router } from "./router.tsx";
+import { Router } from "./router.tsx";
+import { screenScroller } from "~/lib/scroller.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { ALL_NAV } from "./nav.ts";
+import { DESTINATIONS } from "./nav.ts";
+import { buildHash } from "./router.tsx";
+import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -55,17 +58,13 @@ afterEach(() => {
 describe("the shell", () => {
   test("mounts against an engine that has answered nothing", () => {
     mount();
-    // The chrome is present and honest: not connected, and saying so.
-    expect(screen.getByText("engine unreachable")).toBeDefined();
-    expect(screen.getAllByText("Overview").length).toBeGreaterThan(0);
-  });
-
-  test("an empty company still shows every section", () => {
-    // A fresh company has no seats, no events and no spend. Each panel says
-    // what would fill it rather than rendering an unexplained blank.
-    mount();
-    expect(screen.getByText("No seat is mid-turn")).toBeDefined();
-    expect(screen.getByText("Nothing has happened yet")).toBeDefined();
+    // The chrome is present and honest: not connected, and saying so — in the
+    // rail's own engine pill and in the state bar, which is the one place a
+    // degraded connection is reported now.
+    expect(screen.getAllByText("unreachable").length).toBeGreaterThan(0);
+    // AND THE LANDING SCREEN IS THE INBOX, which is what a person opening
+    // this wants to know: is anything waiting on me.
+    expect(screen.getAllByText("Inbox").length).toBeGreaterThan(0);
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
@@ -75,141 +74,164 @@ describe("the shell", () => {
     expect(screen.getByText("No connection to the engine")).toBeDefined();
   });
 
-  test("a connected, quiet company has nothing waiting", () => {
-    const { store, view } = mount();
-    store.applyHealth({ status: "ok" });
-    view.rerender(
-      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-        <Router>
-          <App />
-        </Router>
-      </ClientContext.Provider>,
-    );
-    expect(screen.getByText("Nothing is waiting on you")).toBeDefined();
-  });
-
-  test("the overview leads with what needs a person", () => {
-    // The order is the argument: obligations first, then what the company is
-    // doing, then what it has cost.
+  test("every workspace is in the rail, locked ones included", () => {
+    // A SECTION THAT VANISHES without a credential is indistinguishable from
+    // one that does not exist, so Admin is always a row and carries a lock.
     mount();
-    const headings = screen.getAllByText(/Needs a person|Live seats|Spend by phase/);
-    expect(headings[0]?.textContent).toContain("Needs a person");
+    for (const label of ["Inbox", "Work", "Company", "Knowledge", "Activity", "Cost", "Admin"]) {
+      expect(screen.getAllByText(label).length, label).toBeGreaterThan(0);
+    }
   });
 });
-
-describe("an engine with no active configuration", () => {
-  test("the banner leads to creating the company, and names the command line", async () => {
-    location.hash = "#/people";
-    const store = new Store();
-    // Connected: the banner below leads only when the socket is up, since an
-    // unreachable engine cannot say whether anything is configured.
-    store.applyHealth({ status: "ok" });
-    const socket = new LiveSocket(store);
-    // The `stream` query is what says whether a company is configured.
-    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-      Promise.resolve(what === "stream" ? { status: "ok", configured: false } : null);
-    render(
-      <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <App />
-        </Router>
-      </ClientContext.Provider>,
-    );
-    const link = await screen.findByRole("link", { name: "Create the company" });
-    // Not the Configuration screen, which reads and cannot create one.
-    expect(link.getAttribute("href")).toBe("#/org?lens=builder");
-    expect(screen.getAllByText("crewlet config import").length).toBeGreaterThan(0);
-  });
-});
-
-/**
- * A fetch that answers by path, in the Secrets suite's idiom: the REST-backed
- * screens read over it, and an unstubbed fetch in jsdom is a network error on
- * some machines and a hang on others, which makes a smoke test measure the
- * runner rather than the screen.
- */
-function stubFetch(handler: (path: string) => Response) {
-  const spy = vi.fn((input: RequestInfo | URL) =>
-    Promise.resolve(handler(new URL(String(input), "http://engine.test").pathname)),
-  );
-  vi.stubGlobal("fetch", spy);
-  return spy;
-}
-
-const answer = (status: number, payload: unknown) =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
 
 describe("routing", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  // DERIVED FROM THE NAV, not a hand-written list. The list was one, and a
-  // hand-written one covers exactly the screens somebody remembered to add to
-  // it — so a new nav entry that renders a blank ships green, which is the one
-  // failure this test exists to catch.
-  test("every nav route renders a screen rather than a blank", () => {
-    // An engine with no company yet: the state a builder's create mode opens
-    // on, and the one every REST read has to render honestly.
-    stubFetch((path) =>
-      path === "/config" ? answer(404, { error: "no_active_revision" }) : answer(200, {}),
-    );
-    const visited = ALL_NAV.map((item) => buildHash(item.path));
-    // The two newest screens are the reason the list is derived: a hand-written
+  // DERIVED FROM THE DESTINATIONS TABLE, not a hand-written list. The list
+  // was one, and a hand-written one covers exactly the screens somebody
+  // remembered to add to it — so a new destination that renders a blank ships
+  // green, which is the one failure this test exists to catch.
+  test("every destination renders a screen rather than a blank", () => {
+    const visited = DESTINATIONS.map((item) => buildHash(item.path));
+    // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
-    expect(visited).toContain(buildHash(["work"]));
-    expect(visited).toContain(buildHash(["pages"]));
-    // The builder is reached from the org chart rather than from the nav, so
-    // no derivation covers it, and it is the lens most likely to blank: it
-    // reads its document over REST before it draws anything.
-    for (const hash of [...visited, buildHash(["org"], { lens: "builder" })]) {
+    expect(visited).toContain(buildHash(["work", "views"]));
+    expect(visited).toContain(buildHash(["activity", "turns"]));
+    for (const hash of visited) {
       location.hash = hash;
       const { view } = mount();
-      // THE SCREEN'S OWN CONTENT, found through the one scroll container the
-      // router restores a position in: a screen that rendered nothing leaves
-      // it empty, which is what a blank route looks like.
-      const content = document.getElementById("screen-scroll")!.firstElementChild;
-      expect(content?.children.length, hash).toBeGreaterThan(0);
+      expect(view.container.querySelector(".screen-inner")?.children.length, hash).toBeGreaterThan(
+        0,
+      );
       view.unmount();
     }
   });
 
-  // THE BUILDER LENS MOUNTS THROUGH THE SHELL. It is the one lens that reads
-  // over REST and checks with a dry run on arrival, so a broken import, a
-  // hook-order violation or a context it cannot find shows up here first.
-  test("the org builder lens opens on the configuration it reads", async () => {
-    const config = { name: "Acme", roles: [{ name: "CEO" }] };
-    const spy = stubFetch((path) =>
-      path === "/config"
-        ? new Response(JSON.stringify(config), {
-            status: 200,
-            headers: { "Content-Type": "application/json", ETag: '"r1"' },
-          })
-        : answer(200, {}),
-    );
-    location.hash = "#/org?lens=builder";
-    mount();
-    expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
-    // And its first check went out as a dry run, never as a write.
-    const calls = () => spy.mock.calls as unknown as [string, RequestInit | undefined][];
-    await vi.waitFor(() => {
-      expect(calls().some(([input]) => String(input).includes("dry_run=true"))).toBe(true);
-    });
-    const writes = calls().filter(([, init]) => init?.method === "PATCH" || init?.method === "PUT");
-    expect(writes.every(([input]) => String(input).includes("dry_run=true"))).toBe(true);
+  // THE OTHER HALF OF `source.test.ts`'s link gate. That one proves every
+  // link names a segment a workspace OWNS; this one proves the object routes
+  // those links actually build resolve to a screen. A workspace can own
+  // `activity` while `#/activity/traces/{id}` still falls through to Not
+  // Found, which is exactly what shipped: `traces` had a screen, four buttons
+  // pointing at it, and no case in the switch.
+  test("every object route a link builds resolves to a screen", () => {
+    const routes = [
+      ["activity", "turns", "11111111-1111-4111-8111-111111111111"],
+      ["activity", "traces", "22222222-2222-4222-8222-222222222222"],
+      ["activity", "runs", "33333333-3333-4333-8333-333333333333"],
+      ["activity", "events", "44444444-4444-4444-8444-444444444444"],
+      ["activity", "a2a", "55555555-5555-4555-8555-555555555555"],
+      ["activity", "schedules", "role", "ceo", "standup"],
+      ["company", "people", "ada"],
+      ["company", "units", "platform"],
+      ["work", "ENG-42"],
+      ["goals", "66666666-6666-4666-8666-666666666666"],
+      ["knowledge", "ENG", "Deploy runbook"],
+      ["admin", "fleet", "node-a"],
+      ["admin", "integrations", "slack"],
+      ["admin", "credentials", "SLACK_SIGNING_SECRET"],
+      ["admin", "config", "revisions", "77777777-7777-4777-8777-777777777777"],
+    ];
+    for (const path of routes) {
+      const hash = buildHash(path);
+      location.hash = hash;
+      const { view } = mount();
+      expect(view.container.textContent, hash).not.toMatch(
+        /there is no such screen|under (Activity|Company|Admin)/,
+      );
+      view.unmount();
+    }
   });
 
   test("an unknown screen says so instead of rendering nothing", () => {
     location.hash = "#/nonsense";
     mount();
-    expect(screen.getByText("Not a screen")).toBeDefined();
+    expect(screen.getByText(/there is no such screen/)).toBeDefined();
+  });
+
+  // A TAIL NOTHING ROUTES IS NOT THE WORKSPACE'S LANDING SCREEN. `cost` had a
+  // two-valued test — `budgets` or the spend screen — so `#/cost/budget`, the
+  // obvious typo and the shape of a stale bookmark, drew the spend tables
+  // under a trail reading "Cost / budget": the address, the trail and the
+  // screen each naming something different. Every sibling workspace in this
+  // file ends its switch with Not Found; this one now does too.
+  test("a tail under Cost that names no screen says so", () => {
+    location.hash = "#/cost/budget";
+    mount();
+    expect(screen.getByText(/there is no such screen/)).toBeDefined();
+    // …and the two addresses that DO exist are untouched.
+    cleanup();
+    location.hash = "#/cost";
+    mount();
+    expect(screen.queryByText(/there is no such screen/)).toBeNull();
+    cleanup();
+    location.hash = "#/cost/budgets";
+    mount();
+    expect(screen.queryByText(/there is no such screen/)).toBeNull();
+  });
+
+  // THE SAME SHAPE ONE CASE OVER. `revisions/{id}` is the only tail Config
+  // has, and reading it as `tail[0] === "revisions"` alone rendered the config
+  // screen with the segment dropped for everything else.
+  test("a tail under Config that names no screen says so", () => {
+    location.hash = "#/admin/config/nonsense";
+    mount();
+    expect(screen.getByText(/there is no such screen/)).toBeDefined();
+  });
+
+  /**
+   * A TOOL NAME IS A THIRD PARTY'S STRING, and `servers` is a legal one.
+   *
+   * `#/admin/tools/servers/{name}` filters the catalogue by origin and
+   * `#/admin/tools/{name}` is one tool's page — the address `objects.ts`
+   * builds and where a tool row's `Open ↗` goes. Discriminating on the WORD
+   * took the page away from a tool actually called `servers` and dropped the
+   * reader on the unfiltered catalogue, which is the regression the switch's
+   * own comment says it fixed. The tail's LENGTH is what tells them apart:
+   * the router encodes each segment whole, so a tool page is always exactly
+   * one tail segment and the filter always two.
+   */
+  test("a tool named `servers` keeps its page, and the origin filter keeps its", () => {
+    const annotations = {
+      read_only: "yes",
+      destructive: "no",
+      idempotent: "yes",
+      open_world: "no",
+    } as const;
+    const catalogue = [
+      { name: "servers", description: "", source: "mcp:acme", annotations, delivers: "" },
+      { name: "create_issue", description: "", source: "mcp:github", annotations, delivers: "" },
+    ];
+
+    location.hash = "#/admin/tools/servers";
+    const one = mount();
+    one.store.applyTools(catalogue);
+    one.view.rerender(
+      <ClientContext.Provider value={{ store: one.store, socket: new LiveSocket(one.store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    // The addressed tool is drawn above the catalogue in its own header.
+    expect(one.view.container.querySelector(".object-head")).not.toBeNull();
+    one.view.unmount();
+    cleanup();
+
+    location.hash = "#/admin/tools/servers/github";
+    const two = mount();
+    two.store.applyTools(catalogue);
+    two.view.rerender(
+      <ClientContext.Provider value={{ store: two.store, socket: new LiveSocket(two.store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    // Two segments is the FILTER, so no tool is addressed and the catalogue
+    // stands alone.
+    expect(two.view.container.querySelector(".object-head")).toBeNull();
   });
 
   test("a seat that does not exist explains itself", () => {
-    location.hash = "#/seats/ghost";
+    location.hash = "#/company/people/ghost";
     mount();
     expect(screen.getByText(/No seat called/)).toBeDefined();
   });
@@ -217,8 +239,12 @@ describe("routing", () => {
 
 describe("live state reaches the screen", () => {
   test("a pushed roster renders its seats", () => {
+    // THE HASH BEFORE THE MOUNT. The router reads `location.hash` at mount
+    // and then listens for `hashchange`, which jsdom dispatches
+    // asynchronously — so assigning it after mounting and re-rendering
+    // synchronously renders the screen the reader was on before.
+    location.hash = "#/company/people";
     const { store, view } = mount();
-    location.hash = "#/people";
     store.applyOrg({
       name: "Acme",
       roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
@@ -232,6 +258,66 @@ describe("live state reaches the screen", () => {
       </ClientContext.Provider>,
     );
     expect(screen.getAllByText("CEO").length).toBeGreaterThan(0);
+  });
+
+  // THE STAR'S WHOLE ROUND TRIP. `lib/starred.ts` was written complete — the
+  // cap, the refusal at it, the storage guards, its own suite — and nothing in
+  // the product could make a star or read one back: the page bar's own doc
+  // comment promised "Copy link, star, open" and only Copy link existed, so
+  // every workspace sidebar's Starred section was empty by construction.
+  test("keeping a page puts it in this workspace's sidebar", async () => {
+    localStorage.clear();
+    resetStarsForTest();
+    location.hash = "#/company/people/ceo";
+    const { store, view } = mount();
+    store.applyOrg({
+      name: "Acme",
+      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+    });
+    view.rerender(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    expect(screen.queryByText("Starred")).toBeNull();
+    fireEvent.click(screen.getByTitle("Keep in Starred"));
+    expect(screen.getByText("Starred")).toBeDefined();
+    // AND IT IS THE SAME BUTTON that takes it back out: a filled star means
+    // "not this one".
+    fireEvent.click(screen.getByTitle("Remove from Starred"));
+    expect(screen.queryByText("Starred")).toBeNull();
+  });
+
+  test("a seat opened on a tab it does not have still has a page under it", () => {
+    // THE BLANK PAGE, end to end. `tab=` is a string off a URL and the tab
+    // set belongs to the seat's kind, so `?tab=zzz` — a bookmark, a typed
+    // URL, a link made before the kind changed — used to select no tab and
+    // match no branch: the header and the strip, and then nothing.
+    location.hash = "#/company/people/ceo?tab=zzz";
+    const { store, view } = mount();
+    store.applyOrg({
+      name: "Acme",
+      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+    });
+    store.applyAgents([{ role: "CEO", state: "working" }]);
+    view.rerender(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    // THE STRIP'S OWN ANSWER, which is the thing being asserted: a `tab=`
+    // naming no tab must resolve to one that exists, and the reader must be
+    // able to see WHICH. Reading the page's content instead was ambiguous
+    // the moment the seat grew an ObjectHeader whose facts repeat a
+    // property's label.
+    const selected = screen
+      .getAllByRole("tab")
+      .find((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toContain("Overview");
   });
 });
 
@@ -275,7 +361,7 @@ describe("a turn watched to its end", () => {
   });
 
   function seatView() {
-    location.hash = "#/seats/ceo?tab=model";
+    location.hash = "#/company/people/ceo?tab=turns";
     const { store, view } = mount();
     store.applyOrg(seat);
     const redraw = () =>
@@ -337,7 +423,7 @@ describe("a turn watched to its end", () => {
     // the settled list admits everything anyway, so an assertion taken there
     // passes whether the rule holds or not.
     const { store, redraw } = seatView();
-    const scroller = document.getElementById("screen-scroll");
+    const scroller = screenScroller();
     if (!scroller) throw new Error("no scroller to scroll: the shell's layout moved");
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     store.applyAgents([
@@ -370,4 +456,45 @@ describe("a turn watched to its end", () => {
     // than about any card that happens to be open.
     expect(screen.getAllByTitle(/^turn t1/).length).toBeGreaterThan(0);
   });
+});
+
+/**
+ * A NODE ID IS AN OPERATOR'S STRING, and `domains` is a legal one.
+ *
+ * The fleet arm was `node={tail[0]}` and took any tail at all, so every
+ * address under Infrastructure that is not a node rendered the NODE screen
+ * for a node named after its first segment, with everything after it silently
+ * dropped: `#/admin/fleet/domains/tracker` drew "No node called “domains”
+ * holds a lease" under a breadcrumb reading "Infrastructure / domains/tracker".
+ * A reader saw a plausible answer to a question they did not ask.
+ *
+ * The neighbouring `tools` and `config` arms each carry a long comment about
+ * exactly this class of bug and each discriminate on the tail's LENGTH. This
+ * one did not, which is also why a node genuinely called `domains` is the
+ * case below: node ids are operator-chosen and lowercase-legal
+ * (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`), so reading the WORD would take the
+ * page away from it.
+ */
+test("a node named `domains` keeps its page, and the domains route keeps its", () => {
+  location.hash = "#/admin/fleet/domains";
+  const one = mount();
+  // ONE SEGMENT IS A NODE, whatever it is called — the node screen offers
+  // "All nodes" back to the list, where the domain page offers Infrastructure.
+  expect(one.view.container.textContent).toContain("All nodes");
+  expect(one.view.container.textContent).not.toContain("there is no such screen");
+  one.view.unmount();
+  cleanup();
+
+  // TWO SEGMENTS IS THE DOMAIN, and it is not a node read.
+  location.hash = "#/admin/fleet/domains/tracker";
+  const two = mount();
+  expect(two.view.container.textContent).not.toContain("All nodes");
+  expect(two.view.container.textContent).not.toContain("holds a lease");
+  two.view.unmount();
+  cleanup();
+
+  // AND A TAIL THAT NAMES NEITHER SAYS SO, rather than dropping segments.
+  location.hash = "#/admin/fleet/domains/tracker/extra";
+  mount();
+  expect(screen.getByText(/there is no such screen/)).toBeDefined();
 });

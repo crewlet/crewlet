@@ -54,6 +54,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 	})
 
 	applied := s.applyStatus(ctx)
+	target := s.activation(ctx)
 	nodeRows := make([]map[string]any, 0, len(nodes))
 	for _, lease := range nodes {
 		id := nameIn(coord.ClassNode, lease.Resource)
@@ -71,6 +72,16 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		row["config_epoch"] = status.Epoch
 		row["config_status"] = status.Status
 		row["config_error"] = status.Error
+		// WHICH REVISION THIS NODE IS ON, which the epoch does not say.
+		//
+		// Carried on the apply record for exactly this reason — its own
+		// doc: "the fleet view is read while nodes are mid-transition,
+		// and a node still on the previous revision is exactly what an
+		// operator is looking for." It was written by every node, stored
+		// by the plane, read into this loop, and dropped here, so the
+		// screen could compare epoch numbers and never name what they
+		// stood for.
+		row["config_revision_id"] = status.RevisionID
 		// WHEN this node last reported. Without it a node that stopped
 		// reporting is indistinguishable from one that reported the same
 		// epoch a second ago — and the one that stopped is exactly the
@@ -87,6 +98,21 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			row["started_at"] = isoOrEmpty(live.StartedAt)
 			if live.Posture != "" {
 				row["posture"] = live.Posture
+			}
+			// HOW FAR THIS NODE'S OWN COPY HAS COME UP, which is a
+			// different question from its config epoch: a node can
+			// hold the current revision and still be hydrating the
+			// state it derives from the log, and only one of those
+			// two makes its seats servable.
+			//
+			// ABSENT RATHER THAN ZERO when the node published none —
+			// the meta only carries them when the total is non-zero
+			// — for the reason `in_flight` is absent: a confident 0
+			// of 0 reads as "ready" for a process that is simply not
+			// saying.
+			if live.ProjectionsTotal > 0 {
+				row["projections_ready"] = live.ProjectionsReady
+				row["projections_total"] = live.ProjectionsTotal
 			}
 		}
 		nodeRows = append(nodeRows, row)
@@ -115,7 +141,19 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// What the fleet is converging ON, so a lagging node reads as
 		// "3 epochs behind 41" rather than as a number with nothing to
 		// compare it to.
-		"target_epoch": s.targetEpoch(ctx),
+		// ONE READ, TWO FIELDS. `target_epoch` is what every node row is
+		// compared against; `activation` is what that number STANDS FOR
+		// — which revision, activated when, with the summary whoever
+		// activated it wrote. An operator reading "node-2 is two epochs
+		// behind" could not see any of the second half.
+		//
+		// Read once rather than once per field: they are the same
+		// pointer, and two reads of it inside one answer can disagree
+		// while an activation lands between them — a screen saying
+		// "target 42" beside "revision r-41" describes a fleet that
+		// never existed.
+		"target_epoch": target.epoch,
+		"activation":   target.detail,
 	}, nil
 }
 
@@ -141,23 +179,42 @@ func (s Sources) applyStatus(ctx context.Context) map[string]coord.NodeApply {
 	return out
 }
 
-// targetEpoch is the newest activation, or 0 when there is none or it cannot
-// be read. Zero is safe here because the client compares against it only when
-// non-zero — an unknown target renders as no comparison rather than as "every
-// node is 41 epochs behind".
-func (s Sources) targetEpoch(ctx context.Context) int64 {
+// activationTarget is the newest activation as this answer renders it.
+//
+// The epoch is 0 when there is none or it cannot be read, which is safe
+// because the client compares against it only when non-zero — an unknown
+// target renders as no comparison rather than as "every node is 41 epochs
+// behind".
+//
+// The detail is NIL rather than an object of empty strings, because "nothing
+// has ever been activated" and "the pointer could not be read" both leave a
+// screen with nothing to render, and an empty object would have it render a
+// revision named "" activated at the zero time. The two are told apart in the
+// log, which is where an operator looks for a failure, rather than on a screen
+// that has no remedy to offer for either.
+type activationTarget struct {
+	epoch  int64
+	detail any
+}
+
+func (s Sources) activation(ctx context.Context) activationTarget {
 	if s.Plane == nil {
-		return 0
+		return activationTarget{}
 	}
 	target, found, err := s.Plane.Target(ctx)
-	if err != nil {
-		log.WarnContext(ctx, "fleet_target_epoch_failed", "error", err)
-		return 0
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "fleet_activation_unavailable", "error", err)
+		return activationTarget{}
+	case !found:
+		return activationTarget{}
 	}
-	if !found {
-		return 0
-	}
-	return target.Epoch
+	return activationTarget{epoch: target.Epoch, detail: map[string]any{
+		"epoch":       target.Epoch,
+		"revision_id": target.RevisionID,
+		"at":          isoOrEmpty(target.At),
+		"summary":     target.Summary,
+	}}
 }
 
 // unplaceable are the seats the company declares that no live node may run.

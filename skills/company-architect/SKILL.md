@@ -139,7 +139,7 @@ config all work before any external credential is in play.
 
 It is not a hollow one: the tracker and the knowledge base are on by
 default, so that first turn can already file work and write pages, and
-the founder can watch it happen on the Work board and Pages screens. The
+the founder can watch it happen on the Tracker and Pages screens. The
 integrations that come later are about where their PEOPLE are, not about
 what the company can do.
 

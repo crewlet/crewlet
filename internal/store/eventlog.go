@@ -190,6 +190,24 @@ type ListQuery struct {
 	// NOT mean history is exhausted here; only a zero-row page does.
 	RelatedAgent string
 
+	// Since and Until bound the window a caller is asking about, as a
+	// half-open interval `[Since, Until)`.
+	//
+	// SEPARATE FROM [ListQuery.Before], which is a CURSOR: the cursor is
+	// where this page resumes and moves with every page, while these are
+	// what the reader asked for and do not. Folding a window into the
+	// cursor would make the second page of a bounded read unbounded, which
+	// is the failure a keyset exists to avoid wearing a filter's clothes.
+	//
+	// The history window still applies underneath: a `Since` older than
+	// [EventHistory] does not reach rows the log no longer keeps, and
+	// saying so is the caller's job rather than this read's.
+	//
+	// Zero means unbounded on that side, which is a meaningful zero: an
+	// instant nobody named is not midnight in 1970.
+	Since time.Time
+	Until time.Time
+
 	// Before is an exclusive cursor. Nil starts at the newest row.
 	Before *Cursor
 }
@@ -377,14 +395,23 @@ func qualifiedListColumns(joined bool) string {
 	return strings.Join(parts, ", ")
 }
 
-// List returns a page of events, newest first, ordered by (time, id)
-// descending.
-func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
-	limit := q.Limit
-	if limit <= 0 {
-		limit = defaultListLimit
-	}
-
+// predicate is the FROM, the WHERE terms and their arguments a query's filters
+// compile to — everything the caller ASKED FOR, and nothing about where a page
+// resumes.
+//
+// SHARED, because [EventLog.List] and [EventLog.Histogram] answer two halves of
+// one screen: a bar counting rows the list below it would not show is worse
+// than no bar at all, and two copies of six filters is how that happens. The
+// cursor is deliberately NOT here — it is where a page resumes and moves with
+// every page, while these are what the reader asked for and do not, so folding
+// it in would make a histogram change as somebody scrolled.
+//
+// `col` qualifies a column name for whichever FROM was built, and callers use
+// it for every column rather than for the two that collide: qualifying only
+// `event_time` and `event_id` — the pair the party table also carries — would
+// work today and break the day that table grows a column sharing a name with
+// one of these.
+func (q ListQuery) predicate() (from string, where []string, args []any, col func(string) string) {
 	// The RelatedAgent filter is a JOIN rather than another WHERE clause,
 	// because "involves this agent" is one fact spread over five places on
 	// the event, and the party table is where it was normalised to. The
@@ -392,19 +419,15 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	// primary key — so the work scales with the number of MATCHES rather
 	// than with the size of the log. See schema/0016.
 	joined := q.RelatedAgent != ""
-	// EVERY column of the log is qualified when joined, not just the two
-	// that collide. Qualifying only `event_time` and `event_id` — the pair
-	// the party table also carries — would work today and break the day
-	// that table grows a column sharing a name with one of these.
-	col := func(name string) string {
+	col = func(name string) string {
 		if joined {
 			return "crewlet_events." + name
 		}
 		return name
 	}
 
-	where := []string{col("event_time") + " >= ?"}
-	args := []any{EncodeTime(now().Add(-EventHistory))}
+	where = []string{col("event_time") + " >= ?"}
+	args = []any{EncodeTime(now().Add(-EventHistory))}
 	addEq := func(name, val string) {
 		if val != "" {
 			where = append(where, col(name)+" = ?")
@@ -417,8 +440,19 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
+	// THE WINDOW, half-open, on the same column the keyset walks — so it
+	// narrows the index range the read already scans rather than adding a
+	// term the planner has to filter on.
+	if !q.Since.IsZero() {
+		where = append(where, col("event_time")+" >= ?")
+		args = append(args, EncodeTime(q.Since))
+	}
+	if !q.Until.IsZero() {
+		where = append(where, col("event_time")+" < ?")
+		args = append(args, EncodeTime(q.Until))
+	}
 
-	from := "crewlet_events"
+	from = "crewlet_events"
 	if joined {
 		from = `crewlet_events JOIN crewlet_event_parties
 			ON crewlet_event_parties.event_time = crewlet_events.event_time
@@ -426,6 +460,19 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		where = append(where, "crewlet_event_parties.party = ?")
 		args = append(args, q.RelatedAgent)
 	}
+	return from, where, args, col
+}
+
+// List returns a page of events, newest first, ordered by (time, id)
+// descending.
+func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	from, where, args, col := q.predicate()
+	joined := q.RelatedAgent != ""
 
 	if q.Before != nil {
 		// Keyset, not OFFSET: (event_time, event_id) is the primary key,
@@ -572,6 +619,48 @@ const MaxTurnEvents = MaxTraceEvents
 // index the read walked.
 func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, error) {
 	return l.countEvents(ctx, "turn_id", turnID)
+}
+
+// TurnTraces is every trace one turn touched, in the order it first touched
+// them.
+//
+// ASKED RATHER THAN DERIVED FROM THE ROWS, and the reason is the cap above. A
+// turn RESUMED on another node after a restart spans more than one trace —
+// which is exactly the turn somebody opens a turn page to understand — and a
+// caller deriving the set from the rows it was given loses any trace whose
+// events fell in the middle a capped read dropped. One button labelled
+// "trace" then leads to half the story with nothing saying a second half
+// exists.
+//
+// A DISTINCT walk of the same (turn_id, event_time, event_id) index the read
+// walked, bounded by the same history window, so it is a seek over one turn's
+// range rather than a scan. Ordered by first appearance, because that is the
+// order a reader follows them in: the trace the turn started under comes
+// first.
+func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]string, error) {
+	rows, err := l.db.sql.QueryContext(ctx,
+		"SELECT trace_id, MIN(event_time) AS first_at FROM crewlet_events "+
+			"WHERE turn_id = ? AND event_time >= ? AND trace_id != '' "+
+			"GROUP BY trace_id ORDER BY first_at ASC, trace_id ASC",
+		turnID, EncodeTime(now().Add(-EventHistory)))
+	if err != nil {
+		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []string{}
+	for rows.Next() {
+		var id string
+		var first int64
+		if err := rows.Scan(&id, &first); err != nil {
+			return nil, fmt.Errorf("store: scan the traces of turn %s: %w", turnID, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
+	}
+	return out, nil
 }
 
 // TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
@@ -809,8 +898,64 @@ type PhaseTokenQuery struct {
 	// takes DefaultPhaseTokenDays.
 	SinceDays int
 
+	// Since and Until name the window as INSTANTS, which SinceDays cannot:
+	// a time-range control produces two edges, and a cost explorer's
+	// compare-to-previous asks for the window immediately before the one on
+	// screen — neither of which is "N days back from now".
+	//
+	// Since at its zero value falls back to SinceDays. Until at its zero
+	// value is unbounded, and it is EXCLUSIVE, so two adjacent windows
+	// share their boundary instant without double-counting it.
+	//
+	// Since is floored at MaxPhaseTokenDays back whichever way it was
+	// named: a request further back cannot return more rows, and honouring
+	// it would make a scan of the whole table look like a supported query.
+	Since time.Time
+	Until time.Time
+
 	// AgentRole restricts the rollup to one seat. Empty is the whole org.
 	AgentRole string
+}
+
+// Window reports the instants this query actually covers, after the floor.
+//
+// Exported because the CALLER labels the answer: a rollup headed with the
+// window that was asked for, over rows from the window that was served, is a
+// lie about the numbers beside it — and the clamp lives here, where the floor
+// is defined, rather than being re-derived at every surface.
+//
+// TOTAL IN BOTH EDGES: an unbounded top edge means "up to now", and what this
+// reports is now rather than the zero time. It answered the zero once and
+// every caller wrote the same three lines back — an axis must run to now
+// rather than to the newest record, so a company quiet for six hours has six
+// empty buckets rather than a chart that stops where the spending did, and a
+// rollup must say which instant it counted through. Two copies of one rule is
+// how the chart and the figures above it come to disagree about where a
+// window ends.
+func (q PhaseTokenQuery) Window(now time.Time) (since, until time.Time) {
+	floor := now.Add(-time.Duration(MaxPhaseTokenDays) * 24 * time.Hour)
+	since = q.Since
+	if since.IsZero() {
+		days := q.SinceDays
+		if days <= 0 {
+			days = DefaultPhaseTokenDays
+		}
+		since = now.Add(-time.Duration(days) * 24 * time.Hour)
+	}
+	if since.Before(floor) {
+		since = floor
+	}
+	until = q.Until
+	if until.IsZero() {
+		until = now
+	}
+	// An inverted window is a caller error that must not read as a quiet
+	// company: it collapses to an empty one at the later edge, so the
+	// answer covers nothing and SAYS it covers nothing.
+	if until.Before(since) {
+		since = until
+	}
+	return since.UTC(), until.UTC()
 }
 
 const (
@@ -843,10 +988,17 @@ const (
 	// would only reintroduce an undercount that looks like an underspend.
 )
 
+// The price is the one value here still read out of the PAYLOAD, and
+// deliberately: it is set by a single backend on a minority of phases, so
+// promoting it would be a migration and a column that is NULL on almost every
+// row of the table. The extraction is free of a scan cost the filter does not
+// already pay — the event_type and event_time predicates are what choose the
+// rows, and json_extract runs only on the ones they keep.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, iteration,
-       input_tokens, output_tokens, total_tokens
+       input_tokens, output_tokens, total_tokens,
+       COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
@@ -869,8 +1021,7 @@ const AgentPhaseLimit = 50
 const agentPhaseSQL = `
 SELECT ` + listColumns + `, payload
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?
-  AND (agent_id = ? OR agent_role = ?)`
+WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
 // agentPhaseCursorSQL is the same read, one page older.
 //
@@ -903,7 +1054,17 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 		return nil, nil
 	}
 	query := agentPhaseSQL
-	args := []any{EncodeTime(now().Add(-EventHistory)), agentID, agentRole}
+	args := []any{EncodeTime(now().Add(-EventHistory))}
+	// ONLY THE IDENTIFIERS THE CALLER ACTUALLY HAS.
+	//
+	// It was `(agent_id = ? OR agent_role = ?)` with both bound
+	// unconditionally, so an EMPTY one matched every row that carries
+	// none: a handle the roster could not resolve to a role asked for that
+	// seat's phases and was answered every non-agent event in the window.
+	// The guard above catches only the case where BOTH are empty.
+	clause, ids := seatClause(agentID, agentRole)
+	query += clause
+	args = append(args, ids...)
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
@@ -911,6 +1072,30 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 	query += agentPhaseOrderSQL
 	args = append(args, AgentPhaseLimit)
 	return l.scanPayloads(ctx, query, args...)
+}
+
+// seatClause narrows to a seat by whichever identifier the caller holds.
+//
+// A caller passes the handle-derived agent id, the role name, or both — the
+// roster carries one and the projection keys on the other — and binding an
+// EMPTY one is how a filter turns into a match on every row that has none.
+// Returns an empty clause when the caller holds neither, which its own callers
+// treat as "no seat named" rather than "every seat".
+func seatClause(agentID, agentRole string) (string, []any) {
+	var terms []string
+	var args []any
+	if agentID != "" {
+		terms = append(terms, "agent_id = ?")
+		args = append(args, agentID)
+	}
+	if agentRole != "" {
+		terms = append(terms, "agent_role = ?")
+		args = append(args, agentRole)
+	}
+	if len(terms) == 0 {
+		return "", nil
+	}
+	return " AND (" + strings.Join(terms, " OR ") + ")", args
 }
 
 // phasesSQL is AgentPhases without the seat filter.
@@ -973,17 +1158,17 @@ const MaxPhasePage = 60
 // every other row in the table. The filterable dimensions — the ones a query
 // selects ON — are the promoted ones.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
-	days := q.SinceDays
-	switch {
-	case days <= 0:
-		days = DefaultPhaseTokenDays
-	case days > MaxPhaseTokenDays:
-		days = MaxPhaseTokenDays
-	}
-	since := now().Add(-time.Duration(days) * 24 * time.Hour)
+	since, until := q.Window(now())
 
-	sql := phaseTokenSQL
-	args := []any{EncodeTime(since)}
+	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
+	// half-open window the bucketing folds over, so a record on the
+	// boundary belongs to exactly one of two adjacent windows. Applied even
+	// for a caller that named no top edge, because [PhaseTokenQuery.Window]
+	// reports that as now and the rows have to be the rows the label
+	// claims: a phase stamped in the future by a skewed clock inside a
+	// window headed "counted through now" is a number with no window.
+	sql := phaseTokenSQL + " AND event_time < ?"
+	args := []any{EncodeTime(since), EncodeTime(until)}
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
@@ -1008,6 +1193,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
+			&rec.CostUSD,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

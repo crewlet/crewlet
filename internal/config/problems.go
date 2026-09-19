@@ -164,6 +164,12 @@ var problemKinds = []struct {
 	{"conflict", org.ErrDuplicateHandle},
 	{"conflict", org.ErrDuplicateSeatName},
 	{"conflict", org.ErrDuplicateUnitName},
+	// Two seats on one external account — the "two entities on one
+	// identity" this group's comment opens with, and the only duplicate
+	// that carries no name sentinel alongside it, so with no entry of its
+	// own it arrived as `invalid` while every sibling duplicate was a
+	// conflict.
+	{"conflict", org.ErrDuplicateIdentity},
 	// Its own entry, although a duplicate NAME already carries both
 	// sentinels: where an id is what collided the error carries this one
 	// alone, and with no entry that collision arrives as `invalid`.

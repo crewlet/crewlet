@@ -63,11 +63,35 @@ agents mention and reach them, and how inbound webhooks attribute their
 activity by name. A seat with no contact would be inert (visible in the
 chart but unreachable), so it's rejected at validation.
 
+**And no two seats may claim one identity.** Each of these fields is an
+external account, and an account belongs to one person. A duplicate is
+rejected at validation because it does not fail loudly on its own: inbound
+routing keys a map on the identity, so the *last* seat in the chart takes it,
+while every walk of the chart answers the *first*. One of the two people
+silently stops receiving their own mail, with both entries looking perfectly
+ordinary — and with `crewlet_operator_id` the two directions disagree outright,
+so a token opens one person's dashboard while their wakes go to another seat.
+The comparison ignores case and surrounding whitespace, because the lookups do.
+
 `crewlet_operator_id` satisfies that requirement on its own, and the seat is
 still reachable: their queue is the dashboard, not a chat mention. The roster
 an agent reads says so explicitly rather than telling it to @-mention somebody
 it cannot — a message addressed to a handle that resolves to nobody reads to
 everyone else as work handed over.
+
+**The queue is `#/inbox`**, and it is the dashboard's landing screen. Opening it
+with an API token resolves that token's id against every seat's
+`crewlet_operator_id` and shows the person it names: their notices, the one
+reason of twenty that routed each one, and what is waiting on a decision. A
+token bound to no seat is not an error — it is an operator outside the org
+chart — and the screen says so rather than showing somebody else's queue or an
+empty one, naming the line of company configuration that would give it a
+person. `#/me` is the same person's own work, and it is absent for the same
+reason when the token names nobody.
+
+Read and snooze marks are the assistant's to write, not the screen's: the
+dashboard is read-only, and every write in this engine is attributed to
+somebody. What it shows is what the engine recorded.
 
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a
@@ -120,6 +144,13 @@ A unit's `mcp_env` is shared with its direct **agent** members only. A
 human member inherits none of it, so a human seat can sit in, and lead, a
 unit whose agents share tool credentials; only an `mcp_env` written on the
 human seat itself is refused.
+
+The dashboard draws the same rule rather than restating it. A human seat's
+page omits every row a human seat cannot carry — the model chain, the token
+budget, the tool credentials, the turn and token tiles — instead of drawing
+their fallbacks: "default provider" is a MODEL for a seat that runs none, and
+a configured-settings panel asserting one is a panel claiming this company
+configured something validation would have refused.
 
 Handles are validated for format (`[a-z0-9][a-z0-9-]*`) and org-wide
 uniqueness. They are the canonical seat identity, and an agent and a human

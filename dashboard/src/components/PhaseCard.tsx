@@ -42,37 +42,31 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { PhaseTag } from "./PhaseTag.tsx";
-import { fmtCount, fmtDateTime, fmtDuration } from "~/lib/format.ts";
+import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Tag } from "@crewlethq/ui";
+import {
+  ChevronRightGlyph,
+  KeyboardArrowDownGlyph,
+  TerminalGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+// STILL OURS. `PhaseTag` HAS a peer — uilet's `Tag` carries `phase-onboarding`,
+// `phase-execute` and `phase-review` — but it is a primitive in `~/ui`, and
+// porting it THERE moves this card, the turn card and the seat screen in one
+// change rather than leaving three inlined copies of one variant table behind.
+import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
+import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
+  decisionTone,
   ledgerOf,
   phaseDuration,
   type PhaseRecord,
   type Round,
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
+import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-import {
-  Callout,
-  CodeBlock,
-  cx,
-  Disclosure,
-  EmptyValue,
-  RelativeTime,
-  Tag,
-  useNow,
-  VisuallyHidden,
-} from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import {
-  ChevronRightGlyph,
-  ErrorGlyph,
-  InfoGlyph,
-  KeyboardArrowDownGlyph,
-  TerminalGlyph,
-  WarningGlyph,
-} from "@crewlethq/icons/glyphs";
 
 function ToolRow({
   name,
@@ -89,14 +83,30 @@ function ToolRow({
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
         mono
-        title={name}
-        // THE WORD, not a red glyph. A failed call was marked with a glyph
-        // that carried no name at all, so a screen reader was told nothing
-        // about it, and the hue was the only signal a sighted reader got.
-        // Inside the title the mark also wrapped, putting the alert on its
-        // own line above the tool; the design system draws it after the name,
-        // as part of what the control is called.
+        // THE WORD, not a glyph. `meta` IS our `mark`: a SIBLING of the name
+        // rather than part of it, because inside the title the mark sat in a
+        // truncating single-line span and was the thing that wrapped, so a
+        // failed call showed its alert on its own line above the tool.
+        //
+        // But it was a red glyph carrying NO ACCESSIBLE NAME, so the row a
+        // reader most needs to find was announced exactly like the one above
+        // it, and the hue was the only signal anybody got. It is the word
+        // "failed" now, after the tool's name and part of what the control is
+        // called; the row keeps its own tint, so colour and word say it
+        // together.
         meta={failed ? "failed" : undefined}
+        title={name}
+        // A TRANSCRIPT ITEM IS NOT A SECTION OF THE PAGE. uilet wraps a
+        // disclosure's trigger in a real heading by default, which is right for
+        // the card's own folds below (Prompt, Tool surface, Delegated to) and
+        // wrong for a tool call: a round with nine of them would put nine
+        // headings into the document outline of one phase.
+        headingLevel="none"
+        // Our Disclosure mounted its children only while open. `lazy` is how
+        // uilet spells that, and here it is the behaviour rather than an
+        // optimisation — a closed tool row must not put its result into the
+        // round's text.
+        lazy
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
@@ -105,30 +115,27 @@ function ToolRow({
               dozen regions called "Arguments" on one round is the same as
               none.
 
-              `selectable` is what carries the name: the design system pairs
-              the two in the prop type, because a bounded block is a scroll
-              container a keyboard has to be able to reach, and a region with
-              no accessible name is a tab stop announced as nothing. It also
-              scopes select-all to the block, which is what a reader copying
-              one tool's arguments out of a long round wants. Both blocks are
-              rendered only while the row is open, so this adds no stop to a
-              collapsed card. */}
+              `plain` MEANS SOMETHING ELSE OVER HERE: ours turned wrapping off,
+              theirs drops the header. Both are wanted — the block is bare in
+              this design and arguments are aligned JSON — so it is `plain` for
+              the header and `wrap={false}` for the columns. `maxHeight` is our
+              own `RECORD_MAX_HEIGHT`, and it has to be stated: without one a
+              900-line record pushes the rest of the round off the screen. */}
           <CodeBlock
             plain
-            wrap
-            selectable
-            label={`${name}, arguments`}
-            code={args || "{}"}
+            wrap={false}
             maxHeight={RECORD_MAX_HEIGHT}
+            selectable
+            label={`${name} — arguments`}
+            code={args || "{}"}
           />
           <div className="t-label">{failed ? "Error" : "Result"}</div>
           <CodeBlock
             plain
-            wrap
-            selectable
-            label={`${name}, ${failed ? "error" : "result"}`}
-            code={result || "(empty)"}
             maxHeight={RECORD_MAX_HEIGHT}
+            selectable
+            label={`${name} — ${failed ? "error" : "result"}`}
+            code={result || "(empty)"}
           />
         </div>
       </Disclosure>
@@ -211,7 +218,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             and a reader who cannot see the rail was getting "1", then two
             unrelated-sounding disclosures. Announced here, hidden from the
             node so it is not read twice. */}
-        <VisuallyHidden>Round {round.round}</VisuallyHidden>
+        <span className="sr-only">Round {round.round}</span>
         <span className="round-node t-num" aria-hidden="true">
           {round.round}
         </span>
@@ -243,7 +250,20 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
               <p className="prose muted stream">{thinking}</p>
             </div>
           ) : (
-            <Disclosure title="Thinking" count={`${thinking.length} chars`} variant="aside">
+            // `aside` IS our `tone="reasoning"`, and uilet describes it in our
+            // own words — "what was considered rather than what was decided",
+            // a rule down its edge so a reader can skip the block by its shape.
+            // `round-thinking` stays on it for the reason the streaming branch
+            // above gives: both sit on the round's own left edge, so the block
+            // does not shift sideways when the round commits.
+            <Disclosure
+              className="round-thinking"
+              title="Thinking"
+              count={`${thinking.length} chars`}
+              variant="aside"
+              headingLevel="none"
+              lazy
+            >
               <p className="prose muted">{thinking}</p>
             </Disclosure>
           ))}
@@ -313,6 +333,9 @@ export function PhaseCard({
             {record.taskId}
           </span>
         )}
+        {/* NEUTRAL, because a worker template is an identity. uilet's tone doc
+            states the rule this card already kept: a tone says what a thing IS,
+            never who it is. */}
         {record.worker && (
           <Tag appearance="outline" monospace title="worker template">
             {record.worker}
@@ -329,8 +352,19 @@ export function PhaseCard({
 
         {/* Everything below is present on BOTH a live and a finished phase, in
             the same order, so the row does not reshape when it completes. */}
+        {/* THE DECISION IS THE PHASE'S OWN STATE, so it takes the state's tone
+            — the design doc's rule for the turn header's outcome tile, which
+            this chip is the per-phase form of. It was `=== "self_iterate" ?
+            warning : neutral`, keyed on ONE value, so `blocked` (the executor
+            reporting it could not do the work), the engine-written `incomplete`
+            and the reviewer's `failed` all drew the ordinary grey pill. `failed`
+            is the one that hid worst: a review record never sets the phase's own
+            `failed` flag, so the danger tag above never fires for it and a turn
+            the reviewer ended carried no red anywhere on the card. The table is
+            in lib/phases.ts beside the words, because a decision's sentence and
+            its hue are one fact. */}
         {record.decision && (
-          <Tag variant={record.decision === "self_iterate" ? "warning" : "neutral"}>
+          <Tag variant={uiletTone(decisionTone(record.phase, record.decision))}>
             {decisionLabel(record.phase, record.decision)}
           </Tag>
         )}
@@ -342,7 +376,7 @@ export function PhaseCard({
         {record.emptyAnswerRounds > 0 && (
           <Tag
             variant="warning"
-            title="the model answered with nothing (no response and no tool call) and was re-asked"
+            title="the model answered with nothing — no response and no tool call — and was re-asked"
           >
             {record.emptyAnswerRounds} empty
           </Tag>
@@ -365,22 +399,47 @@ export function PhaseCard({
         )}
 
         <span className="phase-meta mono">
-          {record.model || <EmptyValue label="Model not recorded" />}
+          {record.model || <EmptyValue label="No model recorded" />}
         </span>
-        <span className="phase-meta t-num" title="tool rounds used">
-          {ledger.length || record.roundNum > 0 ? (
-            `${Math.max(ledger.length, record.roundNum)}r`
-          ) : (
-            <EmptyValue label="No tool round recorded" />
-          )}
-        </span>
-        <span className="phase-meta t-num" title="total tokens">
-          {record.totalTokens ? (
-            fmtCount(record.totalTokens)
-          ) : (
-            <EmptyValue label="Tokens not reported" />
-          )}
-        </span>
+        {/* AND THE SAME RULE ONE FIELD EARLIER. A settled phase whose
+            `rounds_used` is 0 took no tool round — which is what a phase that
+            died before its first call came back looks like, and is the fact
+            that explains the failure below it. Rendering "—" there said the
+            engine had not recorded the rounds when it recorded none.
+
+            ON `roundsUsed`, which is the engine's own count on a live phase as
+            well as a settled one. This tested `roundNum === 0`, a field that was
+            zero-based while live and so held `-1` at the opening frame: the
+            phase whose first round had not come back — precisely the case this
+            dash is for — fell through and rendered "0r". And the count below it
+            was one short on a live phase whose rounds narrated nothing. */}
+        {record.live && !ledger.length && record.roundsUsed === 0 ? (
+          <span className="phase-meta" title="this phase has not finished a round yet">
+            —
+          </span>
+        ) : (
+          <span className="phase-meta t-num" title="tool rounds used">
+            {`${Math.max(ledger.length, record.roundsUsed)}r`}
+          </span>
+        )}
+        {/* ZERO IS A NUMBER, AND ONLY A LIVE PHASE'S ZERO IS AN ABSENCE. This
+            read `totalTokens ? … : "—"`, so a phase that genuinely spent
+            nothing — one on a subscription CLI backend, which reports no
+            usage at all, or one the engine stopped before its first call came
+            back — rendered as "not recorded" on the card an operator opens to
+            find out which phase was expensive. `TurnCard` states the rule for
+            the turn header above it: absent and zero are different facts and a
+            dash claims the first about the second. The dash stays for the one
+            case where the zero really is an absence. */}
+        {record.live && record.totalTokens === 0 ? (
+          <span className="phase-meta" title="this phase has not reported its usage yet">
+            —
+          </span>
+        ) : (
+          <span className="phase-meta t-num" title="total tokens">
+            {fmtCount(record.totalTokens)}
+          </span>
+        )}
         {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
             engine measures the phase where the clock is and puts the answer
             on the record. On a self-iterating turn that is the number that
@@ -402,26 +461,14 @@ export function PhaseCard({
           dateTime={record.live ? record.startedAt : record.at}
           title={fmtDateTime(record.live ? record.startedAt : record.at)}
         >
-          {record.live ? (
-            <RelativeTime mode="elapsed" value={record.startedAt} now={now} />
-          ) : (
-            <RelativeTime value={record.at} now={now} />
-          )}
+          {record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)}
         </time>
       </header>
 
       {open && (
         <div className="phase-body">
-          {record.failed && record.error && (
-            <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
-              <span>{record.error}</span>
-            </Callout>
-          )}
-          {record.notes && (
-            <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
-              <span>{record.notes}</span>
-            </Callout>
-          )}
+          {record.failed && record.error && <Callout variant="danger">{record.error}</Callout>}
+          {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
 
           {/* The transcript. One block per round — thought, speech, calls —
               in the order they happened. Rounds append, so nothing above an
@@ -459,6 +506,8 @@ export function PhaseCard({
                   title="Thinking"
                   count={`${legacy.thinking.length} chars`}
                   variant="aside"
+                  headingLevel="none"
+                  lazy
                 >
                   <p className="prose muted">{legacy.thinking}</p>
                 </Disclosure>
@@ -491,21 +540,28 @@ export function PhaseCard({
           )}
 
           {(record.systemPrompt || record.userPrompt) && (
-            <Disclosure title="Prompt" count={`${record.phase} phase`}>
+            // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading
+            // — unlike a tool row, which is a transcript item. `lazy` matches
+            // what ours did: a closed fold mounted nothing, and a seat's system
+            // prompt is tens of kilobytes nobody asked for.
+            <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
               <div className="col gap-3">
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
-                    {/* The tallest block on the page by a wide margin: a
-                        seat's system prompt runs to tens of kilobytes, so
-                        this is the one that most needed to be reachable. */}
+                    {/* The tallest block on the page by a wide margin — a
+                        seat's system prompt runs to tens of kilobytes — so
+                        this is the one that most needed to be reachable.
+                        `selectable` is how uilet grants that: ours measured
+                        the overflow and gave the stop to the blocks that
+                        scrolled, theirs ties the tab stop, the name and ⌘A
+                        into one flag. */}
                     <CodeBlock
                       plain
-                      wrap
+                      maxHeight={RECORD_MAX_HEIGHT}
                       selectable
                       label={`The ${record.phase} phase's system prompt`}
                       code={record.systemPrompt}
-                      maxHeight={RECORD_MAX_HEIGHT}
                     />
                   </div>
                 )}
@@ -514,11 +570,10 @@ export function PhaseCard({
                     <div className="t-label">User</div>
                     <CodeBlock
                       plain
-                      wrap
+                      maxHeight={RECORD_MAX_HEIGHT}
                       selectable
                       label={`The ${record.phase} phase's user message`}
                       code={record.userPrompt}
-                      maxHeight={RECORD_MAX_HEIGHT}
                     />
                   </div>
                 )}
@@ -530,6 +585,7 @@ export function PhaseCard({
             <Disclosure
               title="Tool surface"
               count={record.toolsAvailable.length + record.toolCatalogue.length}
+              lazy
             >
               <div className="col gap-2">
                 {record.toolsAvailable.length > 0 && (
@@ -539,6 +595,9 @@ export function PhaseCard({
                       <span className="muted"> · full JSON schemas were sent</span>
                     </div>
                     <div className="row wrap gap-1">
+                      {/* A TOOL NAME IS AN IDENTITY, so it stays neutral —
+                          uilet's tone doc names a tool among the four things
+                          that must. */}
                       {record.toolsAvailable.map((t) => (
                         <Tag key={t} monospace appearance="outline">
                           {t}
@@ -573,6 +632,7 @@ export function PhaseCard({
                 nested.reduce((n, r) => n + r.totalTokens, 0),
               )} tokens`}
               defaultOpen
+              lazy
             >
               <div className="phase-nest">
                 {nested.map((r) => (
@@ -604,7 +664,7 @@ export function PhaseCard({
             {record.eventId && !onOwnEventPage && (
               <a
                 className="t-link"
-                href={href(["events", record.eventId])}
+                href={href(["activity", "events", record.eventId])}
                 title="this phase's own event, in the log"
               >
                 event →

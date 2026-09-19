@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -232,16 +233,22 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	}
 }
 
-// EVERY CONTAINER HAS THREE VIEWS WITHOUT ANYBODY SAVING ONE, and a sprinting
-// project has five.
+// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE, and a sprinting
+// project has two more.
 //
 // That is what makes "required views" moot: a fresh project needs no setup
 // gesture and nothing has to guard against somebody deleting the last view.
+//
+// THE SET IN ORDER, never its size — see [TestEveryImplicitViewsQueryParses],
+// which was a count and reported adding a view as "has 6, want 5".
 func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	three := []string{tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar}
+	want := []string{
+		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
+		tracker.ViewKeyTimeline, tracker.ViewKeyTable, tracker.ViewKeyTrash,
+	}
 	for _, container := range []tracker.Container{
 		{Kind: tracker.ContainerWorkspace},
 		{Kind: tracker.ContainerProject, ID: "ENG"},
@@ -249,13 +256,8 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 		{Kind: tracker.ContainerPerson, ID: "ana"},
 	} {
 		got := stripKeys(r.strip(container, ""))
-		if len(got) != len(three) {
-			t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, three)
-		}
-		for i, key := range three {
-			if got[i] != key {
-				t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, three)
-			}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, want)
 		}
 		// AND EVERY IMPLICIT ROW SAYS SO, because a caller renders it
 		// from its key rather than editing, protecting or ranking it.
@@ -285,20 +287,28 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 			t.Fatalf("a sprinting project's strip is %v, want %s in it", got, key)
 		}
 	}
-	// AND THE WORKSPACE STILL HAS THREE: a project's policy is not the
-	// company's.
+	// AND THE WORKSPACE IS UNCHANGED: a project's policy is not the
+	// company's. The SET rather than its size, for the reason above — a
+	// count here would report the timeline's arrival as a workspace that
+	// grew a sprint tab.
 	if got := stripKeys(r.strip(tracker.Container{
-		Kind: tracker.ContainerWorkspace}, "")); len(got) != 3 {
+		Kind: tracker.ContainerWorkspace}, "")); !slices.Equal(got, want) {
 		t.Fatalf("the workspace strip grew with a project's policy: %v", got)
 	}
 }
 
 // EVERY IMPLICIT VIEW'S OWN PARAMETERS PARSE.
 //
-// The five are rendered from this package rather than saved, so [checkView]
-// never sees them — which is exactly why they need their own case: a tab that
-// opens on a parse error is the failure the save-time parse exists to prevent,
-// and the implicit ones are the tabs every company meets first.
+// They are rendered from this package rather than saved, so [checkView] never
+// sees them — which is exactly why they need their own case: a tab that opens
+// on a parse error is the failure the save-time parse exists to prevent, and
+// the implicit ones are the tabs every company meets first.
+//
+// THE SET RATHER THAN THE COUNT, because a count says nothing about WHICH: a
+// view renamed, dropped and replaced by another passes a count check, and a
+// view added is a failure whose message names a number rather than a tab. This
+// was a count, and adding the timeline turned it into "has 6 views, want 5" —
+// a red build whose message named nothing anybody could act on.
 func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -314,8 +324,13 @@ func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	r.drain()
 
 	strip := r.strip(tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}, "")
-	if len(strip.Views) != 5 {
-		t.Fatalf("a sprinting project has %d views, want 5", len(strip.Views))
+	want := []string{
+		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
+		tracker.ViewKeyTimeline, tracker.ViewKeyTable, tracker.ViewKeyTrash,
+		tracker.ViewKeySprint, tracker.ViewKeyBacklog,
+	}
+	if got := stripKeys(strip); !slices.Equal(got, want) {
+		t.Fatalf("a sprinting project offers %v, want %v", got, want)
 	}
 	for _, row := range strip.Views {
 		params := make(tracker.MapParams, len(row.Params)+1)

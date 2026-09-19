@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
-import { OrgScreen } from "~/routes/Org.tsx";
+import { CompanyScreen } from "~/routes/company/Company.tsx";
 import { applyState } from "./AfterSaveStrip.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
@@ -170,7 +170,7 @@ describe("in the builder", () => {
     // built on. Against the active revision, which the save now is, the diff
     // would be empty.
     expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
-      "#/config?lens=diff&revision=r-saved&against=r1",
+      "#/admin/config?lens=diff&revision=r-saved&against=r1",
     );
     applied = 2;
     expect(await screen.findByText("Applied.", {}, { timeout: 8000 })).toBeDefined();
@@ -212,9 +212,9 @@ describe("in the builder", () => {
 });
 
 describe("the read lenses", () => {
-  function mountOrg(appliedEpoch: number) {
+  function mountCompany(appliedEpoch: number) {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-    location.hash = "#/org";
+    location.hash = "#/company";
     const store = new Store();
     store.applyHealth({ status: "ok" });
     store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] });
@@ -224,7 +224,7 @@ describe("the read lenses", () => {
     return render(
       <ClientContext.Provider value={{ store, socket }}>
         <Router>
-          <OrgScreen />
+          <CompanyScreen />
         </Router>
       </ClientContext.Provider>,
     );
@@ -232,13 +232,13 @@ describe("the read lenses", () => {
 
   test("say they still draw the previous revision until this node applies the saved one", async () => {
     recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    mountOrg(3);
+    mountCompany(3);
     expect(await screen.findByText(/still applying revision/)).toBeDefined();
   });
 
   test("say nothing once the node has applied it", async () => {
     recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-    mountOrg(4);
+    mountCompany(4);
     await waitFor(() => expect(screen.queryByText(/still applying revision/)).toBeNull());
   });
 });

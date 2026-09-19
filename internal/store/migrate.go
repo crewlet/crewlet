@@ -146,6 +146,9 @@ func (d *DB) applyOne(ctx context.Context, version, body string) error {
 // order. Read-only: it creates nothing, so a readiness probe may call it while
 // another handle is mid-migration.
 func (d *DB) AppliedMigrations(ctx context.Context) ([]string, error) {
+	if d == nil || d.sql == nil {
+		return nil, ErrNoEstate
+	}
 	return d.appliedVersions(ctx)
 }
 

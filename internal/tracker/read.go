@@ -36,9 +36,17 @@ import (
 // every row of a fifty-row page. What a caller needs beyond this is a
 // single-task read, which is flat at any age.
 type TaskRow struct {
-	ID          string      `json:"id"`
-	Key         string      `json:"key"`
-	Title       string      `json:"title"`
+	ID    string `json:"id"`
+	Key   string `json:"key"`
+	Title string `json:"title"`
+
+	// Type is the slug a card is drawn under. On the ROW rather than only
+	// on the document, because a board draws an icon per card and a column
+	// per type, and a row that could be GROUPED BY a value it did not
+	// CARRY rendered every card as the same kind of thing — with the only
+	// way to draw the icon being a document read per card.
+	Type string `json:"type"`
+
 	Status      Status      `json:"status"`
 	StatusGroup StatusGroup `json:"status_group"`
 	Priority    Priority    `json:"priority"`
@@ -61,11 +69,66 @@ type TaskRow struct {
 	// Blocked is DATA a filter and a badge read. It gates nothing: closing
 	// a task with open blockers is allowed, and the facts a reviewer would
 	// want are returned beside the status rather than enforced.
-	Blocked  bool      `json:"blocked,omitempty"`
+	Blocked bool `json:"blocked,omitempty"`
+
+	// WaitingOn is what [TaskRow.Blocked] is the one-bit answer to: the
+	// same edges, carrying WHICH task holds this one up rather than only
+	// that something does.
+	//
+	// It is on the ROW for the reason [TaskRow.Type] is — a renderer that
+	// draws the RELATION between two rows cannot derive it from either of
+	// them, and the alternative is a single-task read per bar. The two
+	// facts are computed from one set of rows in one statement, so a
+	// renderer can never show a blocked badge beside no edges or edges
+	// beside no badge: `Blocked` is exactly "some entry here is Open", and
+	// [TestTheBlockedFlagIsTheEdgesItCarries] is what holds that.
+	//
+	// EVERY edge, not only the open ones, because "this waited on that and
+	// that is finished" is what a plan looks like once it has been
+	// executed — a timeline that dropped a cleared edge would redraw its
+	// own history every time a blocker closed.
+	WaitingOn []Blocker `json:"waiting_on,omitempty"`
+
 	Archived bool      `json:"archived,omitempty"`
 	Rank     Rank      `json:"rank,omitempty"`
 	Updated  time.Time `json:"updated"`
 	Version  uint64    `json:"version"`
+}
+
+// Blocker is one dependency edge as the task that waits on it sees it.
+//
+// THE STATE TRAVELS WITH THE EDGE rather than being looked up per end,
+// because a renderer holds one page of rows and a blocker is routinely not on
+// it: without `Open` here, drawing a cleared edge differently from a live one
+// would need a read per blocker, and with the blocker off the page there is
+// nothing to read it from.
+type Blocker struct {
+	// ID is the blocking task's, never its key: an edge is drawn between
+	// two rows on one page and [TaskRow.ID] is what they are matched on. A
+	// blocker the caller's own filter excluded is an id it holds no row
+	// for, which is the honest answer — the edge exists and this page
+	// cannot draw it.
+	ID string `json:"id"`
+
+	// Open is whether the blocker is still holding this task up. FALSE is
+	// a settled fact rather than a missing one: the edge is known and the
+	// blocker has finished.
+	Open bool `json:"open,omitempty"`
+
+	// OneSided is the blocker not listing this task back — the residue of
+	// a dependency gesture whose mirror did not land, which the repair
+	// duty is still working on.
+	//
+	// It is DERIVED from the other end's rows rather than carried on a
+	// record, and it is here because an edge nobody can see from the
+	// blocker's side is one a reader should be told about rather than
+	// shown as ordinary.
+	OneSided bool `json:"one_sided,omitempty"`
+
+	// OneSidedFinal is the repair duty's DECISION that this edge will
+	// never be mirrored — a different fact from "not mirrored yet", and
+	// the one that stops a reader waiting for it to settle.
+	OneSidedFinal bool `json:"one_sided_final,omitempty"`
 }
 
 // Incomplete says what an answer could not account for.
@@ -1199,6 +1262,18 @@ type sortTerm struct {
 	Column     string
 	Descending bool
 
+	// NeverNull marks a column the schema declares NOT NULL, whose NULL
+	// ordering is therefore moot.
+	//
+	// SAYING SO IS NOT COSMETIC. A `NULLS LAST` on an ASCENDING term is not
+	// the order an index stores, so the planner cannot satisfy the ORDER BY
+	// from one and sorts the whole scope in a temp b-tree instead. The id
+	// TIEBREAK is the case that matters, because [sortTerms] appends it to
+	// every order this grammar compiles: spelling it `t.id NULLS LAST` cost
+	// `tracker_tasks_updated_idx` its only reader, and with it the
+	// workspace's own default listing.
+	NeverNull bool
+
 	// Join is the LEFT JOIN a custom-field sort needs, empty for a plain
 	// column. LEFT because a field the task never set must still appear:
 	// an inner join would silently drop every task with no value, which
@@ -1210,17 +1285,68 @@ type sortTerm struct {
 	JoinArgs []any
 }
 
-// sortColumns is what a caller may order by.
-var sortColumns = map[string]string{
-	"rank": "t.rank", "updated": "t.updated_at", "due": "t.due_at",
-	"priority": "t.prio_rank", "created": "t.created_at",
-	"title": "t.title", "estimate": "t.estimate_min", "points": "t.points",
-	"spend": "t.spend_tokens", "status_entered": "t.status_entered_at",
-	// THE TRASH'S OWN ORDER, and the only sort key that is about a row's
-	// removal rather than about its work. It sorts NULLS anywhere, because
-	// the only query that names it is one already filtered to removed rows.
-	"removed": "t.removed_at",
+// sortColumn is a column a caller may order by, and whether it can be absent.
+type sortColumn struct {
+	Column string
+	// Nullable says the schema permits NULL here, which decides whether the
+	// order carries an explicit NULL clause. See [renderOrder].
+	Nullable bool
 }
+
+// sortColumns is what a caller may order by.
+//
+// THE NULLABILITY IS HERE, beside the column, and it is not a style note: an
+// ascending order over a NOT NULL column must NOT carry `NULLS LAST`, because
+// that is not the order an index stores and the planner then sorts the whole
+// scope in a temp b-tree instead. Written on every column, it cost
+// `tracker_tasks_board_idx` its only reader — the board, which is every
+// listing inside a project — and `tracker_tasks_updated_idx` the workspace's.
+//
+// BOTH DIRECTIONS ARE GATED, which is what makes a table of nullability safe
+// to keep here rather than a hazard: marking a nullable column NOT NULL is
+// caught by [TestSortingByADateLeavesTheUndatedLast], and failing to mark a
+// NOT NULL one is caught by TestEveryIndexServesARegisteredQuery, which
+// reports the index that lost its reader. A migration that relaxes a
+// constraint has to touch this map, and the suite says so either way.
+var sortColumns = map[string]sortColumn{
+	// NOT NULL in `0002_the_tracker_lands.sql`, every one of them with a
+	// default where the writer may omit a value.
+	"rank":           {Column: "t.rank"},
+	"updated":        {Column: "t.updated_at"},
+	"priority":       {Column: "t.prio_rank"},
+	"created":        {Column: "t.created_at"},
+	"title":          {Column: "t.title"},
+	"estimate":       {Column: "t.estimate_min"},
+	"points":         {Column: "t.points"},
+	"spend":          {Column: "t.spend_tokens"},
+	"status_entered": {Column: "t.status_entered_at"},
+
+	// NULLABLE, and the two that made this rule necessary: a task with no
+	// due date is not the soonest-due task, and `sort=due` answered with
+	// every undated one ahead of the one due tomorrow.
+	"due":   {Column: "t.due_at", Nullable: true},
+	"start": {Column: "t.start_at", Nullable: true},
+
+	// AND THE TRASH'S OWN COLUMN, which is nullable because NULL is what
+	// "not removed" IS: on every listing but the trash this orders one
+	// value, so the id tiebreak decides and the answer is the default
+	// order — which is honest, since a live task has no removal to sort by.
+	"removed": {Column: "t.removed_at", Nullable: true},
+}
+
+// EVERY KEY HERE IS ONE [sortKeys] ADMITS, and the two are checked against
+// each other because neither half fails loudly on its own: a key this map
+// holds and the parser refuses is unreachable, and one the parser admits and
+// this map lacks is DROPPED by [sortTerms] — the answer then comes back in the
+// default order with nothing saying the caller's own ordering was ignored.
+// `removed` was the first kind and is now the counter-example: it sat here for
+// a long time with a comment about the trash's order while the parser refused
+// `sort=removed`, so it was unreachable and was deleted. It is back because
+// the trash became a TAB — [ViewKeyTrash] — and a tab whose one natural column
+// cannot be clicked is a column that lies about being sortable. The default
+// order [sortTerms] gives a removed listing is unchanged and is still what an
+// unsorted trash gets; this is the key that lets a reader ask for the oldest
+// removal instead of the newest.
 
 // sortTerms compiles the sort, ALWAYS ENDING IN THE ID.
 //
@@ -1261,7 +1387,10 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 		if !known {
 			continue
 		}
-		terms = append(terms, sortTerm{Column: column, Descending: sort.Descending})
+		terms = append(terms, sortTerm{
+			Column: column.Column, Descending: sort.Descending,
+			NeverNull: !column.Nullable,
+		})
 	}
 	if len(terms) == 0 {
 		switch {
@@ -1272,6 +1401,8 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 			// is ordering by a stale number — and the only index over
 			// removed rows is the partial one on this column, so the
 			// board default also made the listing a heap scan.
+			// NULLABLE — it is what "removed" MEANS — and descending, so
+			// the clause is SQLite's own default either way.
 			terms = append(terms, sortTerm{
 				Column: "t.removed_at", Descending: true,
 			})
@@ -1280,12 +1411,16 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 			// the most recently touched everywhere else, because a
 			// rank is only an order within the container that owns
 			// it.
-			terms = append(terms, sortTerm{Column: "t.rank"})
+			terms = append(terms, sortTerm{Column: "t.rank", NeverNull: true})
 		default:
-			terms = append(terms, sortTerm{Column: "t.updated_at", Descending: true})
+			terms = append(terms, sortTerm{
+				Column: "t.updated_at", Descending: true, NeverNull: true,
+			})
 		}
 	}
-	return append(terms, sortTerm{Column: "t.id"})
+	// The primary key, which the schema declares NOT NULL — so it takes no
+	// NULL clause, and the order stays one an index can serve.
+	return append(terms, sortTerm{Column: "t.id", NeverNull: true})
 }
 
 // orderBy renders a query's sort as SQL.
@@ -1308,14 +1443,44 @@ func sortJoins(terms []sortTerm) (string, []any) {
 }
 
 // renderOrder renders compiled sort terms as SQL.
+//
+// AN ABSENT VALUE SORTS LAST, IN BOTH DIRECTIONS. Descending is SQLite's own
+// default — NULL compares smaller than every value, so it lands at the end —
+// and ascending is not, which is why `sort=due` answered with every undated
+// task ahead of the one due tomorrow: on the list, on a board column and in
+// every tool that reads this grammar.
+//
+// "Soonest first" and "latest first" are both questions about values, and a
+// row that has none is not the answer to either. Every tracker a person has
+// used puts the undated at the end, which is why nobody reports this as a bug
+// and everybody scrolls past the first page.
+//
+// SO THE CLAUSE IS WRITTEN WHERE IT CHANGES THE ANSWER AND NOWHERE ELSE, which
+// is a planner rule rather than a style one: a NULL ordering that is not the
+// one an index stores cannot be satisfied FROM that index, so a redundant
+// clause turns a seek into a scan of the whole scope through a temp b-tree.
+// Written on every term, it cost the workspace's default listing its index.
+// It is still never a list of which columns are nullable — a term says only
+// that its column CANNOT be null, beside the column itself, and the default is
+// to assume it can. A custom-field sort is why that direction is the safe one:
+// its LEFT JOIN makes every field's value nullable for a task that does not
+// carry the field.
+//
+// [keysetAfterOne] is the other half and the two may never disagree: a cursor
+// compares exactly the columns the order sorts by, so an order that moved its
+// NULLs while the comparison did not would resume a page in the middle of
+// them — silently, and only for callers who paged.
 func renderOrder(terms []sortTerm) string {
 	rendered := make([]string, 0, len(terms))
 	for _, term := range terms {
-		if term.Descending {
+		switch {
+		case term.Descending:
 			rendered = append(rendered, term.Column+" DESC")
-			continue
+		case term.NeverNull:
+			rendered = append(rendered, term.Column)
+		default:
+			rendered = append(rendered, term.Column+" NULLS LAST")
 		}
-		rendered = append(rendered, term.Column)
 	}
 	return strings.Join(rendered, ", ")
 }
@@ -1430,18 +1595,23 @@ func keysetAfter(terms []sortTerm, keys []any) (string, []any) {
 
 // keysetAfterOne is "strictly after this key on this column", NULLs included.
 func keysetAfterOne(term sortTerm, key any) (string, []any) {
-	switch {
-	case key == nil && term.Descending:
-		// NOTHING IS AFTER A NULL IN A DESCENDING ORDER, and `0` says so
-		// literally rather than through a comparison that would be NULL.
+	// NOTHING IS AFTER A NULL IN EITHER DIRECTION, because [renderOrder]
+	// puts the absent values last both ways — and `0` says so literally
+	// rather than through a comparison that would itself be NULL.
+	if key == nil {
 		return "0", nil
-	case key == nil:
-		return term.Column + " IS NOT NULL", nil
-	case term.Descending:
+	}
+	// AND THE NULLS ARE AFTER EVERY VALUE, so a page resuming from one
+	// includes them. Symmetric in both directions for the same reason:
+	// this leg is the order's own comparison written out, and the moment
+	// the two spellings diverge a paged answer silently skips whatever
+	// falls between them.
+	if term.Descending {
 		return "(" + term.Column + " < ? OR " + term.Column + " IS NULL)",
 			[]any{key}
 	}
-	return term.Column + " > ?", []any{key}
+	return "(" + term.Column + " > ? OR " + term.Column + " IS NULL)",
+		[]any{key}
 }
 
 // keysetEqualOne is the tie-break leg: the same position on this column.
@@ -1499,7 +1669,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	// statement order.
 	joins = extraJoin + joins
 	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
-	query := `SELECT t.id, t.key, t.title, t.status, t.status_group, t.priority,
+	query := `SELECT t.id, t.key, t.title, t.type, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.sprint_number, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
 	                 t.archived, t.rank, t.updated_at, t.version,
@@ -1517,7 +1687,15 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []TaskRow
+	// ALLOCATED RATHER THAN NIL, and this is the one reader in the tree
+	// where that is a wire contract rather than a style: a nil slice
+	// marshals to `null`, every answer carrying task rows declares the key
+	// as an array, and a client doing `rows.length` on the empty case
+	// throws where it should have drawn "nothing here". A collection is
+	// EMPTY or it is absent; it is never null. The three-valued nils in
+	// this tree are pointers and maps precisely so that a nil SLICE can
+	// mean this and only this.
+	out := []TaskRow{}
 	var pageKeys [][]any
 	for rows.Next() {
 		var row TaskRow
@@ -1527,7 +1705,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		var updated int64
 		var version int64
 		sortValues := make([]any, len(terms))
-		targets := []any{&row.ID, &row.Key, &row.Title, &row.Status,
+		targets := []any{&row.ID, &row.Key, &row.Title, &row.Type, &row.Status,
 			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
 			&sprint, &parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
 			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
@@ -1582,7 +1760,73 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		out[i].Overdue = out[i].Due != nil &&
 			out[i].StatusGroup.Open() && out[i].Due.Before(dayStart)
 	}
+	// AND THE DEPENDENCY EDGES, in ONE statement over the page rather than
+	// one per row: the page's ids are already in hand, and the alternative
+	// — a correlated subquery in the SELECT above — cannot return a
+	// collection at all, which is why `blocked` was a bit in the first
+	// place.
+	if err := loadBlockers(ctx, tx, out); err != nil {
+		return nil, "", err
+	}
 	return out, cursor, nil
+}
+
+// loadBlockers fills [TaskRow.WaitingOn] for one page, in one statement.
+//
+// TWO TABLES, because the edge's two halves live apart and neither alone is
+// the answer: `tracker_relations` is the AUTHORED edge and carries the mirror
+// flags, `tracker_task_deps` is the DERIVED one and carries whether the
+// blocker is still open. The join is exact — [Applier.maintainDeps] writes one
+// deps row per `waiting_on` relation from the same record, in the same
+// transaction — so a LEFT JOIN that missed would be a bug rather than an
+// absence, and it is a LEFT one anyway because a read that dropped an edge
+// over a row it could not pair would report FEWER dependencies than exist,
+// which is the one direction a caller cannot detect.
+func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	at := make(map[string]int, len(rows))
+	ids := make([]any, 0, len(rows))
+	for i := range rows {
+		at[rows[i].ID] = i
+		ids = append(ids, rows[i].ID)
+	}
+	query := `SELECT r.task_id, r.other_id, r.one_sided, r.one_sided_final,
+	                 COALESCE(d.blocker_open, 0)
+	          FROM tracker_relations r
+	          LEFT JOIN tracker_task_deps d
+	                 ON d.task_id = r.task_id AND d.blocker_id = r.other_id
+	          WHERE r.kind = ? AND r.task_id IN (` +
+		strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
+	          ORDER BY r.task_id, r.other_id`
+	args := append([]any{string(RelationWaitingOn)}, ids...)
+	found, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("tracker: read the dependencies of a page: %w", err)
+	}
+	defer func() { _ = found.Close() }()
+	for found.Next() {
+		var task string
+		var edge Blocker
+		var oneSided, oneSidedFinal, open int
+		if err := found.Scan(&task, &edge.ID, &oneSided, &oneSidedFinal,
+			&open); err != nil {
+			return fmt.Errorf("tracker: read a dependency edge: %w", err)
+		}
+		i, ok := at[task]
+		if !ok {
+			continue
+		}
+		edge.Open = open == 1
+		edge.OneSided = oneSided == 1
+		edge.OneSidedFinal = oneSidedFinal == 1
+		rows[i].WaitingOn = append(rows[i].WaitingOn, edge)
+	}
+	if err := found.Err(); err != nil {
+		return fmt.Errorf("tracker: walk the dependency edges: %w", err)
+	}
+	return nil
 }
 
 // countHint counts to the ceiling and stops, reporting whether it stopped.

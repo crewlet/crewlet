@@ -113,7 +113,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   // that has no screen at all.
   expect(await screen.findByText("The company is created")).toBeDefined();
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
-    "#/integrations",
+    "#/admin/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
   expect(
@@ -123,7 +123,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   // configuration itself rather than an empty diff.
   expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
   expect(screen.getByRole("link", { name: "View the configuration" }).getAttribute("href")).toBe(
-    "#/config",
+    "#/admin/config",
   );
 });
 

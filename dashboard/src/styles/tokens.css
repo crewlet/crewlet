@@ -1,0 +1,146 @@
+/* ==========================================================================
+   The design system's one source of colour, type, space and motion.
+   ==========================================================================
+
+   THE RULE THIS FILE EXISTS TO ENFORCE: colour carries STATE, never IDENTITY.
+
+   The dashboard this replaces assigned a hue per agent from a hash of the role
+   name, and when that was removed six more categorical maps were left behind —
+   phase, event category, integration brand, memory block, fleet node role,
+   message role, source badge — each drawing from one eight-family palette, and
+   several of them on screen at once. The Activity screen carried eight to ten
+   chromatic families simultaneously, as 10px coloured type. A hash of a name
+   carries no information: rename the seat and its colour changes, which is the
+   proof that it never meant anything.
+
+   So there are exactly three places colour is allowed to mean something:
+
+     1. STATUS   — positive / caution / critical / info. Four, fixed.
+     2. PHASE    — onboarding / execute / review. Three, fixed, because a phase
+                   is the one recurring categorical dimension a reader tracks
+                   across every screen in the product.
+     3. ACCENT   — one brand violet, spent on the current selection and nothing
+                   else: the active nav row, the primary button, the focus ring.
+
+   THE DATA RAMP IS NOT HERE. A chart's five-plus-residual vocabulary was a
+   fourth, `--viz-1` … `--viz-5` and `--viz-other`. `@crewlethq/ui` publishes
+   the same ramp as `dataColor()` and `DATA_COLOR_OTHER`, measured by the
+   package's own palette gate, and every reader in this tree takes it from
+   there — so a second set of hues here would be a second answer to "what
+   colour is series 3", with nothing comparing them. See `ui/charts.tsx`.
+
+   Everything else — a seat, a unit, an event category, an integration, a node,
+   a tool origin — is neutral, and its identity is carried by its NAME, its icon
+   and its position, which are stable and legible and do not run out at eight.
+
+   ORDER OF DEFINITION. Every token gets its value on bare `:root` first. The
+   dark block is `:root:not([data-theme="light"])` under `prefers-color-scheme`,
+   and `:root[data-theme="dark"]` repeats it so an explicit choice wins in both
+   directions. A colour whose ONLY definition is inside a media query is a
+   colour that disappears for somebody. */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- Space ------------------------------------------------------------
+     `--density` is the multiplier the row heights below are built out of, so
+     compact mode is a real change to every surface rather than to three
+     font-size tokens. The STEPS it scales are uilet.css's aliases onto
+     `--spacing-*`; the type ramp, the weights, the leading and the tracking
+     are the package's too. */
+  --density: 1;
+
+  /* Row heights, so every list in the product lines up with every other. */
+  --row-h: calc(36px * var(--density));
+  --row-h-sm: calc(28px * var(--density));
+  --row-h-lg: calc(48px * var(--density));
+  --control-h: calc(32px * var(--density));
+  --control-h-sm: calc(26px * var(--density));
+
+  /* ---- Layout ---------------------------------------------------------- */
+  /* The rail's geometry, in TWO parts, because a row's EDGE and a row's TEXT
+     want different insets: the edge is the click target and the active tint,
+     and it should reach most of the rail's width; the text wants to sit off
+     that edge far enough to read as a row rather than as a label stuck to a
+     border. --nav-gutter insets the rail (so it is where a row's background
+     begins) and --nav-row-pad insets the content inside the row, which puts
+     every glyph at the sum of the two from the sidebar's edge.
+
+     Splitting it is what lets the rows be widened without moving one glyph:
+     shrink the gutter, grow the pad by the same step, and the sum — the
+     vertical line the mark, the group labels and the item text all start on —
+     does not move. Anything in the rail with no row of its own (the brand,
+     the group labels) adds the two rather than carrying a literal, which is
+     the drift that once put the mark 4px left of every nav label. */
+  --nav-gutter: var(--space-2);
+  --nav-row-pad: var(--space-3);
+  --sidebar-w: 236px;
+  --topbar-h: 52px;
+  /* One band of controls: a control plus the toolbar's own padding. Derived
+     rather than measured, so a change to either input moves the band and the
+     offset below it together. */
+  --toolbar-h: calc(var(--control-h) + var(--space-2) * 2);
+  /* WHERE A STICKY BAND INSIDE THE PAGE COMES TO REST. `.screen` is the one
+     scroller, and more than one thing wants to stop at the top of it — the
+     toolbar, a grid's column heads, a band label. The toolbar is the one that
+     owns 0, so everything under it offsets by this; it is 0 here and raised
+     in shell.css only on a screen that actually has a toolbar, because an
+     unconditional offset leaves a strip of scrolling page above the header on
+     every screen that does not. */
+  --sticky-top: 0px;
+  /* Prose and forms get a measure. Tables and charts deliberately do not:
+     they are the one content that genuinely wants the whole viewport.
+
+     THERE IS NO --screen-max ANY MORE. It capped the page at 1560px, which
+     made sense when the frame was one 236px sidebar and everything else was
+     one column; with a rail and a workspace sidebar the page column is
+     already bounded, and capping it again wasted the width the second level
+     of navigation bought. */
+  --measure: 76ch;
+
+  /* ---- Colour ------------------------------------------------------------
+     THE RAMPS THEMSELVES ARE NOT HERE. The neutral steps, the accent's
+     fill/ink split, the four status families and the three phase hues are
+     `@crewlethq/tokens`', reached through uilet.css's aliases and measured by
+     the package's own contrast gate (see palette.test.ts). What is left here
+     is the ONE value that is a composition rather than a colour. */
+
+  /* TWO rings, not one: an inner ring in the page's own ground separates the
+     outer one from whatever the control is filled with, so the focus state is
+     visible on a primary button and on a bare row alike. It is composed here
+     because neither half is a token on its own. */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
+
+  /* ---- Elevation --------------------------------------------------------
+     The shadow steps are the package's. This one is not: on a dark ground a
+     panel is lifted by the light along its top edge rather than by a shadow
+     nobody can see against near-black, and it is `none` until the dark blocks
+     below turn it on. */
+  --inset-hairline: none;
+}
+
+/* ---- Dark ---------------------------------------------------------------
+   ONE declaration, in both states of the cascade. Every colour the dark theme
+   moves is `@crewlethq/tokens`' now; the hairline is ours, because it is the
+   half of our elevation recipe that only exists on a dark ground.
+
+   It is written twice deliberately: a value whose ONLY definition is inside a
+   media query disappears for a reader who has chosen the theme by hand. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --inset-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  }
+}
+
+/* An explicit choice wins in both directions, so the toggle works whichever
+   way the operating system is set. */
+:root[data-theme="dark"] {
+  --inset-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+:root[data-density="compact"] {
+  --density: 0.82;
+}
+:root[data-density="comfortable"] {
+  --density: 1.14;
+}

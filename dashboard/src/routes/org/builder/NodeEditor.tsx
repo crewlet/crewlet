@@ -124,7 +124,7 @@ import {
   TagsInput,
 } from "@crewlethq/ui";
 import type { TagsInputOption } from "@crewlethq/ui";
-import { withProblems } from "~/components/Problems.tsx";
+import { withProblems } from "~/ui/Problems.tsx";
 
 export function NodeEditor({
   nodeKey,
@@ -386,7 +386,7 @@ function ScheduleToggles({
       hint={
         <>
           Schedules are written in the configuration document. Here each can be switched on or off.{" "}
-          <ScreenLink to={["schedules"]}>Open Schedules</ScreenLink>
+          <ScreenLink to="schedules">Open Schedules</ScreenLink>
         </>
       }
     >
@@ -424,7 +424,7 @@ function ToolCredentialFact({ data }: { data: ConfigRole | ConfigUnit }) {
     <ReadOnlyFact
       label="Tool credentials"
       reason="They name servers the company's mcp_servers block defines, so they are set in the configuration document. Values are never shown."
-      link={{ to: ["config"], label: "Open the configuration" }}
+      link={{ to: "config", label: "Open the configuration" }}
     >
       <ul className="builder-list">
         {names.map(({ server, variables }) => (
@@ -1223,7 +1223,7 @@ function ModelSection({
         <ReadOnlyFact
           label="Model"
           reason="This seat chooses a model per phase."
-          link={{ to: ["config"], label: "Edit in the configuration document" }}
+          link={{ to: "config", label: "Edit in the configuration document" }}
         >
           <ul className="builder-list">
             {formatPhaseLLM(data.llm).map((row) => (
@@ -1353,7 +1353,7 @@ function IntegrationsSection({
             {enrolling && (
               <Callout variant="info">
                 This enrols the seat in GitHub. Create its app from Integrations.{" "}
-                <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+                <ScreenLink to="integrations">Open Integrations</ScreenLink>
               </Callout>
             )}
             {tierChanged && (
@@ -1384,7 +1384,7 @@ function IntegrationsSection({
         ) : (
           <p className="builder-note muted">
             This seat has no Slack app of its own, so it has no channel to set.{" "}
-            <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
         )}
       </EditorSection>
@@ -1430,7 +1430,7 @@ function IntegrationsSection({
         ) : (
           <p className="builder-note muted">
             This seat has no Mattermost bot of its own, so it has no channel to set.{" "}
-            <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
         )}
       </EditorSection>
@@ -1441,7 +1441,7 @@ function IntegrationsSection({
         ) : !hasGitLabProvisioning(company) ? (
           <p className="builder-note muted">
             GitLab provisioning is not set up, so there is no access level to set.{" "}
-            <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </p>
         ) : (
           <ConfigField
@@ -1474,7 +1474,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
   const { state } = useBuilder();
   const company = state.draft.company;
   const facts: ReactNode[] = [];
-  const configLink = { to: ["config"], label: "Open the configuration" };
+  const configLink = { to: "config", label: "Open the configuration" } as const;
 
   const phases = PHASE_MODEL_FIELDS.filter((field) => data[field] !== undefined);
   if (phases.length > 0) {
@@ -1561,7 +1561,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
         key="datadog"
         label="Datadog fallback"
         reason="An alert whose tags name no seat wakes the fallback seat. It is chosen from Integrations, or here when the fallback seat is deleted or changed to a human seat."
-        link={{ to: ["integrations"], label: "Open Integrations" }}
+        link={{ to: "integrations", label: "Open Integrations" }}
       >
         {!on
           ? "Datadog is switched off, so no alert wakes a fallback seat."

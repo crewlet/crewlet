@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 func meterReport(meterID string, seq int, agents ...map[string]any) map[string]any {
@@ -15,7 +16,7 @@ func meterReport(meterID string, seq int, agents ...map[string]any) map[string]a
 	}
 	return map[string]any{
 		"meter_id": meterID, "seq": seq,
-		"org_used_tokens": 500, "org_max_tokens": 1000, "org_refused_at": "",
+		"org_used_tokens": 500, "org_max_tokens": 1000,
 		"agents": rows,
 	}
 }
@@ -23,7 +24,7 @@ func meterReport(meterID string, seq int, agents ...map[string]any) map[string]a
 func seatMeter(role string, used, max int) map[string]any {
 	return map[string]any{
 		"role": role, "agent_id": "a-1",
-		"used_tokens": used, "max_tokens": max, "refused_at": "",
+		"used_tokens": used, "max_tokens": max,
 	}
 }
 
@@ -330,5 +331,61 @@ func TestSpendRecordsAreCappedByCount(t *testing.T) {
 	}
 	if records[0].EventID == "p00000" {
 		t.Error("the oldest record survived a truncation past the cap")
+	}
+}
+
+// A RESTART IS NOT A DAY OF ZEROES.
+//
+// The projection is fed by one ephemeral subscription, so it starts empty and
+// fills only as new phases complete — while the event store beside it holds
+// the whole window. Every screen reading this rollup then said the company had
+// spent nothing, in a window it labelled a full day, next to a chart drawn
+// from the store showing the real spend.
+func TestHydrationSeedsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	now := time.Now().UTC()
+	rec := func(id string, at time.Time, total int) tokens.Record {
+		return tokens.Record{
+			EventID: id, Timestamp: at.Format(time.RFC3339Nano),
+			AgentRole: "Lead", Phase: "plan", TotalTokens: total,
+		}
+	}
+	landed := s.HydrateSpend([]tokens.Record{
+		rec("h1", now.Add(-2*time.Hour), 10),
+		rec("h2", now.Add(-time.Hour), 20),
+	})
+	if landed != 2 || len(s.SpendRecords()) != 2 {
+		t.Fatalf("hydrated %d records, holding %d; want both", landed, len(s.SpendRecords()))
+	}
+
+	// DEDUPED AGAINST WHAT IS ALREADY HERE, in both directions, which is
+	// what makes the ORDER of hydration and subscription a non-question:
+	// the API subscribes before it hydrates, so a live event lands ahead of
+	// the older records this appends behind it.
+	if again := s.HydrateSpend([]tokens.Record{rec("h1", now.Add(-2*time.Hour), 10)}); again != 0 {
+		t.Errorf("a second hydration landed %d records; a rollup that grows on "+
+			"every reload is worse than one that is slightly short", again)
+	}
+	s.Apply(phaseSpend("h2", now.Add(-time.Hour).Format(time.RFC3339Nano), 20))
+	if held := len(s.SpendRecords()); held != 2 {
+		t.Errorf("holding %d records after the stream redelivered a hydrated "+
+			"one; want the same 2", held)
+	}
+
+	// AND A RECORD WITH NO ID IS DROPPED: the dedupe has nothing to hold it
+	// by, so a second hydration would add it again.
+	if landed := s.HydrateSpend([]tokens.Record{rec("", now, 5)}); landed != 0 {
+		t.Errorf("an id-less record landed; it cannot be deduped")
+	}
+
+	// THE WINDOW STILL BINDS. A record older than the live window is
+	// pruned on arrival rather than seeded in, so hydration cannot widen
+	// the window the rollup claims to cover.
+	s.HydrateSpend([]tokens.Record{rec("old", now.Add(-livestate.LiveSpendWindow-3*time.Hour), 99)})
+	for _, r := range s.SpendRecords() {
+		if r.EventID == "old" {
+			t.Error("a record from outside the live window survived hydration")
+		}
 	}
 }

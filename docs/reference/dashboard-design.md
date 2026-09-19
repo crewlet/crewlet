@@ -106,12 +106,14 @@ What is measured, and the floor each clears:
 `--color-text-muted` clears its floor as decoration, and the dashboard spent it
 on words a reader has to read: "(optional)", "not set", "none", "not reported
 by this engine", a seat's goal, an event's category, the placeholder in every
-text box. Those take `--color-text-tertiary` now, and
-`dashboard/src/designSystem.test.ts` fails when a rule in ANY of the
-dashboard's stylesheets gives the decoration step to anything but a glyph. The
-same file fails on a `var()` naming a token the engine used to declare for
-itself, because an undeclared custom property does not fall back to what it
-used to be: it takes its whole declaration with it.
+text box. Those take `--color-text-tertiary` now. The floors themselves are measured by
+`@crewlethq/tokens`' own `runPalette` over all four states of the cascade,
+driven from `styles/palette.test.ts` — a second implementation beside it would
+be two ideas of what "4.5:1 on every surface it can land on" means. WHERE a
+step is spent is the rule this page states and a reviewer keeps; what is
+mechanical is that it exists at all: `styles/tokens.test.ts` fails on a `var()`
+naming a token nothing declares, because an undeclared custom property does not
+fall back to what it used to be — it takes its whole declaration with it.
 
 **The fill/ink split is enforced by that measurement, not by convention.** An
 `-ink` step is text; a fill step is a mark or a background. Mixing them is how
@@ -165,10 +167,10 @@ its top edge, because a shadow is invisible against near-black; on light the
 shadow does the work. One recipe, two grounds, no second component.
 
 The sidebar's inset is the one place that scale is split in two, because a rail
-row has two edges that want different things. `--size-nav-gutter` insets the
+row has two edges that want different things. `--nav-gutter` insets the
 rail, and it is where a row's own background, hover and active tint begin, so
 it decides how much of the rail's width the click target covers.
-`--size-nav-row-pad` insets
+`--nav-row-pad` insets
 the content inside that row. Every glyph in the rail therefore lands on the sum
 of the two, and anything with no row of its own — the brand lockup, the group
 labels — adds them rather than carrying a literal. That is what lets the rows
@@ -180,55 +182,374 @@ share does not move.
 
 ## Information architecture
 
-The sidebar is grouped by **what the reader is looking at**, in the order the
-product's own story runs: the company, the work it is doing, the thinking behind
-that work, what it costs, and the machine underneath. A founder opening this
-meets their company first and the engine last.
+**Two levels, because this product has six unrelated trees.** A **workspace**
+is a noun with a tree of its own — Work has projects, Company has units,
+Knowledge has containers, Activity has kinds of run, Cost has scopes, Admin has
+estates. The 80 px **rail** shows the workspaces and nothing else; the 236 px
+**workspace sidebar** shows one workspace's tree and nothing else.
 
-| Group | Screen | Route | Answers, from |
-|---|---|---|---|
-| — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
-| **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
-| | Org chart | `#/org?lens=chart\|directory\|charter\|builder&unit=&seat=&view=&chart=` | the hierarchy, the directory, and the company's own mission, vision and policies, from the `org` projection and the hierarchy the engine derived. `unit` and `seat` select, and a link carrying one reveals it on arrival. The **builder** lens *(operator-gated)* edits the organization over `/config` and creates the company where none is active; `view=canvas\|outline` and `chart=structure\|reporting` are its sections, and `unit` and `seat` its selection |
-| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access. Identity and reporting lines from the `org` projection; email, model, token budget, schedules, contact identities, integrations and tool credential names from the `config` query *(operator-gated)* |
-| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
-| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
-| | *the project strip* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the filter offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts, its lead, the unit that owns it and the sprint that is running. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
-| | *the feed* | `#/work?project=ENG` | `work_activity` — what HAPPENED in the container, which is a different question from what is on the board: the feed is ordered by the log rather than by anything the rows sort on, so a change that moved nothing on screen is still visible. A change is rendered from its DELTAS (`status: todo → in_progress`), falling back to its excerpt and then to its kind — a row with neither is still a real commit, and rendering it blank would read as a bug |
-| | My work | `#/work/me` | `work_my_work` — one person's seven claims. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the Work board's own header |
-| | Sprints | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
-| | Goals | `#/goals?group=&owner=&archived=` | `work_goals`: the tier above projects, with what each goal is at (computed from the targets behind it on every read rather than stored) and the health its owner set. Read-only, like the board |
-| | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
-| | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
-| | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
-| **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
-| | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |
-| | Knowledge | `#/knowledge?q=` | `knowledge` — search, ranked, through the same seam a seat's own `search_knowledge` uses |
-| | Pages | `#/pages?container=&title=&kind=` | `pages` + `containers` — the same knowledge base BROWSED rather than searched. Two screens because they answer different questions: "show me what the platform team wrote down" should not be a search for a word somebody has to guess |
-| | *a page* | `#/pages/{id}` | `page` — body, breadcrumb, children, comments and revision metadata |
-| **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
-| **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
-| | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
-| | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
-| | Configuration | `#/config?lens=&revision=&against=` | `config` / `config_audit` / `config_diff` *(operator-gated)*. The diff lens compares `revision` with the active revision, or with `against` when a link names one (what one save changed is its revision against its parent). It reads and writes nothing: every surface that reports no active configuration (the shell's banner, the attention row, this screen's empty state) links to `#/org?lens=builder` to create the company, and names `crewlet config import` beside it |
-| | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
-| — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` and `Download turn` in the header assemble the record, the phases and the rest as one JSON object — the same bytes, for pasting into a thread and for attaching to a bug report — and the Turn record panel copies itself and owns ⌘A |
-| — | Event | `#/events/{id}` | `event` |
-| — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
+A single sidebar works when there is one tree. With six it either hides every
+tree behind disclosure — three clicks to a project — or grows to sixty rows and
+stops being scannable. The tracker had already grown a second rail inside its
+own screen, which is the same conclusion reached one screen at a time.
 
-**Old routes redirect, with their query strings intact.** `#/agents`,
-`#/agents/{id}`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
-`#/org?lens=seats` all resolve to their new homes. Those links are in bookmarks
-and in chat threads; a redirect costs one navigation, a dead link costs the
-reader the thing they were looking for.
+### The grammar, stated once and asserted
 
-**A redirect is removed the moment a live screen takes its path.** `#/work`
-redirected to the coding runs back when "work" meant a coding run; the work
-board then took the name, and the entry would have sent every reader of a live
-route somewhere else, permanently, with the address bar agreeing with them.
-That is strictly worse than the dead link a redirect exists to avoid, because
-a dead link is visible. `router.test.ts` holds the rule against the nav.
+- A **rail row** is a workspace.
+- A **sidebar row** is a destination with its **own path**.
+- A **tab** is a `tab=`, `view=` or `lens=` query on the path you are
+  already on — three spellings of one thing, each named for what it
+  switches: an object's tabs, a list's views, a screen's whole lens.
+
+Nothing is two of those. A tab never appears as a sidebar row, a sidebar row
+never appears as a tab, and a filter — a reason, a scope, a status — lives in
+the page's own filter bar rather than in the sidebar. This is the boundary
+every tool of this shape loses first, and it is lost one pull request at a time:
+"just one more row under a project" is what turns two levels into three.
+
+`router.test.ts` holds it against the definitions rather than against this
+paragraph: every destination has a path of its own, no two share one, each
+resolves to the workspace it declares, no two workspaces own a first segment,
+and no reserved segment has the shape of a key the engine mints.
+
+**Reserved segments cannot collide with keys.** Project and container keys are
+uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
+uuid — and every reserved segment is lowercase. That is what lets `#/work/views`
+resolve before any answer arrives.
+
+The set itself is `RESERVED_SEGMENTS` in `app/nav.ts` and is deliberately NOT
+copied out here: a prose list of twenty-one strings is a list that goes stale,
+and this one had drifted to fifteen while two of the entries it did name were
+reserving route space nothing routed. `router.test.ts` holds the routes named
+in the table above against that list and against `RAIL`, so the table and the
+code cannot disagree about which addresses exist.
+
+### The rail
+
+The order is the product's story: you, the work, the people, what they know,
+what they did, what it cost, the machine.
+
+| Row | Route prefix | Badge |
+|---|---|---|
+| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a sprint you are in started), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
+| **My work** | `#/me` | — |
+| **Work** | `#/work`, `#/goals` | — |
+| **Company** | `#/company` | — |
+| **Knowledge** | `#/knowledge` | — |
+| **Activity** | `#/activity` | seats working now, neutral |
+| **Cost** | `#/cost` | — |
+| **Admin** | `#/admin` | a lock when no operator credential is presented |
+
+**Admin's row is never hidden.** A section that vanishes without a credential is
+indistinguishable from one that does not exist, so an operator on a fresh
+browser would conclude the product has no configuration screen.
+
+**A number beside a workspace row says what it counts.** `SidebarRow.count` is
+one field holding a value AND the sentence naming its question, because the two
+used to be a number and an optional sibling and the optional half is the one
+that went missing. A unit carried three unqualified figures across the product:
+its whole subtree in this rail, its own members on the org chart's block, its
+on-screen rows in the roster's group head. All three now come off
+`lib/seats.ts`'s `unitTally`, which answers both questions at once —
+`unitSeatsLabel` says the subtree first and names the direct count only where
+the two differ, and `unitDirectLabel` is what a roster group says, because a
+seat sits in exactly one group and nothing under a unit is in it. A filter
+outranks both: with one on, every count on the screen is over what matched.
+
+`g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
+`g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
+because every single-modifier combination worth having is already the browser's.
+
+### The routes
+
+| Route | Page | Tabs / views |
+|---|---|---|
+| `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
+| `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
+| `#/work` | **All work** | `view=list\|board\|calendar\|timeline\|table\|trash` + the filter grammar |
+| `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
+| `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
+| `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
+| `#/work/{KEY}/sprints` · `#/work/{KEY}/sprints/{n}` | **Sprints** — figures, velocity, burndown | |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
+| `#/goals` · `#/goals/{id}` | **Goals** | |
+| `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
+| `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
+| `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
+| `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
+| `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
+| `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
+| `#/knowledge/{CONTAINER}/{Title}` | **Page** | |
+| `#/activity` | **Live now** — what the company is doing at this moment | `window=15m\|1h\|6h` |
+| `#/activity/turns` · `#/activity/turns/{id}` | **Turns** — every phase, round by round | |
+| `#/activity/runs` · `#/activity/runs/{turn_id}` | **Coding runs** — live and durable | |
+| `#/activity/schedules` | **Schedules** | |
+| `#/activity/a2a` | **Agent-to-agent** | |
+| `#/activity/traces/{id}` | **Trace** — one distributed trace, every span of it. NO LIST: nothing enumerates traces, so a bare `#/activity/traces` is the turns list, which is the nearest thing to "the traces" this product has | |
+| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
+| `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
+| `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
+| `#/admin/fleet` · `#/admin/fleet/{node}` · `#/admin/fleet/domains/{domain}` | **Infrastructure** — nodes, leases, duties, replication, and one state-log domain with every node's position in it *(operator)*. ONE tail segment is a node and two are a domain, discriminated on the tail's LENGTH rather than on the word, because a node id is operator-chosen and `domains` is a legal one | |
+| `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** — the catalogue, and one tool with what has actually been arriving on each of its surfaces *(operator)* | |
+| `#/admin/tools` · `#/admin/tools/{tool}` · `#/admin/tools/servers/{name}` | **Tools** *(operator)* | `q=` · `origin=` |
+| `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
+| `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |
+| `#/admin/audit` | **Audit** — every write a person or a token made, across all four subsystems that record one: the tracker, the knowledge base, the configuration history and the credential store *(operator)*. NO DETAIL ROUTE — every row already has a page of its own somewhere else | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
+
+**There is no redirect table.** There was one, and it was always a liability: a
+redirect whose old path is now a live route sends every reader of that route
+somewhere else, permanently, with the address bar agreeing with them — which is
+strictly worse than the dead link it exists to avoid, because a dead link is
+visible. It happened once, when `#/work` still meant a coding run. No `v*` tag
+has ever shipped a route from this tree, so there is nobody holding an old link;
+`NotFound` names the screen and offers the palette.
+
+**Three of those surfaces are the engine answering a question it has always
+been able to answer.** Search is the ranking a seat gets from `search_work` —
+BM25 over the engine's own index — which the operator reading the same company
+had no access to at all; the board's `q=` is an escaped substring over an
+excerpt and answers something else. The item's **Woke** tab is who one change
+actually reached and under which of twenty reasons, which is the fact no
+commercial tracker records: all of them can say you were notified and none can
+say why. And a seat's **Conversations** tab is its own thread ledger — the only
+account of what a seat said on a surface this engine does not own. Every one of
+those readers was written, tested and swept on a retention horizon before any
+of them reached a screen.
+
+### `window=` — one vocabulary for every time range
+
+Every screen with a range had its own. Spend's picker counted whole days, the
+live strip was a `STRIP_MINUTES` constant nobody could change, and the event log
+showed "whatever happens to be loaded". Three screens showing the same hour
+disagreed about how long an hour was, and a link from one to another carried no
+range at all.
+
+There is now **one key and one control**. The value is a duration from a closed
+set — `15m` `1h` `6h` `1d` `7d` `30d` `90d` — or an explicit interval written as
+ISO 8601's own `<from>/<to>`, so a custom window is still one value a reader can
+copy out of the address bar.
+
+**The offered set is the screen's, not the vocabulary's.** A spend chart has
+nothing useful to say about fifteen minutes; a strip folded from the events the
+browser is holding has nothing to say about ninety days, and no honest answer at
+all for an interval that ended last Tuesday. Each screen declares which windows
+it has and whether an interval is one of them, and a URL naming anything else
+gets that screen's own default — because a value the control cannot show would
+put a heading nobody chose over the rows, and a reader who then touched the
+control could never get back to it. The control renders the offered set in the
+vocabulary's order either way, so `1d` reads the same on every screen.
+
+`window=` is a **section**, not a filter: a reader who widened the range and
+pressed Back means the narrower one.
+
+The two edges reach the engine as the half-open `since`/`until` pair every
+windowed question takes. A chart's edges are rounded **up to the bucket it
+draws**, so the hour in progress is on the chart while it is still being spent
+and the query changes once per column rather than once per second; a list's are
+not. An interval never moves at all — it is the one window that is stable to
+link to.
+
+### Every list is one grid
+
+`DataGrid` draws all of them. There is no `<table>` left in the product except
+the retention screen's per-domain terms — a block that already titled itself,
+with no header row and nothing to sort, which is a table in the sense the
+element means rather than a list of objects.
+
+**The sort is in the URL**, which is the rule the component exists for: a
+sorted ops table that cannot be sent to anybody, does not survive a reload and
+comes back unsorted from Back is sorted for one person for one minute.
+
+**A screen's primary grid takes `sort=` and every other one takes
+`sort.<name>=`.** Several screens carry two or three — the spend by seat and
+the recent turns, a node's leases and its duties — and unnamed they would all
+read the one key: sorting the lower one would silently re-sort the upper, and a
+link to a sorted screen would mean something different depending on which table
+the reader had touched. A name rather than an index, because an index is a fact
+about the source order and inserting a grid above would move every link's
+meaning by one.
+
+**A `shrink` column is capped, because `max-content` is not "shrink to
+content" — it is *grow* to content, with no ceiling.** Grid resolves an
+intrinsic track before it gives anything to a flexible one, so a single long
+value takes whatever it likes and every flexible column collapses to zero. The
+schedules grid drew its Wakes column at 502px of an 822px grid with **Name and
+Task at 0px** — at every width, not just a narrow one — and still ran 317px
+past a box that clips; the work table at 1000px drew Assignee at 220px with the
+**title** at zero. A shrink track is `fit-content` of a fraction of the grid
+now, so a column under the cap is untouched and only one that would take more
+than its share gives way. One fraction for every grid rather than a pixel floor
+per column, which is a number that would have to be invented nineteen times and
+re-invented at every width.
+
+**Below 860px a row is a card, because 390px has no columns.** The audit's six
+want 808px between them and the work trash's twelve want more, and the grid's
+wrap is `overflow: clip` — the same decision that keeps the head sticky — so
+everything past the viewport was cut off with nothing to scroll to: WHAT, TO
+and DETAIL simply did not exist on a phone. Scrolling sideways is not the way
+out either, which is worth saying because it is the obvious fix: the flexible
+tracks are `minmax(0, 1fr)`, so the moment the wrap becomes a scroller its
+content box is the viewport, the content-sized columns alone exceed it, and
+every flexible track resolves to zero — the title column vanishing to make room
+for a due date.
+
+So the head goes and each cell draws its own name beside its value. Three
+things follow from that, and each is a rule a new column has to keep:
+
+- **A column with no word in its head declares one.** `header` is what the head
+  row draws, so a twenty-pixel column carries a mark or nothing — a work item's
+  type, a row's actions, a pair of state tags. A card has no head to explain
+  it, so the column supplies the word separately in `label`, drawn only here.
+  Without it the card gets a bare mark on a line of its own between two
+  labelled ones, which reads as a rendering fault rather than as a value.
+  `app/source.test.ts` is what stops one reaching a screen.
+- **A value wraps rather than being cut.** `.truncate` is right for a cell that
+  IS one line of a fixed column and wrong once the column is gone: at 390px it
+  cut the one field the reader opened the list for and left the rest of the
+  card empty underneath it. What bounds the value instead is the engine — a
+  title is at most `tracker.MaxTitle`.
+- **The sort control goes with the head.** That is the real cost of the shape
+  and it is the right trade: a column head a reader cannot see is not an
+  affordance, and `sort=` is in the URL — so a sorted list still arrives sorted
+  from a link, or from the wider layout that set it.
+
+### An object's own facts
+
+`PropertiesRail` is the rail beside an object — its state, its people, its
+plan, its record. Two components did this: a flat `KeyValue` with no sections
+used by the event, the run, the turn and the seat, and the work item's own
+sectioned rail used by nothing else. They had different label widths, different
+gaps and different rules about an absent value, so the same kind of panel read
+differently depending on which screen it was on — and neither could say **who**
+set a fact, which on a product whose objects are mostly written by agents is
+the thing a reader asks about most. "In progress" is a different fact from
+"moved to in progress by ada, eleven minutes ago, in turn ↗".
+
+**An absent value is a decision.** Three different facts share one empty cell
+and they are not interchangeable:
+
+- the row is **dropped** — this object has no such property at all (a task with
+  no collaborators has no collaborators row);
+- the row is a **dash** — the property exists and holds nothing (a task with no
+  due date has a due date, unset);
+- the row **says something** — the empty state means something a reader should
+  know ("none — reflection uses the default").
+
+The caller says which, and there is no path by which forgetting produces a
+plausible-looking wrong one. `0` and `false` are values a property can hold and
+are rendered, never folded into "nothing set".
+
+### A log is an axis, then its rows
+
+Two screens are log-shaped — the event log and the Inbox — and both had the
+same hole: a page of rows answers *what happened* and has no dimension at all
+for *when the company was busy*. A burst at four in the morning and a steady
+trickle across a week are the same hundred rows in the same column.
+
+**`Histogram`** is that dimension, and its bars are the **engine's**. The
+browser holds at most a page and the store's window it never holds, so an axis
+folded client-side would be right for one window and absent for every other —
+the same rule the spend series follows. Both halves compile their filters
+through one predicate in the store, so a bar can never claim rows the listing
+beneath it would not show. Every bucket is drawn, empty ones included, because
+a quiet hour is a fact about the company rather than a gap in the chart; the
+height is the true proportion with a floor in **pixels**, not percent, so a
+bucket of 4 beside a bucket of 400 stays visibly shorter instead of both being
+rounded up to the same visible sliver.
+
+**A bar is a control.** Clicking one narrows `window=` to the bucket it covers,
+which is the gesture every log tool has and the reason the axis is worth having:
+"what happened in that spike" is the question the spike creates.
+
+**`FacetRail`** is the other half — one dimension of the list, as chips that
+narrow it. Two screens had two of these and they disagreed about the one thing
+that matters: whether a count is over what is **loaded** or over what **exists**.
+That is a required prop now rather than a caption somebody remembers, and it is
+said beside the chips. A number next to a chip is read as "how many there are",
+and when it is really "how many of the four hundred rows this tab happens to be
+holding" the reader is being told something false about their own company.
+
+**The note is a caption on the numbers, so it is drawn only where a number is.**
+Printed unconditionally it appeared beside a rail that could never carry a count
+— the Inbox's unread/all/snoozed control, whose two other scopes are rows the
+loaded page does not hold — and qualified figures the reader could not see. A
+dimension that cannot be counted at all is not a facet rail: it is one of N
+scopes, which is a `Segmented`, the same control the work toolbar's
+open/closed/everything uses.
+
+A facet count is computed with its **own** filter lifted and every other one
+applied, because that is the only meaning it can have: a chip says how many rows
+choosing it would show. Counted through its own filter, every chip but the
+selected one reads zero and the rail is a dead end.
+
+### The frame-level keys
+
+| Key | Kind | Meaning |
+|---|---|---|
+| `peek={kind}:{id}` | section | the detail rail is open on that object |
+| `tab=` | section | the object page's tab |
+| `view=` | section | a list container's view |
+| `lens=` | section | which whole reading of a screen is drawn — the Company screen's chart, charter and builder, the Configuration screen's active, history and diff |
+| `sort=` `cols=` | filter | the grid's order and its visible columns |
+| `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page |
+
+**`peek` is one key, one component, one rule.** A plain click peeks; ⌘-click,
+middle-click and the rail's `Open ↗` go to the page. Inside a peek `[` and `]`
+step through the list it was opened from and `esc` closes it. Opening the rail
+**pushes** — Back closes it, which is what a reader means by Back with a panel
+open — and moving it **replaces**, because four objects walked through one open
+rail are one place the reader has been, exactly as four ticked chips are one
+screen.
+
+**The shell mounts the rail; no screen renders one.** A peek's BODY belongs to
+the kind, in `app/frame/peeks.tsx`, and the shell dispatches on the `peek=`
+token — so a list opens a peek by naming what it points at and needs to know
+nothing about it. The rail took its body as `children` once, which meant the
+screen that opened a peek had to know how to render one, and so exactly one
+screen ever did: nineteen kinds were addressable and only a work item could
+appear in the rail. A kind with no entry in that table is not an error — a
+notice is read in its own inbox and a model has no page at all — and the rail
+closes rather than opening empty.
+
+**Each peek asks its own question.** It takes an id and fetches, rather than
+being handed the row that opened it: the row carries what its list needed, a
+peek answers "what is this thing", and the two differ on every kind. It is
+also what lets a pasted `peek=` open on arrival, where no row exists.
+
+**`[` and `]` walk the list, so the list publishes its order** with
+`usePeekNeighbours`. Only the list knows what the reader is looking at —
+sorted, filtered and paged as they left it — and a rail that stepped through
+anything else would be walking a different set from the one on screen. A
+screen that publishes nothing gets a rail with no stepper, which is honest.
+
+The id is split on its FIRST colon only, so `sprint:ENG/3` and
+`page:ENG/Deploy runbook` survive being carried in a query value.
+
+### The frame
+
+`dashboard/src/app/frame/` owns everything a screen wears, and a screen renders
+none of it:
+
+| Piece | What it is |
+|---|---|
+| `AppRail` | the workspaces, the badges, the engine pill, theme and density. 80px with labels, 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
+| `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
+| `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link |
+| `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
+| `ObjectHeader` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those |
+| `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
+| `DetailRail` | the peek's chrome — resizable, a drawer under 1180 px |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
+| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 860 |
+| `PropertiesRail` | an object's own facts, in sections, with who set each |
+| `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
+| `TimeRangePicker` | the one control for `window=` |
+| `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation |
+
+**A screen publishes what the chrome needs and renders none of it.** The labels
+the route cannot supply (`usePageLabels`), the coverage of the answer it drew
+from (`usePageCoverage`), and its own controls. Twenty screens each drawing
+their own header is how five of them came to drop the coverage badge.
 
 ### Moving, and going back
 
@@ -239,12 +560,11 @@ the URL, is what the Back button reads.
 
 | Move | Stack | Why |
 |---|---|---|
-| a **moved** path | replaces | the entry names a route that no longer exists; leaving it means Back lands on it, it redirects forward, and you arrive where you started |
-| a **section** — a lens, a tab | pushes | the reader called these screens; Back after three of them should walk out through them |
-| a **filter** — chips, sort, a search box | replaces | four ticked chips are ONE screen; Back means "off this list", not "untick one" |
+| a **section** — a tab, a view, opening a peek | pushes | the reader called these screens; Back after three of them should walk out through them |
+| a **filter** — chips, sort, a search box, moving a peek | replaces | four ticked chips are ONE screen; Back means "off this list", not "untick one" |
 
-The line between the last two is whether the reader would call it a different
-screen, and it is the only judgement call in the router.
+The line between them is whether the reader would call it a different screen,
+and it is the only judgement call in the router.
 
 **Scroll is a property of a history entry, not of a URL.** The same screen
 reached twice is two places the reader has been, and keying a position by URL
@@ -255,18 +575,108 @@ position is re-applied for a short window while the rows arrive — a scroll is
 clamped to the height that exists, so one attempt lands short — and abandoned
 the moment the reader touches the page.
 
-All three of these shipped wrong once, and none of them is visible in a URL.
+Both of these shipped wrong once, and neither is visible in a URL.
 
-**A link that names something inside a screen reveals it on arrival.**
-`#/org?unit=Backend` scrolls the chart to that unit and rings it, through the
-router's `useRevealOnArrival(elementId)`. It runs after the router's own reset
-for a new entry (a screen scrolling in its own effect was scrolled straight
-back to the top), only for somewhere new and never while a Back restore is
-pending, and it scrolls `#screen-scroll` directly, honouring the element's
-`scroll-margin-top`, rather than calling `scrollIntoView`. An element that
-arrives with the data after the route is revealed when it appears, unless the
-reader has already started reading. The ring is static: nothing on a live
-screen animates for data.
+### The Inbox is the landing screen
+
+A dashboard's home used to be a summary of the company. What a person opening
+this actually wants to know is whether anything is waiting on them — but a home
+that is ONLY that queue has a failure mode that arrives on the first day: a
+company where nothing is wrong renders as a blank page, and a reader cannot
+tell that from a dashboard that is broken.
+
+**So the first fold is the company, and the queue is under it.** The pulse
+strip is eight facts on one line — seats working, runs parked, open, overdue,
+blocked, the active sprint closing soonest and its days left, tokens, alarms —
+each a link into the workspace that owns it, each carrying the scope of its own
+claim in its title. Every one of them is true whatever the queue holds, so an
+empty band below then MEANS something: nothing is waiting on you, on a company
+that is visibly running. A figure whose query has not answered draws an em
+dash, never a `0`: "your company has no open work" is a claim, and it is a
+false one for as long as the read is in flight. `tokens` is deliberately not
+labelled "today" — the window is the engine's and the screen was not given one,
+so the strip names the figure and puts the window it covers on hover.
+
+**Two bands, stacked on one screen, never two tabs.** **Needs a decision** is
+what the engine derived, over the four subjects `lib/attention.ts` declares: the
+engine and this node's link to it, the token budgets, the coding runs waiting on
+an answer, and the seats themselves. **Notices** is the person's own inbox:
+what reached them, and why. They are never interleaved, because one fused list
+ordered by time would eventually rank a backup-age alarm above the CEO seat
+asking whether to hold a release. And they are never a toggle: a tab hides the
+engine's state behind a control the reader has to press, which is exactly what
+the landing screen cannot afford — the founder's first glance is the whole of
+what this screen is for. A band with nothing in it still draws its own heading
+and says why it is quiet, because a band that disappears takes its name with it
+and a reader cannot then tell "nothing is waiting on you" from "this product
+does not have that".
+
+The sentence it draws is DERIVED FROM THE ANSWER, never from the row count. Zero
+rows is six different facts — nothing has answered yet, the answer was a
+refusal, a reason chip took them all, the page holds none and there are more
+pages, the reader is caught up, and nothing has ever reached them — and the band
+branched on the facet alone, so a person who had never received a single notice
+was told that everything had been marked read and sent to a facet that was just
+as empty. `work_inbox` carries the evidence that separates the last two:
+`seen_through` is the person's own read watermark, written only by `mark_inbox`,
+and absent until they have marked something, so the copy claims the watermark
+and not more than it. A band also draws its own filters whether or not anything
+survives them — a reason chip matching nothing is exactly when it is the only
+way back — and its count is an em dash before the first answer, for the same
+reason the pulse strip's figures are.
+
+**Unread, all and snoozed is a scope, not a facet.** Each is a different
+question put to `work_inbox` — `unread` and `include_snoozed` are its parameters
+— so the other two are pages this one does not hold and no count over the loaded
+rows could describe them. It is a three-option `Segmented` with exactly one
+always chosen, and an unknown `state=` resolves to `unread` rather than leaving
+the control blank and the query wide.
+
+**Two panes, and the right one is there before it is needed.** Reading one row
+IS the activity here, so the detail sits beside the list rather than behind a
+navigation, and the column is present from the first paint: a pane that appears
+on the first click reflows the list under the pointer, so the row a reader
+clicked is no longer the row they are looking at. Under 860px it is one pane,
+list then detail — a human teammate answering an ask from their phone is this
+product's second named reader, and this is the one screen drawn for them.
+
+**The reason facets narrow client-side, which is what makes their counts
+honest.** Sent to the engine, the filter narrowed the ANSWER — so the page the
+counts were derived from became the page one facet had selected, every other
+count went to nothing, and the whole rail unmounted under the pointer. Over the
+loaded page the chips and the rows are the same set by construction, which is
+what `over="loaded"` on the rail already promised. They are ordered by NAME and
+never by count, because a count-ordered row reorders itself on a poll and the
+chip a reader is reaching for moves between the decision to press it and the
+press.
+
+`work_inbox` still reports the `primary_reasons` that were APPLIED — defaulted
+from the person's own record — and the rail badge counts those, so a company
+that has re-decided what counts as primary gets its own badge without the
+client knowing anything about it.
+
+**The wake reason opens every row.** The applier records, per change and per
+recipient, the ONE reason of twenty under which that person heard about it.
+Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
+Jira and ClickUp can all tell you that you were notified, and none can tell you
+why. The client carries no copy of the split — that is a property of the person,
+and the answer states which one it applied.
+
+**Three viewer states, three sentences.** A reader with no credential, a reader
+whose credential no seat claims, and a bound reader. Only the first is anybody's
+fault; an unbound token is an ordinary state whose remedy is a line of company
+configuration, so the screen names the id to bind rather than reporting a fault.
+
+**A thing worth linking to gets an address, not a scroll position.** The
+previous dashboard revealed a unit by scrolling the org screen to it
+(`#/org?unit=Backend`, with a router-level reveal hook); this tree gives a unit
+its own page instead — `#/company/units/{id}` — so it can be linked to, opened
+in a peek, and carry its own state. There is no reveal-on-arrival hook here.
+Where a selection genuinely belongs in the URL rather than in the path it stays
+a filter: the Builder lens reads `unit=` and `seat=` to name the selected node
+on its canvas (see the builder's toolbar below), and a `DataGrid` scrolls its
+selected row into view. The ring is static: nothing on a live screen animates
+for data.
 
 **Work that exists nowhere else is not left behind unasked.** A surface
 holding it registers a leave guard (`useLeaveGuard`, the org builder's node
@@ -291,8 +701,9 @@ reload only while something holds, because some browsers keep a page with a
 ### The attention queue
 
 `dashboard/src/lib/attention.ts` is one list because it is one question, and it
-is the question an operator opens the page with. Every one of these conditions
-was already known to the dashboard and each lived in a different screen:
+is the question an operator opens the page with. It renders in the Inbox, above
+the notices. Every one of these conditions was already known to the dashboard
+and each lived in a different screen:
 
 | Condition | Where it used to live |
 |---|---|
@@ -305,6 +716,129 @@ was already known to the dashboard and each lived in a different screen:
 Ordered by what it costs to ignore, then newest first inside a severity. Every
 row says what happened AND what it costs to leave it, and carries a link to
 where the answer is.
+
+**What the band says when it is EMPTY is derived, not written.** Every condition
+names one of four subjects, `SUBJECTS` maps each to the phrase a reader sees,
+and the quiet band draws all four. That sentence used to be prose on the screen
+— "No seat is stopped, no run is parked on a question, and no budget is
+refusing" — three of the twelve conditions, read as the whole list, so an
+operator whose engine had no active configuration or whose node was shedding its
+seats was told in a closed sentence that those had been checked and were clean.
+A thirteenth condition cannot be pushed without naming a subject, and a new
+subject fails the build until it has its own phrase.
+
+---
+
+## Markdown is rendered, not printed
+
+Page bodies, work-item descriptions and both kinds of comment are **markdown
+by contract** — every one of the tools that writes them says so in its own
+schema — and the dashboard printed them as literal characters: a reader saw
+`## Decision`, `- [ ] ship it` and `[the guide](https://…)` as the text an
+agent typed rather than as the document it wrote.
+
+`lib/markdown.ts` renders a CommonMark subset to React nodes. It is in-tree
+for the same reason the rest of this engine writes its own small pieces: a
+markdown library's real surface is its HTML passthrough and the sanitiser that
+has to follow it, and this renderer needs **neither** — it emits no raw HTML
+under any input, so there is no `dangerouslySetInnerHTML` on the path and
+nothing to sanitise.
+
+Two rules are load-bearing, because a page is written by an agent acting on
+content it read somewhere else:
+
+- **Raw HTML is text.** A `<script>` in a body renders as the characters
+  `<script>`, and the reader still sees what the page said.
+- **A link's scheme is an allowlist** — `http:`, `https:`, `mailto:` and the
+  app's own `#/` routes. Anything else (`javascript:`, `data:`, a
+  protocol-relative `//host`, a bare `/path`) renders as its own **label**
+  rather than as a link, and an image with a refused source renders as its alt
+  text. An allowlist rather than a denylist: enumerating the bad schemes is
+  wrong the moment a browser grows one more.
+
+An outbound link opens in a new tab with `rel="noopener noreferrer"`; an
+in-app `#/` link does neither, because it *is* this application. A task
+list's checkboxes are disabled — this surface performs no writes, and a box a
+reader could tick would report a change that never reached the page.
+
+`.prose` on its own stays a `pre-wrap` block, which is right for a model's own
+speech: its line breaks are load-bearing there and it is not markdown. A
+document carries `.prose.md` beside it.
+
+A page's history shows **what a save changed**, not only what one version
+said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
+with no word-level refinement inside a changed line, because these documents
+are rewritten in paragraphs and a word diff makes a small edit prettier and a
+large one unreadable. Unchanged runs collapse to a row saying how many lines
+they stand for: a gap silently closed makes a document edited at both ends
+look like one rewritten in the middle. "This save did not change the body" is
+its own answer, because a title, a label and a move are saved beside a body
+and a pane of unmarked lines reads as one that failed to load.
+
+## The palette has scopes, and remembers
+
+A launcher with one index answers "where do I go", and three questions do not
+fit that shape. Each gets a **sigil**, typed in the same box in the same
+keystroke:
+
+| Typed | Searches |
+|---|---|
+| *(nothing)* | screens, seats, units, tools, and any event / trace / turn id pasted out of a log |
+| `#` | the company's **work**, ranked — a server query, which is why it cannot be folded into the index above |
+| `@` | **people** — seats and units only, so a colleague is not buried under four tools whose names happen to match |
+| `>` | **commands** — theme, density, copy link, set token — which have no name to search for at all |
+
+The scopes are named in the palette's footer with the one in use marked: a
+sigil nobody is told about is a feature that does not exist.
+
+An empty palette offers **recents** — the last few objects this reader opened,
+newest first, per browser. Objects only: anything the rail or a sidebar
+already lists is left out, because a recents list repeating the navigation
+beside it costs a reader a scan and tells them nothing. The label stored is
+the one the **screen** resolved, which lands a render after the route.
+
+A `>` command that would change nothing is not offered: the list omits the
+theme and the density already in use, because a control that says "switch to
+dark" while the page is already dark does not know what it is looking at.
+
+**And it closes when the route changes**, the way the workspace drawer does.
+Picking a row closes it on the way out, so what this covers is every other way
+the route can move while it is open — Back, Forward, a phone's back gesture, a
+restored history entry. A palette that survives one of those is left ranking
+the objects of the screen the reader just left, over a screen it knows nothing
+about. The token dialog is deliberately not in that rule: a credential prompt
+is about the reader's access rather than about where they are.
+
+---
+
+## A cron expression is read, not printed
+
+The schedules screen printed `0 9 * * 1-5` and nothing else. A reader who
+knows cron reads it; a founder reads five numbers and a dash on the one screen
+that says when the company wakes itself up.
+
+`lib/cron.ts` reads the five fields twice over: a **sentence** beside each
+expression in the list ("at 09:00 on weekdays"), and the **next five instants**
+on the schedule a reader has opened. The instants matter because the engine
+sends one next fire and "every 4 hours" and "at 4am" have the same next fire
+for most of the day — it is the fires after the next that say whether an
+expression means what its author thought.
+
+Two rules keep it honest:
+
+- **The engine is the authority.** `next_run` on a row is the engine's own
+  computation and is what the screen shows as *Next*; this is a reading aid
+  beside it, never a second source for the same fact. A schedule that names a
+  timezone says so under the list, because the engine evaluates it in that
+  zone and this reads it in UTC.
+- **An unreadable expression says so.** The engine runs the schedule; a
+  reading aid that invented a sentence would put words on screen the engine
+  does not act on. The expression renders as itself with nothing claimed.
+
+Cron ORs the day-of-month and day-of-week fields when **both** are restricted
+— `0 0 1 * 1` fires on the first of the month *and* on every Monday — and both
+the sentence and the instants say so, because that is the rule readers get
+wrong.
 
 ---
 
@@ -437,7 +971,8 @@ rules fix it, and each one names a specific mechanism:
 
 ## A monitor is not a reader
 
-`#/model` showed every running phase as an expanded transcript. With one agent
+A fleet-wide phase monitor showed every running phase as an expanded
+transcript. With one agent
 that was pleasant. With seven it was a race: seven seats each republishing
 streamed prose five times a second, in cards that grew as they wrote, so
 nothing held still long enough to read. Adding streaming made a bad shape
@@ -550,6 +1085,19 @@ What replaced it:
 - **The spend panel is a link.** It was Spend's panel on Spend's data at
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
+- **A toolbar carries the `toolbar` class, and its controls travel in
+  groups.** The class is not decoration: `.screen:has(.toolbar)` publishes
+  `--sticky-top`, and every other band that sticks to the same scroller — a
+  grid's column heads, a grouped list's group heads, an item's side rail —
+  starts at that offset. The tracker's filter bar restated every one of
+  `.toolbar`'s declarations under a name of its own, so the property stayed at
+  its `0px` default and the table's own header parked underneath an opaque
+  band. Inside the bar, what narrows the rows is one group and what switches
+  between answers is another, because the bar draws different controls on
+  different tabs: as one flat wrapping row, the scope control moved from x≈345
+  on List to x≈1338 on Board and x≈1155 on Calendar, and the Overdue chip
+  wrapped to a line of its own ~1,200px from the count. A wrap breaks between
+  groups.
 
 Three rows of buttons, and a table, that behaved differently from a keyboard
 than they looked:
@@ -598,9 +1146,14 @@ Four more controls that looked like something they were not:
   a secure context, so `navigator.clipboard` is simply undefined at the
   `http://<node-ip>:8000` anyone reads the dashboard of a machine that is not
   their laptop at. `navigator.clipboard?.writeText(x)` swallowed that. The
-  design system's `CopyButton` falls back to the deprecated `execCommand` path,
-  which is the only one that works there, and then says `Copied` or
-  `Copy failed` — announced as well as drawn.
+  design system's `writeClipboard` falls back to the deprecated `execCommand`
+  path, which is the only one that works there, and then says `Copied` or
+  `Copy failed` — announced as well as drawn. The WRITE is the package's and
+  the answer is this dashboard's, which is the split on purpose: the package's
+  `useClipboard` settles a refusal back to offering its action after a couple
+  of seconds, and a control that has quietly gone back to offering is
+  indistinguishable from one nobody ever pressed. A refusal here holds until
+  the next press.
 - **A download button says whether it downloaded, and refuses rather than
   navigating.** The same invisible outcome with a worse failure available to
   it: an `<a>` whose `download` attribute the browser ignores does not save
@@ -653,12 +1206,19 @@ not, which is the class of defect that never shows up in a screenshot:
   reachable by keyboard only if something makes it focusable. A `selectable`
   block is, because select-all needs it; the rest were not, and they are the
   tall ones: a phase card's verbatim system prompt runs to tens of kilobytes
-  and could not be scrolled from the keyboard at all. A block that actually
-  overflows, on both axes, since `plain` sets `white-space: pre` and scrolls
-  sideways, is a named `region` with a tab stop. Measured rather than
-  assumed, because a stop on every block would put one in front of each of a
-  round's tool arguments, and `label` is what such a block takes focus under:
-  taking focus without a name is the other half of the same trade.
+  and could not be scrolled from the keyboard at all. `focusWhenScrollable` is
+  the second door onto the same tab stop, and the two are separate because
+  they answer different questions: `selectable` is an INTENT only the screen
+  has (this block is the record the page is about), while the stop a scrollbar
+  owes is an OBLIGATION the block discharges for itself. A bridged run's tool
+  log and a seat's thread take the second — they scroll, so they are named
+  regions with a tab stop, and ⌘A goes on meaning what it means everywhere
+  else. Measured rather than assumed, and on both axes since `wrap={false}`
+  scrolls a block sideways in a box that is nowhere near tall enough to scroll
+  down: a stop on every block would put one in front of each of a round's tool
+  arguments, most of them three lines. `label` is what such a block takes
+  focus under, from either door — taking focus without a name is the other
+  half of the same trade.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
@@ -675,6 +1235,28 @@ rescued a lot.
 **Nothing animates on a data push.** A list that re-flows every time a
 tool-loop round lands is a list nobody can read while it is running, and
 `agents` is pushed twice per round.
+
+**A control state is the other half of that rule, and it DOES ease.** The
+distinction is what the pointer did: a fill that changes because somebody moved
+onto a row is a response and should look like one, and a fill that changes
+because the engine said something must land on the frame it is told. Almost
+every interactive surface in the frame — the rail's rows, the sidebar's links,
+a grid row, a crumb, the viewer chip, a work row, a turn row, a feed row — used
+to snap, and a whole product of instant fills reads as a thing that jerks
+rather than a thing that responds. It is ONE declaration in `base.css` naming
+those surfaces rather than a `transition:` on each of them: written per rule it
+was 24 places to forget, and the five that had one had already drifted to three
+different durations. `prefers-reduced-motion` zeroes every duration in the
+document, so there is nothing to opt out of.
+
+**A control must not move under the pointer either**, which is the same rule
+one level up. A figure that resizes its own cell when it goes from 9 to 10
+shifts everything beside it, so every live number sits in a tabular cell with a
+floor; a count that lives inside a heading's text resizes the heading, so it is
+its own element; a mark drawn only in one state (an unread dot) is a fixed cell
+that is filled or not; and a filter chip ordered by a live count reorders itself
+on a poll, so chip rows are ordered by name. Each of those was a real defect on
+the Inbox before it was the landing screen's own suite.
 
 ---
 
@@ -851,10 +1433,14 @@ neither obviously the one they want. The shell is the design system's, and it
 is what holds that: the document is not allowed to grow, so the invariant is
 unreachable rather than merely unused.
 
-One id rather than a class, and everything that needs the scroller asks the
-router for it (`screenScroller`): the router restoring a position per history
-entry, the settled list asking whether the reader is at the top before it
-splices rows in, and search scrolling its results directly rather than calling
+It carries an id so the things that need it can find it without depending on a
+class that styling owns. The router holds the only accessor (`scrollTarget`,
+private to `app/router.tsx`) and uses it to restore a position per history
+entry. The settled list reaches the same element to ask whether the reader is
+at the top before it splices rows in — today by its `.screen` class rather than
+by the id, which works only because one element carries both.
+
+Everything here scrolls a chosen element directly rather than calling
 `scrollIntoView`, which scrolls every scrollable ancestor it can find.
 
 ### A card has one left edge
@@ -880,6 +1466,30 @@ facts are in the same places always. That is what lets a reader scan a list
 down a column instead of hunting each row, and a source is exactly the kind of
 thing somebody scans.
 
+### A bar has to be told which way full means
+
+`Meter` derived its tone from the fill alone — 75% caution, 100% critical —
+which is exactly right for a budget and exactly backwards for progress. A bar
+at 100% is two opposite pieces of news: a budget at 100% is refused charges, a
+goal at 100% is the goal reached. So a goal three-quarters of the way there
+rendered as a **warning**, and one fully achieved would have rendered as a
+**crisis**, on the one screen a founder reads to see how a quarter is going.
+
+`fullMeans` is therefore **required**, not defaulted. A default is the wrong
+answer half the time, silently — and the one call site that had noticed was
+passing `tone="accent"` to opt out of the rule rather than fixing it, which is
+the shape a wrong default always leaves behind.
+
+- `spent` — a budget, a capacity, a quota. Full is bad and the bar warns
+  before it gets there.
+- `achieved` — progress towards something wanted. Full is GOOD and says so;
+  nothing below it is a fault the bar can diagnose.
+
+An explicit `tone` still wins, for what a caller knows and a ratio does not: a
+budget already refusing charges is critical at any fill.
+
+---
+
 ### A description list is a metadata list, not a panel layout
 
 Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,
@@ -895,8 +1505,9 @@ far end of a full-width row**, behind a `.spacer`, with the heading naming the
 unit once rather than every row repeating it — a bare "134 B" beside a label
 says nothing about what was measured.
 
-`DescriptionList` keeps the one thing it is for on this screen: the
-conversation key, which really is a term and its detail.
+`PropertiesRail` keeps the one thing this shape is for on this screen: the
+conversation key, which really is a term and its detail — labelled, with the
+caption that says which external thread it names.
 
 And **a chip must not repeat the sentence beside it.** The trigger's summary
 is built by the vendor's own summariser and already opens with who wrote it
@@ -944,6 +1555,91 @@ own phases and reports worker spend beside it, which is what the engine's own
 
 ---
 
+### The tracker is a workspace, not a table
+
+Everything above about rows is why the tracker's own screen is not one. It
+began as a flat filter row over a plain table beside a "board" that was three
+`<div>`s, and it read as a dump of a database rather than as the place a
+company does its work. What replaced it is a WORKSPACE, and every part of it
+is one of the rules on this page applied to a tracker.
+
+- **The project is the rail, not a dropdown.** A company's projects are the
+  first division of its work, so they are always on screen with their open
+  counts beside them, and choosing one is a SECTION change rather than a
+  filter. `All work` is a real destination above them, because "what is the
+  whole company doing" is a question somebody asks.
+- **Five SHAPES over one answer, and eight tabs.** List, Board, Calendar,
+  Timeline and Table differ in how rows are DRAWN and never in what was asked
+  for — the board's columns are the server's own grouping, the calendar buckets
+  rows the server already returned, the timeline lays out the `start`, `due`
+  and `waiting_on` those same rows carry, and the table puts one field per
+  column so a column can be compared down and sorted at its head. A shape that
+  fetched differently would be a second idea of what the filters mean. The
+  timeline's own window is derived from the rows on screen, which is why it
+  asks for a big unpaged page: a second page would redraw the first one's axis.
+  Sprint, Backlog and **Trash** are the other three tabs, and each is a saved
+  QUERY rather than a shape — which is the distinction the strip is built on. A
+  tab whose meaning is a parameter is a view; a tab whose meaning is a drawing
+  is a type. The trash is a Table carrying `removed=true`, so every view saved
+  with that parameter is read as one: the removal's actor and instant come from
+  `work_activity` rather than from the row, and PURGED work has no row at all —
+  its history entry is the only evidence it existed, so it gets a band of its
+  own saying it cannot be restored.
+- **The table sorts at the ENGINE.** A header writes the query's own `sort=`
+  key, so the whole set is ordered rather than the hundred rows that happen to
+  be loaded — and a column the grammar has no key for is therefore NOT
+  sortable, because `ParseQuery` refuses an unknown key rather than ignoring
+  it: one wrong header would take the board down with a refusal rather than
+  mis-ordering a column. `status` is the one a reader expects and cannot have;
+  `group_by=status` is what that question actually wants.
+- **A view SETS the scope segment.** Open / Closed / All is the single
+  authority on the status group a read asks for: the screen spreads a view's
+  saved parameters and then writes that one key from the segment. So a
+  segment defaulting to a constant made a view saved over closed work
+  unrunnable — it opened on `Open`, overwrote the view's own group, and named
+  a scope its rows did not match. The segment therefore takes its DEFAULT
+  from the chosen view, which is what makes the control and the query agree;
+  a scope somebody picks is in the URL and outlives a view switch, like every
+  other filter here. A saved group the three segments cannot name — `active`
+  alone — reads as `Open`, the wider set nearest what its author asked for, so
+  the segment and the read agree rather than the control claiming a narrowing
+  that is not applied. And a view that WIDENED — `show_closed` with no group at
+  all — opens on `All`, because seeding `Open` there writes the narrow group
+  back over exactly the half the view asked for: "and whatever finished this
+  week" answered as open work alone, and the Trash tab answered as the removed
+  tasks that were still open, hiding every removal of anything already done.
+- **A row is a table, and its columns belong to the LIST.** Every row was its
+  own grid container once, so `auto` tracks sized against that row's content
+  alone and a status badge landed at a different x on every line. The tracks
+  are declared on the list and each row takes them with `subgrid`, so a
+  column is as wide as the widest value in it. The row also keeps a CELL for
+  a value it does not have: an undated, unassigned, unestimated task lines
+  its status up with the task above it rather than pulling every later
+  column one place left.
+- **Nothing is drawn for the default.** `normal` priority is what a task gets
+  when nobody said, so it is most of a board — a mark on every card is a mark
+  that says nothing, and it buries the four that ARE urgent. A due date drops
+  the year it shares with the reader for the same reason: one year repeated
+  down forty rows is how the one row due next year goes unnoticed.
+- **Reading an item does not lose the board.** A plain click opens a PEEK
+  beside the rows; ⌘-click and middle-click follow the anchor to the item's
+  own page, because a card that cannot be opened in a tab is not a link.
+  Below about 1500px it becomes a DRAWER over the board rather than a third
+  column, and that threshold is measured rather than guessed: the sidebar,
+  the rail and the peek are three panes and the board is what is left, so at
+  1280 — an ordinary laptop — one board column was left beside a detail
+  panel, which is not a board.
+- **The charts answer the questions the numbers cannot.** A census bar says
+  the shape of a project where three counts say only their sizes; a velocity
+  bar list is read in SPRINT order, never sorted by size, because the
+  question is a trend; a burndown draws remaining against an ideal, where
+  remaining is an OPEN STATUS GROUP rather than "not delivered" — counting
+  cancelled work as remaining makes a descoped sprint run flat. All of them
+  wear STATUS tones rather than the categorical hues, so one fact is never
+  two colours on one screen.
+
+---
+
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
@@ -963,10 +1659,48 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   says `durable: false` when the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
   a company with no seats says roles come from the configuration.
+- **Everything in the window** vs **everything that arrived.** Where a screen
+  narrows client-side it says so, naming the SOURCE rather than hedging the
+  whole answer. **Audit** is the case that made this a rule: it composes four
+  subsystems and only one of them — the tracker's feed — takes a wall-clock
+  window, so the other three are asked for their newest page and narrowed on
+  the client. A page that fills up before it reaches the start of the window is
+  older rows the screen never saw, and a caption reading "some of this may be
+  missing" is one nobody can act on where "Knowledge answered one page" says
+  where to look.
 
 Every empty state names what would fill it.
 
 ---
+
+## Changing what you are looking at
+
+**The dashboard only reads.** Every change in a Crewlet company is attributed
+to whoever made it, and a browser form posting as "the dashboard" would be the
+one actor an audit trail cannot name — so there is no edit button anywhere in
+it, and that is a decision rather than a gap.
+
+What an object page offers instead is a closed disclosure, **Change this with
+your assistant**, holding the operator MCP calls that would make the change,
+with this object's ids already in them:
+
+```
+update_work_item {"item":"ENG-8","status":"in_progress"}
+comment_on_work_item {"item":"ENG-8","body":"…"}
+remove_work_item {"item":"ENG-8"}
+```
+
+Copy one, edit it, and send it to whatever assistant you have connected to
+`/operator/mcp`. Anything irreversible is last and says so. One line under the
+block names who would be attributed — your token, as an operator, never a seat.
+
+The calls are checked against the real operator catalogue by a test
+(`TestEveryToolCallTheScreenOffersIsOneAnOperatorHas`): every tool named
+exists, every argument filled is one that tool takes, and none of them is a
+read. A block of tool names written by hand is a documentation surface that
+starts lying on the first rename, and it lies in the worst way — a copied call
+the engine refuses, on the one screen whose whole promise is that this is what
+to send.
 
 ## How it is built
 
@@ -974,13 +1708,20 @@ Every empty state names what would fill it.
 dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/protocol/             the wire, typed. NO React, NO DOM at module scope
   src/app/                  shell, hash router, IA, command palette
-  src/lib/                  store bindings, formatting, derivations
+  src/lib/                  store bindings, one clock, formatting, derivations
+  src/ui/                   the component library and the chart kit
   src/components/           the pieces more than one screen draws, composed
                             out of the design system
-  src/routes/               one file per screen; a multi-lens screen keeps its
-                            shell there and its lenses in routes/<screen>/
-  src/styles/               what the design system does not draw: the
-                            utilities, and each screen family's own layout
+  src/routes/<workspace>/   one directory per workspace — inbox, me, work,
+                            company, knowledge, activity, cost, admin — and
+                            one file per screen inside it. Two things sit
+                            outside that shape: NotFound, which belongs to no
+                            workspace and is what the dispatch falls through
+                            to, and routes/org/builder/, the organization
+                            builder — one screen big enough to be a directory
+                            of its own (see below)
+  src/styles/               tokens, base, components, shell, frame, screens —
+                            what the design system does not draw
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
 ```
 
@@ -1084,39 +1825,46 @@ rendered idle from the first phase to the last.
 ### The components come from the design system
 
 - **`@crewlethq/ui` draws it, and the engine composes it.** The palette, the
-  glyphs, the overlays, the layer stack, the primitives, the record table, the
-  list screen, the charts, the canvas and the tree model are the design
-  system's, shared with the console and the documentation site, so a control
-  looks and behaves the same wherever somebody meets it. The dashboard has no
-  component library of its own at all: what `src/components/` holds is
-  COMPOSITION, each piece built out of the package and each one about this
-  engine's own domain (a seat, a phase, a turn, a configuration field), and
-  `designSystem.test.ts` fails the build on a recipe the package already
-  draws being written by hand beside it.
-- **The shell is the design system's too.** The rail, the top bar, the banner
-  strip, the drawer the narrow layout opens, the brand lockup, the sections
-  nav, the search trigger, the theme and density switchers and the command
-  palette are all the package's. What this application says for itself is its
-  own half: which sections exist, what the rail's foot reports about the
-  engine, and which surfaces the chrome can raise. A screen's own head is
-  `PageHeader`, and a list screen does not draw one at all: `DataView` is the
-  head, the toolbar, the chips, the table and the footer together.
-- **A LIST SCREEN IS ONE SHAPE, everywhere.** The event log, model activity,
-  tools, coding runs, agent-to-agent, secrets and the org directory are the
-  same thing: a head, a toolbar carrying the search box and the Filter and Sort
-  menus, a removable chip for each axis a reader narrowed, the rows, and a
-  footer saying how many of how many are on screen. The NARROWING is the
-  screen's: every axis is a URL parameter, so a narrowed list is a link
-  somebody can send, and the view is handed values and hands back callbacks.
-  It applies nothing of its own.
+  glyphs, the overlays, the layer stack, the primitives, most of the chart
+  kit, the canvas and the tree model are the design system's, shared with the
+  console and the documentation site, so a control looks and behaves the same
+  wherever somebody meets it. Everything with a peer in the package is the
+  package's: the badge, the panel, the empty state, the stat row, the
+  skeleton, the select, the tab strip, the avatar, the banner, the disclosure,
+  the search input, the button and the chip — and the ranked list, the legend,
+  the stacked bar, the activity strip and the sparkline with them.
+- **What is left of `src/ui/` is of three kinds, and none of them is a second
+  recipe for something the package already draws.** A VOCABULARY the package
+  does not have and should not — `Tone`, the six words the engine's own
+  payloads are spelled in, and the single translation of them into the
+  package's spelling. A TABLE rather than a recipe — `PhaseTag` draws the
+  package's `Tag` and adds the one thing the package cannot know, which of the
+  six phase strings the engine emits map onto the three hues it publishes. And
+  the few components this product needs that no shared design system has,
+  because each is about a company's own data: the histogram, the facet rail,
+  the `window=` control, the meter, and the three charts the package has no
+  shape for — a time series whose series may be a REFERENCE rather than a
+  measurement, its stacked form, and the phase ramp. `src/components/` above
+  it is COMPOSITION, each piece built out of the package and each one about
+  this engine's own domain — a seat, a phase, a turn, a configuration field.
+- **The shell is this application's own**, drawn with the package's primitives
+  rather than taken whole from it. Two levels of navigation, a page bar, a
+  state bar and a peek rail are what this product's six trees need, and they
+  are not a shape a design system shared with a console and a documentation
+  site can supply — [The frame](#the-frame) is the whole of it. The narrow
+  layout opens the WORKSPACE SIDEBAR as a drawer, never the rail, because the
+  rail is eight rows that already fit. A screen's own half is its labels, its
+  coverage and its controls, portalled into the bar; every list it draws is
+  [one grid](#every-list-is-one-grid).
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
-  (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the shell's own token dialog, search, engine
-  panel and the narrow layout's sections drawer: no modal hand-rolls its veil
-  or listens for Escape beside the stack. The sections drawer is the rail
-  itself, a dialog only while it is open; closed, the stylesheet hides it
-  rather than only sliding it away, so its links leave the tab order, and it
-  closes when a resize takes the layout past the breakpoint. Only the topmost
+  (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the
+  shell's own token dialog, its command palette and the narrow layout's
+  sidebar drawer: no modal hand-rolls its veil or listens for Escape beside
+  the stack. That drawer is the workspace sidebar itself, a dialog only while
+  it is open; closed, the stylesheet hides it rather than only sliding it
+  away, so its links leave the tab order, and it closes on a route change and
+  when a resize takes the layout past the breakpoint. Only the topmost
   surface handles Escape or a press outside, so a prompt over the node editor
   closes on its own Escape and leaves the editor open, a token dialog raised
   by a refused request over that editor does the same, and an open menu
@@ -1151,15 +1899,16 @@ rendered idle from the first phase to the last.
   somewhere, and its `external` form opens a new tab without the referrer or
   the opener. A control drawn as a glyph ALONE is `IconButton`, whose name is
   required: an icon-only button with none is announced as "button".
-  `designSystem.test.ts` fails on a `btn` class list spelled anywhere at all,
-  because that recipe has no owner in this tree any more.
+  `styles/classes.test.ts` is what holds that, and it fails in BOTH
+  directions: a `.btn` list spelled beside the package's own button is a class
+  nothing declares, and a recipe left behind in the stylesheets is one nothing
+  draws.
 - **A shortcut hint is `Kbd`, never a hand-written `<kbd>`.** The
   command key is Command on Apple platforms and Control everywhere else, so a
   literal "⌘K" tells most readers to press a key they do not have. The glyphs
   are hidden from assistive technology, which reads the key names instead
   ("Control plus K"), because a screen reader reads "⌘" as "place of interest
-  sign". The shell's search button and the search footer use it too, and the
-  same scan fails on a `<kbd>` drawn anywhere at all.
+  sign". The command palette's own hints use it too.
 - **A key an input method is composing with belongs to the input method.**
   Somebody typing Japanese, Chinese or Korean walks candidates with the
   arrows, accepts a word with Enter and abandons it with Escape, and every one
@@ -1172,7 +1921,7 @@ rendered idle from the first phase to the last.
 - **A canvas never takes the page's scroll.** The design system's `Canvas`
   fills the box its screen gives it and clips, and the shell's one scroller
   stops scrolling while it is on screen: the screen ASKS for the window's
-  height (`useFillScreen`) and `AppShell` answers, rather than a rule in the
+  height (`useFillScreen`) and the shell answers, rather than a rule in the
   screen's own stylesheet reaching up at a wrapper the shell draws. A plain
   wheel pans the canvas only while focus is inside it, and Ctrl or Command
   with the wheel zooms toward the cursor. On touch, one finger scrolls the page
@@ -1340,7 +2089,7 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   (`against=`), since against the active revision a save that is active now
   differs from nothing; the conflict banner's Show what changed is the newer
   revision against the draft's base for the same reason. Until this node
-  applies it, the Org screen's read lenses carry a note that they draw the
+  applies it, the Company screen's read lenses carry a note that they draw the
   previous revision.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
@@ -1354,7 +2103,7 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 
 ### The org builder draws the engine's organization
 
-The Builder lens of the Org chart screen shows the draft two ways, and both
+The Builder lens of the Company screen shows the draft two ways, and both
 read one module (`routes/org/builder/chartModel.ts`), so they can never
 disagree about where a seat is drawn, who leads a unit or who a seat reports
 to.
@@ -1461,6 +2210,15 @@ to.
    per-category chip colour. If you need to tell two things apart, use their
    names. The third-party app marks in `@crewlethq/icons` are the one, bounded
    exception (see "The one rule" above); nothing else is.
+   **A seat's identity badge is `Avatar`, everywhere**, drawn from its name or
+   handle so the initials are what tell one seat from another, with
+   `variant="dashed"` for a human seat — the engine does not run it, which is a
+   structural fact and therefore an edge rather than a hue. A hand-rolled mark
+   holding a robot glyph drew the KIND, which the roster gives at a glance, in
+   the slot that should have been saying WHO: the same engineer was "FE" on the
+   board and an identical generic robot on Search and on a goal's Owners panel.
+   `tone="brand"` is for the one badge that IS the reader, in the rail's own
+   account row, and for nothing else.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The
@@ -1495,6 +2253,15 @@ to.
     what the absence means ("Not reported", "Not measured"), because a bare
     dash is read aloud as "dash" or skipped, and a value still arriving is a
     different fact again, which a tile reports by being busy.
+    **There is exactly ONE absent mark, and it is `EmptyValue`'s** — its en
+    dash in JSX, its `EMPTY_VALUE` constant in a string a module returns. No
+    module spells one itself. Half the screens adopted it while the rest kept a
+    local `Dash`, an em dash the design system says it "does not use anywhere",
+    so the tracker's trash screen drew a 12px em dash in the table's DUE column
+    beside a 6px en dash in the activity feed's object column — one fact, two
+    glyphs, one viewport. `cells.test.tsx` scans the tree for a string literal
+    or a JSX text node that is nothing but a dash; an em dash inside prose is
+    house punctuation and is not what it is looking for.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
     a download, a write, a revoke — if the reader cannot see the result, the
     control says it, in text a screen reader reaches as well as an icon. A
@@ -1503,17 +2270,37 @@ to.
     land, so a failed state holds until the next click while a successful one
     settles back.
 14. **Per-subject state is keyed on its subject.** A hash change re-renders
-    the route switch rather than remounting it, so `#/turns/A` → `#/turns/B`
+    the route switch rather than remounting it, so `#/activity/turns/A` →
+    `#/activity/turns/B`
     reconciles and anything the screen remembers about A — a held refusal, an
     open disclosure, a selected tab — describes B until something clears it.
     Every id-bearing route carries `key={id}`.
 15. **A screen head's controls wrap.** A button does not break its own label,
     so a head carrying several of them overflows a phone's line instead of
-    taking a second one. `PageHeader` takes its badges and its actions as slots
-    that wrap, and any row built beside one wraps too.
+    taking a second one. `PageBar` and `ObjectHeader` take their badges and
+    their actions as slots that wrap, and any row built beside one wraps too.
 16. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.
+16b. **Text takes the ink, never the fill.** Every status family is three
+    rungs: the base is what a thing is painted *with* — a primary button, a
+    status dot, a meter bar — the `-soft` is the ground it tints, and the
+    `-ink` is the one of the three that is a text colour. The design system
+    measures the pairs it publishes; nothing but `styles/rungs.test.ts`
+    measures which rung this application spends where, and both mistakes are
+    silent. Spending `--accent` as text gives 3.09:1 on its own soft ground and
+    3.71 on the page, against the 4.5 small text needs; the ink gives 5.96 and
+    7.15. Putting an `-ink` **on** its family's solid fill is the one pairing
+    of the three that was never measured — the rail's attention badge did it,
+    at 1.72:1 on a 9px digit, so the unread count rendered as a dot.
+16c. **The faint rung is decoration, and that is a contrast rule.**
+    `--text-faint` is about 3:1 against the ground in *both* themes, which is
+    the floor a non-text mark takes and not the 4.5 a word needs. Spent on a
+    word it is a word nobody can read — it had decayed onto twenty-six rules,
+    every grid column head and sidebar section name among them. A word takes
+    `--text-muted` (6.6–7.0:1). What is left on the faint rung is ten marks —
+    two tree characters, a breadcrumb slash, four icons and three icon-only
+    controls — each named in `styles/rungs.test.ts` with the reason it is one.
 17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.
 18. **Everything the page runs or loads is its own bundle.** The engine serves

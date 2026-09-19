@@ -50,7 +50,7 @@ test("the table view draws a row per node, and a row's Edit opens the node edito
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table",
+    hash: "#/company?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   await openTheEditorFromTheTable();
@@ -99,7 +99,7 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table&seat=ceo",
+    hash: "#/company?lens=builder&view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
@@ -136,7 +136,7 @@ test("the toolbar offers the selected seat's whole list: its entries, order and 
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=visualization&seat=ceo",
+    hash: "#/company?lens=builder&view=visualization&seat=ceo",
   });
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
@@ -161,7 +161,7 @@ test("a node's card menu and its row menu are the same list", async () => {
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=visualization&seat=ceo",
+    hash: "#/company?lens=builder&view=visualization&seat=ceo",
   });
   await screen.findByText("No problems");
   const card = view.container.querySelector<HTMLElement>(
@@ -193,7 +193,7 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
     engine: new Engine(company()),
     surfaces: builderSurfaces,
     keys: countingKeys("lens"),
-    hash: "#/org?lens=builder&view=table",
+    hash: "#/company?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -219,7 +219,7 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table&seat=ceo",
+    hash: "#/company?lens=builder&view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
@@ -247,10 +247,10 @@ test("Back off the lens over a changed editor asks first, and keeping the change
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=chart",
+    hash: "#/company?lens=chart",
   });
   act(() => {
-    location.hash = "#/org?lens=builder&view=table";
+    location.hash = "#/company?lens=builder&view=table";
   });
   await screen.findByText("No problems");
   const onTable = location.hash;
@@ -294,7 +294,7 @@ test("an editor opened before the engine described the company keeps its node", 
           answer = () => resolve(e.answer(r));
         })
       : null;
-  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/org?lens=builder&view=table" });
+  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/company?lens=builder&view=table" });
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
   await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
@@ -316,7 +316,7 @@ test("every opening of the editor builds its own node's form", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table",
+    hash: "#/company?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   await typeIntoTheEditor();
@@ -335,7 +335,7 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   const { store } = mountBuilder({
     engine,
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table&seat=ceo",
+    hash: "#/company?lens=builder&view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   const editor = await typeIntoTheEditor();
@@ -378,7 +378,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=visualization",
+    hash: "#/company?lens=builder&view=visualization",
   });
   await screen.findByText("No problems");
   const node = orgNodeParts();
@@ -445,7 +445,7 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table",
+    hash: "#/company?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -504,7 +504,7 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=table",
+    hash: "#/company?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   // A unit of the draft alone, so an undo can take it away again.

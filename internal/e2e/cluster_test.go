@@ -113,7 +113,13 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 		// own: relay setup could spend the whole ceiling and leave the
 		// member start an already-expired context, so the loop reported
 		// "no cluster came up" having never started a member.
-		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(), deadline)
+		// THE SOONER OF THE CEILING AND THIS ATTEMPT'S OWN TERM, which is
+		// [jetstreamtest.StartAttemptEnd]'s and not a second copy: handed the
+		// whole remaining budget, attempt one could spend all of it and the
+		// other three never ran — measured, on this case, at 181s of a 180s
+		// ceiling with "1 of 4 attempts" in the failure.
+		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(),
+			jetstreamtest.StartAttemptEnd(time.Now(), deadline))
 		relays := mesh(attemptCtx, t, n)
 		c, err := startMeshOnce(attemptCtx, t, relays, n)
 		cancelAttempt()

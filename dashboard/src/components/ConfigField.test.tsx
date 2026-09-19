@@ -580,3 +580,37 @@ test("a stored answer the list no longer offers is kept and shown as itself", ()
     "Every repository",
   ]);
 });
+
+// A REFUSAL IS A LIST OF PROBLEMS, NOT A SENTENCE.
+//
+// The engine refuses with several problems joined by newlines, each opening
+// with the config path it names. HTML collapses those newlines, so a field
+// that put the string in its error line showed one run-on paragraph in which
+// the second problem's path read as the end of the first one's sentence — and
+// the path itself read as prose, on the one form where a reader has to be able
+// to find it in their document. Wired through [withProblems], which is what
+// gives the row a node rather than a string.
+test("a refusal is drawn as its problems, each path picked out", () => {
+  render(
+    <ConfigField
+      label="Site"
+      kind="url"
+      value=""
+      onChange={() => {}}
+      error={
+        "integrations.confluence: required value missing: give url or cloud_id\n" +
+        "integrations.confluence.webhook_secret: required value missing"
+      }
+    />,
+  );
+  const line = document.getElementById(
+    (screen.getByLabelText("Site").getAttribute("aria-describedby") ?? "").split(" ").pop() ?? "",
+  );
+  expect(line).not.toBeNull();
+  // TWO PROBLEMS ARE TWO LINES, so neither runs into the other.
+  expect(line!.querySelectorAll("li")).toHaveLength(2);
+  // AND EACH PATH WEARS THE FACE A CONFIG PATH WEARS, rather than reading as
+  // the prose around it.
+  expect(screen.getByText("integrations.confluence").tagName).toBe("CODE");
+  expect(screen.getByText("integrations.confluence.webhook_secret").tagName).toBe("CODE");
+});

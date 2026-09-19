@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -161,8 +163,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// handle in the chart — so no ancestor walk can ever match it,
 		// `Lead` is false for every operator by construction, and the
 		// only shipped surface for the verb could not use it.
-		Person: actor.Kind == tracker.AuthorHuman ||
-			actor.Kind == tracker.AuthorOperator,
+		Person: actor.Kind.Person(),
 	}
 	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
 	// because the tracker has no chart — see the file head. A surface that
@@ -188,7 +189,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		resolved = append(resolved, id)
 	}
 	result, err := writer.WritePriorities(ctx,
-		"prio-"+handle+"-"+turnKeyOr(turn), handle, resolved, authority)
+		"prio-"+handle+"-"+callKey(turn), handle, resolved, authority)
 	if err != nil {
 		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
 	}
@@ -251,7 +252,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(bad), nil
 	}
 	result, err := writer.WritePins(ctx,
-		"pins-"+actor.Handle+"-"+turnKeyOr(turn), actor.Handle,
+		"pins-"+actor.Handle+"-"+callKey(turn), actor.Handle,
 		argStrings(args, "views"), favorites)
 	if err != nil {
 		return failed(writeFailure(tracker.SetPinsTool, err)), nil
@@ -359,7 +360,7 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		reasons = append(reasons, reason)
 	}
 	result, err := writer.WriteInbox(ctx,
-		"inbox-"+actor.Handle+"-"+turnKeyOr(turn), actor.Handle,
+		"inbox-"+actor.Handle+"-"+callKey(turn), actor.Handle,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
@@ -396,17 +397,27 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 	return actor, d.PersonWriter(actor), nil
 }
 
-// turnKeyOr is the turn's own idempotency key, or a stable empty one.
+// callKey is the idempotency scope of ONE tool call — the turn's own key
+// inside a turn, and a fresh value outside one.
 //
-// AN OPERATOR HAS NO TURN and no redelivery — their client made one call — so
-// there is nothing to deduplicate against and an invented key would be a lie
-// about what produced the write. What the empty string buys is that two calls
-// in one session are two writes, which is what the caller meant.
-func turnKeyOr(turn *turnctx.Turn) string {
+// AN OPERATOR HAS NO TURN and no redelivery: their client made one call, so
+// there is nothing to deduplicate against and two calls in one session are two
+// writes, which is what the caller meant.
+//
+// THAT IS WHAT THIS ALWAYS CLAIMED AND NEVER DID. It returned the literal
+// string `operator`, so the operation id it is half of — `prio-<handle>-operator`,
+// `pins-…`, `inbox-…`, `sprint-<action>-<project>-<n>-…` — was stable for the
+// life of the deployment, and the ledger collapsed every write after the first
+// as a redelivery. `set_priorities` through `/operator/mcp` wrote one list per
+// person, ever; the second call answered `applied` with the FIRST call's
+// position and changed nothing. (The empty string the old comment named would
+// have done exactly the same: what makes a key unique is that it is fresh, not
+// that it is blank.) See [opIDFor], which had the same defect on the same day.
+func callKey(turn *turnctx.Turn) string {
 	if key := turnKey(turn); key != "" {
 		return key
 	}
-	return "operator"
+	return "operator-" + uuid.NewString()
 }
 
 // inboxEntries reads one of the three lists.

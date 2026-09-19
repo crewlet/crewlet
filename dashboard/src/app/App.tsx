@@ -6,200 +6,280 @@
  * same binary as the API — so a code-split chunk buys a round trip against a
  * server that is already answering. The switch is also what makes the screen
  * list readable in one place.
+ *
+ * # Two levels of dispatch, matching the two levels of navigation
+ *
+ * The first segment names a WORKSPACE and the second names what inside it. A
+ * single-level switch is what the previous shape had, and it is why nineteen
+ * unrelated nouns sat at the top of the URL space: `#/runs`, `#/schedules`,
+ * `#/conversations` and `#/model` are four views of one question — what the
+ * company's workforce did — and nothing in the address said so.
+ *
+ * # Keyed on the subject, every screen that has one
+ *
+ * A hash change re-renders this switch rather than remounting it, so
+ * `#/activity/turns/A` → `#/activity/turns/B` reconciles: React keeps the same
+ * component instance and every piece of per-SUBJECT state in it outlives the
+ * subject it describes. A disclosure left open, a tab left selected and a
+ * refusal left on screen are all the same bug waiting for somebody to notice.
  */
 
-import { Component, type ReactNode } from "react";
-import { Button, CodeBlock, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { useRoute } from "./router.tsx";
-import { Overview } from "~/routes/Overview.tsx";
-import { Goals } from "~/routes/Goals.tsx";
-import { People } from "~/routes/People.tsx";
-import { SeatScreen } from "~/routes/Seat.tsx";
-import { OrgScreen } from "~/routes/Org.tsx";
-import { Runs } from "~/routes/Runs.tsx";
-import { Work, WorkItem } from "~/routes/Work.tsx";
-import { Sprints } from "~/routes/Sprints.tsx";
-import { MyWork } from "~/routes/MyWork.tsx";
-import { Pages, PageView } from "~/routes/Pages.tsx";
-import { Conversations } from "~/routes/Conversations.tsx";
-import { Schedules } from "~/routes/Schedules.tsx";
-import { ModelActivity } from "~/routes/Model.tsx";
-import { Activity } from "~/routes/Activity.tsx";
-import { Knowledge } from "~/routes/Knowledge.tsx";
-import { Spend } from "~/routes/Spend.tsx";
-import { Fleet } from "~/routes/Fleet.tsx";
-import { Integrations } from "~/routes/Integrations.tsx";
-import { Tools } from "~/routes/Tools.tsx";
-import { ConfigScreen } from "~/routes/Config.tsx";
-import { Secrets } from "~/routes/Secrets.tsx";
-import { TraceScreen } from "~/routes/Trace.tsx";
-import { EventScreen } from "~/routes/Event.tsx";
-import { TurnScreen } from "~/routes/Turn.tsx";
+import { Inbox } from "~/routes/inbox/Inbox.tsx";
+import { MyWork } from "~/routes/me/MyWork.tsx";
+import { Goal, Goals } from "~/routes/work/Goals.tsx";
+import { People } from "~/routes/company/People.tsx";
+import { SeatScreen } from "~/routes/company/Seat.tsx";
+import { CompanyScreen, UnitScreen } from "~/routes/company/Company.tsx";
+import { Runs } from "~/routes/activity/Runs.tsx";
+import { Work } from "~/routes/work/Work.tsx";
+import { WorkItem } from "~/routes/work/WorkItem.tsx";
+import { SavedViews } from "~/routes/work/SavedViews.tsx";
+import { WorkSearch } from "~/routes/work/WorkSearch.tsx";
+import { Sprints } from "~/routes/work/Sprints.tsx";
+import { Pages, PageView } from "~/routes/knowledge/Pages.tsx";
+import { Conversations } from "~/routes/activity/Conversations.tsx";
+import { Turns } from "~/routes/activity/Turns.tsx";
+import { Schedules } from "~/routes/activity/Schedules.tsx";
+import { LiveNow } from "~/routes/activity/LiveNow.tsx";
+import { Activity } from "~/routes/activity/Activity.tsx";
+import { Knowledge } from "~/routes/knowledge/Knowledge.tsx";
+import { Spend } from "~/routes/cost/Spend.tsx";
+import { Budgets } from "~/routes/cost/Budgets.tsx";
+import { Fleet } from "~/routes/admin/Fleet.tsx";
+import { DomainScreen } from "~/routes/admin/Domain.tsx";
+import { Integrations } from "~/routes/admin/Integrations.tsx";
+import { Tools } from "~/routes/admin/Tools.tsx";
+import { ConfigScreen } from "~/routes/admin/Config.tsx";
+import { Secrets } from "~/routes/admin/Secrets.tsx";
+import { Audit } from "~/routes/admin/Audit.tsx";
+import { EventScreen } from "~/routes/activity/Event.tsx";
+import { TurnScreen } from "~/routes/activity/Turn.tsx";
+import { TraceScreen } from "~/routes/activity/Trace.tsx";
 import { NotFound } from "~/routes/NotFound.tsx";
-import { ErrorGlyph } from "@crewlethq/icons/glyphs";
-import { EmptyState } from "@crewlethq/ui";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+
+/** A project key is uppercase; an item key is `KEY-n`; an id is a uuid. */
+const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
+
+function WorkRoutes({ rest }: { rest: string[] }) {
+  const [first, second, third] = rest;
+  if (!first) return <Work />;
+  if (first === "views") return second ? <SavedViews key={second} id={second} /> : <SavedViews />;
+  if (first === "search") return <WorkSearch />;
+  // A PROJECT, ITS SPRINTS, OR AN ITEM — decided by the SHAPE of the key
+  // rather than by a lookup, so the route resolves before any answer arrives.
+  if (PROJECT_KEY.test(first)) {
+    if (second === "sprints") {
+      return <Sprints key={`${first}/${third ?? ""}`} project={first} sprint={third} />;
+    }
+    return <Work key={first} project={first} />;
+  }
+  // A key or an id BOTH resolve, because the reader has whichever they were
+  // shown: a person pastes ENG-42 out of chat, and every internal link carries
+  // the id. The engine's own Get takes either.
+  return <WorkItem key={first} id={first} />;
+}
+
+function CompanyRoutes({ rest }: { rest: string[] }) {
+  const [first, second] = rest;
+  if (!first) return <CompanyScreen />;
+  if (first === "people") return second ? <SeatScreen key={second} handle={second} /> : <People />;
+  if (first === "units") {
+    return second ? <UnitScreen key={second} id={second} /> : <CompanyScreen />;
+  }
+  return <NotFound what={`“${first}” under Company`} />;
+}
+
+function ActivityRoutes({ rest }: { rest: string[] }) {
+  const [first, ...tail] = rest;
+  const id = tail[0];
+  if (!first) return <LiveNow />;
+  switch (first) {
+    case "turns":
+      return id ? <TurnScreen key={id} turnId={id} /> : <Turns />;
+    // A TRACE HAS NO LIST, only a page: nothing enumerates traces, and every
+    // way in is a link from an event, a turn or a coding run that already
+    // holds the id. A bare `#/activity/traces` is therefore the turns list,
+    // which is the nearest thing to "the traces" this product has.
+    case "traces":
+      return id ? <TraceScreen key={id} traceId={id} /> : <Turns />;
+    case "runs":
+      return <Runs key={id ?? ""} runId={id} />;
+    case "schedules":
+      return <Schedules key={tail.join("/")} scope={tail} />;
+    case "a2a":
+      return <Conversations key={id ?? ""} channelId={id} />;
+    case "events":
+      return id ? <EventScreen key={id} eventId={id} /> : <Activity />;
+    default:
+      return <NotFound what={`“${first}” under Activity`} />;
+  }
+}
+
+function AdminRoutes({ rest }: { rest: string[] }) {
+  const [first, ...tail] = rest;
+  // THE LANDING PAGE IS THE FLEET, because a reader who opened Admin is
+  // looking at the machine and the nodes are the machine.
+  if (!first) return <Fleet />;
+  switch (first) {
+    case "fleet": {
+      // TWO SHAPES UNDER ONE SEGMENT, discriminated on the tail's LENGTH for
+      // the reason the `tools` arm below gives: a node id is an OPERATOR's
+      // string and `domains` is a legal one, so reading `tail[0] === "domains"`
+      // would take the page away from a node actually called that.
+      //
+      // It used to take any tail at all and keep only the first segment, so
+      // `#/admin/fleet/domains/tracker` drew the node screen for a node named
+      // `domains` with `tracker` silently dropped — a plausible answer to a
+      // question nobody asked, under a breadcrumb that read
+      // "Infrastructure / domains/tracker".
+      const domain = tail.length === 2 && tail[0] === "domains" ? tail[1] : undefined;
+      if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
+      if (tail.length > 1) {
+        return <NotFound what={`“${tail.join("/")}” under Infrastructure`} />;
+      }
+      return <Fleet key={tail[0] ?? ""} node={tail[0]} />;
+    }
+    case "integrations":
+      return <Integrations key={tail[0] ?? ""} kind={tail[0]} />;
+    case "tools": {
+      // TWO SHAPES UNDER ONE SEGMENT, and they do not overlap: `servers/{name}`
+      // is a FILTER on the catalogue's origin, and a bare `{name}` is one TOOL
+      // — which is what `objects.ts` calls a tool's page and where a tool
+      // peek's `Open ↗` goes. The bare form used to fall through with the
+      // segment dropped, so that link landed on the unfiltered catalogue and a
+      // reader lost the tool they had open.
+      //
+      // DISCRIMINATED ON LENGTH, not on the word. A tool name comes from a
+      // third-party MCP server — `tool_prefix` is optional, so the catalogue
+      // holds whatever the server called it — and `nav.ts`'s reserved-segment
+      // rule ("everything the engine mints is a uuid or an uppercase key") does
+      // not cover one. Reading `tail[0] === "servers"` as the filter therefore
+      // took the page away from a tool literally named `servers`, which is the
+      // same regression one sentence up. `router.tsx` encodes each segment
+      // whole, so a tool page is always exactly ONE tail segment and the
+      // origin filter always two — a test nothing else can fake.
+      const server = tail.length === 2 && tail[0] === "servers" ? tail[1] : undefined;
+      const tool = tail.length === 1 ? tail[0] : undefined;
+      if (tail.length > 0 && server === undefined && tool === undefined) {
+        return <NotFound what={`“${tail.join("/")}” under Tools`} />;
+      }
+      return <Tools key={tail.join("/")} server={server} tool={tool} />;
+    }
+    case "config": {
+      // `revisions/{id}` IS THE ONLY TAIL, so anything else is an address the
+      // product does not have — and rendering the config screen with the
+      // segment dropped leaves the trail naming a page nobody routed to.
+      if (!tail[0]) return <ConfigScreen />;
+      if (tail[0] === "revisions" && tail.length <= 2) {
+        return <ConfigScreen key={tail.join("/")} revision={tail[1]} />;
+      }
+      return <NotFound what={`“${tail.join("/")}” under Config`} />;
+    }
+    case "credentials":
+      return <Secrets key={tail[0] ?? ""} name={tail[0]} />;
+    case "audit":
+      // NO TAIL. Every row here has a page of its own somewhere else — a task,
+      // a wiki page, a config revision — so a detail under this address would
+      // be a second page for an object that already has one, reachable by two
+      // routes that would then have to agree about it.
+      if (tail.length > 0) return <NotFound what={`“${tail.join("/")}” under Audit`} />;
+      return <Audit />;
+    default:
+      return <NotFound what={`“${first}” under Admin`} />;
+  }
+}
 
 function Screen() {
   const route = useRoute();
-  const [head, id] = route.path;
+  const [head, ...rest] = route.path;
   switch (head) {
-    // KEYED ON THE SUBJECT, every screen that has one.
-    //
-    // A hash change re-renders this switch rather than remounting it, so
-    // `#/turns/A` → `#/turns/B` reconciles: React keeps the same component
-    // instance and every piece of per-SUBJECT state in it outlives the subject
-    // it describes. The Turn header's controls are where that shows — a
-    // refusal holds until the next click now, so a "Download failed" left over
-    // from turn A greeted the reader of turn B — but the hazard is the shape,
-    // not the control: a disclosure left open, a tab left selected and a filter
-    // left set are all the same bug waiting for someone to notice.
+    // THE LANDING SCREEN IS THE INBOX. A dashboard's home used to be a
+    // summary of the company; what a person opening this actually wants to
+    // know is whether anything is waiting on them.
     case undefined:
-      return <Overview />;
-    case "people":
-      return <People />;
-    case "seats":
-      return id ? <SeatScreen key={id} handle={id} /> : <People />;
-    case "org":
-      return <OrgScreen />;
-    case "runs":
-      return <Runs />;
-    // A key or an id BOTH resolve, because the reader has whichever they were
-    // shown: a person pastes ENG-42 out of chat, and every internal link
-    // carries the id. The engine's own Get takes either, so the route does
-    // not have to know which it was handed.
+    case "inbox":
+      return <Inbox />;
+    case "me":
+      return <MyWork />;
     case "work":
-      // `me` IS NOT A TASK. Keys are `<PROJECT>-<n>` and ids are uuids, so
-      // neither can collide with it — and `#/work/me` is the address this
-      // screen has had since it was designed.
-      if (id === "me") return <MyWork />;
-      return id ? <WorkItem key={id} id={id} /> : <Work />;
+      return <WorkRoutes rest={rest} />;
     case "goals":
-      return <Goals />;
-    // ITS OWN SCREEN rather than a tab of the board, for the reason the view
-    // strip is its own question: a sprint report is about the CONTAINER over
-    // time and the board is about the rows in it now.
-    case "sprints":
-      return <Sprints />;
-    case "pages":
-      return id ? <PageView key={id} id={id} /> : <Pages />;
-    case "conversations":
-      return <Conversations />;
-    case "schedules":
-      return <Schedules />;
-    case "model":
-      return <ModelActivity />;
-    case "activity":
-      return <Activity />;
+      return rest[0] ? <Goal key={rest[0]} id={rest[0]} /> : <Goals />;
+    case "company":
+      return <CompanyRoutes rest={rest} />;
     case "knowledge":
-      return <Knowledge />;
-    case "spend":
-      return <Spend />;
-    case "fleet":
-      return <Fleet />;
-    case "integrations":
-      return <Integrations />;
-    case "tools":
-      return <Tools />;
-    case "config":
-      return <ConfigScreen />;
-    case "secrets":
-      return <Secrets />;
-    case "traces":
-      return id ? <TraceScreen key={id} traceId={id} /> : <NotFound what="a trace id" />;
-    case "events":
-      return id ? <EventScreen key={id} eventId={id} /> : <Activity />;
-    case "turns":
-      return id ? <TurnScreen key={id} turnId={id} /> : <NotFound what="a turn id" />;
+      // A CONTAINER, OR A PAGE INSIDE ONE. Both are addressed by their own
+      // names rather than by an id, because a container key is what somebody
+      // types and a page title is what they were given.
+      if (rest.length >= 2) {
+        return (
+          <PageView
+            key={rest.join("/")}
+            container={rest[0] ?? ""}
+            title={rest.slice(1).join("/")}
+          />
+        );
+      }
+      return rest[0] ? <Pages key={rest[0]} container={rest[0]} /> : <Knowledge />;
+    case "activity":
+      return <ActivityRoutes rest={rest} />;
+    case "cost":
+      // A CLOSED SET OF TWO, so an unknown tail is Not Found rather than the
+      // spend screen. A two-valued test read every other tail as `#/cost`, so
+      // `#/cost/budget` — the obvious typo, and the shape of a stale bookmark
+      // — drew the spend tables under a trail reading "Cost / budget": the
+      // address, the trail and the screen each naming something different,
+      // with nothing telling the reader the route does not exist.
+      if (!rest[0]) return <Spend />;
+      return rest[0] === "budgets" && rest.length === 1 ? (
+        <Budgets />
+      ) : (
+        <NotFound what={`“${rest.join("/")}” under Cost`} />
+      );
+    case "admin":
+      return <AdminRoutes rest={rest} />;
     default:
       return <NotFound what={`the screen “${head}”`} />;
   }
 }
 
-interface BoundaryProps {
-  /** What the reader is looking at. A new value is a new chance to render. */
-  resetKey: string;
-  children: ReactNode;
-}
-
-interface BoundaryState {
-  error: Error | null;
-  resetKey: string;
-}
-
-/**
- * A screen that throws takes itself down, and nothing else.
- *
- * WITHOUT ONE, A RENDER ERROR UNMOUNTS THE WHOLE APPLICATION. That is React's
- * contract, and it is what a seat whose `llm` was a per-phase mapping did: one
- * field of one seat reached a component as an object, and the reader was left
- * with a blank page, no navigation and no way to learn which screen or which
- * field. Around the routed screen, and only there, because the shell is what
- * a reader needs to get somewhere else.
- *
- * It resets when the reader goes somewhere (any change of the hash, a filter
- * included, since a different lens or selection may not reach the fault) and
- * when they ask to try again. React reports the caught error to the console
- * itself, so it is not logged twice here.
- */
-export class ScreenBoundary extends Component<BoundaryProps, BoundaryState> {
-  override state: BoundaryState = { error: null, resetKey: this.props.resetKey };
-
-  static getDerivedStateFromError(error: unknown): Partial<BoundaryState> {
-    return { error: error instanceof Error ? error : new Error(String(error)) };
-  }
-
-  static getDerivedStateFromProps(
-    props: BoundaryProps,
-    state: BoundaryState,
-  ): Partial<BoundaryState> | null {
-    return props.resetKey === state.resetKey ? null : { error: null, resetKey: props.resetKey };
-  }
-
-  override render(): ReactNode {
-    const { error } = this.state;
-    if (!error) return this.props.children;
-    return (
-      <EmptyState
-        icon={<ErrorGlyph />}
-        title="This screen could not be drawn"
-        description="Something it received did not have the shape it expects. The rest of the dashboard keeps working, and the message below is what to include in a report."
-        action={
-          <div className="col gap-3" style={{ alignItems: "center" }}>
-            <CodeBlock
-              plain
-              wrap
-              code={error.message || error.name}
-              maxHeight={RECORD_MAX_HEIGHT}
-            />
-            <Button variant="secondary" onClick={() => this.setState({ error: null })}>
-              Try again
-            </Button>
-          </div>
-        }
-      />
-    );
-  }
-}
-
 export function App() {
-  const route = useRoute();
   return (
     // The toast host wraps the shell rather than sitting inside a screen: an
     // outcome has to survive the navigation the write causes, and a provider
     // mounted per screen is unmounted by exactly that.
+    //
+    // uilet's provider, whose `ok` / `failed` are ours verbatim — a success
+    // dismisses itself and a failure stays until it is taken back. What it
+    // adds is the part ours only asserted: two live regions rather than one,
+    // so a refusal is announced assertively while a confirmation stays
+    // polite, and a `max` that drops the oldest instead of letting a burst of
+    // writes bury the screen.
     <ToastProvider>
-      {/* Every overlay portals into the nearest LayerHost, so the one at the
-          root is what puts a dialog over the whole application rather than
-          inside the screen that opened it. The builder's fullscreen container
-          mounts a second one, because a fullscreen element renders only its
-          own subtree. */}
+      {/* THE ONE PORTAL TARGET, DECLARED RATHER THAN FALLEN BACK TO. Every
+          overlay uilet draws — a Modal, a Select's listbox, a Popover, and
+          the palette, which takes the layer without the frame — asks
+          `useLayerContainer()` where to go, and with no host mounted that
+          answers `document.body`: a fallback, and one that puts each surface
+          outside `#root` as a sibling of the application, in whatever order
+          the session happened to open them.
+
+          The host is one absolutely-positioned box covering the shell, inert
+          until something is drawn in it, holding the whole layer band in a
+          stacking context of its own. `body` has `overflow: hidden` here and
+          the shell is the window, so the box IS the viewport and nothing
+          moves on screen — what changes is that the application says where
+          its overlays live.
+
+          INSIDE THE TOAST PROVIDER, so the toaster is rendered after the host
+          and paints above it. A toast reports what a write inside a dialog
+          did; it has to be readable over the dialog that caused it. */}
       <LayerHost>
         <Shell>
-          <ScreenBoundary resetKey={route.hash}>
-            <Screen />
-          </ScreenBoundary>
+          <Screen />
         </Shell>
       </LayerHost>
     </ToastProvider>

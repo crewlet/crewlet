@@ -54,6 +54,16 @@ var ErrNoProject = errors.New("tracker: no such project")
 // would go looking for the wrong thing.
 var ErrNoComment = errors.New("tracker: no such comment")
 
+// ErrNoSprint reports a sprint number this project has never minted.
+//
+// BESIDE the other two rather than folded into [ErrNoProject], because the two
+// failures send a caller to different places: an unknown project key is a typo
+// in the key, and an unknown number on a project that exists is a sprint that
+// has not been minted yet — which `sprint_report` answers by listing the ones
+// that have. A reader that returned an empty series for it would report a
+// sprint in which nothing happened.
+var ErrNoSprint = errors.New("tracker: no such sprint")
+
 // DetailWants says which parts of the answer to assemble.
 //
 // EXPLICIT rather than "everything", because the parts have very different

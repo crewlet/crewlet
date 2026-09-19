@@ -47,8 +47,13 @@ import { insidePart, orgTableParts } from "~/testing.tsx";
  */
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-/** This screen's stylesheet. */
-const SCREEN = read("src/styles/org.css");
+/**
+ * This screen's stylesheet. `screens.css` in this tree: the builder is a lens
+ * of the company screen, and every screen's recipes live in one sheet here —
+ * see the note in `builderStyles.test.ts`. The cascade below is read over the
+ * whole sheet, which is what the browser does anyway.
+ */
+const SCREEN = read("src/styles/screens.css");
 
 /**
  * The design system's, as the dashboard ships it. From the INSTALLED package's

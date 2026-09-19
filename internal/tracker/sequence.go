@@ -406,6 +406,9 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
 		return nil, nil, err
 	}
+	if err := mintedSprint(ctx, tx, task.Project, task.Sprint); err != nil {
+		return nil, nil, err
+	}
 	if err := requiredFields(ctx, tx, project, task); err != nil {
 		return nil, nil, err
 	}
@@ -1499,4 +1502,49 @@ func (w *Writer) drainRows() float64 {
 		return rows
 	}
 	return 1
+}
+
+// mintedSprint refuses a task filed into a sprint the project never minted.
+//
+// THE SCHEMA ALREADY PROMISED THIS — `sprint` is documented as a number
+// `sprint_report` lists for the project — and nothing checked it, so any
+// positive integer was accepted and stored. The task then pointed at a
+// membership that does not exist: `sprint_report` and the burndown both refuse
+// it with [ErrNoSprint], so the work was filed somewhere no report could ever
+// show it, and the seat that filed it was told the write succeeded.
+//
+// A REFUSAL, NOT AN UNAVAILABLE, which is [declaredTags]'s answer for a tag
+// the project has not declared rather than [Writer.refuseCreate]'s for a
+// project this node does not hold — and the difference is which case
+// DOMINATES. A project reaches that check because a caller named one that
+// almost certainly exists, so absent there reads as lag. A sprint number is
+// typed by a model against a schema that merely describes it, so absent here
+// is overwhelmingly a number nobody minted, and `unavailable` would tell that
+// caller to retry a request that can never succeed — the one answer worse
+// than a refusal, because it never ends.
+//
+// The cost is the case the tag check already accepts: a sprint minted moments
+// ago on another node is refused here until this one applies the mint. The
+// message names the sprints the project does have, so a seat re-reads and
+// sees the new one rather than being told to change a request that was right.
+func mintedSprint(ctx context.Context, tx *sql.Tx, project string, number *int) error {
+	if number == nil || *number == 0 {
+		// NOT NAMED, or taken out of its sprint: neither says anything
+		// about a sprint that has to exist.
+		return nil
+	}
+	sprint, held, err := readSprint(ctx, tx, project, *number)
+	switch {
+	case err != nil:
+		return err
+	case !held:
+		return fmt.Errorf("tracker: %s has no sprint %d — `sprint_report` "+
+			"lists the ones it has minted, and `write_project` mints the "+
+			"next", project, *number)
+	case sprint.Archived:
+		return fmt.Errorf("tracker: sprint %d of %s is archived, so no work "+
+			"is filed into it; `sprint_report` lists the ones that take work",
+			*number, project)
+	}
+	return nil
 }

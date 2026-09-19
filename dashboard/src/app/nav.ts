@@ -1,269 +1,421 @@
-import type { ComponentType } from "react";
-import {
-  type GlyphProps,
-  AccountTreeGlyph,
-  Book2Glyph,
-  BuildGlyph,
-  CableGlyph,
-  CalendarClockGlyph,
-  CalendarTodayGlyph,
-  CheckGlyph,
-  DashboardGlyph,
-  DescriptionGlyph,
-  DnsGlyph,
-  GroupGlyph,
-  KeyGlyph,
-  LinkGlyph,
-  ManufacturingGlyph,
-  NeurologyGlyph,
-  TargetGlyph,
-  TerminalGlyph,
-  TimelineGlyph,
-  TokenGlyph,
-} from "@crewlethq/icons/glyphs";
 /**
- * The information architecture.
+ * The information architecture: two levels, and the grammar that keeps them
+ * apart.
  *
- * The sidebar is grouped by WHAT THE READER IS LOOKING AT, in the order the
- * product's own story runs: the company, the work it is doing, the thinking
- * behind that work, what it costs, and the machine underneath. That ordering
- * is the argument: a founder opening this should meet their company first and
- * the engine last, because the company is the product and the engine is the
- * thing that runs it.
+ * # Two levels, not one
  *
- * It replaces a flat list of nine nouns grouped by the KIND OF DATA each held
- * (Dashboard, Agents, Activity, Tokens, Tools, Schedules, Fleet, Configuration),
- * where the questions an operator actually arrives with (*is anything waiting
- * on me? what is my company doing right now? what is this costing?*) each
- * needed three or four screens and a mental join.
+ * A **workspace** is a noun with a tree of its own. Work has projects,
+ * Company has units, Knowledge has containers, Activity has kinds of run,
+ * Cost has scopes, Admin has estates. The RAIL shows the workspaces and
+ * nothing else; a workspace's SIDEBAR shows that workspace's tree and nothing
+ * else.
  *
- * Every entry resolves to a screen backed by a real answer. Nothing here is a
- * placeholder or a coming-soon stub: an empty screen says which endpoint
- * answered and why it was empty.
+ * It replaced a single flat sidebar of six groups and nineteen rows, which is
+ * the shape that fails as soon as there is more than one tree: either every
+ * tree hides behind disclosure — three clicks to a project — or the column
+ * grows to sixty rows and stops being scannable. The tracker had already
+ * grown its own rail inside its own screen, which is the same conclusion
+ * reached one screen at a time.
+ *
+ * # The grammar, stated once and asserted in router.test.ts
+ *
+ *   - A RAIL ROW is a workspace.
+ *   - A SIDEBAR ROW is a destination with its OWN PATH — an object, a saved
+ *     view, a workspace-level list.
+ *   - A TAB is a `tab=` or `view=` query on the path you are already on.
+ *
+ * Nothing is two of those. A tab never appears as a sidebar row, and a
+ * sidebar row never appears as a tab; a filter (a reason, a scope, a status)
+ * lives in the page's own filter bar, never in the sidebar. This is the
+ * boundary every tool of this shape loses first, and it is lost one pull
+ * request at a time — "just one more row under a project" is what turns two
+ * levels into three.
+ *
+ * # The order is the argument
+ *
+ * You, the work, the people, what they know, what they did, what it cost, the
+ * machine. A founder opening this meets their own inbox first and the engine
+ * last, because the company is the product and the engine is what runs it.
  */
 
-export interface NavItem {
-  key: string;
+import type { MarkName } from "~/ui/glyph.tsx";
+
+/** The workspaces, which are the rail's rows. */
+export type Workspace =
+  "inbox" | "me" | "work" | "company" | "knowledge" | "activity" | "cost" | "admin";
+
+export interface RailRow {
+  key: Workspace;
   label: string;
-  icon: ComponentType<GlyphProps>;
+  /**
+   * A GLYPH NAME, not a glyph component. Three consumers draw this one row —
+   * the rail, the sidebar and the palette — and a table holding components
+   * would make each of them carry the whole set to render it;
+   * `@crewlethq/icons/glyphs/registry` is published for exactly this case and
+   * names it: "a lookup by name is the right trade where the name really is
+   * data (a navigation table)". The union keeps what the old `IconName`
+   * bought — a misspelling is a compile error rather than a blank square.
+   */
+  icon: MarkName;
+  /** Where the row goes. */
   path: string[];
+  /** Every first path segment this workspace owns. */
+  owns: string[];
   /** Shown under the label in the command palette. */
   hint: string;
-  /** Auth-gated screens are marked so the palette can say so before you land. */
+  /** Everything under this row needs an operator credential. */
   guarded?: boolean;
+  /** The access key in the `g`-prefixed jump chord. */
+  chord: string;
 }
 
-export interface NavGroup {
-  key: string;
-  label: string;
-  items: NavItem[];
-}
-
-export const NAV: NavGroup[] = [
+export const RAIL: RailRow[] = [
   {
-    key: "now",
-    label: "",
-    items: [
-      {
-        key: "overview",
-        label: "Overview",
-        icon: DashboardGlyph,
-        path: [],
-        hint: "What the company is doing, and what needs a person",
-      },
-    ],
+    key: "inbox",
+    label: "Inbox",
+    icon: "inbox",
+    path: ["inbox"],
+    owns: ["inbox"],
+    hint: "What reached you, and what needs a person",
+    chord: "i",
   },
   {
-    key: "company",
-    label: "Company",
-    items: [
-      {
-        key: "people",
-        label: "People",
-        icon: GroupGlyph,
-        path: ["people"],
-        hint: "Every seat, what it is doing, and why it stopped",
-      },
-      {
-        key: "org",
-        label: "Org chart",
-        icon: AccountTreeGlyph,
-        path: ["org"],
-        hint: "The hierarchy, the directory and the charter",
-      },
-    ],
+    key: "me",
+    label: "My work",
+    icon: "person",
+    path: ["me"],
+    owns: ["me"],
+    hint: "Your priorities, your asks, and what became workable",
+    chord: "m",
   },
   {
     key: "work",
     label: "Work",
-    items: [
-      {
-        key: "work",
-        label: "Work board",
-        icon: CheckGlyph,
-        path: ["work"],
-        hint: "Every item on the company's own tracker, and what moved it",
-      },
-      {
-        key: "sprints",
-        label: "Sprints",
-        icon: CalendarTodayGlyph,
-        path: ["sprints"],
-        hint: "What each sprint took on, and what shipped inside its own window",
-      },
-      {
-        key: "goals",
-        label: "Goals",
-        icon: TargetGlyph,
-        path: ["goals"],
-        hint: "The tier above projects, and what its targets say right now",
-      },
-      {
-        key: "runs",
-        label: "Coding runs",
-        icon: TerminalGlyph,
-        path: ["runs"],
-        hint: "Detached sandbox runs, live and finished",
-      },
-      {
-        key: "conversations",
-        label: "Agent-to-agent",
-        icon: LinkGlyph,
-        path: ["conversations"],
-        hint: "The private channels seats opened with each other",
-      },
-      {
-        key: "schedules",
-        label: "Schedules",
-        icon: CalendarClockGlyph,
-        path: ["schedules"],
-        hint: "Recurring work, when it next fires and how it last went",
-      },
-    ],
+    icon: "check",
+    path: ["work"],
+    owns: ["work", "goals"],
+    hint: "Projects, sprints, items and goals",
+    chord: "w",
   },
   {
-    key: "intelligence",
-    label: "Intelligence",
-    items: [
-      {
-        key: "model",
-        label: "Model activity",
-        icon: NeurologyGlyph,
-        path: ["model"],
-        hint: "Every phase the models ran, round by round",
-      },
-      {
-        key: "activity",
-        label: "Event log",
-        icon: TimelineGlyph,
-        path: ["activity"],
-        hint: "Everything the engine published, filterable and paged",
-      },
-      {
-        key: "knowledge",
-        label: "Knowledge",
-        icon: Book2Glyph,
-        path: ["knowledge"],
-        hint: "Search the company knowledge base and what seats have learned",
-      },
-      {
-        key: "pages",
-        label: "Pages",
-        icon: DescriptionGlyph,
-        path: ["pages"],
-        hint: "Browse the company's own knowledge base by container and tree",
-      },
-    ],
+    key: "company",
+    label: "Company",
+    icon: "group",
+    path: ["company"],
+    owns: ["company"],
+    hint: "The charter, the people and the units",
+    chord: "c",
+  },
+  {
+    key: "knowledge",
+    label: "Knowledge",
+    icon: "book_2",
+    path: ["knowledge"],
+    owns: ["knowledge"],
+    hint: "The company's own pages, searched the way an agent searches them",
+    chord: "k",
+  },
+  {
+    key: "activity",
+    label: "Activity",
+    icon: "timeline",
+    path: ["activity"],
+    owns: ["activity"],
+    hint: "Turns, coding runs, schedules, asks and the event log",
+    chord: "a",
   },
   {
     key: "cost",
     label: "Cost",
-    items: [
-      {
-        key: "spend",
-        label: "Spend & budgets",
-        icon: TokenGlyph,
-        path: ["spend"],
-        hint: "Token spend by seat, model, phase and turn; budget headroom",
-      },
-    ],
+    icon: "token",
+    path: ["cost"],
+    owns: ["cost"],
+    hint: "Token spend by seat, model, phase and turn; budget headroom",
+    chord: "o",
   },
   {
-    key: "operations",
-    label: "Operations",
-    items: [
-      {
-        key: "fleet",
-        label: "Fleet",
-        icon: DnsGlyph,
-        path: ["fleet"],
-        hint: "Nodes, seat leases and config rollout",
-      },
-      {
-        key: "integrations",
-        label: "Integrations",
-        icon: CableGlyph,
-        path: ["integrations"],
-        hint: "The surfaces agents work on, and whether traffic is arriving",
-      },
-      {
-        key: "tools",
-        label: "Tools",
-        icon: BuildGlyph,
-        path: ["tools"],
-        hint: "Every tool a seat can call, by origin",
-      },
-      {
-        key: "config",
-        label: "Configuration",
-        icon: ManufacturingGlyph,
-        path: ["config"],
-        hint: "The active company revision, its history and its diffs",
-        guarded: true,
-      },
-      {
-        key: "secrets",
-        label: "Secrets",
-        icon: KeyGlyph,
-        path: ["secrets"],
-        hint: "The company's credentials: names and provenance, never values",
-        guarded: true,
-      },
-    ],
+    // LAST AND LOCKED, and the row is never hidden: a section that vanishes
+    // when a credential is absent is indistinguishable from one that does not
+    // exist, so an operator on a fresh browser would conclude the product has
+    // no configuration screen.
+    key: "admin",
+    label: "Admin",
+    icon: "dns",
+    path: ["admin"],
+    owns: ["admin"],
+    hint: "Nodes, integrations, tools, configuration and credentials",
+    guarded: true,
+    chord: "d",
   },
 ];
 
-export const ALL_NAV: NavItem[] = NAV.flatMap((g) => g.items);
-
-/** Screens reachable from a row rather than from the nav. */
-export const DETAIL_TITLES: Record<string, string> = {
-  seats: "Seat",
-  traces: "Trace",
-  events: "Event",
-  turns: "Turn",
-};
-
-/** Which nav entry a route belongs to, so the sidebar marks the right row. */
-export function activeNavKey(path: string[]): string {
+/**
+ * Which workspace a route belongs to, so the rail marks the right row.
+ *
+ * Derived from `owns` rather than from a second table: a screen whose
+ * workspace is decided in two places is a screen that loses its place in the
+ * rail on exactly the route somebody forgot to add.
+ */
+export function workspaceOf(path: string[]): Workspace | "" {
   const head = path[0] ?? "";
-  if (!head) return "overview";
-  // A seat page belongs to People, a trace and a turn to Model activity, one
-  // event to the log. Otherwise the reader loses their place in the sidebar
-  // the moment they open a detail.
-  if (head === "seats") return "people";
-  if (head === "traces" || head === "turns") return "model";
-  if (head === "events") return "activity";
-  // An item and a page each belong to their own listing, so opening one does
-  // not move the reader's place in the sidebar. They are their own nav
-  // entries rather than details of another screen, which is why neither
-  // needs a DETAIL_TITLES row.
-  return ALL_NAV.find((i) => i.path[0] === head)?.key ?? "";
+  if (!head) return "inbox";
+  return RAIL.find((row) => row.owns.includes(head))?.key ?? "";
 }
 
-export function titleFor(path: string[]): string {
-  const head = path[0] ?? "";
-  if (!head) return "Overview";
-  const item = ALL_NAV.find((i) => i.path[0] === head);
-  if (item) return item.label;
-  return DETAIL_TITLES[head] ?? "Crewlet";
+/** The rail row for a workspace, or undefined for a route nothing owns. */
+export function railRow(key: Workspace | ""): RailRow | undefined {
+  return RAIL.find((row) => row.key === key);
+}
+
+/**
+ * Every reserved path segment, so a test can hold them apart from the keys the
+ * engine mints.
+ *
+ * Project and container keys are UPPERCASE, item keys are `KEY-n`, everything
+ * else the engine mints is a uuid — and every segment here is lowercase. That
+ * is what makes `#/work/views` a list of saved views rather than a project
+ * called VIEWS, without a single escape character in the route table.
+ */
+export const RESERVED_SEGMENTS: string[] = [
+  "views",
+  "search",
+  "sprints",
+  "people",
+  "units",
+  "turns",
+  "runs",
+  "schedules",
+  "a2a",
+  "events",
+  "traces",
+  "servers",
+  "revisions",
+  "domains",
+  "budgets",
+  "fleet",
+  "integrations",
+  "tools",
+  "config",
+  "credentials",
+  "audit",
+  "me",
+];
+
+/**
+ * Every workspace-level destination, for the command palette and for the
+ * tests that walk the product.
+ *
+ * NOT the sidebar's source. A workspace sidebar is built from live answers —
+ * the projects that exist, the units the chart has, the containers this node
+ * knows about — and a hand-kept copy of those would be a second, wrong list.
+ * What is here is the fixed furniture: the lists and landing pages that exist
+ * whatever a company contains.
+ */
+export interface Destination {
+  key: string;
+  workspace: Workspace;
+  label: string;
+  /** A glyph name, for the reason [RailRow.icon] gives. */
+  icon: MarkName;
+  path: string[];
+  hint: string;
+  guarded?: boolean;
+}
+
+export const DESTINATIONS: Destination[] = [
+  {
+    key: "inbox",
+    workspace: "inbox",
+    label: "Inbox",
+    icon: "inbox",
+    path: ["inbox"],
+    hint: "What reached you, and what needs a person",
+  },
+  {
+    key: "me",
+    workspace: "me",
+    label: "My work",
+    icon: "person",
+    path: ["me"],
+    hint: "Your priorities, your asks, and what became workable",
+  },
+  {
+    key: "work",
+    workspace: "work",
+    label: "All work",
+    icon: "check",
+    path: ["work"],
+    hint: "Every item in the company, in one list",
+  },
+  {
+    key: "work-search",
+    workspace: "work",
+    label: "Search",
+    icon: "search",
+    path: ["work", "search"],
+    hint: "Rank the company's work against a phrase, the way an agent does",
+  },
+  {
+    key: "work-views",
+    workspace: "work",
+    label: "Saved views",
+    icon: "dashboard",
+    path: ["work", "views"],
+    hint: "Every saved view, who owns it and which are pinned",
+  },
+  {
+    key: "goals",
+    workspace: "work",
+    label: "Goals",
+    icon: "target",
+    path: ["goals"],
+    hint: "The tier above projects, and what its targets say right now",
+  },
+  {
+    key: "company",
+    workspace: "company",
+    label: "Company",
+    icon: "crown",
+    path: ["company"],
+    hint: "The charter: mission, vision and the standing policies",
+  },
+  {
+    key: "people",
+    workspace: "company",
+    label: "People",
+    icon: "group",
+    path: ["company", "people"],
+    hint: "Every seat, what it is doing, and why it stopped",
+  },
+  {
+    key: "knowledge",
+    workspace: "knowledge",
+    label: "Knowledge",
+    icon: "book_2",
+    path: ["knowledge"],
+    hint: "Search the company knowledge base, and browse its containers",
+  },
+  {
+    key: "activity",
+    workspace: "activity",
+    label: "Live now",
+    icon: "bolt",
+    path: ["activity"],
+    hint: "What the company is doing at this moment",
+  },
+  {
+    key: "turns",
+    workspace: "activity",
+    label: "Turns",
+    icon: "neurology",
+    path: ["activity", "turns"],
+    hint: "Every turn the seats ran, round by round",
+  },
+  {
+    key: "runs",
+    workspace: "activity",
+    label: "Coding runs",
+    icon: "terminal",
+    path: ["activity", "runs"],
+    hint: "Detached sandbox runs, live and finished",
+  },
+  {
+    key: "schedules",
+    workspace: "activity",
+    label: "Schedules",
+    icon: "calendar_clock",
+    path: ["activity", "schedules"],
+    hint: "Recurring work, when it next fires and how it last went",
+  },
+  {
+    key: "a2a",
+    workspace: "activity",
+    label: "Agent-to-agent",
+    icon: "link",
+    path: ["activity", "a2a"],
+    hint: "The private channels seats opened with each other",
+  },
+  {
+    key: "events",
+    workspace: "activity",
+    label: "Event log",
+    icon: "timeline",
+    path: ["activity", "events"],
+    hint: "Everything the engine published, filterable and paged",
+  },
+  {
+    key: "cost",
+    workspace: "cost",
+    label: "Spend",
+    icon: "token",
+    path: ["cost"],
+    hint: "Token spend by seat, model, phase and turn",
+  },
+  {
+    key: "budgets",
+    workspace: "cost",
+    label: "Budgets",
+    icon: "shield",
+    path: ["cost", "budgets"],
+    hint: "Caps, the durable counter behind them, and what is being refused",
+  },
+  {
+    key: "fleet",
+    workspace: "admin",
+    label: "Infrastructure",
+    icon: "dns",
+    path: ["admin", "fleet"],
+    hint: "Nodes, seat leases, domains and config rollout",
+    guarded: true,
+  },
+  {
+    key: "integrations",
+    workspace: "admin",
+    label: "Integrations",
+    icon: "cable",
+    path: ["admin", "integrations"],
+    hint: "The surfaces agents work on, and whether traffic is arriving",
+    guarded: true,
+  },
+  {
+    key: "tools",
+    workspace: "admin",
+    label: "Tools",
+    icon: "build",
+    path: ["admin", "tools"],
+    hint: "Every tool a seat can call, by origin",
+    guarded: true,
+  },
+  {
+    key: "config",
+    workspace: "admin",
+    label: "Configuration",
+    icon: "tune",
+    path: ["admin", "config"],
+    hint: "The active company revision, its history and its diffs",
+    guarded: true,
+  },
+  {
+    key: "credentials",
+    workspace: "admin",
+    label: "Credentials",
+    icon: "key",
+    path: ["admin", "credentials"],
+    hint: "The company's credentials — names and provenance, never values",
+    guarded: true,
+  },
+  {
+    key: "audit",
+    workspace: "admin",
+    label: "Audit",
+    icon: "description",
+    path: ["admin", "audit"],
+    hint: "Every write a person or a token made, across all four subsystems",
+    guarded: true,
+  },
+];
+
+/** The destinations belonging to one workspace, in declaration order. */
+export function destinationsOf(workspace: Workspace): Destination[] {
+  return DESTINATIONS.filter((d) => d.workspace === workspace);
 }

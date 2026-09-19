@@ -167,6 +167,28 @@ func (t *writeProject) Parameters() map[string]any {
 						"type": "string",
 						"enum": toAny(sprintMeasureNames()),
 					},
+					"capacity": map[string]any{
+						"type": "object",
+						"description": "What each seat can take in a sprint, " +
+							"keyed by handle, in this project's own measure. " +
+							"A seat named here is compared against it; one " +
+							"that is not has NO capacity, which is not a " +
+							"capacity of zero. Sending the object REPLACES " +
+							"the set, so drop a seat by omitting it.",
+						"additionalProperties": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"points":       map[string]any{"type": "number"},
+								"estimate_min": map[string]any{"type": "integer"},
+							},
+						},
+					},
+					"point_scale": map[string]any{
+						"type": "array",
+						"description": "The estimates this project allows, " +
+							"as a list of numbers. Empty means any.",
+						"items": map[string]any{"type": "number"},
+					},
 				},
 			},
 			"default_assignee": map[string]any{
@@ -237,7 +259,13 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
 	// holds both facets cannot land the tag half and then be refused the
 	// policy half on a different answer to the same question.
+	// EITHER AUTHORITY IS ENOUGH, and the operator half is why the lookup
+	// below is not the whole answer: it resolves the lead from the ORG
+	// CHART by handle, and an operator token carries its own name rather
+	// than a seat's — so for the founder's own surface it always answers
+	// false. See [tracker.ProjectAuthority].
 	lead := t.leads != nil && t.leads(ctx, actor.Handle, key)
+	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
 
@@ -246,7 +274,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
 		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
-			tagEdit, tracker.TagAuthority{Lead: lead})
+			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
 		}
@@ -261,7 +289,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if !edit.Empty() {
 		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
-			edit, tracker.ProjectAuthority{Lead: lead, Operator: actor.Kind == tracker.AuthorOperator})
+			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
 		}
@@ -369,6 +397,8 @@ func sprintPolicyArg(spec map[string]any) *tracker.SprintPolicy {
 		ArchiveAfter: argInt(spec, "archive_after", 0),
 		NameFormat:   strings.TrimSpace(argString(spec, "name_format")),
 		Measure:      tracker.SprintMeasure(strings.TrimSpace(argString(spec, "measure"))),
+		Capacity:     capacityArg(spec["capacity"]),
+		PointScale:   pointScaleArg(spec["point_scale"]),
 	}
 	if policy.LengthDays == 0 {
 		// THE DEFAULT IS APPLIED AT THE EDGE rather than left as a zero
@@ -378,6 +408,69 @@ func sprintPolicyArg(spec map[string]any) *tracker.SprintPolicy {
 		policy.LengthDays = tracker.DefaultSprintDays
 	}
 	return policy
+}
+
+// capacityArg reads the per-seat capacities a policy declares.
+//
+// THE FIELD HAD NO PRODUCER. `SprintPolicy.Capacity` is validated by
+// [checkSprintPolicy], read by the sprint report and read again by the
+// workload — and nothing in the tree could set it, so the loop that validates
+// it ran over an always-empty map and both readers answered "nobody declared
+// one" in every company. It is the shape `waiting_on` was in before it got a
+// writer: an entire feature over a field only a test could author.
+//
+// A WHOLE-SET REPLACE, not a merge, and the schema says so. A merge cannot
+// express a removal — there is no value meaning "this seat no longer has a
+// capacity", since zero is a real one — so a caller dropping somebody would
+// have no gesture at all.
+//
+// A MALFORMED ENTRY IS SKIPPED rather than refusing the whole edit: the policy
+// carries nine other fields and losing all of them over one bad capacity is a
+// worse answer than landing the rest. What CANNOT be salvaged — a negative
+// number — is refused by [checkSprintPolicy] inside the write, which is the
+// only place that sees the project it is landing on.
+func capacityArg(raw any) map[string]tracker.Capacity {
+	spec, ok := raw.(map[string]any)
+	if !ok || len(spec) == 0 {
+		return nil
+	}
+	out := make(map[string]tracker.Capacity, len(spec))
+	for handle, value := range spec {
+		entry, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(handle)] = tracker.Capacity{
+			Points:      argFloat(entry, "points"),
+			EstimateMin: argInt(entry, "estimate_min", 0),
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// pointScaleArg reads the estimates a project allows.
+//
+// The other half of the same hole: validated, never writable. An empty list
+// and an absent one are the same state — any estimate is allowed — so there is
+// no three-valued question here and nil is the honest answer to both.
+func pointScaleArg(raw any) []float64 {
+	list, ok := raw.([]any)
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	out := make([]float64, 0, len(list))
+	for _, value := range list {
+		if n, ok := value.(float64); ok {
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // sprintMeasureNames renders the closed set for the tool schema.

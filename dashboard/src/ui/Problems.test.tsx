@@ -1,0 +1,221 @@
+/**
+ * The engine's refusal, rendered as the list of problems it is.
+ *
+ * A validation refusal is several of them joined with newlines, each one
+ * `path: kind: what to do`. HTML collapses those newlines, so the banner
+ * showed one run-on paragraph in which the second problem's config path ran
+ * into the end of the first one's sentence.
+ */
+
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
+
+import { Problems, marked, paths, split, withProblems } from "./Problems.tsx";
+
+afterEach(cleanup);
+
+// The two the engine refuses a half-filled Atlassian form with, verbatim.
+const refusal =
+  "integrations.confluence: required value missing: give url (a Data Center " +
+  "instance or a Cloud site) or cloud_id (an Atlassian Cloud id): without one " +
+  "there is nowhere to search\n" +
+  "integrations.confluence.webhook_secret: required value missing: required " +
+  "for a Data Center instance: the /webhooks/confluence route has nothing to " +
+  "verify a delivery with otherwise, and answers 503 to every one";
+
+// TWO PROBLEMS ARE TWO LINES. Joined, the second one's path read as the end
+// of the first one's sentence: "…nowhere to search
+// integrations.confluence.webhook_secret: required value missing…".
+test("a refusal is split into the problems it holds", () => {
+  const problems = split(refusal);
+  expect(problems.length).toBe(2);
+  expect(problems[0]?.path).toBe("integrations.confluence");
+  expect(problems[1]?.path).toBe("integrations.confluence.webhook_secret");
+  // THE ENGINE'S OWN WORDS, unaltered: a message this screen rewrote would
+  // be a second, quieter statement of a rule that lives in Go.
+  expect(problems[0]?.text).toContain("nowhere to search");
+});
+
+// A SENTENCE WITHOUT A PATH IS LEFT WHOLE. Not every refusal names a place in
+// the document, and inventing a head for one would put a fragment of prose in
+// the face reserved for config paths.
+test("a refusal that names no path is one plain line", () => {
+  const problems = split("The engine refused that.");
+  expect(problems).toEqual([{ text: "The engine refused that." }]);
+});
+
+// EACH KIND OF THING GETS ITS OWN FACE, because a wall of one makes a reader
+// parse the punctuation to work out which is which.
+test("values, routes, references and links are picked out of a sentence", () => {
+  render(
+    <span>
+      {marked(
+        'set ${ATLASSIAN_ORG_ID}, the /webhooks/confluence route, "auto", ' +
+          "integrations.github.provisioning.org, or see https://example.com/docs",
+      )}
+    </span>,
+  );
+
+  // A SEALED ENTRY wears the face it wears in a field and on the Secrets
+  // screen: it names something in the store, not a path in the document.
+  //
+  // THE VARIANT IS uilet's NOW — `crewlet-inline-code--reference`, where this
+  // file drew `is-reference` itself — and it is asserted AGAINST THE PATH CHIP
+  // in the same sentence rather than against a spelling alone: the claim is
+  // that the two are drawn as different kinds of thing, and a single hardcoded
+  // name cannot fail on both chips losing their variant together.
+  const ref = screen.getByText("${ATLASSIAN_ORG_ID}");
+  const path = screen.getByText("integrations.github.provisioning.org");
+  expect(ref.tagName).toBe("CODE");
+  expect(path.tagName).toBe("CODE");
+  expect(ref.className).toContain("crewlet-inline-code--reference");
+  expect(path.className).not.toContain("crewlet-inline-code--reference");
+
+  expect(screen.getByText("/webhooks/confluence").tagName).toBe("CODE");
+  expect(screen.getByText('"auto"').tagName).toBe("CODE");
+
+  // A LINK IS SOMEWHERE TO GO, and it opens in a new tab: this sits in a
+  // dialog holding a half-filled form, and following it in place would throw
+  // the form away to read a page about how to fill it in.
+  const link = screen.getByRole("link", { name: "https://example.com/docs" });
+  expect(link.getAttribute("href")).toBe("https://example.com/docs");
+  expect(link.getAttribute("target")).toBe("_blank");
+});
+
+// A LINK GOES WHERE THE SENTENCE PUTS IT.
+//
+// Only the person writing the sentence knows which words the link is about.
+// Appended, it became "Open GitLab" after a full stop, and a reader had to
+// work out which of several pages the form meant.
+test("a sentence carries its own link and its own literals", () => {
+  render(
+    <span>
+      {marked(
+        "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new) " +
+          "with the full `api` scope, belonging to somebody who owns the group.",
+      )}
+    </span>,
+  );
+
+  const link = screen.getByRole("link", { name: "Create a legacy personal token" });
+  expect(link.getAttribute("href")).toBe(
+    "https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new",
+  );
+  expect(link.getAttribute("target")).toBe("_blank");
+  // THE SCOPE IS A LITERAL, so it wears the face a value wears rather than
+  // reading as the English word "api".
+  expect(screen.getByText("api").tagName).toBe("CODE");
+  // And the rest is prose, with the address nowhere in it.
+  expect(screen.queryByText(/personal_access_tokens/)).toBeNull();
+});
+
+// ONE PROBLEM IS A SENTENCE, not a list of one: a bullet on its own reads as
+// the first of several and sets a reader looking for the rest.
+test("a single problem is not drawn as a list", () => {
+  const { container } = render(<Problems detail="integrations.jira: required value missing" />);
+  expect(container.querySelector("ul")).toBeNull();
+  expect(screen.getByText("integrations.jira").tagName).toBe("CODE");
+});
+
+// AND SEVERAL ARE, one per line.
+test("several problems are one line each", () => {
+  const { container } = render(<Problems detail={refusal} />);
+  expect(container.querySelectorAll("li").length).toBe(2);
+  // The route inside the second one is still picked out.
+  expect(screen.getByText("/webhooks/confluence").tagName).toBe("CODE");
+});
+
+// A CHIP INSIDE A REFUSAL CARRIES THE REFUSAL'S INK.
+//
+// This is drawn inside something already saying the value cannot be saved —
+// a danger Callout on the setup dialog, a field's error line — and a chip
+// that kept its own quiet grey put a calm identifier in the middle of an
+// alarming sentence. In ordinary prose the chip keeps that grey, which is
+// what says "this is a string you type", so the two are checked together:
+// the tone is a fact about where the sentence is drawn, not about the chip.
+test("a path inside a refusal takes the message's ink, and one in prose does not", () => {
+  const { unmount } = render(<Problems detail="integrations.jira: required value missing" />);
+  expect(screen.getByText("integrations.jira").className).toContain("crewlet-inline-code--inherit");
+  unmount();
+
+  render(<span>{marked("see integrations.jira.project for the key")}</span>);
+  expect(screen.getByText("integrations.jira.project").className).not.toContain(
+    "crewlet-inline-code--inherit",
+  );
+});
+
+// A MAP KEY IS WRITTEN AS THE OPERATOR WROTE IT. A server name can carry a
+// hyphen and a variable name is upper snake case, and the three patterns that
+// find a path each missed both, in three slightly different ways: the path
+// rendered as prose, and a caller acting on `paths` never heard about it.
+describe("a path through map keys", () => {
+  const upper = "roles[2].mcp_env.tracker.TOKEN";
+  const hyphenated = "units[0].children[1].mcp_env.jira-cloud.API_TOKEN";
+
+  test("opens a problem line", () => {
+    expect(split(`${upper}: literal value is masked`)[0]?.path).toBe(upper);
+    expect(split(`${hyphenated}: literal value is masked`)[0]?.path).toBe(hyphenated);
+    expect(split("mcp_env.tracker.TOKEN: unresolved")[0]?.path).toBe("mcp_env.tracker.TOKEN");
+  });
+
+  test("is found inside a sentence, in the same shape as at the head", () => {
+    expect(paths(`the mask at ${hyphenated} could not be restored`)).toEqual([hyphenated]);
+    expect(paths(`${upper}: set it, or remove roles[2].mcp_env.tracker.TOKEN`)).toEqual([upper]);
+  });
+
+  test("is marked up as one path, not as a word and a fragment", () => {
+    render(<span>{marked(`restore ${hyphenated} before renaming`)}</span>);
+    expect(screen.getByText(hyphenated).tagName).toBe("CODE");
+  });
+
+  test("stops where the key does", () => {
+    // A trailing index, and a dash that belongs to the sentence.
+    expect(paths("remove roles[0].contact.emails[1] and retry")).toEqual([
+      "roles[0].contact.emails[1]",
+    ]);
+    expect(paths("check mcp_env.jira-cloud.API_TOKEN - then retry")).toEqual([
+      "mcp_env.jira-cloud.API_TOKEN",
+    ]);
+  });
+
+  // AND A PATH IS STILL FOUND WHERE THE DASH IS GLUED TO IT. A key may carry
+  // a hyphen and may not end in one, so a sentence that runs a dash straight
+  // onto a path used to leave the pattern backtracking segment by segment for
+  // a shorter path it would accept, finding none, and reporting nothing: the
+  // path rendered as prose and no caller heard about it. The one thing that
+  // may be lost at the end is the dash, never the path.
+  test("a dash run straight onto a path does not lose the path", () => {
+    expect(paths(`check ${hyphenated}- then retry`)).toEqual([hyphenated]);
+    expect(paths("see integrations.jira.project-key- for the key")).toEqual([
+      "integrations.jira.project-key",
+    ]);
+  });
+
+  test("an ordinary sentence is still prose", () => {
+    expect(paths("See crewlet.yaml, e.g. the API section.")).toEqual([]);
+    expect(split("The Engine refused: try again")).toEqual([
+      { text: "The Engine refused: try again" },
+    ]);
+  });
+});
+
+// A FIELD'S ERROR LINE IS A REFUSAL OR IT IS NOTHING.
+//
+// [FormField] takes a NODE for its error and draws the line only where one is
+// truthy, so the absent case has to stay absent: a field handed an element
+// wrapping an empty refusal would carry `aria-invalid` and an alert region on
+// a value nobody has refused. And the present case has to be the LIST, not the
+// string — a field rendering the refusal as plain text would be the one place
+// in the product where a config path does not read as one.
+describe("a refusal as a field's error line", () => {
+  test("no refusal is no node", () => {
+    expect(withProblems(undefined)).toBeUndefined();
+    expect(withProblems("")).toBeUndefined();
+  });
+
+  test("a refusal is the problems, marked up", () => {
+    render(<span>{withProblems("integrations.jira.project_key: required value missing")}</span>);
+    expect(screen.getByText("integrations.jira.project_key").tagName).toBe("CODE");
+    expect(screen.getByText(/required value missing/)).toBeTruthy();
+  });
+});

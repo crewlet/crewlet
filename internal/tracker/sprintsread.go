@@ -348,7 +348,7 @@ func readSprintRows(ctx context.Context, tx *sql.Tx, p Project, q SprintQuery,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []SprintRow
+	out := []SprintRow{}
 	for rows.Next() {
 		var row SprintRow
 		var start, end int64
@@ -451,6 +451,24 @@ func scoreSprint(ctx context.Context, tx *sql.Tx, p Project, row *SprintRow,
 	column := measure.Column()
 	delivered, deliveredArgs := deliveredClause("t.status_group", "t.status")
 
+	// EACH FIGURE VALUED AT THE INSTANT IT IS ABOUT, which is the whole
+	// of what these numbers mean. Every one of them summed the task's
+	// CURRENT size, so re-estimating a task from 3 to 8 on day 5 raised
+	// what `committed` had reported on day 1 by five points nobody
+	// committed — and the burndown beside it did the same thing, so the
+	// panel and the chart agreed only by being wrong together. Now they
+	// agree by reading one history: see [measureAt] for the walk's half.
+	//
+	// The PAST-TENSE figures take a per-row instant — `added` is worth
+	// what it was worth when it ARRIVED, `removed` what it was worth when
+	// it LEFT — and the present-tense ones keep the current column, which
+	// is the honest reading rather than an oversight: `remaining` is the
+	// work still to do NOW, at today's estimate, and `unestimated` is
+	// what a reader would go and fix.
+	atStart := measureAtSQL(measure, "m.task_id", "?")
+	atArrival := measureAtSQL(measure, "m.task_id", "m.from_at")
+	atExit := measureAtSQL(measure, "m.task_id", "m.to_at")
+
 	// ONE STATEMENT over the stays, because every figure but `done` is a
 	// predicate over the same two instants and five separate counts would
 	// be five scans of one index range.
@@ -460,7 +478,7 @@ func scoreSprint(ctx context.Context, tx *sql.Tx, p Project, row *SprintRow,
 	// backwards when somebody tidied up — the same rule a goal's task
 	// targets take.
 	args := []any{
-		start, start, // committed
+		start, start, start, // committed, and the instant it is valued at
 		start, end, // added
 		start, end, // removed
 	}
@@ -470,15 +488,15 @@ func scoreSprint(ctx context.Context, tx *sql.Tx, p Project, row *SprintRow,
 		SELECT
 			COALESCE(SUM(CASE WHEN m.from_at <= ?
 			                   AND (m.to_at IS NULL OR m.to_at > ?)
-			                  THEN `+column+` ELSE 0 END), 0),
+			                  THEN `+atStart+` ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN m.from_at > ? AND m.from_at <= ?
-			                  THEN `+column+` ELSE 0 END), 0),
+			                  THEN `+atArrival+` ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN m.to_at IS NOT NULL AND m.to_at > ?
 			                   AND m.to_at <= ? AND m.rolled_to IS NULL
-			                  THEN `+column+` ELSE 0 END), 0),
+			                  THEN `+atExit+` ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN m.to_at IS NULL AND NOT (`+delivered+`)
 			                  THEN `+column+` ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN m.rolled_to IS NOT NULL THEN `+column+`
+			COALESCE(SUM(CASE WHEN m.rolled_to IS NOT NULL THEN `+atExit+`
 			                  ELSE 0 END), 0),
 			COUNT(*),
 			COALESCE(SUM(CASE WHEN `+column+` = 0 THEN 1 ELSE 0 END), 0)
@@ -501,10 +519,46 @@ func scoreSprint(ctx context.Context, tx *sql.Tx, p Project, row *SprintRow,
 		row.Figures.OpenAfterClose += row.Figures.Remaining
 	}
 
-	if err := scoreSprintDone(ctx, tx, p, row, column); err != nil {
+	if err := scoreSprintDone(ctx, tx, p, row, measure); err != nil {
 		return err
 	}
-	return scoreSprintAssignees(ctx, tx, p, row, column, start, end)
+	return scoreSprintAssignees(ctx, tx, p, row, measure, start, end)
+}
+
+// measureAtSQL is the size a task held at one instant, as a scalar subquery
+// over `tracker_measure_spans` — the SQL half of [measureAt].
+//
+// `instant` is an expression rather than a value so one helper serves both
+// shapes the figures need: a FIXED instant, passed as a `?` the caller binds
+// (the sprint's start), and a PER-ROW one taken from the stay itself
+// (`m.from_at` when the task arrived, `m.to_at` when it left). `taskID` is an
+// expression too, because one caller joins the stay row as `m` and another
+// has only the task as `t`.
+//
+// THE TWO FALLBACKS ARE BOTH LOAD-BEARING, and in this order:
+//
+//   - the EARLIEST span, for an instant older than the history the per-task
+//     cap kept. Answering zero would say the task was unestimated when what
+//     is true is that this node no longer knows, and it would make a sprint's
+//     `committed` fall as its tasks were re-estimated often enough to push
+//     their own history out. This is [measureAt]'s rule, stated in SQL so the
+//     panel and the chart cannot part over it.
+//   - the CURRENT row, for a task with no history at all. Migration 0011
+//     creates the span table empty and a task gets spans only when a record
+//     next touches it, so on the day this ships every task in every running
+//     deployment has none — and every already-closed sprint has tasks nothing
+//     will ever touch again. Without this every one of those figures would
+//     read zero, which is a worse answer than the one being fixed.
+func measureAtSQL(measure SprintMeasure, taskID, instant string) string {
+	span := measure.SpanColumn()
+	return `COALESCE(
+			(SELECT ` + span + ` FROM tracker_measure_spans v
+			  WHERE v.task_id = ` + taskID + ` AND v.from_at <= ` + instant + `
+			  ORDER BY v.from_at DESC LIMIT 1),
+			(SELECT ` + span + ` FROM tracker_measure_spans v
+			  WHERE v.task_id = ` + taskID + `
+			  ORDER BY v.from_at ASC LIMIT 1),
+			` + measure.Column() + `)`
 }
 
 // deliveredInWindow is "this task was delivered inside this sprint's window".
@@ -525,14 +579,30 @@ func deliveredInWindow(project string, number int, from, to int64) (string, []an
 }
 
 // scoreSprintDone sums the delivered tasks of the sprint's window.
+//
+// VALUED AT THE WINDOW'S END, which is where this number is read from: `done`
+// is what the sprint SHIPPED and it is what velocity is built out of, so a
+// task corrected from 5 points to 13 a month after the sprint closed must not
+// raise what that sprint is recorded as having delivered. The end instant
+// rather than each task's own delivery instant, deliberately — it makes this
+// figure exactly the burndown's LAST point, the same way `committed` is its
+// first, and a panel whose numbers are not the ends of the chart beside it is
+// a screen somebody files a bug against.
 func scoreSprintDone(ctx context.Context, tx *sql.Tx, p Project,
-	row *SprintRow, column string) error {
+	row *SprintRow, measure SprintMeasure) error {
 
-	done, args := deliveredInWindow(p.Key, row.Number,
-		store.EncodeTime(row.StartAt), store.EncodeTime(sprintWindowEnd(*row)))
+	end := store.EncodeTime(sprintWindowEnd(*row))
+	done, window := deliveredInWindow(p.Key, row.Number,
+		store.EncodeTime(row.StartAt), end)
+	// THE END INSTANT BINDS FIRST, because its `?` is in the SELECT list
+	// and the window's are in the WHERE. Appending it last bound the
+	// delivered clause's first argument as the instant and pushed every
+	// other one along by a place, which read as a sprint that delivered
+	// nothing at all.
+	args := append([]any{end}, window...)
 	args = append(args, p.Key, row.Number)
 	err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(`+column+`), 0)
+		SELECT COALESCE(SUM(`+measureAtSQL(measure, "t.id", "?")+`), 0)
 		FROM tracker_tasks t
 		WHERE t.removed_at IS NULL AND `+done+`
 		  AND EXISTS (SELECT 1 FROM tracker_task_sprints m
@@ -550,22 +620,33 @@ func scoreSprintDone(ctx context.Context, tx *sql.Tx, p Project,
 // THE SAME FOUR PREDICATES the sprint's own figures use, so the breakdown sums
 // to the total. It is one GROUP BY rather than a query per person because a
 // sprint's assignees are not knowable before the read.
+// scoreSprintAssignees breaks the sprint down by who is carrying it.
+//
+// EACH SHARE VALUED THE WAY THE SPRINT TOTAL IS, which is the whole reason
+// the two are computed from one vocabulary: `by_assignee` that does not sum to
+// `done` is a screen somebody files a bug against, and it would not have
+// summed the moment one side valued a re-estimate historically and the other
+// did not.
 func scoreSprintAssignees(ctx context.Context, tx *sql.Tx, p Project,
-	row *SprintRow, column string, start, end int64) error {
+	row *SprintRow, measure SprintMeasure, start, end int64) error {
 
+	column := measure.Column()
 	done, doneArgs := deliveredInWindow(p.Key, row.Number, start, end)
 	notDelivered, notDeliveredArgs := deliveredClause("t.status_group", "t.status")
+	atStart := measureAtSQL(measure, "m.task_id", "?")
+	atEnd := measureAtSQL(measure, "m.task_id", "?")
 
-	args := []any{start, start}
+	args := []any{start, start, start}
 	args = append(args, doneArgs...)
+	args = append(args, end)
 	args = append(args, notDeliveredArgs...)
 	args = append(args, p.Key, row.Number, MaxSprintAssignees)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT t.assignee,
 			COALESCE(SUM(CASE WHEN m.from_at <= ?
 			                   AND (m.to_at IS NULL OR m.to_at > ?)
-			                  THEN `+column+` ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN `+done+` THEN `+column+` ELSE 0 END), 0),
+			                  THEN `+atStart+` ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN `+done+` THEN `+atEnd+` ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN m.to_at IS NULL AND NOT (`+notDelivered+`)
 			                  THEN `+column+` ELSE 0 END), 0),
 			COALESCE(SUM(`+column+`), 0),

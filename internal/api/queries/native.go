@@ -112,18 +112,28 @@ type WorkReader interface {
 		tracker.ProjectDetail, error)
 	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
 		tracker.SprintListing, error)
+	Burndown(ctx context.Context, q tracker.BurndownQuery, now time.Time) (
+		tracker.Burndown, error)
+	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
+		tracker.WorkloadAnswer, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
 	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
 		tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
+	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
+	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
+		tracker.RoutingAnswer, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
 type PageReader interface {
 	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
 	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
-	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.Container, error)
+	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.ContainerListing, error)
+	Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error)
+	Revision(ctx context.Context, pageID string, version int,
+		fresh statelog.Freshness) (pages.Revision, bool, error)
 }
 
 // ---- work -------------------------------------------------------------- //
@@ -138,9 +148,23 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// THE VIEWER'S OWN PROJECT comes from the chart, because
 	// `preset=my_queue` asks what is unclaimed in THEIR container and an
 	// unscoped second arm offers every unassigned task in the company.
-	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
-		Handle:  strings.TrimSpace(p.String("viewer")),
-		Project: s.projectOf(strings.TrimSpace(p.String("viewer"))),
+	//
+	// AND IT IS TAKEN OUT OF THE BAG, which is the whole of why it is read
+	// into a variable first. `viewer` is a property of the SURFACE — its
+	// credential, its turn's seat — and not of the grammar: it is absent
+	// from [tracker.QueryKeys], and `checkKeys` refuses a key nothing
+	// parses rather than ignoring it. Handed on inside the map it made
+	// every call that named a viewer a `bad_params` refusal, and took
+	// `preset=my_queue` with it — the preset expands from `viewer.Handle`,
+	// so it is answerable only on a surface that HAS a viewer, and this is
+	// that surface. The comment above described the behaviour this call did
+	// not have.
+	values := p.Values()
+	viewer := strings.TrimSpace(p.String("viewer"))
+	delete(values, "viewer")
+	q, err := s.Work.ExpandedQuery(ctx, values, tracker.Viewer{
+		Handle:  viewer,
+		Project: s.projectOf(viewer),
 	}, now, time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
@@ -238,8 +262,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// against — but the bound is about this node's LAG, checked before
 	// any row is read, and a detail is exactly as far behind as a board
 	// on the same node. The floor travels for the same reason.
+	//
+	// EVERY PART, the custom fields included: a screen draws a properties
+	// panel from the ANNOTATED values — each with the slug, name and type
+	// that explain it — and a detail that left them out rendered a task
+	// filed with a severity as one that carried none, beside a board that
+	// had just filtered on that very field.
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
-		Comments: true, History: true, Links: true,
+		Comments: true, History: true, Links: true, Fields: true,
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -252,19 +282,31 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 
 // workViews answers one container's view strip.
 //
-// # Why `viewer` is a parameter here and not the caller's own identity
+// # Why `viewer` is a parameter, and why naming somebody else needs a
+// credential
 //
 // A personal view is private to its OWNER, and the reader enforces that in
-// SQL. What `viewer=` selects is which person's strip to render — their
-// personal views and their pins — and it is safe to let a caller name one
-// because this whole surface is guarded: the caller already holds the
-// company's own credential and can read every task, comment and page in it.
-// The privacy a personal view has is from other COMPANY MEMBERS reading
-// through their own seats, which is a boundary the seat tools enforce and this
-// route is on the other side of.
+// SQL. What `viewer=` selects is WHOSE strip to render — their personal views
+// and their pins — so it has to be a parameter: a screen reaches this before
+// it knows who is looking, and `work_views` is asked for a container rather
+// than for a person.
 //
-// Absent is the SHARED strip: no pins and no personal views but the shared
-// ones, which is what a screen draws before it knows who is looking.
+// It used to be unchecked, on the reasoning that the whole surface is guarded
+// so the caller already holds the company's own credential and can read every
+// task, comment and page in it anyway. That reasoning has the same hole
+// [Sources.workPerson] records: `api.allow_anonymous_read` opens this surface,
+// and then `viewer=` is a free choice of whose record to read. Anybody could
+// walk the org chart — which `org` answers — and page through every seat's
+// pinned views by handle. So the parameter now takes the scope rule the other
+// personal questions take, through [Sources.viewerPins]: your own, or an
+// operator credential for anybody else's.
+//
+// Absent is still the SHARED strip: no pins and no personal views but the
+// shared ones, which is what a screen draws before it knows who is looking,
+// and what the sidebar and the board ask for on every poll. That is why the
+// rule is [Sources.viewerPins] rather than [Sources.viewerHandle] — the
+// refusal an absent handle earns on a question ABOUT somebody would refuse a
+// strip that has a perfectly good answer.
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -274,9 +316,13 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
+	if err != nil {
+		return nil, err
+	}
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
-		Viewer:    strings.TrimSpace(p.String("viewer")),
+		Viewer:    viewer,
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [freshness] and [Sources.workItems].
@@ -393,15 +439,21 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// THE HANDLE IS A PARAMETER for the reason [Sources.workViews]' viewer is: this
-// whole surface is guarded, so the caller already holds the company's own
-// credential. What the parameter selects is whose day to render, and the
-// engine's own write side is where the authority lives — a read here can no
-// more mark somebody's work read than a screen can.
+// SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
+// `work_inbox` take: an absent handle is the caller's own seat, and naming
+// anybody else's needs an operator credential.
+//
+// It DEMANDED a handle and checked nothing, on the reasoning that the whole
+// surface is guarded so the caller already holds the company's credential.
+// That reasoning has a hole in it that the other two do not: `api.allow_
+// anonymous_read` opens this surface, and this answer carries the richest
+// personal record the engine keeps — somebody's unread notices, what they mean
+// to work on next, and who set that order. The parameter selected whose. A
+// scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle := strings.TrimSpace(p.String("handle"))
-	if handle == "" {
-		return nil, badParams("handle", "", nil)
+	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
 	}
 	fresh, err := freshness(p)
 	if err != nil {
@@ -673,6 +725,76 @@ func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
 	return listing, nil
 }
 
+// workWorkload answers who is carrying how much, against what they can take.
+//
+// NO VIEWER AND NO HANDLE. Every other read of somebody's load is about ONE
+// person and resolves the viewer from the caller's own credential; this one is
+// about everybody at once, which is the whole question — "who is overloaded"
+// has no answer that names a person in advance.
+func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
+		Unit:  strings.TrimSpace(p.String("unit")),
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	return out, nil
+}
+
+// workBurndown answers one sprint's day-by-day series.
+//
+// TWO REQUIRED KEYS AND NO DEFAULT FOR EITHER. A sprint is numbered per
+// project, so a number with no key names one sprint per team; and defaulting
+// the number to "the active one" would make a saved link mean a different
+// sprint every fortnight, which is the one thing a chart somebody bookmarked
+// must not do.
+func (s Sources) workBurndown(ctx context.Context, p Params) (any, error) {
+	project := strings.TrimSpace(p.String("project"))
+	if project == "" {
+		return nil, badParams("project", "", nil)
+	}
+	number := p.Int("sprint", 0)
+	if number <= 0 {
+		return nil, badParams("sprint", strings.TrimSpace(p.String("sprint")),
+			[]string{"a sprint number this project has minted"})
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.Work.Burndown(ctx, tracker.BurndownQuery{
+		Project: project,
+		Sprint:  number,
+		// THE WHOLE FRESHNESS, as every other native read hands it over.
+		// `MinPosition` was the one field this call dropped, so a caller
+		// that had just written and passed the position back was told
+		// its burndown was served — at a checkpoint that need not have
+		// included the write. A floor silently ignored is the one shape
+		// a read level cannot be audited from the answer.
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+	}, time.Now().UTC())
+	switch {
+	case errors.Is(err, tracker.ErrNoProject), errors.Is(err, tracker.ErrNoSprint):
+		// BOTH ARE NOT-FOUND and the message survives the
+		// classification, which is what tells a caller which of the two
+		// they got: a mistyped key and a sprint nobody has minted are
+		// different repairs.
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		return nil, unavailableIfBehind(err)
+	}
+	return out, nil
+}
+
 // chartUnits is the running org as the tracker's unit seam.
 //
 // THE ADAPTER IS THE ENGINE'S, not a second copy: resolving a project's
@@ -730,6 +852,23 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
 		}
 	}
+	// WHO WAS WRITING, which is the audit screen's whole question: every
+	// commit a token or a person made, across the company, rather than one
+	// seat's work. REFUSED rather than dropped when it names a kind this
+	// build does not have — a filter silently ignored answers a wider
+	// question than the caller asked and looks exactly like one that
+	// worked, which on an audit surface is the worst shape of all.
+	for _, name := range strings.Split(p.String("actor_kinds"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		kind := tracker.AuthorKind(name)
+		if !kind.Valid() {
+			return nil, badParams("actor_kinds", name, names(tracker.AuthorKinds))
+		}
+		q.ActorKinds = append(q.ActorKinds, kind)
+	}
 	// THE `since` KEY TAKES EITHER SHAPE, and which one it is decides what
 	// it means: a LOG POSITION resumes a feed exactly, and an instant is
 	// the wall-clock bound a person typed. Tried as a position first,
@@ -778,9 +917,13 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	handle := strings.TrimSpace(p.String("handle"))
-	if handle == "" {
-		return nil, badParams("handle", "", nil)
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerHandle]. This
+	// was registered operator-only and demanded a handle, which is why
+	// routes/MyWork.tsx picked the alphabetically first seat: there was no
+	// way for the screen to know whose day it was drawing.
+	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
 	}
 	fresh, err := freshness(p)
 	if err != nil {

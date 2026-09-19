@@ -133,9 +133,8 @@ type LiveCall struct {
 // A PROCESS-LIFETIME meter, never to be compared against the 24-hour spend
 // rollup or the 7-day per-agent total that sit beside it on the same screen.
 type Meter struct {
-	Used      int    `json:"used"`
-	Max       int    `json:"max"`
-	RefusedAt string `json:"refused_at"`
+	Used int `json:"used"`
+	Max  int `json:"max"`
 }
 
 // Overlay is the live half of an agent row, merged onto its static config row.
@@ -253,6 +252,21 @@ func num(payload map[string]any, key string) int {
 		return v
 	case float64:
 		return int(v)
+	}
+	return 0
+}
+
+// fraction reads a fractional value, for the one payload field that is money.
+//
+// SEPARATE FROM num rather than a widening of it: num TRUNCATES, which is
+// correct for a token count and silently wrong for a price — every phase that
+// cost less than a dollar would report zero, which is most of them.
+func fraction(payload map[string]any, key string) float64 {
+	switch v := payload[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
 	}
 	return 0
 }

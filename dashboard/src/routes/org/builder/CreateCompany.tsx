@@ -27,6 +27,7 @@ import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
+import { screenPath } from "./dialogParts.tsx";
 import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -234,7 +235,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
             Agents reach people and work through the company's integrations.
           </span>
           <div className="row">
-            <ButtonLink variant="secondary" size="small" href={href(["integrations"])}>
+            <ButtonLink variant="secondary" size="small" href={href(screenPath("integrations"))}>
               Open Integrations
             </ButtonLink>
           </div>

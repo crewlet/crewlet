@@ -123,9 +123,20 @@ func (l *Ledger) Recent(ctx context.Context, limit int) ([]schedule.Run, error) 
 		// table. The contract says a non-positive limit returns nothing.
 		return nil, nil
 	}
-	rows, err := l.db.QueryContext(ctx, recentSQL, limit)
+	return l.scanRuns(ctx, "recent", recentSQL, limit)
+}
+
+// scanRuns reads a run listing. ONE DECODER for both listings, because the
+// column order, the instant decoding and the two typed enums are the half a
+// second copy gets subtly wrong — and a listing that decoded an outcome
+// differently from its sibling would show one schedule's history in a
+// vocabulary the rest of the screen does not use.
+func (l *Ledger) scanRuns(ctx context.Context, what, query string, args ...any) (
+	[]schedule.Run, error) {
+
+	rows, err := l.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("sqlledger: recent: %w", err)
+		return nil, fmt.Errorf("sqlledger: %s: %w", what, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -140,7 +151,7 @@ func (l *Ledger) Recent(ctx context.Context, limit int) ([]schedule.Run, error) 
 		)
 		if err := rows.Scan(&scope, &run.ScopeID, &run.ScheduleName, &run.FireLabel,
 			&run.TargetHandle, &scheduledAt, &firedAt, &outcome, &run.TraceID); err != nil {
-			return nil, fmt.Errorf("sqlledger: recent: scan: %w", err)
+			return nil, fmt.Errorf("sqlledger: %s: scan: %w", what, err)
 		}
 		run.Scope = types.ScheduleScope(scope)
 		run.Outcome = schedule.Outcome(outcome)
@@ -149,9 +160,37 @@ func (l *Ledger) Recent(ctx context.Context, limit int) ([]schedule.Run, error) 
 		out = append(out, run)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sqlledger: recent: %w", err)
+		return nil, fmt.Errorf("sqlledger: %s: %w", what, err)
 	}
 	return out, nil
+}
+
+// recentForSQL is recentSQL narrowed to one schedule's identity tuple.
+//
+// The SAME ORDER and the same columns, written as one statement each rather
+// than one statement with a conditional WHERE: the two differ by a predicate
+// and share an ORDER BY that is part of the Ledger contract, and a builder
+// that composed them would be the place that clause silently stops matching.
+const recentForSQL = `
+SELECT scope_type, scope_id, schedule_name, fire_label, target_handle,
+       scheduled_at, fired_at, outcome, trace_id
+FROM scheduled_runs
+WHERE scope_type = ? AND scope_id = ? AND schedule_name = ?
+ORDER BY fired_at DESC, scope_type, scope_id, schedule_name, fire_label, target_handle
+LIMIT ?`
+
+// RecentFor returns one schedule's newest rows first, at most limit of them.
+func (l *Ledger) RecentFor(ctx context.Context, scope types.ScheduleScope,
+	scopeID, name string, limit int) ([]schedule.Run, error) {
+
+	if l == nil || l.db == nil {
+		return nil, ErrNoDB
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+	return l.scanRuns(ctx, "recent for "+name, recentForSQL,
+		string(scope), scopeID, name, limit)
 }
 
 const purgeSQL = `DELETE FROM scheduled_runs WHERE fired_at < ?`

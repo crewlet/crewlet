@@ -57,6 +57,17 @@ type Record struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+
+	// CostUSD is what the phase's own provider billed, in dollars, and it
+	// is set on a MINORITY of records: only a subscription coding CLI
+	// reports a price, so every native-provider phase carries zero.
+	//
+	// Which is why [Bucket] counts PricedCalls beside the sum. A total of
+	// zero over zero priced calls means nobody said what this cost; a total
+	// of zero over three means three runs were billed nothing. Collapsing
+	// those two into one number is how a dashboard comes to render "$0.00"
+	// under a company that has never had a price reported at all.
+	CostUSD float64 `json:"cost_usd"`
 }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
@@ -67,6 +78,16 @@ type Bucket struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 	Calls        int `json:"calls"`
+
+	// CostUSD sums what the calls in this bucket were billed, and
+	// PricedCalls counts how many of them said anything at all.
+	//
+	// TWO FIELDS, because a price is reported by one backend and not by the
+	// rest (see [Record.CostUSD]) — so a currency total is meaningless
+	// without the count of records behind it, and a reader that shows a
+	// dollar figure over PricedCalls == 0 is stating a price nobody quoted.
+	CostUSD     float64 `json:"cost_usd"`
+	PricedCalls int     `json:"priced_calls"`
 }
 
 func (b *Bucket) add(r Record) {
@@ -74,6 +95,13 @@ func (b *Bucket) add(r Record) {
 	b.OutputTokens += r.OutputTokens
 	b.TotalTokens += r.TotalTokens
 	b.Calls++
+	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
+	// would silently reduce a company's reported spend. Only a positive one
+	// counts, and only a positive one is priced.
+	if r.CostUSD > 0 {
+		b.CostUSD += r.CostUSD
+		b.PricedCalls++
+	}
 }
 
 // PhaseRow is the per-phase breakdown of a rollup.
@@ -129,10 +157,23 @@ type TurnRow struct {
 
 // Rollup is the whole breakdown.
 type Rollup struct {
-	// SinceDays and AgentRole describe the WINDOW this covers, so a reader
-	// looking at a number knows what it is a number of. Both are set by
-	// the caller that chose them, not derived here.
-	SinceDays int    `json:"since_days"`
+	// Since and Until describe the WINDOW this covers, so a reader looking
+	// at a number knows what it is a number of. Both are RFC3339 instants
+	// set by the caller that chose them, not derived here.
+	//
+	// INSTANTS RATHER THAN A DAY COUNT, which is what this was. A count is
+	// a window anchored at now, and a time-range control produces two edges
+	// that need not be: "1 June to 8 June" is not any number of days back
+	// from this afternoon, and a rollup that could only say "7 days" put a
+	// heading over the figures that disagreed with the chart beside them
+	// the moment a reader named their own window.
+	//
+	// Until is EXCLUSIVE, matching every other half-open window in this
+	// engine, so two adjacent rollups share their boundary instant without
+	// either losing it or counting it twice.
+	Since string `json:"since"`
+	Until string `json:"until"`
+
 	AgentRole string `json:"agent_role"`
 
 	Totals   Bucket      `json:"totals"`
@@ -158,9 +199,18 @@ type Options struct {
 	// guessing one — a wrong link is worse than no link.
 	Handles map[string]string
 
-	// SinceDays and AgentRole are recorded on the rollup as the window it
-	// describes. The caller does the filtering; this only reports it.
-	SinceDays int
+	// Since, Until and AgentRole are recorded on the rollup as the window
+	// it describes. The caller does the filtering; this only reports it.
+	//
+	// Each is rendered as it is given, and a zero one renders EMPTY —
+	// unbounded on that side. Aggregate never reads the clock to fill one
+	// in: every caller here already holds the window it filtered by (the
+	// store's own [store.PhaseTokenQuery.Window] hands back both edges),
+	// and a fold that read the clock would be a second opinion about a
+	// window somebody already decided.
+	Since time.Time
+	Until time.Time
+
 	AgentRole string
 
 	// RecentTurns caps the per-turn list. Zero takes DefaultRecentTurns.
@@ -183,7 +233,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 	}
 
 	out := Rollup{
-		SinceDays: opts.SinceDays,
+		Since:     stamp(opts.Since),
+		Until:     stamp(opts.Until),
 		AgentRole: opts.AgentRole,
 		// Never nil. A nil slice marshals to `null`, and the client does
 		// `d.by_phase.length` — so an empty window would throw in the
@@ -382,4 +433,12 @@ func compareStamp(a, b string) int {
 		return at.Compare(bt)
 	}
 	return cmp.Compare(a, b)
+}
+
+// stamp renders a window edge, or the empty string for an unbounded one.
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

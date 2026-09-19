@@ -74,7 +74,7 @@ async function settleOn(hash: string) {
 }
 
 beforeEach(() => {
-  history.replaceState(null, "", "#/org");
+  history.replaceState(null, "", "#/company");
 });
 
 afterEach(() => {
@@ -83,20 +83,20 @@ afterEach(() => {
   history.replaceState(null, "", "#/");
 });
 
-test("a push from code waits for the guard, and leave makes it", async () => {
+test("a push from code waits for the guard, and leave makes it", () => {
   const probe = holdAll();
   mount(probe.guard);
-  act(() => nav!.to(["people"]));
-  expect(probe.asked).toEqual(["#/people"]);
-  expect(location.hash).toBe("#/org");
-  expect(shown).toBe("#/org");
+  act(() => nav!.to(["company", "people"]));
+  expect(probe.asked).toEqual(["#/company/people"]);
+  expect(location.hash).toBe("#/company");
+  expect(shown).toBe("#/company");
   act(() => probe.leave());
-  expect(location.hash).toBe("#/people");
-  expect(shown).toBe("#/people");
+  expect(location.hash).toBe("#/company/people");
+  expect(shown).toBe("#/company/people");
   // A section is a push too.
-  act(() => nav!.section("lens", "builder"));
-  expect(probe.asked).toEqual(["#/people", "#/people?lens=builder"]);
-  expect(location.hash).toBe("#/people");
+  act(() => nav!.section("view", "table"));
+  expect(probe.asked).toEqual(["#/company/people", "#/company/people?view=table"]);
+  expect(location.hash).toBe("#/company/people");
 });
 
 test("a replace stays on the entry, so no guard is asked", () => {
@@ -104,29 +104,29 @@ test("a replace stays on the entry, so no guard is asked", () => {
   mount(probe.guard);
   act(() => nav!.filter({ unit: "Sales" }));
   expect(probe.asked).toEqual([]);
-  expect(location.hash).toBe("#/org?unit=Sales");
+  expect(location.hash).toBe("#/company?unit=Sales");
 });
 
 test("Back and Forward are undone while held, and leave makes each", async () => {
   const view = mount(null);
-  act(() => nav!.to(["people"]));
-  act(() => nav!.to(["runs"]));
+  act(() => nav!.to(["company", "people"]));
+  act(() => nav!.to(["activity", "runs"]));
   const probe = holdAll();
   view.rerender(probe.guard);
 
   act(() => history.back());
-  await waitFor(() => expect(probe.asked).toEqual(["#/people"]));
+  await waitFor(() => expect(probe.asked).toEqual(["#/company/people"]));
   // Undone: the page never showed the entry it was asked about.
-  await settleOn("#/runs");
+  await settleOn("#/activity/runs");
 
   act(() => probe.leave());
-  await settleOn("#/people");
+  await settleOn("#/company/people");
 
   act(() => history.forward());
-  await waitFor(() => expect(probe.asked).toEqual(["#/people", "#/runs"]));
-  await settleOn("#/people");
+  await waitFor(() => expect(probe.asked).toEqual(["#/company/people", "#/activity/runs"]));
+  await settleOn("#/company/people");
   act(() => probe.leave());
-  await settleOn("#/runs");
+  await settleOn("#/activity/runs");
 });
 
 // A link is an entry the browser makes itself, with no place stamped on it:
@@ -135,14 +135,14 @@ test("a link is held and undone, and leave follows it", async () => {
   const probe = holdAll();
   mount(probe.guard);
   const link = document.createElement("a");
-  link.href = "#/integrations";
+  link.href = "#/admin/integrations";
   document.body.appendChild(link);
   try {
     fireEvent.click(link);
-    await waitFor(() => expect(probe.asked).toEqual(["#/integrations"]));
-    await settleOn("#/org");
+    await waitFor(() => expect(probe.asked).toEqual(["#/admin/integrations"]));
+    await settleOn("#/company");
     act(() => probe.leave());
-    await settleOn("#/integrations");
+    await settleOn("#/admin/integrations");
   } finally {
     link.remove();
   }
@@ -154,13 +154,13 @@ test("a guard that lets a move go is not in its way, and no guard holds nothing"
     asked.push(to.hash);
     return false;
   });
-  act(() => nav!.to(["people"]));
-  expect(asked).toEqual(["#/people"]);
-  expect(shown).toBe("#/people");
+  act(() => nav!.to(["company", "people"]));
+  expect(asked).toEqual(["#/company/people"]);
+  expect(shown).toBe("#/company/people");
   view.rerender(null);
   act(() => history.back());
-  await settleOn("#/org");
-  expect(asked).toEqual(["#/people"]);
+  await settleOn("#/company");
+  expect(asked).toEqual(["#/company/people"]);
 });
 
 // An editor's question is asked over the lens's: the guard that began to
@@ -186,14 +186,14 @@ test("the guard that began to hold last is asked first, and every guard before t
   );
   const view = render(ui(false));
   view.rerender(ui(true));
-  act(() => nav!.to(["people"]));
-  expect(inner.asked).toEqual(["#/people"]);
+  act(() => nav!.to(["company", "people"]));
+  expect(inner.asked).toEqual(["#/company/people"]);
   expect(outer.asked).toEqual([]);
   act(() => inner.leave());
-  expect(outer.asked).toEqual(["#/people"]);
-  expect(shown).toBe("#/org");
+  expect(outer.asked).toEqual(["#/company/people"]);
+  expect(shown).toBe("#/company");
   act(() => outer.leave());
-  expect(shown).toBe("#/people");
+  expect(shown).toBe("#/company/people");
 });
 
 test("a reload or a closed tab asks while a leave or an unload guard holds, and only then", () => {
@@ -238,13 +238,13 @@ test("the page listens for a reload only while something holds work", () => {
 // so the move takes its place from the entry, not from a router that has yet
 // to adopt it: stamped with another place, every Back after it would be
 // undone in the wrong direction.
-test("a move made before the router adopts its entry keeps the entry's place", async () => {
+test("a move made before the router adopts its entry keeps the entry's place", () => {
   // A router that has stood on the session's first entry, as a fresh page's has.
   history.replaceState(null, "", "#/");
   render(<Router>{null}</Router>);
   cleanup();
 
-  history.replaceState({ crewletIndex: 3 }, "", "#/org");
+  history.replaceState({ crewletIndex: 3 }, "", "#/company");
   function Early() {
     const navigator = useNavigator();
     useEffect(() => navigator.filter({ unit: "Sales" }), [navigator]);
@@ -256,8 +256,8 @@ test("a move made before the router adopts its entry keeps the entry's place", a
       <Probe guard={null} />
     </Router>,
   );
-  expect(location.hash).toBe("#/org?unit=Sales");
+  expect(location.hash).toBe("#/company?unit=Sales");
   expect((history.state as { crewletIndex?: unknown }).crewletIndex).toBe(3);
-  act(() => nav!.to(["people"]));
+  act(() => nav!.to(["company", "people"]));
   expect((history.state as { crewletIndex?: unknown }).crewletIndex).toBe(4);
 });

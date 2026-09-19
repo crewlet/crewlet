@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -211,8 +212,8 @@ func checkView(view *View) error {
 			"maximum is %d — shorten the name rather than having it cut",
 			view.ID, len(view.Name), MaxViewName)
 	case !view.Type.Valid():
-		return fmt.Errorf("tracker: %q is not a view shape — the three are "+
-			"%s, %s and %s", view.Type, ViewList, ViewBoard, ViewCalendar)
+		return fmt.Errorf("tracker: %q is not a view shape — the shapes are "+
+			"%s", view.Type, strings.Join(ViewTypeNames(), ", "))
 	case !ValidContainerKind(view.Container.Kind):
 		return fmt.Errorf("tracker: %q is not a container a view can belong "+
 			"to — the four are %s, %s, %s and %s", view.Container.Kind,
@@ -270,17 +271,20 @@ func checkView(view *View) error {
 	return nil
 }
 
-// Valid reports whether this is one of the three shapes.
+// Valid reports whether this is one of the shapes [ViewTypes] names.
 //
-// A CLOSED SET, and the type's own comment says there are no others: a fourth
-// rendering is a screen that does not exist, so a view naming one is refused
-// at the write rather than rendered as a blank tab.
-func (t ViewType) Valid() bool {
-	switch t {
-	case ViewList, ViewBoard, ViewCalendar:
-		return true
+// A CLOSED SET, and the type's own comment says there are no others: a
+// rendering that list does not name is a screen that does not exist, so a view
+// naming one is refused at the write rather than rendered as a blank tab.
+func (t ViewType) Valid() bool { return slices.Contains(ViewTypes, t) }
+
+// ViewTypeNames is [ViewTypes] as the strings a schema enum and a refusal use.
+func ViewTypeNames() []string {
+	out := make([]string, len(ViewTypes))
+	for i, t := range ViewTypes {
+		out[i] = string(t)
 	}
-	return false
+	return out
 }
 
 // readView reads one saved view inside a write's own snapshot.

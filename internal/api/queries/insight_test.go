@@ -3,7 +3,9 @@ package queries_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -459,4 +461,295 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 		t.Errorf("no company and no backend share one reason: %q", none["reason"])
 	}
 
+}
+
+// EVERY TRACE THIS TURN TOUCHED, and the capped read is exactly why it is
+// ASKED rather than derived.
+//
+// A turn RESUMED on another node after a restart spans more than one trace,
+// which is precisely the turn somebody opens this page to understand. The
+// client derived the set from the rows it was handed — so a trace whose events
+// all fell in the middle a capped read dropped simply vanished, and one button
+// labelled "trace" led to half the story with nothing saying a second half
+// existed.
+func TestATurnNamesEveryTraceItTouchedEvenOnesTheCapDropped(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	payload, err := json.Marshal(map[string]any{"turn_id": "resumed", "phase": "execute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THE SECOND TRACE IS IN THE MIDDLE, which is the only placement a
+	// client-side derivation cannot see: the head read stops at the cap and
+	// the recovered ending starts after it, so a trace confined to the rows
+	// between them is invisible to anybody counting the rows they got.
+	const extra = 60
+	total := store.MaxTurnEvents + extra
+	middle := store.MaxTurnEvents + extra/2
+	for i := range total {
+		trace := "trace-first"
+		switch {
+		case i == middle:
+			trace = "trace-resumed"
+		case i > middle:
+			trace = "trace-third"
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:   fmt.Sprintf("e-%04d", i),
+			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
+			Category: "lifecycle", Actor: "PM", TraceID: trace, Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "resumed"}))
+	traces := stringList(t, got["trace_ids"])
+	// IN FIRST-APPEARANCE ORDER, which is the order a reader follows them
+	// in: the trace the turn started under comes first.
+	want := []string{"trace-first", "trace-resumed", "trace-third"}
+	if !slices.Equal(traces, want) {
+		t.Fatalf("trace_ids = %v, want %v — the middle one is the trace a "+
+			"client-side derivation loses to the cap", traces, want)
+	}
+}
+
+// A TURN WITH NO TRACE AT ALL ANSWERS AN EMPTY LIST, never null: a client
+// rendering `trace_ids.length` should not have to guard the field as well, and
+// an event written before tracing existed carries no trace id.
+func TestATurnWithNoTracesAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	payload, err := json.Marshal(map[string]any{"turn_id": "untraced"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "e-1", Type: "turn_completed", Time: time.Now().UTC().Add(-time.Minute),
+		Category: "lifecycle", Actor: "PM", Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "untraced"}))
+	if got["trace_ids"] == nil {
+		// AN EMPTY LIST, never null: a client rendering `.length` on the
+		// field should not have to guard the field as well.
+		t.Fatal("trace_ids is null on a turn whose events carry no trace")
+	}
+	if traces := stringList(t, got["trace_ids"]); len(traces) != 0 {
+		t.Errorf("trace_ids = %v on a turn whose events carry none", traces)
+	}
+}
+
+// stringList reads a JSON list of strings off an answer, since the helper above
+// round-trips through the wire — which is the shape a client actually sees.
+//
+// Not `strings`, which is the standard package this file also uses.
+func stringList(t *testing.T, v any) []string {
+	t.Helper()
+	list, ok := v.([]any)
+	if !ok {
+		t.Fatalf("%#v is not a list", v)
+	}
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		s, ok := item.(string)
+		if !ok {
+			t.Fatalf("%#v is not a string", item)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// THE WINDOW IS A FILTER AND NOT THE CURSOR, and `turn_id` was declared,
+// documented against migration 0014, and unaskable.
+//
+// `store.ListQuery` carried `TurnID` and the reader filtered on it, and no
+// surface ever passed one — so "every event of this turn" was answerable by
+// the store and reachable from nowhere. `since`/`until` did not exist at all,
+// which left a reader scrubbing a time range paging backwards through history
+// until they found it.
+func TestTheEventListTakesATurnAndAWindow(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	// RELATIVE TO NOW, because the log's own history window bounds every
+	// read: a fixed date far enough in the past is outside it, and the
+	// window filter under test would then be checked against a read that
+	// was already empty.
+	base := time.Now().UTC().Truncate(time.Second)
+
+	for i, e := range []struct {
+		id    string
+		turn  string
+		delta time.Duration
+	}{
+		{"e-old", "turn-a", -3 * time.Hour},
+		{"e-mid", "turn-a", -2 * time.Hour},
+		{"e-new", "turn-b", -1 * time.Hour},
+	} {
+		// THE TAG, not a field: `turn_id` is a promoted COLUMN the
+		// writer derives from the event's own tags and payload, so a
+		// record does not carry one directly.
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: e.id, Type: "agent_phase_completed", Time: base.Add(e.delta),
+			Category: "lifecycle", Actor: "PM",
+			Tags: map[string]string{"turn_id": e.turn},
+		}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	src := queries.Sources{Events: log}
+
+	ids := func(params map[string]any) []string {
+		t.Helper()
+		got := asMap(t, answer(t, src, "events", params))
+		out := []string{}
+		for _, row := range rows(t, got["events"]) {
+			out = append(out, fmt.Sprint(row["id"]))
+		}
+		return out
+	}
+
+	// ONE TURN, which is the filter that existed and could not be asked.
+	if got := ids(map[string]any{"turn_id": "turn-a"}); !slices.Equal(got,
+		[]string{"e-mid", "e-old"}) {
+
+		t.Errorf("turn_id=turn-a gave %v, want the turn's two events newest first", got)
+	}
+
+	// A HALF-OPEN WINDOW: since is inclusive, until is not. The boundary is
+	// what makes two adjacent windows cover a range without double-counting
+	// the row on the seam.
+	since := base.Add(-2 * time.Hour).Format(time.RFC3339)
+	until := base.Add(-1 * time.Hour).Format(time.RFC3339)
+	if got := ids(map[string]any{"since": since, "until": until}); !slices.Equal(got,
+		[]string{"e-mid"}) {
+
+		t.Errorf("[%s, %s) gave %v, want only the row on the lower bound",
+			since, until, got)
+	}
+
+	// EACH SIDE IS OPTIONAL, because an instant nobody named is unbounded
+	// rather than midnight in 1970.
+	if got := ids(map[string]any{"since": since}); !slices.Equal(got,
+		[]string{"e-new", "e-mid"}) {
+
+		t.Errorf("since alone gave %v, want everything from the bound on", got)
+	}
+}
+
+// A WINDOW THAT NAMES NO ROWS IS REFUSED rather than answered empty. The
+// interval is half-open, so `until <= since` is not a narrow window — it is an
+// empty one, and a reader who typed their bounds the wrong way round is told
+// rather than shown a company that did nothing.
+func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
+	t.Parallel()
+	src := queries.Sources{Events: openStore(t).Events()}
+	_, err := askNative(t, src, "events", map[string]any{
+		"since": "2026-04-16T12:00:00Z",
+		"until": "2026-04-16T11:00:00Z",
+	})
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an inverted window answered %v, want bad params", err)
+	}
+	// AND AN UNPARSEABLE BOUND NAMES THE PARAMETER, because a silently
+	// dropped one is a read that answers a different question than the one
+	// asked.
+	if _, err := askNative(t, src, "events", map[string]any{
+		"since": "last tuesday",
+	}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an unparseable since answered %v, want bad params", err)
+	}
+}
+
+// `failed` IS THREE-VALUED, and the third value is the default.
+//
+// nil is every turn, true is the ones that carried a failure, false is the
+// ones that did not. Folding the absent case into `false` would make an
+// unparameterised list hide every failing turn — which is the one an operator
+// opens this screen for.
+func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	seed := func(id string, failed bool) {
+		t.Helper()
+		tags := map[string]string{"turn_id": id, "agent_role": "PM"}
+		if failed {
+			tags["failed"] = "true"
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-p0", Type: "agent_phase_completed", Time: base,
+			Category: "lifecycle", Actor: "PM", Tags: tags,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("t-ok", false)
+	seed("t-bad", true)
+
+	src := queries.Sources{Events: log}
+	ids := func(params map[string]any) []string {
+		t.Helper()
+		got := asMap(t, answer(t, src, "turns", params))
+		out := []string{}
+		for _, row := range rows(t, got["turns"]) {
+			out = append(out, fmt.Sprint(row["turn_id"]))
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	if got := ids(nil); !slices.Equal(got, []string{"t-bad", "t-ok"}) {
+		t.Errorf("the default gave %v, want every turn — an absent filter is "+
+			"not `false`", got)
+	}
+	if got := ids(map[string]any{"failed": "true"}); !slices.Equal(got, []string{"t-bad"}) {
+		t.Errorf("failed=true gave %v", got)
+	}
+	if got := ids(map[string]any{"failed": "false"}); !slices.Equal(got, []string{"t-ok"}) {
+		t.Errorf("failed=false gave %v", got)
+	}
+	// A VALUE THAT IS NEITHER is refused rather than read as one of them.
+	if _, err := askNative(t, src, "turns", map[string]any{"failed": "maybe"}); !errors.Is(
+		err, queries.ErrBadParams) {
+
+		t.Errorf("failed=maybe answered %v, want bad params", err)
+	}
+}
+
+// THE CURSOR IS ECHOED, not left for a client to assemble — the rule the event
+// list already follows, because a client building it from the last row's
+// fields would be reimplementing the one thing that must not drift.
+func TestTheTurnListEchoesItsCursor(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "t-1-p0", Type: "agent_phase_completed", Time: base,
+		Category: "lifecycle", Actor: "PM",
+		Tags: map[string]string{"turn_id": "t-1", "agent_role": "PM"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turns", nil))
+	if got["next"] == nil || got["next"] == "" {
+		t.Fatalf("next = %#v on a page with a turn on it", got["next"])
+	}
+	// AND NOTHING TO RESUME FROM AT THE END, so a client walking the list
+	// stops rather than re-asking for the same page for ever.
+	empty := asMap(t, answer(t, queries.Sources{Events: openStore(t).Events()}, "turns", nil))
+	if empty["next"] != nil {
+		t.Errorf("next = %#v on an empty page", empty["next"])
+	}
 }

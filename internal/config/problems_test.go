@@ -243,6 +243,14 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 		{"duplicate seat name",
 			"name: Acme\nroles:\n  - name: Dev\n    handle: a\n  - name: Dev\n    handle: b\n", "conflict"},
 		{"duplicate unit name", "name: Acme\nunits:\n  - name: Eng\n  - name: Eng\n", "conflict"},
+		// Two seats on one account carries ErrDuplicateIdentity ALONE — no
+		// name or handle collided — so it is the one duplicate a missing
+		// table entry reports as `invalid`.
+		{"duplicate contact identity",
+			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +
+				"    contact: {slack_user_id: U0F}\n  - name: Ada\n    kind: human\n" +
+				"    contact: {slack_user_id: U0F}\n",
+			"conflict"},
 		// A collision an id carried names no duplicate name and so carries
 		// only the key sentinel, which is the entry the table lost.
 		{"duplicate unit key", "name: Acme\nunits:\n  - name: Platform\n  - name: Product\n    id: platform\n",

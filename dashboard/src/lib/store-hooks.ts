@@ -106,6 +106,32 @@ export function useTokens() {
   return useSlice(["tokens"], (s) => s.tokens);
 }
 
+/**
+ * The company's resolved schedules, as the handshake and every config apply
+ * push them.
+ *
+ * THE SLICE HAD NO ACCESSOR. `Store` declares it, lists it, fills it from the
+ * snapshot AND from the push, and emits on it — and nothing could read it, so
+ * the one screen that wanted schedules asked the engine instead and paid a
+ * round trip for rows this client already held, kept fresh on every apply.
+ *
+ * These are the RESOLVED rows, which is the distinction that matters against
+ * the other way to get a seat's schedules: `lib/seats.ts`'s `schedulesOf`
+ * reads the `schedules:` a seat AUTHORED out of the company document, so it
+ * is operator-gated and carries name, cron and task. A row here carries the
+ * effective timezone, the engine's own `next_run`, the `runners` a fire
+ * actually reaches, and `problem` when a cron or a zone cannot be read — and
+ * it is pushed to every reader, token or not.
+ *
+ * WHAT IT DOES NOT CARRY is the run ledger. `recent_runs` arrives only on the
+ * `schedules` QUESTION, so `routes/activity/Schedules.tsx` polls that
+ * deliberately and must not be moved onto this hook: it would silently lose
+ * the fires. This is for a reader that wants the schedules and nothing else.
+ */
+export function useSchedules() {
+  return useSlice(["schedules"], (s) => s.schedules ?? []);
+}
+
 export function useOrgBudget() {
   return useSlice(["budget"], (s) => s.budget);
 }
@@ -125,28 +151,29 @@ export function useConnection() {
   }));
 }
 
-export type { QueryMap, QueryName };
-
 /**
  * How often the engine's own health is re-read, in milliseconds.
  *
  * FIVE SECONDS, because that is the cadence the engine PUSHES at: the socket
  * ticks `{status, in_flight, shutting_down}` every five seconds, and the query
  * below fetches the rest of the same body. Read at any other interval the two
- * halves of one readout disagree by the difference, which is exactly what the
- * shell and the engine panel used to do at 15 and 5 seconds: the rail said the
- * engine was configured while the panel open in front of it said it was not,
- * for as long as ten seconds after a revision applied.
+ * halves of one readout disagree by the difference — which is what the shell
+ * and the screens that poll this separately do today at 15 seconds, so the
+ * rail can say the engine is configured while a panel open in front of it says
+ * it is not, for as long as fifteen seconds after a revision applied.
  */
 export const HEALTH_POLL_MS = 5_000;
 
 /**
- * The engine's own health: one read, shared by everything that shows it.
+ * The engine's own health: ONE read, shared by everything that shows it.
  *
  * `stream` rather than `health` because a query name may never collide with a
  * push kind, and the query answers the whole body where the push carries three
- * fields of it.
+ * fields of it — including `event_history_seconds`, the read floor three
+ * screens used to restate as literal copy.
  */
 export function useEngineHealth() {
   return useQuery("stream", undefined, { pollMs: HEALTH_POLL_MS });
 }
+
+export type { QueryMap, QueryName };

@@ -19,9 +19,46 @@
  * constant has no caller that exists only for a test.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+
+/**
+ * The screen file that declares `PHASE_ORDER`, found rather than addressed.
+ *
+ * A HARDCODED PATH BREAKS ON A MOVE, and this test's whole subject is a
+ * constant that has to keep agreeing with a Go slice — a property that
+ * survives the file being reorganised. It was `src/routes/Integrations.tsx`
+ * and went red the day the screens were grouped by workspace, reporting a
+ * drift that had not happened.
+ *
+ * KEYED ON THE DECLARATION, not the filename, so a rename does not break it
+ * either — and a file that no longer declares it fails as "nothing declares
+ * PHASE_ORDER", which is the honest answer and the one that sends a reader
+ * to the right place.
+ */
+function screenSource(): string {
+  const routes = join(process.cwd(), "src/routes");
+  const found: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".tsx") && !entry.name.includes(".test.")) {
+        const text = readFileSync(path, "utf8");
+        if (text.includes("const PHASE_ORDER")) found.push(text);
+      }
+    }
+  };
+  walk(routes);
+  if (found.length !== 1) {
+    throw new Error(
+      `${found.length} screens under src/routes declare PHASE_ORDER, want exactly one — ` +
+        "two would be two orders that can drift from each other as well as from the engine",
+    );
+  }
+  return found[0]!;
+}
 
 /** The `Phases` slice, in the order internal/integration/report.go writes it. */
 function enginePhases(): string[] {
@@ -42,11 +79,11 @@ function enginePhases(): string[] {
   });
 }
 
-/** PHASE_ORDER, as Integrations.tsx declares it. */
+/** PHASE_ORDER, as the screen declares it. */
 function screenPhases(): string[] {
-  const src = readFileSync(join(process.cwd(), "src/routes/Integrations.tsx"), "utf8");
+  const src = screenSource();
   const list = /const PHASE_ORDER = \[([\s\S]*?)\];/.exec(src);
-  if (!list) throw new Error("Integrations.tsx has no `PHASE_ORDER` list to read");
+  if (!list) throw new Error("the screen's `PHASE_ORDER` is not a list this reader can parse");
   return [...list[1]!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]!);
 }
 

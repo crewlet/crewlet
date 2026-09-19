@@ -191,7 +191,7 @@ describe("outside the chart", () => {
     const html = view.container.ownerDocument.body.innerHTML;
     expect(html).not.toContain("__redacted__");
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
-      "#/secrets",
+      "#/admin/credentials",
     );
   });
 

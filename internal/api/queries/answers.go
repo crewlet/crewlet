@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -87,7 +89,13 @@ type Sources struct {
 	// surface reads open channels and nothing else, and a source that could
 	// reach the activation pointer would eventually be given a reason to.
 	Channels interface {
+		// TWO LISTINGS WITH OPPOSITE RULES — see the coordination
+		// contract. The idle sweep's is open-only, because a closed
+		// channel re-reported is a second close for one channel; a read
+		// surface needs both, or the record the fleet keeps until the
+		// purge horizon is one nothing can ever show.
 		OpenChannels(ctx context.Context) ([]coord.Channel, error)
+		AllChannels(ctx context.Context) ([]coord.Channel, error)
 	}
 
 	// Knowledge resolves the company's ONE knowledge backend, behind the
@@ -170,6 +178,26 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
+	// WorkSearch is the ranked item search, and it is SEPARATE from
+	// [Sources.Work] because the two fail independently: the rows are the
+	// fleet's and the lexical index is this node's own, so a node still
+	// building one answers every board question and cannot rank a word.
+	// Nil leaves `work_search` unregistered, which is what a screen needs
+	// in order to offer the board's filters instead of an empty ranking.
+	WorkSearch WorkSearcher
+
+	// Conversations is the seat's own thread ledger — what it has said on
+	// a surface this engine does not own, and the record that stops it
+	// replying twice in one thread. Typed on the client since the client
+	// had types and registered nowhere, so the panel that reads it drew an
+	// empty list for every seat in every company.
+	Conversations Conversations
+
+	// Counterparties is what the learning loop remembers about WHO a seat
+	// has worked with — the one memory object that is about somebody else,
+	// and the one the memory answer never carried.
+	Counterparties Counterparties
+
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
 	//
@@ -212,6 +240,14 @@ type Sources struct {
 // not on the ledger. Satisfied by the SQL ledger and its memory twin alike.
 type ScheduleRuns interface {
 	Recent(ctx context.Context, limit int) ([]schedule.Run, error)
+
+	// RecentFor is the same listing narrowed to ONE schedule — see
+	// [schedule.Ledger]. The company-wide page is not a history of
+	// anything: twenty schedules firing hourly fill fifty rows in two and
+	// a half hours, so "did the standup fire this week" was unanswerable
+	// while every row of the answer sat in the table.
+	RecentFor(ctx context.Context, scope types.ScheduleScope,
+		scopeID, name string, limit int) ([]schedule.Run, error)
 }
 
 // clock reads the injected time, or the wall clock.
@@ -251,22 +287,63 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Events != nil {
 		r.Register("events", s.events)
+		// THE SAME ROWS WITH A TIME AXIS, which the listing has no
+		// dimension for: a page of rows says what happened and nothing
+		// about when the company was busy. A second question rather than
+		// a flag on the first, because the two answers have different
+		// shapes and one route returning either would make every caller
+		// branch on what came back — the same split `tokens` and
+		// `token_series` already carry.
+		r.Register("event_series", s.eventSeries)
 		r.Register("event", s.event)
 		r.Register("trace", s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
 		// answer, and migration 0014 which made it askable at all.
 		r.Register("turn", s.turn)
+		// AND THE LIST OF THEM, which did not exist: a turn is the unit
+		// of work this engine does and every other surface is a
+		// projection of one. The dashboard faked it by paging the raw
+		// feed sixty-one times and folding in the browser.
+		r.Register("turns", s.turns)
 		// The company's phase records, with their payloads. `events` cannot
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", s.phases)
+		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
+		// sum over the whole window, so it cannot say WHEN — which is the
+		// question a cost explorer is for. Gated on the event store rather
+		// than on the projection: the projection holds a day, and an axis
+		// that changed source when a reader widened the range is a seam
+		// across the one comparison the screen exists to make.
+		r.Register("token_series", s.tokenSeries)
 	}
 	if s.Health != nil {
 		r.Register("stream", s.stream)
 	}
 	if s.Coord != nil {
-		r.Register("fleet", s.fleet)
+		// OPERATOR-ONLY, like every other answer the Admin workspace
+		// draws. It reports the node ids, which node holds which seat,
+		// the lease epochs and how far a config rollout has reached —
+		// the shape of the deployment rather than the company's work.
+		// The dashboard already locks the row and its palette entry
+		// says "needs a token", and its own sidebar asks this beside
+		// `integrations`, which has always been operator-only. So this
+		// was the one destination of the five where the client claimed
+		// a guard the server did not keep, and on a node with
+		// `api.allow_anonymous_read` an anonymous GET read all of it.
+		r.RegisterOperator("fleet", s.fleet)
+	}
+	// WHO IS ASKING. Registered unconditionally: a process with no company
+	// still has a credential presented to it, and "this token resolves to
+	// no seat" is the answer a screen needs in order to say what to bind.
+	r.Register("viewer", s.viewer)
+	if s.Runs != nil {
+		// ONE SCHEDULE'S OWN HISTORY, gated on the LEDGER rather than on
+		// the company: the configured rows are a projection of the org
+		// and this is a store read, so a node with one and not the other
+		// is a real shape.
+		r.Register("schedule_runs", s.scheduleRuns)
 	}
 	if s.Company != nil {
 		// Gated on the COMPANY, not on the durable counter: the caps are
@@ -324,16 +401,47 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_projects", s.workProjects)
 		r.Register("work_project", s.workProject)
 		r.Register("work_sprints", s.workSprints)
+		// THE BURNDOWN IS A SERIES, and a series is a different read
+		// from a set of figures: `work_sprints` scores every sprint in
+		// the window at two instants, and this one scores ONE sprint at
+		// every day of its own window. Folding it in would make the
+		// five-sprint report pay for five series nobody asked to draw.
+		r.Register("work_burndown", s.workBurndown)
+		// AND WHO IS CARRYING HOW MUCH, across every project at once.
+		// The two halves of that question live apart and neither is
+		// reachable from the other: what somebody HOLDS is a group-by
+		// over the tasks, and what they CAN hold is a sprint policy —
+		// per project, which is what `work_sprints` answers one of. A
+		// caller that summed them itself paid one round trip per
+		// project and rewrote the three-valued capacity per surface.
+		r.Register("work_workload", s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.
 		r.Register("work_activity", s.workActivity)
-		// AND ONE PERSON'S DAY. Operator-only, because it is seven
-		// lists ABOUT somebody — their priorities, the questions
-		// waiting on them, the sub-items they claimed — and a surface
-		// that answered it anonymously would render anybody's day to
-		// anybody who asked.
-		r.RegisterOperator("work_my_work", s.workMyWork)
+		// AND ONE PERSON'S DAY, plus the notices that reached them.
+		//
+		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
+		// A caller reads the seat their own token is bound to, and
+		// naming anybody else's needs an operator credential, which is
+		// the same authority the tools that WRITE these records
+		// enforce. Registered operator-only, as `work_my_work` was, the
+		// landing screen becomes the most-gated screen in the product
+		// and the human teammate — one of the two readers this
+		// dashboard is for — is fictional. `work_person` has always
+		// been registered ungated, so this is what already ships rather
+		// than a new posture.
+		r.Register("work_my_work", s.workMyWork)
+		// THE READER HAS ALWAYS EXISTED and nothing asked it: twenty
+		// typed wake reasons, an addressed flag, a fallback flag and
+		// this person's own read and snooze marks, swept on a 365-day
+		// retention and reaching no screen.
+		r.Register("work_inbox", s.workInbox)
+		// WHO ONE CHANGE WOKE. The applier has written the set
+		// since the domain landed and its only trace on any surface
+		// was `work_activity.notified`: a boolean saying that
+		// somebody, somewhere, was told.
+		r.Register("work_routing", s.workRouting)
 		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)
@@ -346,12 +454,38 @@ func Register(r *Registry, s Sources) {
 		// navigation, and folding them together would ship every
 		// container's record with every page listing.
 		r.Register("containers", s.containers)
+		// WHAT HAPPENED TO THE PAGES, which `pages_history` has recorded
+		// since the domain landed with two indexes naming readers nobody
+		// wrote — and ONE REVISION'S BODY, which the detail's summaries
+		// could say existed and never show.
+		r.Register("page_activity", s.pageActivity)
+		r.Register("page_revision", s.pageRevision)
 	}
-	if s.Diary != nil || s.Episodes != nil || s.Skills != nil {
+	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
+		s.Counterparties != nil {
+
+		// FOUR HALVES NOW. Each is gated inside the answer rather than
+		// here, so a node holding one of them answers with that one and
+		// empty lists for the rest — which is what a client needs to
+		// tell "this seat has learned nothing" from "this node does not
+		// keep that half".
 		r.Register("agent_memory", s.agentMemory)
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
+	}
+	if s.WorkSearch != nil {
+		// SEARCH IS A QUESTION, not a filter on the board, and it is
+		// gated on its own index rather than on the tracker: the ranked
+		// reader is what `search_work` gives a seat, and the operator
+		// reading the same company had only `q=` — an escaped LIKE over
+		// the excerpt, gated to a span of days.
+		r.Register("work_search", s.workSearch)
+	}
+	if s.Conversations != nil {
+		// SCOPED, like every other per-seat question — see
+		// [Sources.viewerHandle].
+		r.Register("conversations", s.conversations)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes
@@ -530,12 +664,42 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		AgentRole:   p.String("agent_role"),
 		RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
 	}
+	// THE WINDOW AS TWO INSTANTS, which `since_days` cannot name: a
+	// time-range control produces two edges and they need not end at now.
+	// The same pair the series takes, and the same refusal, so a reader who
+	// scrubs to a window sees the chart and the figures above it move
+	// together rather than one of them staying anchored to this afternoon.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return nil, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return nil, err
+	}
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		return nil, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+			"window is half-open, so an empty one names no rows at all",
+			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
+	}
 	live := livestate.LiveSpendWindowDays()
 	days := p.Int("since_days", live)
+	q := store.PhaseTokenQuery{
+		SinceDays: days,
+		Since:     since,
+		Until:     until,
+		AgentRole: opts.AgentRole,
+	}
+	// LABELLED WITH WHAT THE STORE WILL ACTUALLY COVER, never with what was
+	// asked for: `since` is floored at the retention window, so a request
+	// for a year answered over thirty days and headed "a year" is a lie
+	// about the numbers beside it.
+	opts.Since, opts.Until = q.Window(time.Now())
 
-	// The live window, unfiltered, is the one the projection can answer.
-	if days == live && opts.AgentRole == "" {
-		opts.SinceDays = live
+	// The live window, unfiltered, is the one the projection can answer —
+	// and only when the caller named no instants of their own, since the
+	// projection holds one rolling window and cannot look behind it.
+	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
 		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
 	}
 	if s.Events == nil {
@@ -543,19 +707,12 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		// see is an EMPTY rollup labelled with the window asked for, not
 		// the live one relabelled — which would put a week's heading over
 		// an hour's numbers.
-		opts.SinceDays = days
 		return tokens.Aggregate(nil, opts), nil
 	}
-	records, err := s.Events.PhaseTokens(ctx, store.PhaseTokenQuery{
-		SinceDays: days, AgentRole: opts.AgentRole,
-	})
+	records, err := s.Events.PhaseTokens(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	// Reported as the store CLAMPED it, not as asked: a request for a year
-	// answered over thirty days and labelled a year is a lie about the
-	// numbers beside it.
-	opts.SinceDays = Clamp(days, store.DefaultPhaseTokenDays, store.MaxPhaseTokenDays)
 	return tokens.Aggregate(records, opts), nil
 }
 
@@ -603,16 +760,13 @@ func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
 // store filtered, and the difference shows up as rows that vanish when a reader
 // scrolls.
 func (s Sources) events(ctx context.Context, p Params) (any, error) {
-	q := store.ListQuery{
-		Limit:        Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage),
-		Type:         p.String("type"),
-		Source:       p.String("source"),
-		Category:     p.String("category"),
-		TraceID:      p.String("trace_id"),
-		Actor:        p.String("actor"),
-		RelatedAgent: p.String("agent"),
+	q, err := eventFilters(p)
+	if err != nil {
+		return nil, err
 	}
+	q.Limit = Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage)
 	if before := p.String("before_id"); before != "" {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
 		if err != nil {
 			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
@@ -637,6 +791,97 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// the walk. Saying so beats a client inferring it wrongly.
 		"exhausted": len(rows) == 0,
 	}, nil
+}
+
+// eventSeries answers the log's own time axis.
+//
+// THE FILTERS ARE THE LISTING'S, read through the same function, because the
+// two are halves of one screen: a bar counting rows the list below it would not
+// show is worse than no bar at all. The store compiles both from one predicate;
+// this makes sure both are handed the same one.
+func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
+	filters, err := eventFilters(p)
+	if err != nil {
+		return nil, err
+	}
+	bucket := store.EventBucket(p.String("bucket"))
+	if !bucket.Valid() {
+		return nil, fmt.Errorf("%w: bucket %q is not one of %v",
+			ErrBadParams, bucket, store.EventBuckets)
+	}
+	got, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
+	switch {
+	case errors.Is(err, store.ErrHistogramBucket),
+		errors.Is(err, store.ErrHistogramSpan),
+		errors.Is(err, store.ErrHistogramRelated):
+		// A REQUEST THIS SURFACE UNDERSTOOD AND REFUSED, so it answers
+		// 400 with the store's own sentence rather than 500 with
+		// "something went wrong": every one of these names the parameter
+		// the caller has to change.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
+	}
+	return got, nil
+}
+
+// eventFilters reads the filters both the listing and its axis take.
+//
+// ONE READER, for the reason the store has one predicate: a filter added to the
+// list and forgotten here would draw an axis over a wider set than the rows
+// beneath it, silently.
+func eventFilters(p Params) (store.ListQuery, error) {
+	q := store.ListQuery{
+		Type:         p.String("type"),
+		Source:       p.String("source"),
+		Category:     p.String("category"),
+		TraceID:      p.String("trace_id"),
+		Actor:        p.String("actor"),
+		RelatedAgent: p.String("agent"),
+		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
+		// DEAD: the column exists, the reader filters on it, and no
+		// surface ever passed one — so "every event of this turn" was
+		// answerable by the store and unaskable from anywhere.
+		TurnID: p.String("turn_id"),
+	}
+	// THE WINDOW, which is what a reader scrubbing a time range means and
+	// is NOT the cursor: a cursor is where a page resumes and moves with
+	// every page, while these are what was asked for and do not.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	q.Since, q.Until = since, until
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		return store.ListQuery{}, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+			"window is half-open, so an empty one names no rows at all",
+			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
+	}
+	return q, nil
+}
+
+// instantParam reads an RFC 3339 instant, or the zero time when absent.
+//
+// THE ZERO IS MEANINGFUL and is what makes each side of a window optional: an
+// instant nobody named is unbounded rather than midnight in 1970. A value that
+// is present and unparseable is refused naming the parameter, because a
+// silently-dropped bound is a read that answers a different question than the
+// one asked.
+func instantParam(p Params, name string) (time.Time, error) {
+	raw := strings.TrimSpace(p.String(name))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %s must be an RFC 3339 instant "+
+			"(2026-04-16T09:00:00Z), and %q is not: %w", ErrBadParams, name, raw, err)
+	}
+	return at.UTC(), nil
 }
 
 // cursorOf is the position a caller resumes from, or nil at the end.

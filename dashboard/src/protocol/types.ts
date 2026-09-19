@@ -195,11 +195,18 @@ export interface LiveCall {
   started_at?: string;
 }
 
-/** A live token meter. Process-lifetime — never comparable to a spend rollup. */
+/** A live token meter. Process-lifetime — never comparable to a spend rollup.
+ *
+ *  THERE IS NO `refused_at`. The field was on the wire, read here to draw a
+ *  "refusing charges" badge, and never written by the engine — so the badge
+ *  was unreachable on every company. It could not have been written either:
+ *  the report is built per NODE and a refusal happens inside one node's tool
+ *  loop, so a node that refused nothing would report no refusal while the
+ *  company next door was turning charges away. At or past the cap is what the
+ *  shared counter can honestly say. */
 export interface Meter {
   used: number;
   max: number;
-  refused_at: string;
 }
 
 /** The live half of a seat row, merged onto its static config row. */
@@ -244,11 +251,30 @@ export interface SandboxEntry {
 }
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */
+/** The durable statuses `sandbox.PendingRun` actually carries.
+ *
+ *  Not a free string: the screen's own tone map named `succeeded`, `completed`,
+ *  `cancelled` and `reclaimed`, none of which the engine can write, so four of
+ *  its seven entries were unreachable and three real states fell through to
+ *  the neutral default. */
+/**
+ * The five statuses a run record can hold.
+ *
+ * THERE IS NO `done` OR `failed` HERE, and that is the engine's shape rather
+ * than an omission: a run's record is DELETED once the run settles and its box
+ * is reclaimed, so `sandbox.Active` is every status a record can carry and the
+ * terminal pair can never reach a client. How a run ended is on the event
+ * stream — the resumed turn's own events, or a `sandbox_run_failed` naming the
+ * reason — never on this row.
+ */
+export type SandboxStatus =
+  "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
+
 export interface SandboxRun {
   turn_id: string;
   agent_handle: string;
   role: string;
-  status: string;
+  status: SandboxStatus;
   coding_agent: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
@@ -264,6 +290,37 @@ export interface SandboxRun {
   started_at: string;
   updated_at: string;
   answerable_in_chat: boolean;
+
+  /**
+   * What this run called through the MCP bridge, in order.
+   *
+   * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. A native tool loop keeps
+   * its calls in memory and the turn writes them when it ends; a bridged run's
+   * are made by a process outside the engine, minutes or hours apart and
+   * possibly across a restart. Absent on every run that is not bridged, which
+   * is every ordinary coding run.
+   */
+  bridge_calls?: BridgeCall[];
+
+  /**
+   * How many calls were dropped from the MIDDLE of that list.
+   *
+   * The engine bounds the log at 200 and drops the middle rather than the
+   * start — how a run began and how it ended are what explain it. Reported
+   * rather than hidden: a log that silently skips is a log that lies about
+   * what the run did.
+   */
+  bridge_calls_elided?: number;
+}
+
+/** One call a bridged run made. */
+export interface BridgeCall {
+  name: string;
+  /** What the caller passed, as JSON TEXT — never a decoded map. */
+  args?: string;
+  output?: string;
+  failed?: boolean;
+  at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +332,23 @@ export interface Bucket {
   output_tokens: number;
   total_tokens: number;
   calls: number;
+  /**
+   * What the calls in this bucket were billed, and how many of them quoted
+   * anything at all.
+   *
+   * TWO NUMBERS, because only a subscription coding CLI reports a price. A
+   * `cost_usd` of 0 over `priced_calls: 0` means nobody said what this cost;
+   * over 2 it means two runs were billed nothing.
+   *
+   * NOT RENDERED. The dashboard measures spend in TOKENS — a currency shown
+   * for the minority of calls that quote one, beside a token count covering
+   * all of them, reads as the company's spend and is a fraction of it. The
+   * field stays on the wire and in the store, so putting a price back on a
+   * screen is a rendering change rather than a migration. `priced_calls` IS
+   * read: it says how much of a window has accounting of its own.
+   */
+  cost_usd: number;
+  priced_calls: number;
 }
 
 export interface PhaseRow extends Bucket {
@@ -303,7 +377,9 @@ export interface TurnSpendRow extends Bucket {
 }
 
 export interface Rollup {
-  since_days: number;
+  /** The window this covers, as two RFC3339 instants — `until` exclusive. */
+  since: string;
+  until: string;
   agent_role: string;
   totals: Bucket;
   by_phase: PhaseRow[];
@@ -315,6 +391,81 @@ export interface Rollup {
   aggregated_through: string;
 }
 
+/**
+ * THE SAME SPEND WITH A TIME AXIS — `token_series`.
+ *
+ * `Rollup` is a breakdown whose every row is a sum over the whole window, so
+ * it cannot say WHEN. The engine buckets because it is the one place that can:
+ * the browser holds at most the live window's records, so an axis folded here
+ * would be correct for a day and absent for every other range.
+ */
+export interface SeriesBand extends Bucket {
+  /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
+  group: string;
+  handle?: string;
+  /** The residual: every group past the chart's cap, and how many it stands for. */
+  other: boolean;
+  folded: number;
+}
+
+export interface SeriesPoint extends Bucket {
+  /** The bucket's START, RFC 3339 in UTC — never its middle or its end. */
+  at: string;
+  groups: Record<string, Bucket>;
+  other: Bucket;
+}
+
+export interface TokenSeries {
+  group: "phase" | "model" | "seat" | "unit" | "worker" | "turn";
+  bucket: "hour" | "day";
+  /** The window COVERED, which the store may have floored below what was asked. */
+  since: string;
+  until: string;
+  series: SeriesPoint[];
+  by_group: SeriesBand[];
+  /**
+   * Every record in the window, INCLUDING the ones this grouping places in no
+   * band — so `totals` is not the sum of `by_group`, and `grouped` is what the
+   * bands do cover. Grouping by worker leaves out every phase that is not a
+   * worker's, and the gap is the answer to "why is this less than the rollup".
+   */
+  totals: Bucket;
+  grouped: Bucket;
+}
+
+/** One bucket of the event log's time axis. */
+export interface EventBar {
+  /** The bucket's START, RFC3339 — never its middle and never its end. */
+  at: string;
+  count: number;
+}
+
+/**
+ * The event log's own time axis.
+ *
+ * WHAT A PAGE OF ROWS CANNOT SAY: a listing answers what happened and has no
+ * dimension for when the company was busy. Counted by the ENGINE through the
+ * same predicate the listing filters with, so a bar can never claim rows the
+ * list beside it would not show.
+ */
+export interface EventSeries {
+  bucket: "minute" | "hour" | "day";
+  /** The window COVERED, snapped outward to whole buckets. */
+  since: string;
+  until: string;
+  /** Every bucket in the window, INCLUDING the empty ones. */
+  bars: EventBar[];
+  /** The window's whole count, stated rather than left as a sum of the bars. */
+  total: number;
+  /**
+   * How many rows each category would give, over the window, with the CATEGORY
+   * filter lifted and every other one applied — which is the only meaning a
+   * facet count can have. A category with no rows is absent, so a screen
+   * rendering the closed set reads a missing key as the zero it is.
+   */
+  by_category: Record<string, number>;
+}
+
 /** The org-wide live meter, plus the identity of the engine run reporting it. */
 export interface OrgBudget {
   meter_id?: string;
@@ -323,15 +474,15 @@ export interface OrgBudget {
 }
 
 export interface BudgetsAnswer {
-  /**
-   * `durable_updated_at` and `live_used` are absent when no company is
-   * applied: the engine then answers the caps as unknown rather than zero.
-   */
   org: {
     max_tokens: number;
     durable_used: number;
-    durable_updated_at?: string;
-    live_used?: number | null;
+    durable_updated_at: string;
+    /** NULL when this node holds no live meter — "nothing spent this run" and
+     *  "no meter here" are different facts, and the answer has always sent
+     *  null for the second. Typed as a plain number, a reader rendering it
+     *  drew a confident 0 for a seat this process has never run. */
+    live_used: number | null;
   };
   seats: {
     role: string;
@@ -340,11 +491,6 @@ export interface BudgetsAnswer {
     max_tokens: number;
     durable_used: number;
     durable_updated_at: string;
-    /**
-     * This process's own meter for the seat, or `null` when this node has
-     * none: "nothing spent this run" and "no meter here" are different
-     * facts, and a null read as zero states a measurement nobody took.
-     */
     live_used: number | null;
   }[];
   /** False means the durable counter could not be READ — never that it is zero. */
@@ -352,22 +498,255 @@ export interface BudgetsAnswer {
 }
 
 // ---------------------------------------------------------------------------
-// Org, tools, schedules
+// The company document (the guarded `config` query, `GET /config`)
 // ---------------------------------------------------------------------------
 
 /**
- * One seat on the ANONYMOUS org projection (`/org`, the snapshot's `org` and
- * the `org` push), as `internal/api`'s `OrgSeat` writes it.
+ * The company document as the configuration surface serves it, REDACTED: a
+ * credential field holds a whole `${VAR}` reference or the mask
+ * `__redacted__`, never a value.
  *
- * AN EXPLICIT PUBLIC SHAPE, not a marshal of the config's own role. The
+ * WHERE EVERYTHING THE PROJECTION NO LONGER CARRIES IS READ. `/org` is
+ * anonymous, so it was narrowed to a charter and a tree ([OrgProjection]); a
+ * seat's email, model chain, token budget, contact identities, tool
+ * credentials, integration blocks and schedules live here instead, behind the
+ * operator token.
+ *
+ * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
+ * the index signature keeps every other key the engine writes — including the
+ * keys a NEWER engine writes that this build has never heard of — part of the
+ * value rather than something a typed copy silently drops.
+ */
+export interface CompanyDocument {
+  name?: string;
+  mission?: string;
+  vision?: string;
+  policies?: string[];
+  roles?: ConfigRole[];
+  units?: ConfigUnit[];
+  integrations?: Record<string, unknown>;
+  providers?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** One seat in the company document, as `config.Role` writes it. */
+export interface ConfigRole {
+  name: string;
+  kind?: string;
+  handle?: string;
+  email?: string;
+  /** A root seat's home unit: the engine MOVES the seat into it. */
+  unit?: string;
+  goal?: string;
+  backstory?: string;
+  responsibilities?: string[];
+  behavioral_guidelines?: string[];
+  manages?: string[];
+  workers?: string[];
+  /** 0 or absent is unlimited. */
+  token_budget?: number;
+  llm?: PhaseLLM;
+  llm_review?: ProviderKeys;
+  llm_subagent?: ProviderKeys;
+  llm_auxiliary?: ProviderKeys;
+  llm_judge?: ProviderKeys;
+  llm_sandbox?: ProviderKeys;
+  /** Unset means the company default, so this is three-valued. */
+  learning_enabled?: boolean | null;
+  /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
+  contact?: Record<string, string>;
+  availability?: string;
+  /** Server name to variable name to a `${VAR}` reference or the mask. */
+  mcp_env?: Record<string, Record<string, string>>;
+  sandbox?: Record<string, unknown>;
+  placement?: Record<string, unknown>;
+  integrations?: ConfigRoleIntegrations;
+  schedules?: ScheduleSpec[];
+  [key: string]: unknown;
+}
+
+/**
+ * The identities a human seat's `contact` holds, as `org.HumanContact` names
+ * them: a Slack member ID, a Mattermost USERNAME (the key says user id, the
+ * value is the name a mention renders), an Atlassian account ID, a GitHub
+ * login and a GitLab username. The engine refuses a human seat with none.
+ */
+export type HumanContactKey =
+  | "slack_user_id"
+  | "mattermost_user_id"
+  | "atlassian_account_id"
+  | "github_login"
+  | "gitlab_username";
+
+/** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
+export interface ConfigRoleIntegrations {
+  github?: {
+    tier?: string;
+    repos?: string[];
+    app_id?: number;
+    app_slug?: string;
+    installation_id?: number;
+    private_key?: string;
+    webhook_secret?: string;
+    [key: string]: unknown;
+  };
+  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
+  jira?: { project?: string; [key: string]: unknown };
+  confluence?: { space?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+/** One unit in the company document, as `config.Unit` writes it. */
+export interface ConfigUnit {
+  name: string;
+  type?: string;
+  /**
+   * The unit's STABLE IDENTITY, which a name is not — a rename moves
+   * everything keyed on the name and nothing keyed on this. Absent means the
+   * name IS the key, which is what `org.Unit.Key` falls back to. Guarded, so
+   * it is here rather than on [OrgUnit].
+   */
+  id?: string;
+  purpose?: string;
+  lead?: string;
+  goals?: string[];
+  channel?: string;
+  knowledge?: string[];
+  /** Inherited by the unit's direct AGENT members; a seat's own values win. */
+  mcp_env?: Record<string, Record<string, string>>;
+  /** The tracker project this unit owns. Vendor-neutral, and guarded. */
+  project?: string;
+  /** The knowledge container this unit writes pages in. Guarded. */
+  space?: string;
+  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
+  roles?: ConfigRole[];
+  children?: ConfigUnit[];
+  schedules?: ScheduleSpec[];
+  [key: string]: unknown;
+}
+
+/**
+ * What a validation problem IS, as a value to branch on. Widened with
+ * `string & {}` for the reason every other open enum here is: a newer engine
+ * may name a kind this build does not know, and it renders as its message.
+ */
+export type ConfigProblemKind =
+  | "missing"
+  | "unknown_value"
+  | "out_of_range"
+  | "conflict"
+  | "unknown_field"
+  | "shape"
+  | "invalid"
+  | (string & {});
+
+/**
+ * One located, classified validation failure, as `config.Problem` writes it.
+ *
+ * `segments` is the same place as `path`, split: a map key in a config path
+ * can hold a dot or a hyphen, so a path string cannot be split back into
+ * segments reliably, and nothing in this client parses `path` to find out
+ * where a problem is.
+ */
+export interface ConfigProblem {
+  /** The authored path in the validated document; "" for a parse failure. */
+  path: string;
+  /**
+   * Strings for keys, numbers for indexes. `null` for a document-level parse
+   * failure, whose path is "": Go marshals a nil slice that way, as it does
+   * every list in [Derived].
+   */
+  segments: (string | number)[] | null;
+  kind: ConfigProblemKind;
+  /** The full line, exactly as the refusal's `detail` carries it. */
+  message: string;
+  /** The engine-derived handle of the seat it is about. */
+  seat?: string;
+  unit?: string;
+  /** 1-based line in the submitted text, for parse failures only. */
+  line?: number;
+}
+
+/**
+ * Something the engine will run but a person should know: a reference naming
+ * nothing, or a rule a stored revision breaks that a new write would be
+ * refused for.
+ */
+export interface ConfigWarning {
+  kind: "dangling_reference" | "admission" | (string & {});
+  ref: "lead" | "unit" | "manages" | "gitlab_access_level" | "" | (string & {});
+  path: string;
+  /** As on [ConfigProblem]: `null` when it names no place in the document. */
+  segments: (string | number)[] | null;
+  seat: string;
+  unit: string;
+  /** Display text: who or what holds the reference. */
+  from: string;
+  /** Display text: what it names. */
+  to: string;
+  message: string;
+}
+
+/** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
+export interface DryRunResult {
+  valid: true;
+  /** The revision the draft was validated against. */
+  base_revision_id: string;
+  warnings: ConfigWarning[] | null;
+  derived: Derived;
+}
+
+/** `201` from a configuration write that stored and activated a revision. */
+export interface WriteResult {
+  revision_id: string;
+  epoch: number;
+  warnings: ConfigWarning[] | null;
+  /** The hierarchy the stored document derives to, as `configapi` writes it
+   *  beside the revision id on every 201. It was missing from this shape,
+   *  which is how a caller that wanted the new chart after a save came to
+   *  read it back from a second request the answer already carried. */
+  derived: Derived;
+}
+
+// ---------------------------------------------------------------------------
+// Org, tools, schedules
+// ---------------------------------------------------------------------------
+
+/** The `llm:` field of a seat, in every shape `config.PhaseLLM` accepts:
+ *
+ *      llm: fast                        one provider for every phase
+ *      llm: [fast, backup]              a fallback chain for every phase
+ *      llm: {default: fast, judge: tiny} a chain per phase
+ *
+ *  A phase left unset in the mapping form falls back to `default`. */
+export type ProviderKeys = string | string[];
+export type PhaseLLM =
+  | ProviderKeys
+  | {
+      default?: ProviderKeys;
+      review?: ProviderKeys;
+      subagent?: ProviderKeys;
+      auxiliary?: ProviderKeys;
+      judge?: ProviderKeys;
+      sandbox?: ProviderKeys;
+    };
+
+/**
+ * One seat on the ANONYMOUS org projection (`/org`, the snapshot's `org` key
+ * and the `org` push), as `internal/api`'s `OrgSeat` writes it.
+ *
+ * AN EXPLICIT PUBLIC SHAPE, never a marshal of the config's own role. The
  * projection used to be `config.Role` verbatim, so every field a role gained
- * reached anonymous readers by default: contact identities, placement,
- * integrations and per-seat credentials among them. What is NOT here (email,
- * contact, llm, token budget, schedules, integrations, mcp_env and the rest)
- * is read through the operator-gated `config` query instead.
+ * reached anonymous readers the day it landed: contact identities, per-seat
+ * credentials, placement labels and sandbox setup commands among them. What
+ * is NOT here — `email`, `contact`, `llm`, `token_budget`, `schedules`,
+ * `integrations`, `mcp_env` — is read through the operator-gated `config`
+ * query instead, as [CompanyDocument].
  *
- * `handle` is what the document declares, and empty when the handle is
- * derived. The handle a seat actually runs under is `DerivedSeat.handle`.
+ * `handle` is what the DOCUMENT declares, and empty where the engine derives
+ * one from the name. The handle a seat actually runs under is
+ * [DerivedSeat.handle]; this client never derives one of its own.
  */
 export interface OrgSeat {
   name: string;
@@ -381,16 +760,24 @@ export interface OrgSeat {
   availability?: string;
 }
 
-/** One unit on the anonymous org projection, as `internal/api`'s `OrgUnit` writes it. */
+/**
+ * One unit on the anonymous org projection, as `internal/api`'s `OrgUnit`
+ * writes it.
+ *
+ * `id`, `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not
+ * here: `internal/api/orgprojection_test.go` classifies every field of
+ * `config.Unit` and fails the build over an unclassified one. A screen that
+ * needs one of them reads the company document through the `config` query.
+ */
 export interface OrgUnit {
   name: string;
   type?: string;
   purpose?: string;
-  /** The seat NAME the document declares as lead. Empty when it inherits. */
+  /** The seat NAME the document declares as lead. Empty when it inherits one. */
   lead?: string;
   goals?: string[];
   channel?: string;
-  /** Free-text knowledge references. Not a read scope. */
+  /** Free-text knowledge references. NOT a read scope. */
   knowledge?: string[];
   roles?: OrgSeat[];
   children?: OrgUnit[];
@@ -398,7 +785,8 @@ export interface OrgUnit {
 
 /**
  * The company as the anonymous projection carries it: its charter, its seats
- * and units in authored positions, and the hierarchy the ENGINE derived.
+ * and units in the positions the document wrote them, and the hierarchy the
+ * ENGINE derived from that document.
  *
  * `derived` is optional because an engine older than the field serves the
  * projection without it. A screen reading one without `derived` has the
@@ -416,11 +804,11 @@ export interface OrgProjection {
 }
 
 /**
- * The hierarchy the engine derived from a company document: every rule the
- * dashboard must not re-implement (handle derivation, root seats moved into a
- * unit by their `unit:` reference, lead and channel inheritance, unit
- * references in `manages`, automatic management by a unit lead, and which
- * manager is primary), resolved once, in Go, by `config.Derive`.
+ * The hierarchy the engine derived from a company document: every rule this
+ * client must not re-implement — handle derivation, root seats moved into a
+ * unit by their `unit:` reference, lead and channel inheritance, unit names
+ * expanded inside `manages`, automatic management by a unit lead, and which
+ * of several managers is primary — resolved once, in Go, by `config.Derive`.
  *
  * Every list here may arrive as `null`: Go marshals a nil slice that way, and
  * a company with no units has a nil unit list. A reader treats `null` as
@@ -429,15 +817,15 @@ export interface OrgProjection {
 export interface Derived {
   /** In the engine's own seat order (`Organization.AllRoles`). */
   seats: DerivedSeat[] | null;
-  /** Depth-first, parents before children: the order of the authored unit tree. */
+  /** Depth first, parents before children: the authored unit tree's order. */
   units: DerivedUnit[] | null;
 }
 
 export interface DerivedSeat {
   /**
-   * The seat's authored path in the document (`units[0].roles[1]`). Carried
-   * by the guarded config answers and OMITTED from the anonymous projection,
-   * which has no document to point into.
+   * The seat's authored path in the document (`units[0].roles[1]`). Carried by
+   * the GUARDED config answers and omitted from the anonymous projection,
+   * which hands a reader no document to point into.
    */
   path?: string;
   handle: string;
@@ -445,8 +833,8 @@ export interface DerivedSeat {
   kind: string;
   /**
    * The authored path of the seat's effective home unit, "" at the root.
-   * Omitted from the anonymous projection like `path`: there, membership is
-   * `DerivedUnit.seats`.
+   * Omitted from the anonymous projection with `path`: there, membership is
+   * [DerivedUnit.seats].
    */
   unit_path?: string;
   /** A root seat the engine moved into a unit because of its `unit:` reference. */
@@ -464,12 +852,12 @@ export interface DerivedSeat {
 }
 
 export interface DerivedUnit {
-  /** Authored path; omitted from the anonymous projection. */
+  /** Authored path; omitted from the anonymous projection, as on a seat. */
   path?: string;
   name: string;
-  /** The effective type, after the engine's default. */
+  /** The EFFECTIVE type, after the engine's default. */
   type: string;
-  /** Handle of the effective lead. "" when the unit has none. */
+  /** Handle of the effective lead, declared or inherited. "" when it has none. */
   lead: string;
   lead_inherited: boolean;
   channel: string;
@@ -478,6 +866,13 @@ export interface DerivedUnit {
   seats: string[] | null;
 }
 
+/**
+ * One entry of a seat's or a unit's `schedules:`, as `org.Schedule` writes it.
+ *
+ * GUARDED, like everything else a seat's own configuration holds: it reaches
+ * this client through the `config` query or through `/schedules`, never
+ * through the anonymous org projection.
+ */
 export interface ScheduleSpec {
   name: string;
   cron: string;
@@ -485,10 +880,33 @@ export interface ScheduleSpec {
   timezone?: string;
   /** A unit schedule's runner: the lead, or every member. */
   target?: string;
-  /** Unset means enabled. */
+  /** Unset means ENABLED, so this is three-valued rather than a bool. */
   enabled?: boolean | null;
   timeout_seconds?: number;
   catchup?: boolean | null;
+}
+
+/**
+ * One tool's behavioural hints, as the engine recorded them AT REGISTRATION.
+ *
+ * EVERY HINT IS A WORD, never a bool, and the third word is the point: "the
+ * server did not advertise this" and "the server said no" are different facts,
+ * and an absent hint arriving as `false` would read as a positive denial — so
+ * a fresh MCP server's unannotated tools would look like proven reads on the
+ * one screen an operator audits them on. All three values are truthy, so a
+ * careless `if (!ann.read_only)` cannot mean "not read-only" either.
+ *
+ * A hint this build does not know renders as ITSELF, for the reason the event
+ * registry gives: a rolling upgrade puts a newer node's value on an older
+ * node's screen.
+ */
+export type ToolHint = "yes" | "no" | "unknown";
+
+export interface ToolAnnotations {
+  read_only: ToolHint;
+  destructive: ToolHint;
+  idempotent: ToolHint;
+  open_world: ToolHint;
 }
 
 export interface ToolRow {
@@ -496,32 +914,90 @@ export interface ToolRow {
   description: string;
   /** `builtin` / `mcp:<server>` / `a2a` — the two-value origin grammar. */
   source: string;
+  /** A human-readable name the server advertised, when it advertised one. */
+  title?: string;
+  annotations: ToolAnnotations;
+  /**
+   * WHERE calling this puts something in front of somebody outside the turn,
+   * empty for a tool that reaches nobody. The registry's own predicate — not
+   * "was this served by MCP": a proven read-only MCP tool delivers nowhere,
+   * and the native tracker's comment tool delivers although it is a builtin.
+   */
+  delivers: string;
+  /**
+   * The JSON Schema the model is offered, ABSENT when the tool takes no
+   * arguments. Absent and `{}` are different: only the first means this build
+   * did not send one.
+   */
+  input_schema?: Record<string, unknown>;
 }
 
+/** One declared schedule, as `schedule.Row` serialises it.
+ *
+ *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`, `scope_name`,
+ *  `last_run` and `last_outcome`; the server sends `scope_type` and `scope_id`
+ *  and has no last-run field at all — the ledger is a separate answer — so
+ *  four of its nine fields rendered as `undefined` on every row. */
 export interface ScheduleRow {
+  /** `role` or `unit`. */
+  scope_type: string;
+  /** The seat handle or the unit name this schedule is scoped to. */
+  scope_id: string;
   name: string;
   cron: string;
-  task: string;
-  scope: string;
-  scope_name: string;
   timezone: string;
+  task: string;
+  /** Empty for a role schedule, where a target is meaningless rather than
+   *  defaulted — see `schedule.Row`. */
+  target: string;
+  enabled: boolean;
+  timeout_seconds: number;
+  catchup: boolean;
+  /** The seats a fire actually reaches, resolved from the scope and target. */
+  runners: string[];
+  /** Zero-valued when there is no next fire: disabled, an expression that
+   *  cannot be parsed, or a date the calendar never reaches. */
   next_run: string;
-  last_run: string;
-  last_outcome: string;
+  /** Why `next_run` is empty when the reason is a DEFECT rather than a choice
+   *  — an unparseable cron, an unknown timezone. Empty for a healthy row and
+   *  for a merely disabled one, so a blank cell is never the only symptom. */
+  problem?: string;
 }
 
+/** One fire, from the at-most-once dispatch ledger.
+ *
+ *  `outcome` has exactly two values — `fired` and `skipped_catchup` — because
+ *  this is a DISPATCH ledger and not a turn-outcome one. Nothing here can say
+ *  a turn failed; the turn says that. */
 export interface ScheduleRunRow {
-  name: string;
-  scope: string;
-  scope_name: string;
+  scope_type: string;
+  scope_id: string;
+  schedule_name: string;
+  /** The tick this fire stands for, as the ledger's own at-most-once key. */
+  fire_label: string;
+  target_handle: string;
+  scheduled_at: string;
   fired_at: string;
-  outcome: string;
-  detail: string;
+  outcome: "fired" | "skipped_catchup" | "";
+  trace_id: string;
 }
 
 export interface SchedulesAnswer {
   schedules: ScheduleRow[];
+  /** The COMPANY's newest fires, capped across every schedule — so a company
+   *  with twenty hourly ones fills this in a couple of hours. One schedule's
+   *  own history is `schedule_runs`. */
   recent_runs?: ScheduleRunRow[];
+}
+
+/** One schedule's own dispatch history, newest first. */
+export interface ScheduleRunsAnswer {
+  scope_type: string;
+  scope_id: string;
+  schedule_name: string;
+  runs: ScheduleRunRow[];
+  /** The page filled, so older fires are past it. */
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,10 +1032,16 @@ export interface EngineHealth {
   queue?: string;
   clients?: number;
   /**
-   * How far back the event log can be read, in seconds: the hard bottom of
-   * paging, past which every page is empty for ever. Three screens restated
-   * it as literal copy while nothing on the wire carried it, so it is read
-   * from the engine now and named in one place (`lib/format.ts`).
+   * How far back the event log can be read, in SECONDS: the hard bottom of
+   * paging, past which every page is empty for ever.
+   *
+   * `store.EventHistory` is the only thing that decides it, and three screens
+   * restated it as literal copy ("the store keeps 30 days") while nothing on
+   * the wire carried it — so a change to the retention would have left all
+   * three lying with nothing to catch it, and a reader told the wrong floor
+   * stops paging early. Seconds rather than days, because a client that
+   * re-derives the unit is a second place it can be wrong; the sentence is
+   * `eventHistoryLabel` in `lib/format.ts`.
    */
   event_history_seconds?: number;
   in_flight?: number;
@@ -585,7 +1067,34 @@ export interface FleetNode {
   config_epoch?: number;
   config_status?: string;
   config_error?: string;
+  /**
+   * WHICH revision this node is on, which the epoch does not say.
+   *
+   * Carried on the apply record for exactly this reason: a fleet view is read
+   * while nodes are mid-transition, and a node still on the previous revision
+   * is what an operator is looking for. `internal/api/queries/fleet.go` has
+   * written it on every row since it was added; this type simply never
+   * declared it, so the one screen that compares them read it through a cast.
+   */
+  config_revision_id?: string;
   config_reported_at?: string;
+  /**
+   * How far this node's own derived copies have come up — `ready` of `total`.
+   *
+   * A DIFFERENT QUESTION FROM THE EPOCH: a node can hold the current revision
+   * and still be replaying the log the state is derived from, and only one of
+   * those makes its seats servable. `internal/coord/nodestatus.go` says where
+   * the fact belongs — "where an operator asking why is the new node holding
+   * nothing can see it, which is the fleet view" — and it writes TWO integers
+   * rather than a bool because "3 of 5" and "0 of 2" are the readings that
+   * have to be told apart.
+   *
+   * ABSENT RATHER THAN ZERO. The node publishes them only once the total is
+   * non-zero, so absent is "this node is not saying", never "nothing is
+   * ready" — the same rule `in_flight` follows.
+   */
+  projections_ready?: number;
+  projections_total?: number;
   in_flight?: number;
   draining?: boolean;
   started_at?: string;
@@ -684,13 +1193,24 @@ export interface RetentionDomain {
   snapshot_blocked_by?: string;
 }
 
-/** A term's third value made explicit: read, unreadable, or not applicable. */
-export type RetentionTermState = "ok" | "unknown" | "n/a";
+/**
+ * A term's value made explicit: read, unreadable, not applicable, or read and
+ * binding nothing.
+ *
+ * `unbounded` is the one that is not about readability. A term permitting
+ * everything — no hold pins the log, a solo fleet takes no snapshots — has a
+ * sequence of 2^64-1 inside the engine, which is the identity for the minimum
+ * the trim takes and not a position at all. It used to arrive here as `ok`
+ * with that number on it, and the screen printed `18446744073709552000` beside
+ * the term's own prose saying nothing was pinning anything — not even the
+ * right digits, since a JSON number is a float64.
+ */
+export type RetentionTermState = "ok" | "unknown" | "n/a" | "unbounded";
 
 export interface RetentionTerm {
   name: string;
   state: RetentionTermState;
-  /** Meaningless unless `state` is "ok". */
+  /** Meaningless unless `state` is "ok", and zero in every other state. */
   seq?: number;
   detail?: string;
   /** On EVERY term rather than the blocking one: an operator watching a term
@@ -964,12 +1484,38 @@ export interface SynthesizedSkill {
   uses?: number;
 }
 
+/** Who a counterparty IS, which is two identities and not one string.
+ *
+ *  A profile's subject is either a seat in this company or an unmapped person
+ *  on some surface — a chat account, an issue reporter — and the name is
+ *  DISPLAY ONLY: somebody renaming themselves on Slack must not orphan what
+ *  this seat learned about them. */
+export interface CounterpartySubject {
+  handle?: string;
+  external_id?: string;
+  platform?: string;
+  name: string;
+}
+
+/** What one seat has learned about one colleague.
+ *
+ *  THE TWO INSTANTS MEASURE DIFFERENT CADENCES and both are carried, because
+ *  the difference is the interesting one: `last_updated_at` moves on every
+ *  interaction and `last_corroborated_at` only when the traits actually
+ *  changed. A colleague seen daily whose profile has not moved in months is
+ *  one this seat has stopped learning about — which is the state the Plan
+ *  phase's own prefetch demotes on, so a screen showing one number would
+ *  disagree with the prompt. */
 export interface CounterpartyProfile {
-  observer_handle: string;
-  subject: string;
-  summary: string;
-  updated_at: string;
-  observations?: number;
+  subject: CounterpartySubject;
+  /** Whether the subject resolved to a seat in this company. */
+  resolved: boolean;
+  /** A bag whose keys the model invents — never a fixed schema. */
+  traits: Record<string, unknown>;
+  interactions: number;
+  first_seen_at: string;
+  last_updated_at: string;
+  last_corroborated_at: string;
 }
 
 export interface AgentMemoryAnswer {
@@ -992,18 +1538,28 @@ export interface AgentMemoryAnswer {
 /** One recorded turn in one conversation, from the conversation ledger. */
 export interface ConversationEntry {
   turn_id?: string;
-  conversation_key: string;
-  work_key?: string;
-  summary?: string;
-  outcome?: string;
-  created_at: string;
-  [key: string]: unknown;
+  at?: string;
+  trigger?: string;
+  /** What the turn set out to do, in the seat's own words. */
+  intent?: string;
+  /** PRE-RENDERED tool-call lines, fixed at write time so a later reader
+   *  cannot restate history against a surface that has since changed. */
+  tool_calls?: string;
+  /** `reply` is set ONLY when something actually reached the waiting party,
+   *  and `unsent` carries the same artifact when nothing did. Which of the
+   *  two holds it is the whole record of whether anybody received it — a
+   *  screen that rendered them alike would show work announced to nobody as
+   *  announced. */
+  reply?: string;
+  unsent?: string;
+  decision?: string;
+  completed_work?: string;
 }
 
 export interface ConversationRow {
+  /** The surface-scoped conversation identity — a thread, an issue, a
+   *  channel. OPAQUE: the notification layer owns its grammar. */
   key: string;
-  source?: string;
-  local?: string;
   turns: number;
   last_at: string;
 }
@@ -1124,6 +1680,11 @@ export interface WorkSummary {
   key: string;
   project: string;
   title: string;
+  /** The slug a card is drawn under. On the ROW rather than only on the
+   *  document, because a board draws an icon per card and a column per type,
+   *  and a row that could be GROUPED BY a value it did not CARRY rendered
+   *  every card as the same kind of thing. */
+  type: WorkType;
   status: WorkStatus;
   status_group?: WorkStatusGroup;
   priority?: WorkPriority;
@@ -1142,11 +1703,99 @@ export interface WorkSummary {
   /** Data a badge and a filter read. It gates nothing: closing a task with
    *  open blockers is allowed. */
   blocked?: boolean;
+  /** What `blocked` is the one-bit answer to: the same edges, carrying WHICH
+   *  task holds this one up rather than only that something does.
+   *
+   *  It is on the ROW because a renderer that draws the RELATION between two
+   *  rows cannot derive it from either of them — the alternative is a
+   *  single-task read per bar. `blocked` is exactly "some entry here is
+   *  `open`", computed from the same rows in the same statement, so a badge
+   *  can never appear beside no edges.
+   *
+   *  A blocker the caller's own filter excluded is an id this page holds no
+   *  row for. That is the honest answer, not an omission: the edge exists and
+   *  this page cannot draw it. */
+  waiting_on?: WorkBlocker[];
   archived?: boolean;
   rank?: string;
   updated: string;
   /** The composed log position this row was last written at. */
   version: number;
+}
+
+/** One person's load, as `work_workload` answers it.
+ *
+ *  It counts OPEN work — every task assigned to them, in or out of a sprint —
+ *  because "is this person overloaded" is a question about their whole queue,
+ *  where a sprint report is about one fortnight's commitment. The two numbers
+ *  are deliberately different and both are worth having. */
+export interface WorkloadRow {
+  handle: string;
+  open: number;
+  /** Both measures a company may size in, both carried rather than one
+   *  chosen: which one is used is per PROJECT, so a company-wide answer that
+   *  picked one would be wrong for every project running the other. */
+  points: number;
+  estimate_min: number;
+  /** The three shapes of "this is not simply work in progress". A person at
+   *  capacity whose whole queue is blocked has a different problem from one
+   *  who is simply busy. */
+  blocked: number;
+  overdue: number;
+  unscheduled: number;
+  /** The sum of what every ACTIVE sprint policy says this person can take,
+   *  in that project's own measure — ABSENT when no policy names them. An
+   *  unset capacity is not a capacity of zero, which would render everybody
+   *  permanently over. */
+  capacity?: number;
+  /** How many projects contributed to it, so a reader can tell a whole
+   *  week's number from part of one. */
+  capacity_from?: number;
+  /** What the capacity counts. Absent with the capacity, and a single value
+   *  because a person whose projects size in DIFFERENT measures has no
+   *  summable capacity at all. */
+  capacity_measure?: "points" | "estimate" | (string & {});
+  over_capacity?: boolean;
+  /** The capacity could not be summed because this person's projects size in
+   *  different units. It is the REASON the capacity is absent, said rather
+   *  than left to look like nobody declared one — those are different facts
+   *  and only one of them is somebody's to fix. */
+  mixed_measures?: boolean;
+}
+
+export interface WorkloadAnswer {
+  rows: WorkloadRow[];
+  /** The answer stopped at the handle cap. */
+  truncated?: boolean;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One dependency edge as the task that waits on it sees it.
+ *
+ *  THE STATE TRAVELS WITH THE EDGE rather than being looked up per end,
+ *  because a renderer holds one page of rows and a blocker is routinely not on
+ *  it: without `open` here, drawing a cleared edge differently from a live one
+ *  would need a read per blocker — and with the blocker off the page there is
+ *  nothing to read it from. */
+export interface WorkBlocker {
+  /** The blocking task's ID, never its key: an edge is drawn between two rows
+   *  on one page and `WorkSummary.id` is what they are matched on. */
+  id: string;
+  /** Whether the blocker is still holding this task up. `false` is a settled
+   *  fact rather than a missing one — the blocker has finished. */
+  open?: boolean;
+  /** The blocker not listing this task back: the residue of a dependency
+   *  gesture whose mirror did not land, which the repair duty is working on. */
+  one_sided?: boolean;
+  /** The repair duty's DECISION that this edge will never be mirrored — a
+   *  different fact from "not mirrored yet", and the one that stops a reader
+   *  waiting for it to settle. */
+  one_sided_final?: boolean;
 }
 
 /** What an answer could NOT account for: records this node holds and cannot
@@ -1236,14 +1885,38 @@ export interface WorkItemsAnswer {
 
 /** One entry in a container's view strip.
  *
- *  A BUILTIN ROW HAS NO ID. Every container has a list, a board and a calendar
- *  without anybody saving one — they are not objects, so there is nothing to
- *  rename, protect, rank or pin — and a screen renders them from `key`. */
+ *  A BUILTIN ROW HAS NO ID. Every container has a list, a board, a calendar and
+ *  a timeline without anybody saving one — they are not objects, so there is
+ *  nothing to rename, protect, rank or pin — and a screen renders them from
+ *  `key`. */
+/**
+ * The renderings a view may be drawn in, and there are no others.
+ *
+ * HELD AGAINST THE ENGINE'S OWN CLOSED SET by a Go gate —
+ * `internal/tracker/viewshape_client_test.go` — because this is a copy the
+ * dashboard has to keep: it is a separate build in a separate language and
+ * cannot import `tracker.ViewTypes`. A shape the engine mints that this union
+ * does not name is a tab that renders a blank body, and one named here the
+ * engine refuses is a branch nothing can reach. Both are silent.
+ *
+ * `timeline` draws the rows against a DATE AXIS, which is the one arrangement
+ * the others cannot express: a list orders by a column, a board groups by one,
+ * and a calendar puts a task on the day it is due — none of them can show that
+ * a task spans three weeks, or that it cannot start until another finishes.
+ * `table` puts one field per column, which is what a question about a FIELD
+ * rather than about a task needs.
+ *
+ * THE TRASH IS NOT ONE OF THESE. It is a table carrying `removed=true`,
+ * because what makes a listing the trash is the query rather than the drawing
+ * — so every view saved with that parameter is one.
+ */
+export type WorkViewShape = "list" | "board" | "calendar" | "timeline" | "table";
+
 export interface WorkView {
   id?: string;
   key: string;
   name: string;
-  type: "list" | "board" | "calendar";
+  type: WorkViewShape;
   container: { kind: string; id: string };
   builtin: boolean;
   /** Empty is a SHARED view; a handle makes it personal to that person. */
@@ -1434,6 +2107,51 @@ export interface WorkProjectDetail extends WorkProjectRow {
   incomplete?: WorkIncomplete;
 }
 
+/** One instant of a sprint's burndown. */
+export interface WorkBurndownPoint {
+  at: string;
+  /** Everything the sprint was carrying then — delivered, abandoned and
+   *  outstanding alike. Without it the remaining line cannot tell "we
+   *  finished eight points" from "somebody added eight and we finished
+   *  sixteen". */
+  scope: number;
+  /** The part still to do: a task whose status then was in an OPEN group.
+   *  NOT the negation of delivery — `cancelled` is finished and undelivered,
+   *  so a line written that way keeps counting work the team dropped. */
+  remaining: number;
+  /** The part that had landed. `cancelled` is in neither this nor
+   *  `remaining`, so the gap between their sum and `scope` IS the abandoned
+   *  work. */
+  delivered: number;
+}
+
+/** One sprint's day-by-day series. */
+export interface WorkBurndown {
+  project: string;
+  sprint: number;
+  name?: string;
+  measure: "points" | "estimate_min";
+  start_at: string;
+  end_at: string;
+  /** From the start to whichever of the sprint's end and now comes first: a
+   *  running sprint draws to today rather than flat into its own future. */
+  points: WorkBurndownPoint[];
+  /** The scope at the start, which is the height the reference line falls
+   *  from. The line itself is the renderer's — two points and a straight
+   *  edge is not something to send over a wire. */
+  ideal: number;
+  tasks: number;
+  /** How many of them carry no value in the measure — the honesty pair the
+   *  sprint figures already carry. */
+  unestimated: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkSprintsAnswer {
   project: string;
   sprints: WorkSprintRow[];
@@ -1496,6 +2214,18 @@ export interface WorkGoal {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  /** The health check-in history, newest LAST as it was written. The only part
+   *  of a goal a person writes in prose, served by `work_goals` since it
+   *  existed and declared by nothing until now. */
+  updates?: WorkGoalUpdate[];
+}
+
+/** One check-in on a goal: who, when, the health they declared, and why. */
+export interface WorkGoalUpdate {
+  at: string;
+  author: string;
+  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
+  text?: string;
 }
 
 export interface WorkGoalsAnswer {
@@ -1523,12 +2253,39 @@ export interface WorkTypeDef {
 }
 
 /** One custom-field declaration. */
+/** One choice on a `dropdown`, `labels` or `relationship` field.
+ *
+ *  A VALUE STORES THE ID, so rendering one means looking its name up here —
+ *  which is the whole reason the declaration travels beside the value. */
+export interface WorkFieldOption {
+  id: string;
+  slug: string;
+  name: string;
+  color?: string;
+  order?: number;
+  archived?: boolean;
+}
+
+/** What a field's type lets it be configured with. */
+export interface WorkFieldConfig {
+  options?: WorkFieldOption[];
+  unit?: string;
+  precision?: number;
+  min?: number;
+  max?: number;
+  /** A `date` field that holds a time of day as well as a day. */
+  time?: boolean;
+  progress?: string;
+  multi?: boolean;
+}
+
 export interface WorkFieldDef {
   id: string;
   slug: string;
   name: string;
   description?: string;
   type: string;
+  config?: WorkFieldConfig;
   applies_to?: string[];
   required?: boolean;
   required_in_subtasks?: boolean;
@@ -1603,6 +2360,12 @@ export interface WorkComment {
   author_kind?: string;
   body: string;
   reply_to?: string;
+  /** A colleague this comment is a QUESTION to, who owes it an answer — set
+   *  only at creation, because turning an old remark into a question would
+   *  wake somebody for a conversation that has moved on. */
+  ask?: string;
+  /** The comment id this one answers, which is what closes that question. */
+  answers?: string;
   mentions?: string[];
   resolved?: boolean;
   resolved_by?: string;
@@ -1661,6 +2424,23 @@ export interface WorkLink {
  *  `estimate_minutes` on a task. Inheriting them made the compiler promise
  *  fields the server never sends — which is how a Blocked badge that renders
  *  on the board silently never renders on the item it links to. */
+/** Who removed a task, when, and what removed it alongside.
+ *
+ *  A REMOVAL IS REVERSIBLE AT ANY AGE — `restore_work_item` takes it back and
+ *  there is no window — so this is a state the task is in rather than the end
+ *  of its record. `removed_with` names the parent whose removal took this one
+ *  with it, which is what tells a task somebody deleted from one that went
+ *  with its container. */
+export interface WorkTombstone {
+  by: string;
+  /** `agent`, `human` or `operator`, as every other authored row on this
+   *  wire spells it — a plain string, because an unknown value off a newer
+   *  build must decode rather than throw. */
+  kind?: string;
+  at: string;
+  removed_with?: string;
+}
+
 export interface WorkItem {
   id: string;
   key: string;
@@ -1694,14 +2474,89 @@ export interface WorkItem {
   estimate_minutes?: number;
   points?: number;
   archived?: boolean;
+  /** PRESENT ONLY WHEN THE TASK IS IN THE TRASH. The detail read does not
+   *  filter removed tasks, so a removed task's page resolves and answers
+   *  exactly like a live one's — this field is what tells the screen which it
+   *  is looking at. NOT on the row: the listing's SELECT does not read the
+   *  tombstone, so a summary never carries one. */
+  removed?: WorkTombstone;
   /** The item's own hand-off budget, spent by an agent reassigning it and
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */
   reassignments?: number;
+  /** Keys this task used to answer to — a project rename or a merge leaves
+   *  them, and every one still resolves, which is why they are worth
+   *  showing beside the current one. */
+  former_keys?: string[];
+  /** What this task blocks: the MIRRORED half of a dependency, carried so a
+   *  close can say who it unblocks without scanning the company. */
+  dependents?: string[];
+  checklists?: WorkChecklist[];
+  spend?: WorkSpend;
+  body_author?: string;
+  body_at?: string;
+  /** When the task entered the status it is in — the EFFECTIVE instant, so
+   *  two nodes compute one duration. */
+  status_entered_at?: string;
+  done_at?: string;
+  closed_at?: string;
   created_at?: string;
   updated_at?: string;
   /** The composed log position this task was last written at. */
   version: number;
+}
+
+/** One sub-item of a checklist. It mints no object and appears on no board. */
+export interface WorkChecklistItem {
+  id: string;
+  name: string;
+  done?: boolean;
+  assignee?: string;
+  parent?: string;
+  order?: number;
+  /** The subtask this item BECAME, which renders it struck through with the
+   *  new key rather than deleted. */
+  promoted_to?: string;
+}
+
+export interface WorkChecklist {
+  id: string;
+  name: string;
+  items?: WorkChecklistItem[];
+}
+
+/** What a task has cost, in turns rather than in a seat's month.
+ *
+ *  A FUNCTION of the applied records rather than a separately transmitted
+ *  number, which is what makes it impossible for it to disagree with the
+ *  turns it summarises. */
+export interface WorkSpend {
+  turns?: number;
+  rounds?: number;
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  wall_ms?: number;
+  tokens?: number;
+}
+
+/** One custom-field value with the declaration that explains it.
+ *
+ *  The three marks are states a filter already excludes, and each is a
+ *  different fact: `hidden` is a value whose declaration was ARCHIVED,
+ *  `foreign` is one mirrored in from another tracker, and `undeclared` is one
+ *  this company explains nowhere. A panel that rendered all three as ordinary
+ *  fields would invite somebody to filter on a field that cannot be filtered. */
+export interface WorkFieldValue {
+  slug?: string;
+  name?: string;
+  id: string;
+  type?: string;
+  value: unknown;
+  hidden?: boolean;
+  foreign?: boolean;
+  undeclared?: boolean;
 }
 
 export interface WorkItemDetail {
@@ -1709,6 +2564,11 @@ export interface WorkItemDetail {
   comments?: WorkComment[];
   history?: WorkChange[];
   links?: WorkLink[];
+  /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
+   *  raw map stays on the task; this is the reader's view of it. */
+  fields?: WorkFieldValue[];
+  /** Pages the thread backwards, and is empty when this page is all of it. */
+  comments_cursor?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
@@ -1745,6 +2605,13 @@ export interface PagesAnswer {
   pages: PageSummary[];
   limit: number;
   offset: number;
+  /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
+   *  — so a page list served far behind the log was pixel-identical to a
+   *  complete one. Same envelope as every other state-log answer. */
+  read_level?: ReadLevel;
+  position?: number;
+  log_lag?: number;
+  complete?: boolean;
 }
 
 export interface PageContainer {
@@ -1752,6 +2619,11 @@ export interface PageContainer {
   name?: string;
   purpose?: string;
   created_at?: string;
+  /** How many pages this container holds, TRASHED ONES EXCLUDED — so the
+   *  number on the rail and the list behind it agree. DERIVED beside the
+   *  container rather than stored on it: the document is what a writer wrote,
+   *  and a count on it would have every page create rewrite its container. */
+  pages: number;
 }
 
 export interface PageComment {
@@ -1778,6 +2650,50 @@ export interface Page extends PageSummary {
   body?: string;
   watchers?: string[];
   created_at?: string;
+}
+
+/** One change to a page, from the wiki's own history table. */
+export interface PageChange {
+  id: string;
+  page_id: string;
+  /** The page's CURRENT title and container, resolved by the read: a feed of
+   *  uuids is a feed nobody reads. Empty for a page that has been purged, whose
+   *  entries are the record it ever existed. */
+  title?: string;
+  container?: string;
+  kind: string;
+  actor?: string;
+  actor_kind?: string;
+  operator_id?: string;
+  comment_id?: string;
+  excerpt?: string;
+  /** The turn that made this change — what a wiki cannot have, and what makes
+   *  "why did this page change" one click. */
+  turn_id?: string;
+  /** A change that announced nothing. A fact about the change rather than its
+   *  importance: a label edit is quiet by construction. */
+  quiet?: boolean;
+  at: string;
+  log_seq: number;
+}
+
+export interface PageActivityAnswer {
+  changes: PageChange[];
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  complete?: boolean;
+}
+
+/** One saved version of a page, BODY INCLUDED — which is what the revision
+ *  summaries on the detail could say existed and never show. */
+export interface PageRevisionBody {
+  page_id: string;
+  version: number;
+  title: string;
+  body: string;
+  message?: string;
+  author?: string;
+  created_at: string;
 }
 
 export interface PageDetail {
@@ -1818,6 +2734,19 @@ export interface TurnAnswer {
    * measurement.
    */
   truncated: boolean;
+  /**
+   * EVERY TRACE THIS TURN TOUCHED, as the store itself indexed them.
+   *
+   * The screen can derive a list from the rows it holds, and does — but only
+   * from the rows it HOLDS. A turn read to the per-turn cap is missing its
+   * middle, and a turn whose events fell out of the retention window is
+   * missing most of itself, so a derived list silently loses whichever traces
+   * lived in the gap. `internal/api/queries/insight.go` seeks these
+   * separately for that reason and DEGRADES to an empty list rather than
+   * failing the read, so an absent or empty value means "the seek did not
+   * answer", never "this turn touched no trace".
+   */
+  trace_ids?: string[];
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -2173,10 +3102,23 @@ export interface SetupRun {
 export interface SetupListing {
   tools: SetupToolState[];
   public_base_url: {
+    /** The RESOLVED address, empty when the reference resolves to nothing. */
     value: string;
     present: boolean;
+    /**
+     * Whether the configured value resolves to something. THREE-VALUED:
+     * `null` means this node cannot say, which is not the same as `false`.
+     * `present` alone is what a banner read once, so a `${VAR}` nobody
+     * exported rendered as "reach this engine at" and then nothing.
+     */
     resolved?: boolean | null;
     config_path: string;
+    /**
+     * The variable the setting points at, empty for a literal. What makes
+     * an unresolved address actionable: "set it" is advice, "export
+     * PUBLIC_BASE_URL" is an instruction.
+     */
+    reference?: string;
   };
 }
 
@@ -2186,227 +3128,6 @@ export interface SecretRow {
   updated_at: string;
   updated_by: string;
   source: string;
-}
-
-// ---------------------------------------------------------------------------
-// The company document (`GET /config`, the `config` query)
-// ---------------------------------------------------------------------------
-
-/**
- * A seat's `llm:` field, in any of the three shapes the engine accepts and
- * writes back: one provider key, a fallback chain, or a chain per phase
- * (`{default, review, subagent, auxiliary, judge, sandbox}`).
- *
- * It was typed `string` here, and a seat written in the mapping form reached
- * React as an object child, which throws and blanked the whole page.
- */
-export type PhaseLLM = string | string[] | Record<string, string | string[]>;
-
-/** A provider chain on a flat `llm_<phase>` field: one key, or a list. */
-export type ProviderKeys = string | string[];
-
-/**
- * The company document as the configuration surface serves it, REDACTED: a
- * credential field holds a whole `${VAR}` reference or the mask
- * `__redacted__`, never a value.
- *
- * A SUPERSET, deliberately open. Only the fields a screen reads are named; the
- * index signature is what keeps every other key the engine writes (and every
- * key a newer engine writes that this build has never heard of) part of the
- * value rather than something a typed copy silently drops.
- */
-export interface CompanyDocument {
-  name?: string;
-  mission?: string;
-  vision?: string;
-  policies?: string[];
-  roles?: ConfigRole[];
-  units?: ConfigUnit[];
-  integrations?: Record<string, unknown>;
-  providers?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-/** One seat in the company document, as `config.Role` writes it. */
-export interface ConfigRole {
-  name: string;
-  kind?: string;
-  handle?: string;
-  email?: string;
-  /** A root seat's home unit: the engine moves the seat into it. */
-  unit?: string;
-  goal?: string;
-  backstory?: string;
-  responsibilities?: string[];
-  behavioral_guidelines?: string[];
-  manages?: string[];
-  workers?: string[];
-  /** 0 or absent is unlimited. */
-  token_budget?: number;
-  llm?: PhaseLLM;
-  llm_review?: ProviderKeys;
-  llm_subagent?: ProviderKeys;
-  llm_auxiliary?: ProviderKeys;
-  llm_judge?: ProviderKeys;
-  llm_sandbox?: ProviderKeys;
-  learning_enabled?: boolean | null;
-  /** Human seats: one identity per surface, keyed by [HumanContactKey]. */
-  contact?: Record<string, string>;
-  availability?: string;
-  /** Server name to variable name to a `${VAR}` reference or the mask. */
-  mcp_env?: Record<string, Record<string, string>>;
-  sandbox?: Record<string, unknown>;
-  placement?: Record<string, unknown>;
-  integrations?: ConfigRoleIntegrations;
-  schedules?: ScheduleSpec[];
-  [key: string]: unknown;
-}
-
-/**
- * The identities a human seat's `contact` holds, as `org.HumanContact` names
- * them: a Slack member ID, a Mattermost USERNAME (the key says user id, the
- * value is the name a mention renders), an Atlassian account ID, a GitHub
- * login and a GitLab username. The engine refuses a human seat with none.
- */
-export type HumanContactKey =
-  | "slack_user_id"
-  | "mattermost_user_id"
-  | "atlassian_account_id"
-  | "github_login"
-  | "gitlab_username";
-
-/** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
-export interface ConfigRoleIntegrations {
-  github?: {
-    tier?: string;
-    repos?: string[];
-    app_id?: number;
-    app_slug?: string;
-    installation_id?: number;
-    private_key?: string;
-    webhook_secret?: string;
-    [key: string]: unknown;
-  };
-  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
-  mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
-  jira?: { project?: string; [key: string]: unknown };
-  confluence?: { space?: string; [key: string]: unknown };
-  [key: string]: unknown;
-}
-
-/** One unit in the company document, as `config.Unit` writes it. */
-export interface ConfigUnit {
-  name: string;
-  type?: string;
-  purpose?: string;
-  lead?: string;
-  goals?: string[];
-  channel?: string;
-  knowledge?: string[];
-  /** Inherited by the unit's direct agent members; a seat's own entries win. */
-  mcp_env?: Record<string, Record<string, string>>;
-  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
-  roles?: ConfigRole[];
-  children?: ConfigUnit[];
-  schedules?: ScheduleSpec[];
-  [key: string]: unknown;
-}
-
-/**
- * What a validation problem IS, as a value to branch on. Widened with
- * `string & {}` for the reason [KnowledgeReason] is: a newer engine may name
- * a kind this build does not know, and it must render as its message.
- */
-export type ConfigProblemKind =
-  | "missing"
-  | "unknown_value"
-  | "out_of_range"
-  | "conflict"
-  | "unknown_field"
-  | "shape"
-  | "invalid"
-  | (string & {});
-
-/**
- * One located, classified validation failure, as `config.Problem` writes it.
- *
- * `segments` is the same place as `path`, split: a map key in a config path
- * can contain a dot or a hyphen, so a path string cannot be split back into
- * segments reliably, and nothing in this client parses `path` to find out
- * where a problem is.
- */
-export interface ConfigProblem {
-  /** The authored path in the validated document; "" for a document-level parse failure. */
-  path: string;
-  /**
-   * Strings for keys, numbers for indexes. `null` for a document-level parse
-   * failure, whose path is "": Go marshals the nil slice that has no segments
-   * as `null`, as it does every list in [Derived].
-   */
-  segments: (string | number)[] | null;
-  kind: ConfigProblemKind;
-  /** The full line, exactly as it appears in the refusal's `detail`. */
-  message: string;
-  /** The engine-derived handle of the seat it is about. */
-  seat?: string;
-  unit?: string;
-  /** 1-based line in the submitted text, for parse failures only. */
-  line?: number;
-}
-
-/**
- * Something the engine will run but a person should know: a reference that
- * names nothing, or a rule a stored revision breaks that a new write would be
- * refused for.
- */
-export interface ConfigWarning {
-  kind: "dangling_reference" | "admission" | (string & {});
-  ref: "lead" | "unit" | "manages" | "gitlab_access_level" | "" | (string & {});
-  path: string;
-  /** As on [ConfigProblem]: `null` when the warning names no place in the document. */
-  segments: (string | number)[] | null;
-  seat: string;
-  unit: string;
-  /** Display text: who or what holds the reference. */
-  from: string;
-  /** Display text: what it names. */
-  to: string;
-  message: string;
-}
-
-/** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
-export interface DryRunResult {
-  valid: true;
-  /** The revision the draft was validated against. */
-  base_revision_id: string;
-  warnings: ConfigWarning[] | null;
-  derived: Derived;
-}
-
-/** `201` from a configuration write that stored and activated a revision. */
-export interface WriteResult {
-  revision_id: string;
-  epoch: number;
-  warnings: ConfigWarning[] | null;
-  derived: Derived;
-}
-
-/**
- * The body of a refused configuration write or dry run.
- *
- * `problems` is present on `validation_error`, `invalid_patch` and
- * `invalid_body`; `derived` whenever the document parsed and normalized far
- * enough to derive one. The revision ids are present on `revision_advanced`.
- */
-export interface ConfigRefusal {
-  error: string;
-  detail?: string;
-  hint?: string;
-  problems?: ConfigProblem[] | null;
-  derived?: Derived;
-  current_revision_id?: string;
-  your_base?: string;
-  stored_revision_id?: string;
 }
 
 /**
@@ -2564,19 +3285,231 @@ export interface WorkMyWork {
   incomplete?: WorkIncomplete;
 }
 
+/** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
+ *
+ *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
+ *  WHY this change found this person, as one of twenty, in the precedence
+ *  order that decided it. A notice also says whether it ASKS something of them
+ *  (`addressed`) or merely informs, and whether it arrived only because nobody
+ *  better was found (`fallback`). */
+export interface WorkInboxNotice {
+  /** The history row this came from, and what a mark names. */
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  /** The AUTHORED instant — a card saying "yesterday" must not move because a
+   *  record was redelivered. */
+  at: string;
+  reason: string;
+  /** Which half of the person's own split this fell in. */
+  primary: boolean;
+  /** It asks something rather than informing: a turn that must answer. */
+  addressed: boolean;
+  /** Delivered only because nobody better was found — a lead hearing about a
+   *  report's task because the report has left. */
+  fallback?: boolean;
+  kind: string;
+  subject_id: string;
+  /** The human-readable key, resolved by the applier so the read is an index
+   *  range rather than a join. */
+  subject_key?: string;
+  excerpt?: string;
+  actor?: string;
+  actor_kind?: string;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
+/** A page of one person's inbox. */
+export interface WorkInboxAnswer {
+  handle: string;
+  notices: WorkInboxNotice[];
+  /** The split that was APPLIED, defaulted — so a screen can say "you are
+   *  seeing these because" without repeating the defaulting rule. */
+  primary_reasons: string[];
+  /** Where this person's own record says they have read to. */
+  seen_through?: { stream?: string; generation?: number; seq?: number };
+  next_cursor?: string;
+  /** Counts over THIS PAGE, and the answer says so: a total over the table
+   *  would be a second scan of rows this answer did not return. A badge built
+   *  on them therefore saturates at the page size rather than claiming a
+   *  total. */
+  unread: number;
+  primary: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One ranked hit from the company's own lexical item search. */
+export interface WorkRanked {
+  id: string;
+  key: string;
+  title: string;
+  project: string;
+  type: string;
+  status: string;
+  assignee?: string;
+  /** A PLACE, 1-based, and deliberately NOT a score. The arithmetic that
+   *  ordered these — score within a method, reciprocal rank fusion across
+   *  methods, per slice of the corpus — is finished before a coordinator sees
+   *  them, so a score field here could only ever have carried zero. */
+  rank: number;
+  /** The index's own excerpt, which is what makes a ranked answer readable
+   *  without opening every hit. */
+  snippet?: string;
+}
+
+/** The ranked search, and the one refusal that is not a failure.
+ *
+ *  `available: false` with `reason: "building"` means this node joined
+ *  recently and is still indexing — items that exist are simply not findable
+ *  from here yet. It is reported rather than returned as an error because
+ *  nothing is wrong, and a screen that drew "nothing matches" would have a
+ *  reader file the duplicate. */
+export interface WorkSearchAnswer {
+  hits: WorkRanked[];
+  available: boolean;
+  reason?: string;
+  note?: string;
+}
+
+/** One person a change reached, and why.
+ *
+ *  `reason` is the ONE of twenty that named them — the resolution is ordered
+ *  and a handle appears once — and `addressed` is whether the notice ASKS
+ *  something of them rather than informing them. */
+export interface RoutingRecipient {
+  handle: string;
+  reason: string;
+  addressed: boolean;
+  fallback?: boolean;
+  fallback_rank?: number;
+  excerpt?: string;
+}
+
+/** What this node can say about who one change reached.
+ *
+ *  THE THREE EMPTY STATES ARE THREE ANSWERS and each sends a reader somewhere
+ *  different: `nobody` at who has left the company, `swept` at the retention
+ *  horizon, `unknown` at neither. `quiet` is the commit that announced nothing
+ *  at all, which is most of them. */
+export type Delivery = "quiet" | "reached" | "nobody" | "swept" | "unknown";
+
+/** Who one change woke, and under which reason. */
+export interface WorkRoutingAnswer {
+  record_id: string;
+  /** False when no change with that id exists here — a dead link, or a
+   *  reanchor that has not replayed this far. NOT the same as a change that
+   *  woke nobody. */
+  held: boolean;
+  kind?: string;
+  subject_id?: string;
+  subject_key?: string;
+  actor?: string;
+  actor_kind?: string;
+  at?: string;
+  /** Whether the commit CARRIED a notification. It does not mean somebody was
+   *  woken: the applier deliberately does not hold the roster that would
+   *  need, so an announced change can still reach nobody. */
+  notified: boolean;
+  recipients: RoutingRecipient[];
+  delivery: Delivery;
+  /** The instant the stated retention horizon falls on — what `delivery` was
+   *  decided against. */
+  retained_from?: string;
+  /** The list was cut. It cannot happen for a change this engine wrote, so
+   *  it means a peer wrote a larger recipient set. */
+  truncated?: boolean;
+  addressed: number;
+  fallback: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** One unit of agent work, as a list row. */
+export interface TurnRow {
+  turn_id: string;
+  agent_id?: string;
+  role?: string;
+  /** The span of the turn's own EVENTS, which is not its duration: the span
+   *  covers the reflection pass that publishes after the turn ends. */
+  started_at: string;
+  ended_at: string;
+  /** The turn's OWN measurement, and zero for one that has not finished —
+   *  which `complete` is what tells apart. */
+  duration_ms: number;
+  /** Whether a completion record exists. A turn with none is either running
+   *  or died mid-flight, and those look identical from a list. */
+  complete: boolean;
+  phases: number;
+  /** SELF-ITERATE rounds — the highest iteration any phase reached. A phase's
+   *  TOOL rounds are `rounds_used` on its own record; the two are different
+   *  quantities and were both called "rounds", so a one-iteration turn listed
+   *  "Rounds 1" directly above phase rows reading "3r" and "1r". */
+  iterations: number;
+  /** Whether ANY event of the turn was a failure, which is a different
+   *  question from its outcome: a turn can recover from a failed provider
+   *  call and still end well. */
+  failed: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  /** Every distinct model the turn used, comma-joined — a turn routinely uses
+   *  two, a cheap one for the extension judge and the seat's own. */
+  models?: string;
+  summary?: string;
+  trigger?: string;
+  task_id?: string;
+}
+
+export interface TurnsAnswer {
+  turns: TurnRow[];
+  /** The cursor to resume from, on the turn's START. */
+  next: string | null;
+}
+
+/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+export interface Viewer {
+  /** The operator id the token resolves to, or "" for an anonymous caller. */
+  operator_id: string;
+  /** Whether this caller may ask the operator-gated questions. */
+  operator: boolean;
+  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
+   *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
+  handle: string;
+  name: string;
+  kind: string;
+}
+
 export interface QueryMap {
+  viewer: Viewer;
+  work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
   agent_memory: AgentMemoryAnswer;
   events: EventsPage;
+  event_series: EventSeries;
   event: EventRecord;
   trace: TraceAnswer;
   turn: TurnAnswer;
+  turns: TurnsAnswer;
   phases: PhasesPage;
   tokens: Rollup;
+  token_series: TokenSeries;
   stream: EngineHealth;
   fleet: FleetAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
+  schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
   retention: RetentionReport;
@@ -2586,18 +3519,23 @@ export interface QueryMap {
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_sprints: WorkSprintsAnswer;
+  work_burndown: WorkBurndown;
+  work_workload: WorkloadAnswer;
   work_activity: WorkActivityAnswer;
   work_my_work: WorkMyWork;
   work_goals: WorkGoalsAnswer;
   work_catalogue: WorkCatalogueAnswer;
   work_person: WorkPersonState;
+  work_search: WorkSearchAnswer;
+  work_routing: WorkRoutingAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };
+  page_activity: PageActivityAnswer;
+  page_revision: PageRevisionBody;
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
-  /** The active company document, redacted; `null` when nothing is active. */
   config: CompanyDocument | null;
   config_audit: RevisionMeta[];
   config_diff: ConfigDiff;

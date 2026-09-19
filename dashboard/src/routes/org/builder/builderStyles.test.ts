@@ -22,8 +22,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
+/*
+ * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is a lens
+ * of the company screen (`#/company?lens=builder`), and every screen's recipes
+ * live in one sheet here, so the builder's sit beside the chart's rather than
+ * in a file of their own — which is what `org.css` was before the two screens
+ * became one. Reading the whole sheet costs nothing: every assertion below is
+ * keyed on a selector this screen writes.
+ */
 const css = readFileSync(
-  fileURLToPath(new URL("../../../styles/org.css", import.meta.url)),
+  fileURLToPath(new URL("../../../styles/screens.css", import.meta.url)),
   "utf8",
 );
 
@@ -115,14 +123,24 @@ test("no builder rule redraws what the design system's chart and table draw", ()
 });
 
 /**
- * A status, data or phase hue, under the names the design system gives them.
+ * A status, data or phase hue, under the names THIS TREE gives them.
  *
  * Spelled as a pattern over the FAMILY rather than over each token, and paired
- * with the case below, because this guard was already dead once: it matched
- * `--data-*` while the tokens were named `--viz-*`, and the rename to the
- * design system's names made it unable to match anything at all.
+ * with the case below, because this guard was already dead twice: it matched
+ * `--data-*` while the tokens were named `--viz-*`, and then it matched ONLY
+ * the design system's canonical `--color-feedback-*` / `--color-data-*` names,
+ * which no stylesheet in this tree writes — every sheet here is written
+ * against the short aliases `styles/uilet.css` declares (`--critical`,
+ * `--info`, `--phase-execute`), so the canonical spelling could not match a
+ * single declaration and the guard passed on everything.
+ *
+ * BOTH SPELLINGS, therefore. The alias is what a rule here would be written
+ * with today and the canonical name is what it resolves to, so a rule reaching
+ * for a hue is caught whichever way its author spelled it — and the day the
+ * aliases go, this guard does not quietly stop working.
  */
-const CARRIED_HUE = /var\(--color-(feedback|data|phase)-[-\w]*\)/;
+const CARRIED_HUE =
+  /var\(--(?:critical|caution|positive|info|phase)[-\w]*\)|var\(--color-(?:feedback|data|phase)-[-\w]*\)/;
 
 /*
  * A NODE HUE IS NOT ONE OF THESE, and it does not come from here. An agent
@@ -144,10 +162,13 @@ test("a builder node or row takes no status or data hue, only the accent for the
 });
 
 test("the hue guard recognises a hue, and lets the accent through", () => {
-  expect(CARRIED_HUE.test("color: var(--color-feedback-danger-ink);")).toBe(true);
+  expect(CARRIED_HUE.test("color: var(--critical-ink);")).toBe(true);
+  expect(CARRIED_HUE.test("box-shadow: inset 2px 0 0 var(--caution);")).toBe(true);
   expect(CARRIED_HUE.test("background: var(--color-data-3);")).toBe(true);
-  expect(CARRIED_HUE.test("border-color: var(--color-phase-execute-soft);")).toBe(true);
+  expect(CARRIED_HUE.test("border-color: var(--phase-execute-ink);")).toBe(true);
+  expect(CARRIED_HUE.test("color: var(--color-feedback-danger-ink);")).toBe(true);
   // Where the reader is, which is the one colour a builder card may carry.
-  expect(CARRIED_HUE.test("background: var(--color-brand-accent-soft);")).toBe(false);
-  expect(CARRIED_HUE.test("color: var(--color-text-tertiary);")).toBe(false);
+  expect(CARRIED_HUE.test("background: var(--accent-soft);")).toBe(false);
+  expect(CARRIED_HUE.test("color: var(--text-muted);")).toBe(false);
+  expect(CARRIED_HUE.test("border: 1px solid var(--border-subtle);")).toBe(false);
 });

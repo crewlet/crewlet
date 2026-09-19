@@ -83,12 +83,35 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 			actor.Handle)
 	}
 
+	// AND THE KNOWLEDGE BASE RECORDS THE SAME OPERATOR THE SAME WAY, which
+	// is the claim rather than the coincidence: the two histories are read
+	// TOGETHER on the audit screen, and one person under two names there is
+	// two people to whoever is reading it.
+	//
+	// It was not. The handle was left empty here, and `pages.Actor.Name`
+	// falls back to `"operator:" + OperatorID` for an actor without one — so
+	// a founder's work commit said `founder` and their page commit said
+	// `operator:founder`, three rows apart in one feed, and a reader
+	// filtering on a name matched half of what they did. The kind is already
+	// its own column on both rows, so the prefix was a second encoding of a
+	// fact the row carries.
 	page, err := opsmcp.PageActor(ctx, nil)
 	if err != nil {
 		t.Fatalf("PageActor: %v", err)
 	}
-	if page.Kind != pages.AuthorOperator || page.OperatorID != "ops-bot" || page.Handle != "" {
+	if page.Kind != pages.AuthorOperator || page.OperatorID != "ops-bot" {
 		t.Errorf("a page write is attributed as %+v", page)
+	}
+	if page.Handle != actor.Handle {
+		t.Errorf("one operator is recorded as %q by the tracker and %q by the "+
+			"knowledge base", actor.Handle, page.Handle)
+	}
+	// THROUGH `Name`, which is what actually lands in the history row: the
+	// field agreeing is the mechanism, and the rendered name is the property.
+	if got := page.Name(); got != actor.Handle {
+		t.Errorf("a page history row records the author as %q where the tracker "+
+			"records %q — the audit feed reads both and shows one person twice",
+			got, actor.Handle)
 	}
 }
 

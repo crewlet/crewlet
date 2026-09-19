@@ -532,16 +532,23 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 }
 
 // EnsureContainer creates a space if it is not there, or updates its settings.
+//
+// THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN, not whether the call
+// succeeded. This runs on every boot for every unit's space, so the ordinary
+// outcome is that the row already says what the chart says — and a caller
+// that could not tell that from a create would log "applied" on every restart
+// for a company nobody had edited.
 func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) (
-	Container, error) {
+	Container, bool, error) {
 
 	key = strings.ToUpper(strings.TrimSpace(key))
 	if key == "" {
-		return Container{}, invalid("container", "a container needs a key")
+		return Container{}, false, invalid("container", "a container needs a key")
 	}
 	at := s.now()
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
+	changed := true
 	out := Container{V: DocumentVersion, Key: key, Name: name,
 		Purpose: purpose, CreatedAt: at}
 
@@ -572,6 +579,7 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 					// per boot per space is a log that grows
 					// with restarts rather than with edits.
 					out = held
+					changed = false
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
@@ -584,9 +592,9 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 		},
 	})
 	if err != nil {
-		return Container{}, err
+		return Container{}, false, err
 	}
-	return out, nil
+	return out, changed, nil
 }
 
 // patchOf turns a save into a record's payload and reports what changed.

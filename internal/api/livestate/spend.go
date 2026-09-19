@@ -46,6 +46,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
+		CostUSD:      fraction(payload, "cost_usd"),
 	}})
 	s.pruneSpend(env.Timestamp)
 	return true
@@ -112,16 +113,77 @@ func (s *LiveState) SpendRecords() []tokens.Record {
 	return out
 }
 
-// LiveSpendWindowDays is the live window expressed the way the dashboard
-// labels it.
+// LiveSpendWindowDays is the live window expressed as the `since_days` a
+// caller would ask for to get exactly it.
+//
+// NOT A LABEL any more — a rollup names its window with two instants — but
+// still the comparison that decides whether a request can be answered from the
+// projection in memory rather than by a scan of the event store.
 //
 // At LEAST one, because the window is measured in hours and a sub-day one
-// would round to zero — and "spend over the last 0 days" is a label that makes
-// a real number look like a bug.
+// would round to zero — and a fast path keyed on 0 would never be taken.
 func LiveSpendWindowDays() int {
 	days := int(LiveSpendWindow / (24 * time.Hour))
 	if days < 1 {
 		return 1
 	}
 	return days
+}
+
+// HydrateSpend seeds the window from records the store already holds, and
+// reports how many landed.
+//
+// WITHOUT IT A RESTART IS A DAY OF ZEROES. The projection is fed by one
+// EPHEMERAL subscription, so it starts empty and fills only as new phases
+// complete — while the event store beside it holds the whole window. Every
+// screen that reads this rollup then said the company had spent nothing, in a
+// window it labelled a full day, next to a chart drawn from the store that
+// showed the real spend. Two facts on one screen that cannot both be true.
+//
+// DEDUPED BY EVENT ID against what is already here, which is what makes the
+// ORDER of hydration and subscription a non-question: the API subscribes
+// before it hydrates, so a live event lands ahead of the older records this
+// appends behind it, and either one arriving twice is counted once. It is also
+// why [LiveState.pruneSpend] is order-independent rather than popping the head.
+//
+// A record with no id is DROPPED rather than counted: the dedupe has nothing
+// to hold it by, so a second hydration — a reconnect, a second call — would
+// add it again, and a rollup that grows on every reload is worse than one that
+// is slightly short.
+func (s *LiveState) HydrateSpend(records []tokens.Record) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	landed := 0
+	for _, rec := range records {
+		if rec.EventID == "" || s.countedPhases.has(rec.EventID) {
+			continue
+		}
+		s.countedPhases.put(rec.EventID, struct{}{})
+		s.spend = append(s.spend, spendEntry{at: newStamp(rec.Timestamp), Record: rec})
+		landed++
+	}
+	if landed == 0 {
+		return 0
+	}
+	// PRUNED AGAINST THE NEWEST RECORD HELD, not against the newest in
+	// this batch: a hydration that seeded only records older than the
+	// window would otherwise anchor the window on its own oldest row and
+	// keep every one of them, widening what the rollup claims to cover.
+	//
+	// COMPARED AS INSTANTS, never as the strings they arrived as. Two
+	// encodings of one instant reach this projection — the store truncates
+	// to microseconds while a live row keeps nanoseconds, and Go's
+	// RFC3339Nano trims trailing zeros — so `…:07Z` sorts before `…:07.42Z`
+	// on 'Z' against '.', which puts the LATER instant first and would
+	// anchor the prune early.
+	var newest stamp
+	for _, e := range s.spend {
+		if e.at.valid && (!newest.valid || newest.before(e.at)) {
+			newest = e.at
+		}
+	}
+	if newest.valid {
+		s.pruneSpend(newest.raw)
+	}
+	return landed
 }

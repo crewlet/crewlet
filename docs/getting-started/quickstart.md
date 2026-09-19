@@ -344,20 +344,33 @@ a plain `tee` dies on the first Ctrl+C and the drain logs have nowhere to go.
 
 ## 4. Watch the first turn
 
-Open the dashboard at <http://localhost:8000/>. The **Overview** greets you
-with your company's name and mission, and says what — if anything — needs a
-person. Within five minutes the `hello-crewlet` schedule fires a
-`TaskAssigned` at the CEO: the seat appears under **Live seats**, and
-**Model activity** shows the turn as it runs — Plan, then Execute, then Review,
-each phase listing the rounds it took, the tools each round called, and the
-prompts the model actually saw. A phase that finishes updates in place rather
-than moving, so you can read one while the next is running.
+Open the dashboard at <http://localhost:8000/>. It lands on the **Inbox**,
+which is what a person opening this wants first: whether anything is waiting on
+them. With no company activity yet it says so, and lists any condition the
+engine itself raised.
 
-Follow the turn to the **Work board** and **Pages**. Both are the engine's own
-— `tracker.backend` and `knowledge.backend` default to `native`, so your
-company has a tracker and a wiki from its first minute with nothing to set up.
-A seat files with `create_work_item` and writes with `write_page`; a board row
-links to the item's thread and history.
+The rail on the left is the product in eight rows — Inbox, My work, Work,
+Company, Knowledge, Activity, Cost, Admin — and each one opens its own tree
+beside it. `g` then a letter jumps between them.
+
+Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
+CEO. **Activity** shows it: *Live now* has the seat working, and **Turns**
+shows the turn as it runs — Plan, then Execute, then Review, each phase listing
+the rounds it took, the tools each round called, and the prompts the model
+actually saw. A phase that finishes updates in place rather than moving, so you
+can read one while the next is running.
+
+Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
+`tracker.backend` and `knowledge.backend` default to `native`, so your company
+has a tracker and a wiki from its first minute with nothing to set up. A seat
+files with `create_work_item` and writes with `write_page`; a board row opens
+the item beside the board, and ⌘-click opens its page.
+
+**Bind your token to your seat** and the personal screens become yours: give a
+human seat `contact.crewlet_operator_id` matching one of your
+`api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
+person. Until then the dashboard says so rather than guessing — an unbound
+token is an ordinary state, not a fault.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:
@@ -406,8 +419,8 @@ curl -X PUT http://localhost:8000/config \
   --data-binary @company.yaml
 ```
 
-Or create the company from the dashboard: open **Org chart** and its
-**Builder** lens (`#/org?lens=builder`). With no configuration active it opens
+Or create the company from the dashboard: open **Company** and its
+**Builder** lens (`#/company?lens=builder`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
 it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The

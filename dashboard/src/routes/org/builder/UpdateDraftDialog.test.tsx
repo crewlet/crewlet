@@ -51,7 +51,7 @@ test("an edit that still applies is replayed onto the newer revision", async () 
   // The banner links to what changed between the draft's base and now: the
   // newer revision against the base, read forwards.
   expect(screen.getByRole("link", { name: "Show what changed" }).getAttribute("href")).toBe(
-    "#/config?lens=diff&revision=r2&against=r1",
+    "#/admin/config?lens=diff&revision=r2&against=r1",
   );
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });

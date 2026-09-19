@@ -28,7 +28,7 @@ import (
 // hanging there would leave that record out of the spans entirely. A missing
 // span is strictly worse than a slightly wrong instant.
 func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
-	projectKey string, applied map[string]Delta) (int, error) {
+	keys subjectKeys, applied map[string]Delta) (int, error) {
 
 	subject := c.subject()
 	effective, err := effectiveAt(ctx, tx, subject.ID, c)
@@ -96,7 +96,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 			 broker_at, effective_at, skew_ms, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
-		historyID(c), string(subject.Kind), subject.ID, projectKey, kind,
+		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
 		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
 		commentID, batchOf(c.record), excerpt, fields, c.record.TurnID,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
@@ -120,7 +120,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	inbox, err := a.writeInbox(ctx, tx, c)
+	inbox, err := a.writeInbox(ctx, tx, c, keys.Key)
 	if err != nil {
 		return 0, err
 	}
@@ -277,6 +277,36 @@ func (a *Applier) recomputeSpans(ctx context.Context, tx *sql.Tx, taskID string)
 // back a year is a thing that happens.
 const InboxRetentionDefaultDays = 365
 
+// subjectKeys is what the applier already read off the object row, named so
+// the two are not passed as two bare strings a call site can swap.
+//
+// BOTH COME FROM THE ROW THE APPLIER READ, which is the whole point: `Project`
+// is "ENG" and `Key` is "ENG-1", and neither is something a writer can state
+// on a CREATE — the item key is minted by the write itself, from the project's
+// own counter. A record's notification therefore cannot carry it, and for as
+// long as the inbox row took the writer's snapshot every creation in every
+// company wrote a notice whose subject was a uuid. [InboxNotice.SubjectKey]
+// says what it is for: "an inbox of uuids is an inbox nobody reads."
+//
+// Zero for a subject that has no item key — a project, a view, a person, a
+// goal — which is the honest value rather than a missing one.
+type subjectKeys struct{ Project, Key string }
+
+// inboxSubjectKey is the key a notice carries.
+//
+// THE APPLIER'S ROW WINS over the writer's snapshot, for the reason the field
+// exists: the applier read the object in this transaction and the snapshot is
+// a claim formed before the write, so on a rename the two differ and only one
+// of them is what the item is called now. The snapshot is the fallback for a
+// subject the applier holds no row for, where it is the only thing anybody
+// knows.
+func inboxSubjectKey(fromRow string, notify *Notify) string {
+	if fromRow != "" {
+		return fromRow
+	}
+	return notify.Snapshot.Key
+}
+
 // writeInbox writes one row per candidate the commit concerned.
 //
 // EVERY CANDIDATE, not every recipient: the row is the complete record of who
@@ -288,7 +318,8 @@ const InboxRetentionDefaultDays = 365
 // than inside it, which is what keeps that function free of a clock: a record
 // older than the horizon writes no inbox rows at all, so a whole-log replay
 // rebuilds no expired inbox.
-func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
+func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
+	subjectKey string) (int, error) {
 
 	notify := c.record.Notify
 	if notify == nil {
@@ -318,7 +349,8 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext) (i
 				 log_seq, log_stream, log_generation)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
-			historyID(c), candidate.Handle, c.subject().ID, notify.Snapshot.Key,
+			historyID(c), candidate.Handle, c.subject().ID,
+			inboxSubjectKey(subjectKey, notify),
 			string(notify.Kind), string(candidate.Reason),
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,

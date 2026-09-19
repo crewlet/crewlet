@@ -1,0 +1,3563 @@
+/* Screen-level composition: the shapes that belong to one screen rather than
+ * to the component library. Everything here still reads tokens only.
+ */
+
+/* ---- Phase and turn cards ----------------------------------------------
+   The stable transcript. Nothing in here animates on a data push: a row that
+   re-enters, glows or re-flows every time a tool-loop round lands is a row
+   nobody can read while it is running. */
+
+.turn-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.turn-card.live {
+  border-color: var(--info-soft);
+  box-shadow: inset 2px 0 0 var(--info);
+}
+.turn-card.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+/* A HEAD WRAPS, which is rule 15 of the design doc and the one place in this
+   file that was not keeping it. A phase's head is up to fifteen items — the
+   phase tag, the iteration, a delegated task id, a worker template, a role,
+   then the decision, the round cap, the empty-answer count, the rescue, the
+   sandbox, the failure, the live dot, the model, the rounds, the tokens, the
+   duration and the time — and every one of them is a tag or a `nowrap` figure
+   that cannot break its own label.
+
+   Nothing wrapped, and `.phase-card` hides its overflow, so at 390px the head
+   was 690px of content in a 330px box: everything from the decision chip
+   rightward was CUT OFF rather than merely off-screen, since a hidden box is a
+   scrollport whose offset nothing can move. The half that went is the half the
+   card is opened for — which model ran, how many rounds, how many tokens, how
+   long, when.
+
+   AT EVERY WIDTH rather than at a breakpoint, because the overflow is a
+   property of the content: a long model name or four warning tags reach the
+   same place on a laptop. The `.spacer` still right-aligns the tail on a line
+   that fits, so nothing moves where everything already fitted. */
+.turn-head,
+.phase-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.turn-head:hover,
+.phase-head:hover {
+  background: var(--surface-hover);
+}
+.turn-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.phase-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.phase-card.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+.phase-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+/* The header's trailing facts sit in a fixed order at a fixed size, so a live
+   phase and a finished one are the same shape and the row does not change
+   height the moment it completes. */
+.phase-meta {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.phase-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+
+/* The round ledger: one block per round, appended below the last, so nothing
+   above an insertion point can move.
+
+   GROUPING IS STRUCTURAL, NOT CHROMATIC. A hue per round would read as
+   meaning something and mean nothing — the same objection as a colour per
+   agent, and worse at nine rounds. So a round is BRACKETED by a rail that
+   runs from its numbered node down its own content, and adjacent rounds are
+   told apart by an alternating surface tint that is two steps rather than N.
+   Colour inside a round is reserved for what it can actually distinguish:
+   thinking from speech, and a failed call from a successful one.
+
+   Those are two different jobs and it took a reader to notice only one of
+   them was being done. The rail used to be drawn strictly BETWEEN rounds and
+   the tint only on even ones, so both devices described the SEQUENCE and
+   neither bounded a round: a phase with a single round — the common case, and
+   the one a reader complained about — got neither, and rendered as a bare
+   numeral in the gutter beside a flat stack of look-alike disclosure rows,
+   where `Thinking` and `submit_work` read as two siblings rather than as a
+   thought and the call it asked for. */
+.round-ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The block-padding is what separates one round from the next, and it has to
+   beat `.round-body`'s own gap by enough to be read as a different KIND of
+   boundary: 24px between rounds against 8px inside one. At the previous
+   `--space-2` the two were 16 and 8, and the ledger's boundary to the phase
+   sections below it (`.phase-body`'s 12px gap) sat between them — so the
+   three levels of the hierarchy were 8 / 12 / 16 and read as one flat list.
+   The ledger's own frame, below, supplies the outer boundary. */
+.round {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2) var(--space-3) 0;
+  border-radius: var(--r-sm);
+}
+/* Two steps, alternating — enough to separate adjacent blocks, not enough to
+   claim a meaning. Mixed against the accent rather than taken from a grey
+   ramp so the band survives dark mode, where two adjacent surface steps are
+   nearly the same colour. */
+.round:nth-child(even) {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.round-rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.round-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  width: 18px;
+  flex: none;
+  margin-top: 2px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  position: relative;
+}
+/* Drawn from under the node to the bottom of THIS round's own content, on
+   every round including the last — the bracket that says the thinking, the
+   speech and the calls beside it are one round.
+
+   It used to stop short of the last round (`:not(:last-child)`) and to bleed
+   past its own content into the gap below, which is the shape you draw when
+   the line is a connector between siblings rather than a bracket around one.
+   Bounded to the round it belongs to it does both jobs at once: every round
+   is delimited, and the ledger still ends where its last round's content ends
+   rather than trailing into nothing. */
+.round-rail::after {
+  content: "";
+  position: absolute;
+  left: calc(50% - 1px);
+  /* Just under the node (2px margin + 18px), so the bracket reads as the
+     node continuing. At the old 24px it started 4px clear of it, which on a
+     round only one row tall — a round that called a tool and said nothing —
+     left a detached 6px dash rather than a short bracket. */
+  top: 22px;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  /* `--border`, not `--border-subtle`. This line is now the thing that says
+     which blocks are one round, and the subtle step is 0.06 alpha in dark
+     mode — a rule a reader has to look for is not doing that job. */
+  background: var(--border);
+}
+.round-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+/* ONE LEFT EDGE for everything a round holds. A disclosure head carries its
+   own `--space-2` so its hover band has room to sit under the chevron, and a
+   tool row's head the same inside its box — so the model's SPEECH, the one
+   block with no inset, started 8px to the left of every other piece of ink in
+   the round. Three kinds of round content on three different edges is the
+   other half of "these do not belong together". */
+.round-body > .prose,
+.round-body > .abandoned,
+.round-body > .round-thinking {
+  margin-inline: var(--space-2);
+}
+.round-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* A round that CALLED SOMETHING THAT FAILED. The one other colour a round
+   carries, and it is earned: scanning nine rounds for where it went wrong is
+   the actual question a reader brings to a stuck turn, and the answer was
+   previously a small icon inside a collapsed row. Three node states in total
+   — normal, failed, live — not one per round. */
+.round.errored .round-node {
+  border-color: color-mix(in srgb, var(--critical) 55%, transparent);
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+
+/* The round in flight. The accent is doing real work here — it is the one
+   place a reader looks to answer "where is it now". */
+.round.live .round-node {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.round.live .round-node::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--accent);
+  animation: round-pulse 1.8s ease-out infinite;
+}
+@keyframes round-pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+.waiting-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  animation: waiting-fade 1.6s ease-in-out infinite;
+}
+/* A live indicator that will not stop is exactly the thing this setting is
+   for, so both of them stop rather than merely slow down. */
+@media (prefers-reduced-motion: reduce) {
+  .round.live .round-node::before,
+  .waiting-dot {
+    animation: none;
+  }
+}
+@keyframes waiting-fade {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* The ledger's own frame. It says where the transcript stops and the phase's
+   metadata — the prompt, the tool surface, the workers — begins, which
+   nothing else did: `.phase-body`'s 12px gap put the last round's tool row
+   closer to the `Prompt` disclosure below it than to the round it belonged
+   to.
+
+   The frame is the SAME live and finished. It used to be part of the tailing
+   rule, so a ledger grew a border and 8px of padding the moment a phase went
+   live and lost them again the moment it completed — the transcript visibly
+   reshaping at exactly the instant it became complete, which is the defect
+   rule 5 of this card forbids for its header and is no better here. */
+.tail-scroll {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  padding: var(--space-1) var(--space-2);
+}
+/* Tailing. A running phase's ledger is bounded and scrolls itself; a finished
+   one is a document and simply flows, because there is nothing to follow. */
+.tail-scroll.tailing {
+  max-height: 620px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* PROSE. The model's reasoning and its speech are natural language, and were
+   set in the monospace code block that tool JSON uses — 11px, tight
+   leading, unbounded measure. That is a wall of text nobody reads. Here they
+   get a proportional face, real leading and a bounded measure, while
+   monospace stays where it means something. `pre-wrap` keeps the model's own
+   paragraph breaks, which are load-bearing in a long answer. */
+.prose {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-relaxed);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 78ch;
+}
+.prose.muted {
+  color: var(--text-secondary);
+}
+
+.tool-row {
+  border-radius: var(--r-xs);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+}
+.tool-row.failed {
+  border-color: color-mix(in srgb, var(--critical) 40%, transparent);
+}
+
+/* ---- Attention ---------------------------------------------------------- */
+
+.attention-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  min-width: 0;
+}
+.attention-row:last-child {
+  border-bottom: none;
+}
+.attention-row.clickable:hover {
+  background: var(--surface-hover);
+}
+.attention-row .attention-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  flex: none;
+}
+/* THE TINT IS ON THE ICON, whatever contains it. Two of the three used to be
+   reachable only through `.attention-row`, so the same mark on the Inbox — the
+   one screen where every one of these conditions is drawn — rendered critical
+   and caution untinted while info alone was coloured. A severity that shows on
+   one screen and not the next is worse than no severity at all. */
+.attention-row[data-severity="critical"] .attention-icon,
+.attention-icon[data-severity="critical"] {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+.attention-row[data-severity="caution"] .attention-icon,
+.attention-icon[data-severity="caution"] {
+  background: var(--caution-soft);
+  color: var(--caution-ink);
+}
+.attention-row[data-severity="info"] .attention-icon,
+.attention-icon[data-severity="info"] {
+  background: var(--info-soft);
+  color: var(--info-ink);
+}
+/* The geometry too, for the same reason. */
+.attention-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  flex: none;
+}
+
+/* ---- Seat cards --------------------------------------------------------- */
+
+.seat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-3);
+}
+.seat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  text-align: left;
+  min-width: 0;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.seat-card:hover {
+  border-color: var(--border-strong);
+}
+/* The tone is what the seat is DOING, never who it is. `quiet` takes no tint
+   at all: an idle seat used to draw a glowing tile that read as activity. */
+.seat-card[data-tone="working"] {
+  box-shadow: inset 2px 0 0 var(--info);
+}
+.seat-card[data-tone="needs"] {
+  box-shadow: inset 2px 0 0 var(--caution);
+}
+.seat-card[data-tone="broken"] {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+.seat-line {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  min-height: 1.2em;
+}
+
+/* ---- Org chart ---------------------------------------------------------- */
+
+.org-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+.org-unit {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.org-unit-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  min-width: 0;
+}
+.org-children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border-subtle);
+}
+.org-seats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.org-node {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  min-width: 190px;
+  text-align: left;
+}
+.org-node:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+.org-node.human {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* ---- Org builder: the lens ----------------------------------------------
+   The company screen's third lens (`routes/org/builder/`), which is the one
+   that WRITES. Its recipes live here beside the chart's because they are one
+   screen: `#/company` with `lens=builder`.
+
+   Read `routes/org/builder/builderStyles.test.ts` before changing anything
+   below — it reads these rules as text and states what each one buys. */
+
+/* THE CARD WIDTH IS A KNOB THE CONSUMER SETS. `--crewlet-tree-canvas-card-width`
+   is the design system's own variable for a tree card, and the design system
+   reads it with a fallback because a component has to draw without a consumer.
+   This declaration is what the builder's chart is drawn at: the component
+   renders every card itself, so this one line is the whole of what this
+   application says about how wide they are, and the cards, the rows measured
+   inside them and the connectors between them all lay out against it. */
+.org-builder {
+  --crewlet-tree-canvas-card-width: 15rem;
+}
+
+/* THE CANVAS VIEW FILLS THE SCREEN, and the shell's scroller has nothing to
+   scroll. The builder and its body become flex columns with a definite height,
+   so the canvas takes what is left under the toolbar instead of growing the
+   page.
+
+   THE HEIGHT ITSELF COMES FROM THE SHELL, which the screen ASKS for rather
+   than reaches into: `useFillScreen` raises the request, the shell answers it
+   with `data-fill` on its own scroller, and shell.css is where that column is
+   given the window's remaining height. Nothing here names a class the shell
+   draws, and nothing there names one of these. */
+.org-builder:has(> .org-builder-body.fill) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.org-builder-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.org-builder-body.fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Fullscreen takes the whole container, which paints its own ground: the
+   page's background is not behind a fullscreen element. */
+.org-builder:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  background: var(--bg);
+  overflow: auto;
+}
+
+.org-builder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
+   the drawer breakpoint; the check status and Review and save stay. */
+.org-builder-narrow {
+  display: none;
+}
+@media (max-width: 860px) {
+  .org-builder-wide {
+    display: none;
+  }
+  .org-builder-narrow {
+    display: inline-flex;
+  }
+}
+
+.org-builder-problems ul,
+.org-builder-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* A sentence that follows the one before it in a banner, on its own line. */
+.org-builder-note {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.org-builder-conflict {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* ---- Org builder: canvas ------------------------------------------------
+   The builder's charts (`routes/org/builder/CanvasView.tsx`).
+
+   THE CHART IS THE DESIGN SYSTEM'S `TreeCanvas`, so almost nothing about it is
+   here. The card's surface, boundary, radius and lift, the dashed edge a human
+   seat wears, the inset on each node, the focus ring, the accent ring on the
+   selection, the connectors, the gap probe and the reveal of every
+   pointer-only control are all drawn by the package. What is left below is
+   what the ENGINE says inside a card, which the package could not know.
+
+   Nothing here is a per-entity colour: a card is neutral whatever it holds,
+   and what marks a human seat is the boundary the package draws, so the mark
+   reads to somebody who cannot separate the hue at all. */
+
+.bchart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The canvas is the design system's, and this is the only thing the builder
+   says about it: it takes what is left of the column under the toolbar. */
+.bchart-canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Over the canvas's top edge, in its untransformed overlay layer, so it
+   neither resizes the viewport as it comes and goes nor takes a press meant
+   for the chart beneath it. */
+.bchart-note {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  right: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  background: var(--surface-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  pointer-events: none;
+}
+
+/* A LIVE STATE OR A CHECK NEVER RESIZES A NODE. The live state and the problem
+   count each have a slot on the card's first line that does not shrink, wrap
+   or push the name onto a second line: the name truncates instead, and the
+   line is as tall with a badge as without one. So a push that turns "idle"
+   into "working", and a count that leaves while a check is out and comes back
+   with its answer, change a word and never a measured height. */
+.bnode-state,
+.bnode-count {
+  display: inline-flex;
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A WIRING MARK ON A CHART NODE IS A GLYPH, and it keeps its size for the same
+   reason: a node one rank tall has no room for the sentence written out, and a
+   mark that changed size would move every node beside it. The sentence is the
+   glyph's own accessible name and this element's tooltip. */
+.bnode-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+/* ---- Org builder: table -------------------------------------------------
+   The builder's table (`routes/org/builder/TableView.tsx`).
+
+   THE TABLE IS THE DESIGN SYSTEM'S `OrgTable`, over its `TreeGrid`, so the
+   rows, the cells, the column template, the tree's wires, the two-line name
+   group, the strip of row controls and the split add pill are all drawn by it
+   and none of them are here.
+
+   WHICH LEAVES NOTHING TO DRAW. `.btable-name` and `.btable-label` are
+   HANDLES, not styles: the suite finds a row by its NAME cell rather than by
+   whichever cell happens to mention a name. Every declaration they used to
+   carry was already set on the same elements by `.crewlet-org-table__node`,
+   `__icon` and `__name`, four of them byte for byte, and the one that was not
+   (`min-width` on the label span) was inert, since the span is not a flex item
+   and the ellipsis lives on `__name`. */
+
+/* ---- Org builder: the node editor and its dialogs ------------------------
+   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
+   kind dialogs. A drawer's body is a column of fields; a section separates a
+   group of them (reports, a tool, what the document configures) with a rule
+   and a heading, so a long seat form reads as parts rather than one list. */
+
+/* KEYED ON THE SECTION'S OWN DEPTH, which it already knows: it reads the depth
+   to pick its heading level, so it says it. A section inside a section (one
+   tool inside Integrations) is a sub-part, not a new part, and takes no rule,
+   which the depth says directly rather than by being cancelled again below. */
+.builder-section[data-depth="0"] {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+.builder-section-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+.builder-section .builder-section .builder-section-title {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.builder-section p,
+.builder-fact p,
+.builder-note {
+  margin: 0;
+}
+.builder-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Two fields that make one answer (a contact's surface and its identity) sit
+   side by side and share the width, so neither reads as a separate question.
+
+   A GRID, so the split is the row's own rule rather than one each child has to
+   carry. It used to be a flex row that sized its children through `> .field`,
+   the class the engine's own field component drew; the design system draws the
+   field now, and that selector went with it, leaving the two questions to size
+   themselves and the pair to read as one wide and one narrow. */
+.builder-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* ---- Feed --------------------------------------------------------------- */
+
+/* A feed row's columns are FIXED, so a run of rows scans as columns rather
+   than as prose: time, who, what, where. The previous feed rendered a nub, a
+   category dot, a summary and a relative time — and never said who did
+   anything, while offering actor filter chips for a field it did not show. */
+.feed-row {
+  display: grid;
+  grid-template-columns: 62px 132px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+/* A row on a page about ONE turn.
+   NOT `.feed-row`, which this borrowed at first and which is a FOUR-column
+   grid (time, actor, summary, tail). Three children landed in the first
+   three tracks, so the summary was squeezed into the 132px actor column and
+   truncated at about twenty characters while the raw event type had the
+   whole tail to itself, and a full date wrapped to three lines inside the
+   62px time column. Every row was three lines tall to show half a sentence.
+   Here the summary is the content and gets the space; the time is one
+   instant inside a turn the header already dates, so it needs only a clock. */
+.turn-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+.turn-row:last-child {
+  border-bottom: none;
+}
+.turn-row:hover {
+  background: var(--surface-hover);
+}
+.turn-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+.turn-row > .what {
+  color: var(--text);
+  min-width: 0;
+}
+.feed-row:last-child {
+  border-bottom: none;
+}
+.feed-row:hover {
+  background: var(--surface-hover);
+}
+/* A ROW IS NOT AN INLINE LINK. `a:hover` underlines, which is right for a
+   link inside a sentence and wrong for a whole row that happens to be an
+   anchor: hovering one struck a line under its timestamp, its summary AND
+   its type, three unrelated fragments at once. A row-shaped link is already
+   telling you it is hoverable with its ground. */
+.feed-row:hover,
+.turn-row:hover,
+.seat-card:hover,
+.attention-row.clickable:hover,
+.hit-title:hover {
+  text-decoration: none;
+}
+.feed-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+/* A TIMESTAMP IS THE FEED'S PRIMARY SORT KEY, so it is a fact and not
+   decoration. `--text-faint` is annotated in tokens.css as decoration only —
+   it is measured between 2.8:1 and 4.5:1 deliberately, to keep it out of
+   exactly this kind of cell — and the one column every reader scans was
+   painted in it. */
+.feed-time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.feed-actor {
+  color: var(--text-secondary);
+  font-weight: var(--fw-medium);
+}
+.feed-what {
+  color: var(--text);
+  min-width: 0;
+}
+.feed-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--fs-3xs);
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .feed-row {
+    grid-template-columns: 54px minmax(0, 1fr);
+  }
+  .feed-row .feed-tail {
+    grid-column: 2;
+  }
+  .feed-actor {
+    grid-column: 2;
+  }
+}
+
+/* ---- Conversations ------------------------------------------------------ */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.thread-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.thread-entry:last-child {
+  border-bottom: none;
+}
+
+/* A thread entry that IS the control — the row a reader clicks to select one
+   of a list. A <button> rather than a div with a handler, because a list you
+   arrow through is a list a keyboard reaches; the browser's own button chrome
+   is what is being removed here, not the semantics. */
+.thread-entry.as-row {
+  width: 100%;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-entry.as-row:hover {
+  background: var(--surface-hover);
+}
+.thread-entry.as-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.thread-entry.as-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- Ranked search ------------------------------------------------------ */
+
+/* A hit's PLACE in the answer. A number rather than a bar, because that is
+   what the engine produces: the fusion arithmetic is finished before a
+   coordinator sees these, so there is no score left to draw a length from —
+   and a bar with nothing behind it is the same defect as a zeroed field,
+   wearing a chart's clothes. */
+.rank-place {
+  display: inline-block;
+  min-width: 1.75em;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Knowledge ---------------------------------------------------------- */
+
+.hit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.hit:last-child {
+  border-bottom: none;
+}
+.hit-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--accent-ink);
+}
+.hit-snippet {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+/* ---- Config ------------------------------------------------------------- */
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 200px) minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  border-radius: var(--r-xs);
+  align-items: baseline;
+}
+/* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
+   These selectors read add / remove / replace, which no answer has ever
+   carried, so every diff line rendered unstyled. */
+.diff-line[data-kind="added"] {
+  background: var(--positive-soft);
+  color: var(--positive-ink);
+}
+.diff-line[data-kind="removed"] {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+.diff-line[data-kind="changed"] {
+  background: var(--caution-soft);
+  color: var(--caution-ink);
+}
+
+/* ---- A live screen that stays readable ---------------------------------- */
+
+/* Everything that changes on a timescale of milliseconds is confined here,
+   so its churn cannot reflow the settled transcript below it. The border is
+   doing real work: it is the visible promise that motion stops at this
+   edge. */
+.live-region {
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  /* Generous, and more above than below: the label sits at the top edge and
+     small tracked caps read as crowded long before body text does. */
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  gap: var(--space-3);
+}
+
+/* The pill that holds finished rows back. Splicing them in at the top pushed
+   the page down by a card mid-sentence, which on a busy company happens every
+   few seconds — the same complaint as a chat that scrolls while you read
+   history. */
+.new-rows {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.new-rows:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* HEADER SPACING. A turn head, the phase head nested inside it and the
+   "Rounds" label were stacked with nothing between them, so three rows of
+   chrome read as one dense block. Each gets air above what it labels. */
+.turn-card > .turn-body {
+  padding-top: var(--space-2);
+}
+.turn-body .phase-card + .phase-card {
+  margin-top: var(--space-2);
+}
+
+/* The workers a phase delegated to, rendered INSIDE it.
+   Indented and rail-marked rather than merely stacked: a fan-out of eight
+   flush against its parent's edge reads as eight more phases of the turn,
+   which is the thing nesting them was supposed to stop. The rail is the
+   phase hue of a nested call — muted, like its tag — so the indent says
+   "under this" without competing with the phase colour above it. */
+.phase-nest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+}
+.phase-card > .phase-body {
+  padding-top: var(--space-2);
+}
+.phase-head,
+.turn-head {
+  padding-block: var(--space-2);
+}
+
+/* A FLUSH CARD CLIPS RATHER THAN HIDES, which is the difference between a
+   sticky column head that works and one that cannot.
+
+   uilet's recipe says what the declaration is for: "the slots reach the
+   card's edges, and the clip is what makes the header's hairline and a
+   table's own corners follow the radius instead of crossing it". That is
+   `clip`'s job exactly. `hidden` also makes the card a SCROLL CONTAINER, and
+   a sticky box is confined to its nearest scrollport — a flush card has no
+   height constraint, so it grows to its content, its scroll offset is
+   permanently 0, and `top` is never applied to anything inside it.
+
+   Measured against a running engine: every `DataGrid` in a flush card had a
+   dead sticky head — the audit's 84 rows and the cost breakdown's 50 scrolled
+   their column names off the top of the window, so the reader was left
+   matching values to headers they could no longer see. This is the SAME
+   correction `.grid-wrap` already carries in frame.css, for the same reason
+   and against the same property.
+
+   `clip` gives up programmatic scrolling, which is all `hidden` ever offered
+   here: a card the reader cannot scroll and nothing scrolls for them. What it
+   keeps is the rounding, which is the whole of what the recipe asked for.
+   What uilet needs is `overflow: clip` upstream, after which this rule
+   goes. */
+.crewlet-card--flush {
+  overflow: clip;
+}
+
+/* A CARD TITLE ELLIPSES RATHER THAN CLIPPING, which is the one thing uilet's
+   own head cannot do for us. `.crewlet-card__title` is `white-space: nowrap`
+   inside a `.crewlet-card__header-main` that hides its overflow, and it is
+   itself a FLEX container — and `text-overflow` applies to a block container,
+   never to a flex one, so the package cannot ellipse a title even though it
+   means to. The title is cut mid-word at the header's edge instead.
+
+   The flex is there for a caller who puts a mark inside the title. No screen
+   here does: `Card.Header` has an `icon` slot of its own, and all 106
+   `Card.Title` call sites in this tree hold a single text expression — which
+   is what makes `block` safe here and would not make it safe upstream. The
+   ones that can actually run long are the data-driven ones: a unit's name, a
+   checklist's, a sprint's.
+
+   uilet's own rule survives untouched around this: the SUBTITLE still gives
+   way first (`flex-shrink: 100`), so this only ever applies once there is no
+   tail left to trade. What uilet needs is a `truncate` option on the title,
+   after which this rule and its ALLOWED entry both go. */
+.crewlet-card__title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
+   trigger sets `gap: var(--spacing-1)`, which is right for the card's own
+   folds (Prompt, Tool surface) where the chevron and two words are the whole
+   row. A tool call's head carries a mono name and, when it failed, a mark
+   beside it, and at one step those three read as one run-on token.
+
+   The mark's own `flex: none` is NOT restated here. It used to be, as
+   `.disclosure-head > svg`, because our mark was an inline SVG inside the
+   truncating title span and was therefore the thing that wrapped. It is
+   `meta` now — a sibling of the title — and uilet declares `flex: none` on
+   `.crewlet-disclosure__meta` and on its chevron. A second copy here would be
+   a second idea of a rule the package already states, and the selector would
+   not even match: the glyph is inside the meta span rather than a direct
+   child of the trigger. */
+.tool-row .crewlet-disclosure__trigger {
+  gap: var(--space-2);
+}
+
+/* A PILL ROW SCROLLS RATHER THAN PUSHING THE SCREEN SIDEWAYS, which is the
+   rule uilet already states for its underline row and not for this one. A
+   `.crewlet-tabs` is `display: inline-flex` and the pill variant is
+   `width: fit-content`, and neither caps: a flex row of nowrap labels has a
+   MIN-content width equal to the sum of them, so `fit-content` resolves to
+   the whole row and the box simply grows past its container.
+
+   Measured on the tracker at 390px: the view switcher stood 497px wide and
+   the DOCUMENT went to 642, so the reader scrolled the page — the heading,
+   the filters and the summary card with it — to reach a Table tab that was
+   past the edge with nothing else to drag. The set is data-driven there
+   (`views.map`), so it is not five tabs by construction; a founder who pins
+   two more makes it worse on every screen size.
+
+   `max-width` is the half that matters and the reason `overflow-x` alone
+   would change nothing: without it the box is still the width of its content
+   and there is nothing for a scrollport to hide. The scrollbar goes for the
+   package's own reason — it would sit on the baseline the pills are drawn on,
+   and the row answers the arrow keys either way. What uilet needs is this on
+   `.crewlet-tabs--pill` upstream, after which this rule goes. */
+.crewlet-tabs--pill {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.crewlet-tabs--pill::-webkit-scrollbar {
+  display: none;
+}
+
+/* A phase whose text is arriving right now. The ring is what the seat page
+   needed: a running turn that looks different from a finished one at a
+   glance, rather than only by reading its badge. */
+.phase-card.streaming {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.turn-card.live {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* Text that is being written. The transition is on COLOR only — never on
+   height: animating the height of a growing block makes every append a
+   reflow the reader can feel, which is the opposite of the point. */
+.prose.stream {
+  transition: color var(--dur-slow) var(--ease);
+}
+.prose.stream::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret 1.1s steps(1) infinite;
+}
+@keyframes caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* An attempt a provider gave up on. Dimmed and ruled off rather than deleted
+   — a reader has already read it, and making it vanish reads as a glitch. */
+.abandoned {
+  border-left: 2px solid color-mix(in srgb, var(--critical) 45%, transparent);
+  padding-left: var(--space-3);
+  opacity: 0.65;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prose.stream::after {
+    animation: none;
+  }
+}
+
+/* ---- Integrations ------------------------------------------------------- */
+
+/* One row per surface, laid out the way the console's own catalogue is: an
+   icon tile, the name and what it is for, and the state on the right. The
+   tile is NEUTRAL on purpose. A third-party app's brand mark would spend a
+   hue on "which integration", and colour here means state and nothing
+   else. */
+/* ---- Integrations -------------------------------------------------------
+   ONE CARD PER TOOL, not rows inside a panel, and the shape is the console's
+   own: a bordered box per integration with a gap between them, so a
+   connected one can grow a body and still read as the same object it was
+   before it was connected, just taller. A shared panel could not do that --
+   a row that expands inside a list of rows pushes its neighbours around and
+   reads as the list breaking rather than as one thing opening. */
+.int-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.int-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease-out);
+}
+.int-card:hover {
+  border-color: var(--border-strong);
+}
+
+/* A tool nobody has connected: one row, no disclosure. */
+.int-card-absent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+}
+/* NOT DIMMED. An unconfigured tool is the one a reader came here to set up,
+   so it is the last thing that should look switched off: greying it reads as
+   "unavailable" when it means "available, and yours to connect". The state is
+   already said twice, in the badge and in the action beside it, and colour
+   here carries STATE and never identity. The only difference from a connected
+   card is that there is nothing yet to disclose. */
+.int-card-absent:hover {
+  border-color: var(--border);
+}
+
+.int-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-right: var(--space-6);
+}
+
+/* The disclosure is the identity block rather than the whole header, so the
+   card's own buttons are not nested inside a button and a keyboard reader
+   gets one predictable target. */
+.int-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-4) var(--space-2) var(--space-4) var(--space-6);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+/* Hovering the disclosure tints the whole header rather than the strip the
+   button happens to cover: the row is what a reader perceives as the thing
+   they are about to press, and a highlight stopping halfway reads as a
+   rendering fault. */
+.int-card-head:has(.int-card-toggle:hover) {
+  background: var(--surface-hover);
+}
+.int-card-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The third-party app's mark, in a circle the way the console draws it. Its
+   colours are the third-party app's own; see ui/VendorMark.tsx for why that
+   is the one exception to colour carrying state. */
+.int-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--row-h-lg);
+  height: var(--row-h-lg);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.vendor-mark {
+  display: block;
+  width: var(--fs-xl);
+  height: var(--fs-xl);
+}
+
+.int-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.int-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+/* The second line carries whatever the card most needs to say: what the tool
+   is for when there is nothing wrong, and what is wrong when there is. */
+.int-desc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.int-desc.attention {
+  color: var(--caution-ink);
+}
+
+.int-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* A real control rather than decoration inside the identity button, so it
+   can sit beside the actions and still toggle the body. */
+.int-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--row-h-sm);
+  height: var(--row-h-sm);
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.int-chevron:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.int-chevron:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.int-chevron svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+.int-chevron.is-open svg {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .int-chevron svg {
+    transition: none;
+  }
+}
+
+.int-card-body {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1) var(--space-6) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ONE ROW PER THING THE CARD IS MADE OF, surfaces and seats alike, separated
+   by a rule rather than by whitespace. The body used to stack loose lines of
+   prose, which made a tool with three surfaces read as one paragraph with no
+   edges: nothing said where Jira stopped and Confluence began. */
+.int-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.int-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.int-row:first-child {
+  border-top: none;
+}
+
+/* The identity column takes the slack, so every badge in the list lands on
+   the same right edge however long a name or a path is.
+
+   THE BASIS IS WHAT MAKES THE ROW WRAP. At `flex: 1` — a basis of 0 — the
+   badges never wrapped: flex placement asks whether an item's HYPOTHETICAL
+   size fits, a zero basis always does, and `min-width: 0` then let this
+   column shrink to about ten pixels rather than push them onto a second line.
+   In the peek rail, where a surface's three badges take most of 420px, the
+   sentence beside them came out one word per line. With a real basis the
+   badges wrap instead and the identity gets the width back on its own line;
+   `min-width: 0` stays, for the long paths it has to truncate rather than
+   overflow. */
+.int-row-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 15rem;
+}
+.int-row-name {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+}
+.int-row-detail {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* THE CONNECT FORM, laid out the way the console's is.
+   The field spacing is deliberately wider than the dialog's default stack:
+   these are labelled inputs each carrying a help line, and at the tighter
+   gap a help line sat as close to the NEXT field's label as to the control
+   it belongs to, which is the one ambiguity a form must not have. */
+.int-form-intro {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--text-secondary);
+}
+.int-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+/* SENTENCE CASE, scoped to this form.
+   The product's field label is an uppercase micro-label, which reads as a
+   column head: right above a table, wrong above a question. These fields ARE
+   questions, each with a sentence of help under it, and the console asks them
+   in sentence case. Scoped rather than changed globally, because every other
+   form in the dashboard is a settings table where the micro-label belongs.
+
+   THE LABEL IS uilet's `.crewlet-label` NOW — `ui/Field.tsx` draws a
+   `FormField` — and `.field` is the class that file still puts on it, so the
+   selector reaches the same element it always did. Specificity is what makes
+   this land: `(0,2,1)` here against the package's `(0,1,0)`. */
+.int-form .field > label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-normal);
+  text-transform: none;
+  color: var(--text);
+}
+
+/* AN AGENT'S ROW IN A CARD'S ROSTER.
+ *
+ * The console's shape: the agent's own mark, then a name and one line under
+ * it, then what it holds on the right. The mark is what makes the roster read
+ * as a list of the company's agents rather than a list of settings, which is
+ * the whole reason the roster is there.
+ */
+.int-seat-row {
+  align-items: center;
+  gap: var(--space-3);
+}
+.int-seat-row .int-row-identity {
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* HOW MUCH THIS AGENT MAY DO, beside its name.
+ *
+ * QUIETER THAN A STATUS TAG, which is the console's own reasoning and the
+ * whole of why it sits here: a tier is a standing fact about the agent, not
+ * something that needs attention. It was a chip out on the right next to
+ * "ready", where two chips on one row read as two verdicts and a reader
+ * scanning a roster for what is wrong stopped on "read-only" every time.
+ */
+/* THROUGH THE TOKENS, all of it. This arrived with six literals — a 9px
+   font-size off the nine-step ramp, its own margin, padding, radius,
+   line-height and tracking — and the design rules name that as the one thing
+   a change may not do: "No new colour, size, radius or spacing literal. If a
+   component needs one, the TOKEN is what gets added."
+   
+   --fs-3xs is the smallest step and the pill is made small by its PADDING
+   rather than by a tenth type size, because a step nothing else uses is a
+   scale of ten pretending to be a scale of nine. */
+.int-seat-tier {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-3xs);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  /* MUTED, NEVER FAINT. --text-faint is decoration only, and the tier is a
+     fact about what this agent may do to a repository. */
+  color: var(--text-muted);
+}
+
+/* Weight follows trust: full access carries the accent, review a lighter
+   share of it, read-only stays neutral. */
+.int-seat-tier--full_access {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: color-mix(in srgb, var(--accent) 65%, var(--text));
+}
+.int-seat-tier--review {
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: color-mix(in srgb, var(--accent) 35%, var(--text-secondary));
+}
+
+/* What configures the connection, folded away from what makes it.
+ *
+ * The console asks three things to connect an app. This engine also receives
+ * that app's deliveries and routes them, so it has fields the console has no
+ * equivalent for, and seven inputs in one column made connecting an app read
+ * as filling in a configuration file. */
+/* An alternative to what the form asked for, so it closes the form rather
+   than sitting among the fields. It carries no rule of its own: where the
+   fold is present that rule already ends the form, and a second one would
+   box the note in. */
+/* SMALL, because it is an aside. The sentence that says what to do is one
+   line and the reasoning is behind the icon, so it sits under the form
+   without competing with the fields for the same attention. */
+.int-form-note {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-3xs);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+}
+.int-form-note a {
+  color: inherit;
+  text-decoration: underline;
+}
+.int-form-note a:hover {
+  color: var(--text);
+}
+/* The icon is the handle for the tooltip, so it takes a cursor that says
+   there is something to hover and does not shrink out of reach. */
+.int-form-why {
+  display: inline-flex;
+  flex: 0 0 auto;
+  cursor: help;
+}
+
+.int-form-more {
+  /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
+     than sitting in the field flow with a hairline through the middle. The
+     parent's own gap already separates it from the last field; a margin on
+     top of that put the rule closer to the fold than to the form it ends. */
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-5);
+}
+/* The disclosure is a control, so it reads as one: the same weight as a
+   field's label, with a marker that says which way it opens. */
+.int-form-more > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
+}
+.int-form-more > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+.int-form-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+.int-form-more > summary:hover {
+  color: var(--text);
+}
+/* The fields inside carry the form's own rhythm, so opening the fold does
+   not change the spacing of the questions below it. */
+.int-form-more-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-top: var(--space-5);
+}
+
+/* ONE AGENT'S OWN BLOCK in the setup dialog, for an app whose credentials
+   live on the seat. Folded, because the same two questions are asked once per
+   agent: a ten-agent company opened twenty inputs in one scroll with no way
+   to see how many were left, and the dialog now opens as the roster it is. */
+.int-seat-form {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.int-seat-form + .int-seat-form {
+  margin-top: calc(var(--space-3) - var(--space-5));
+}
+.int-seat-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--r-md);
+}
+.int-seat-summary::-webkit-details-marker {
+  display: none;
+}
+/* The marker says which way it opens, and is the same one the More settings
+   fold draws, so two disclosures in one dialog are one idea. */
+.int-seat-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+.int-seat-form[open] > .int-seat-summary::before {
+  transform: rotate(90deg);
+}
+.int-seat-summary:hover {
+  background: var(--surface-2);
+}
+/* The badge sits at the far end, so a column of blocks reads down its right
+   edge as a list of what is left to do. */
+.int-seat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-seat-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
+   FOLDED, because it is forty lines of JSON and the two boxes under it are
+   what the form is for: it is opened once per agent, at the start. */
+.int-manifest {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: var(--space-3);
+}
+/* The label, the aside, and the Copy button on one line: copying is what an
+   operator does with this, and a button below the fold is one they have to
+   open it to reach. */
+.int-manifest-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: auto;
+}
+/* THE SAME MARKER THE OTHER DISCLOSURES DRAW, because a fold that gives no
+   sign of being one is a line of text somebody has to discover by clicking. */
+.int-manifest-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+.int-manifest[open] > .int-manifest-summary::before {
+  transform: rotate(90deg);
+}
+.int-manifest-summary > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-manifest > .int-manifest-text {
+  margin-top: var(--space-3);
+}
+/* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
+   read against the app they already have, and a dialog that grew to forty
+   lines of JSON would push its own buttons off the screen. */
+.int-manifest-text {
+  width: 100%;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+/* The link that finishes an agent off, at the far end of its row, so a
+   column of them reads down one edge. */
+.int-row-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.int-row-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* A FINDING TAKES THE FULL WIDTH BENEATH ITS ROW rather than squeezing into
+   the detail line: it is a sentence, often a third-party app's own error
+   text, and truncating the one line that says what to do is the opposite of
+   useful. */
+.int-row-note {
+  flex-basis: 100%;
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.int-row-note-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* THE GAP IS THE STRUCTURE. Its four slots — what is wrong, which things,
+     what to do, and the rest — used to sit at 2px, which is closer than the
+     line spacing inside any one of them, so a paragraph and the disclosure
+     summary beneath it read as one run-on line: `…nothing else can do it.`
+     followed immediately by `1 more finding`. */
+  gap: var(--space-2);
+}
+.int-row-note-when {
+  color: var(--text-muted);
+}
+
+/* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
+   while everything around it is quieter. */
+.int-note-problem {
+  margin: 0;
+  color: var(--text);
+}
+
+/* WHAT TO DO: one step down, because it is read second and only once. It is
+   a separate line rather than another clause because an instruction buried
+   mid-paragraph is one a reader has to find. */
+.int-note-remedy {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--text-muted);
+}
+
+/* THE OTHER FINDINGS, ruled off. A disclosure that opens into more sentences
+   needs to be visibly not part of the sentence above it. */
+.int-more {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.int-more .int-findings > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
+   drawn at the muted step rather than the faint one: tokens.css marks
+   --text-faint decoration only, never a fact, and it falls under the 4.5:1
+   contrast floor on both themes. */
+.int-summary {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+details > summary.int-summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+details > summary.int-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A section heading inside the setup dialog, for a tool the engine reaches
+   over more than one surface. */
+.int-section {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.int-findings {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}
+
+/* WHICH THINGS A FINDING IS ABOUT, as chips.
+
+   A handle or an address is a thing a reader SCANS FOR, not a sentence they
+   read: wrapped in prose inside the finding's own sentence, picking one out
+   meant reading the whole line. Laid out, the same six are one glance.
+
+   Scrolls past a point rather than growing, because thirty-six service
+   accounts is the measured case and a card is not a page. */
+.int-subjects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+.int-subject {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  /* The addresses and URLs this carries have no spaces to break at. */
+  overflow-wrap: anywhere;
+}
+
+/* THE OVERFLOW COUNT EXPANDS IN PLACE. The reason the rest are folded is
+   width rather than secrecy, and the long case is a list somebody is working
+   through — so it must not send them somewhere to read it. */
+.int-subject-more {
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-2xs);
+}
+.int-subject-more:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+/* ---- The work tracker ---------------------------------------------------
+   The rail, the head, the three shapes, the peek and the item page.
+
+   TWO RULES DECIDE MOST OF WHAT IS HERE.
+
+   A BOARD OVERFLOWS SIDEWAYS ON PURPOSE. A board grouped by assignee can have
+   a dozen columns, and wrapping them into rows loses the one thing a board is
+   for — every column visible at once, in the order the axis declares. So the
+   strip scrolls and each column keeps a readable width instead of being
+   squeezed to a fraction of one.
+
+   AND A COLUMN SCROLLS ON ITS OWN. A column carries up to fifty rows; stacked
+   into the page, one busy column would make the whole board a kilometre tall
+   and put the other eleven columns' cards below the fold. Bounding the column
+   is what keeps every column's head — which is where the counts are — on one
+   screen.
+
+   The depth cue is the kanban one and it is the only place this file spends
+   elevation: a column sits on the SUNKEN ground and its cards sit on the
+   PANEL, so a card reads as an object on a surface rather than as a box drawn
+   on a box. */
+
+/* ---- The main column and the project head ------------------------------- */
+
+.work-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* The head's facts sit in a fixed order at a fixed size, so moving between
+   two projects does not move the numbers — the same rule the phase header
+   keeps, and the reason a reader can scan a column instead of hunting. */
+.work-facts {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1), var(--inset-hairline);
+  min-width: 0;
+}
+.work-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.work-fact-label {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.work-fact-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--heading);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+/* ---- The filter bar ----------------------------------------------------- */
+
+/* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
+   `--z-sticky`, opaque, wrapping, and a `--toolbar-h` floor. This rule used to
+   restate all of that and omit the class, which cost the one thing the class
+   is for: `.screen:has(.toolbar)` publishes `--sticky-top`, so with the copy
+   the property stayed at its `0px` default and `.grid-head` — which offsets
+   itself by it — parked underneath this band. What is left here is only what
+   is genuinely the work bar's own.
+
+   A COLUMN GAP WIDER THAN THE ROW GAP, because the children are GROUPS now and
+   the space between two groups has to read as a boundary against the
+   `--space-2` between the controls inside one. */
+.work-filters {
+  column-gap: var(--space-4);
+}
+/* THE GROUPS ARE THE WRAP UNIT. A single wrapping row broke between any two
+   controls, and since what the bar draws varies by shape — type, sprint,
+   group-by and sort each appear on some tabs and not others — the scope
+   control landed at x≈345 on List, x≈1338 on Board and x≈1155 on Calendar.
+   Grouped, a break falls between the question and the switches, and the
+   switches sit against the count rather than against six conditional
+   pickers. */
+.work-filters-ask,
+.work-filters-switches {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+/* THE QUESTION TAKES THE SLACK, which is what positions the switches from the
+   RIGHT edge. `margin-left: auto` on the count alone could not: an auto margin
+   is measured against the line the item lands on, so when the Overdue chip
+   wrapped the chip sat at x≈345 with ~1,200px of nothing beside it. */
+.work-filters-ask {
+  flex: 1 1 auto;
+}
+.work-filters-switches {
+  flex: 0 0 auto;
+}
+/* SEARCH IS THE WIDEST CONTROL IN THE BAR, because it is the one a person
+   types into: the selects beside it hold a word each and never grow. */
+.work-filters-search {
+  flex: 2 1 240px;
+  max-width: 380px;
+  min-width: 160px;
+}
+/* The coverage cluster ends the bar, so how fresh and how complete an answer
+   is sits beside the count it qualifies rather than above the rows. It keeps
+   the auto margin for the one case the groups above do not cover: a bar whose
+   question and switches both fit on one line still has slack after them, and
+   the count belongs at the edge rather than trailing the last chip. */
+.work-summary {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.work-coverage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* ---- The body, and the peek beside it ----------------------------------- */
+
+.work-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  min-width: 0;
+}
+.work-body[data-peek="true"] {
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+
+/* ---- The board ---------------------------------------------------------- */
+
+.work-board {
+  display: flex;
+  /* EVERY LANE IS THE SAME HEIGHT. A column is a LANE — the place work in
+     that state lives — and one that stopped at its single card read as a
+     panel that had finished rather than as a lane with room in it. The
+     body's own max-height is what bounds them all. */
+  align-items: stretch;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+  min-width: 0;
+  scroll-snap-type: x proximity;
+}
+/* A LANE IS A RECESS IN THE PAGE, and `--surface-inset` is the token whose
+   job that is — an overlay that darkens the ground in light and lifts it in
+   dark, so the lane reads as a surface under the cards in BOTH. `--bg-sunken`
+   was the wrong one: it is the app's own ground, BELOW the page in either
+   theme, and in dark that put the lane darker than what surrounds it — an
+   empty column became a hole nobody could see, so the one lane with room in
+   it was the one that looked absent. */
+.work-col {
+  flex: 0 0 auto;
+  width: min(292px, 82vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  scroll-snap-align: start;
+  min-width: 0;
+}
+.work-col-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.work-col-head .count-chip {
+  margin-left: auto;
+}
+.work-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-2);
+  /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. */
+  overflow-y: auto;
+  max-height: min(62dvh, 620px);
+  /* Fills whatever height the tallest lane sets, so a short column is a
+     lane with space rather than a panel that ended. */
+  flex: 1 1 auto;
+}
+.work-col-foot {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+.work-col-foot a {
+  color: var(--accent-ink);
+}
+.work-col-empty {
+  padding: var(--space-4) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ---- The card ----------------------------------------------------------- */
+
+.work-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.work-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-2);
+}
+.work-card.selected {
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-2);
+}
+/* A BLOCKED CARD WEARS A RAIL, the same idiom a stopped seat's card does:
+   the badge says it in words and the rail makes a column of forty scannable
+   for the three that cannot move. */
+.work-card[data-blocked="true"] {
+  box-shadow:
+    inset 2px 0 0 var(--critical),
+    var(--shadow-1);
+}
+.work-card-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+/* THE CLAMP IS `.clamp` IN base.css, which this element carries. What stays
+   here is the card's own type register and the COUNT: three is a fact about how
+   tall a work card may be, not a fact about clamping, and the declarations that
+   do the clamping are written once so a second spelling of them cannot appear
+   beside this one and drift. This copy already had — it never carried
+   `min-width: 0`, so a long unbroken title could refuse to shrink inside its
+   flex parent. */
+.work-card-title {
+  --clamp-lines: 3;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  color: var(--text);
+}
+.work-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* ---- The marks a row and a card share ----------------------------------- */
+
+.work-key {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex: none;
+}
+.work-type {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  flex: none;
+}
+.work-prio {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: var(--fs-3xs);
+  flex: none;
+}
+.work-prio[data-priority="urgent"] {
+  color: var(--critical-ink);
+}
+.work-prio[data-priority="high"] {
+  color: var(--caution-ink);
+}
+.work-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+.work-due.overdue {
+  color: var(--critical-ink);
+  font-weight: var(--fw-medium);
+}
+.work-size {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+/* NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
+   the project's lead, and a project with no lead routes to nobody at all. A
+   dashed empty square rather than a blank, so a column of unclaimed work
+   reads as unclaimed rather than as a rendering that failed. */
+.work-nobody {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
+  border: 1px dashed var(--border);
+  color: var(--text-faint);
+  flex: none;
+}
+.work-nobody .muted {
+  margin-left: var(--space-2);
+  white-space: nowrap;
+}
+
+/* ---- The list ----------------------------------------------------------- */
+
+/* One grid, so a run of rows scans down its columns rather than as prose —
+   the same reason the event feed is one. The title track is the only elastic
+   one; everything else is content-width and never wraps.
+
+   THE COLUMNS BELONG TO THE LIST, NOT TO EACH ROW. Every `.work-row` was
+   its own grid container, so `auto` sized each row's tracks against that
+   row's own content alone — and a status badge landed at a different x on
+   every line, which is exactly what a table is for avoiding. The tracks are
+   declared here once and each row takes them with `subgrid`, so the column
+   is as wide as the widest value in the LIST and every row agrees. A group
+   is its own list, which is right: a grouped column is a table per group. */
+.work-rows {
+  display: grid;
+  grid-template-columns: 16px 74px minmax(0, 1fr) auto auto auto auto auto;
+  /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
+     row's own `column-gap` is ignored and the parent's is used — so declared
+     on the row it silently became zero, and a type icon sat on top of the
+     key beside it. */
+  column-gap: var(--space-3);
+}
+.work-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--row-h);
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+/* A cell the row keeps even when its value is absent — see [WorkRow]. It
+   is right-aligned because these are the trailing columns, where a value
+   reads against the column's own edge rather than against the title. */
+.work-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+/* The four are named so the narrow breakpoint can drop them by what they
+   ARE rather than by where they sit — a positional selector over a row
+   whose cells move is the rule that silently starts hiding the wrong one. */
+.work-cell-prio,
+.work-cell-due,
+.work-cell-who {
+  justify-content: flex-end;
+}
+/* THE STATUS PILL READS FROM ITS LEFT EDGE, which is where its dot is —
+   right-aligned, the dot moved with the word's length and a reader scanning
+   the column for a state followed a ragged edge. */
+.work-cell-status {
+  justify-content: flex-start;
+}
+.work-row:last-child {
+  border-bottom: none;
+}
+.work-row:hover {
+  background: var(--surface-hover);
+}
+.work-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.work-row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.work-row-when {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.work-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  position: sticky;
+  /* NOT 0: the filter bar is sticky at the top of this same scroller, opaque
+     and at `--z-sticky`, so a head that stopped at 0 would stop underneath it
+     — and at `z-index: 1` it loses that overlap every time. `--sticky-top` is
+     what the bar publishes for exactly this, and it is `0px` on a screen with
+     no toolbar rather than a band of empty page above every head. */
+  top: var(--sticky-top);
+  z-index: 1;
+}
+.work-group-foot {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ---- The calendar ------------------------------------------------------- */
+
+.work-cal {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.work-cal-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.work-cal-month {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  color: var(--heading);
+  min-width: 10ch;
+}
+.work-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.work-cal-dow {
+  padding: var(--space-2);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.work-cal-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 116px;
+  padding: var(--space-1);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.work-cal-cell:nth-child(7n) {
+  border-right: none;
+}
+/* A DAY OF A NEIGHBOURING MONTH IS STILL A DAY — its work is really due then
+   — so it is drawn quieter rather than left out, which is what lets a task
+   due on the 1st be visible from the month before it.
+
+   THE GROUND IS RUNG 3, AND RUNG 2 WAS A NO-OP. This rule said `--surface-2`
+   and rendered nothing from the day it was written: that token is
+   `--color-surface-topbar-lift`, which is #f4f4f5 light and #1c1e24 dark —
+   byte-identical to `--color-surface-subtle`, the ground every Card in this
+   product paints, in all three states of the cascade. So every cell of the grid
+   came back the card's own colour and the leading 31 was indistinguishable from
+   the 1st. The `--surface-1/2/3` ramp steps off the PAGE and a card already
+   stands on rung 2, so rung 3 is the first step a card can show. See uilet.css's
+   surfaces note; `styles/surfaces.test.ts` resolves both against the installed
+   palette and fails if they collide again. */
+.work-cal-cell.out {
+  background: var(--surface-3);
+}
+.work-cal-day {
+  align-self: flex-start;
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  padding: 1px var(--space-1);
+  border-radius: var(--r-full);
+  min-width: 18px;
+  text-align: center;
+}
+/* AND THE NUMERAL STEPS DOWN A RUNG, because the ground alone is not the
+   distinction. A grid can open with a SINGLE out-of-month cell — a month
+   beginning on Tuesday — and one tinted square at the head of a row reads as a
+   day that is highlighted rather than as a day that is elsewhere. The step is
+   the design system's own device on `.crewlet-calendar__day.is-outside`: body
+   ink for the month being read, tertiary for the months either side.
+
+   NOT `--text-faint`. That is `--color-text-muted`, #8f8f95, which is declared
+   decoration-only for exactly this reason: a date is read, not decorated. Nor a
+   WEIGHT step — thirty semibold numerals is a grid that shouts, and the accent
+   pill below is already the emphasis this cell has.
+
+   IT MUST PRECEDE THE `today` RULE. Both selectors are three classes, so the tie
+   is broken by source order alone, and today can be an out-of-month cell — page
+   to May on the 30th of April and the 30th is in the first row. Ordered the
+   other way this muted ink would land on the accent fill and today's pill would
+   lose its contrast. */
+.work-cal-cell.out .work-cal-day {
+  color: var(--text-muted);
+}
+.work-cal-cell.today .work-cal-day {
+  background: var(--accent);
+  color: var(--text-on-fill);
+}
+.work-cal-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--space-1);
+  border-radius: var(--r-xs);
+  background: var(--surface-inset);
+  font-size: var(--fs-3xs);
+  color: var(--text-secondary);
+  min-width: 0;
+  transition: background var(--dur-fast) var(--ease);
+}
+.work-cal-chip:hover {
+  background: var(--surface-active);
+}
+.work-cal-chip[data-overdue="true"] {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+/* FINISHED WORK IS QUIETER, not hidden: a calendar that dropped it would
+   answer "what is due" with a month that forgets what was delivered. */
+.work-cal-chip[data-done="true"] {
+  color: var(--text-muted);
+}
+.work-cal-chip .work-cal-key {
+  font-family: var(--font-mono);
+  flex: none;
+}
+.work-cal-more {
+  align-self: flex-start;
+  font-size: var(--fs-3xs);
+  color: var(--accent-ink);
+  padding: 0 var(--space-1);
+}
+.work-cal-note {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ---- The peek, and the item page ---------------------------------------- */
+
+.work-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--space-4);
+  align-items: start;
+  min-width: 0;
+}
+.work-item-main,
+.work-item-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+/* ONLY THE RAIL STICKS — the main column is what scrolls past it. */
+.work-item-side {
+  position: sticky;
+  /* `--sticky-top`, NOT 0, for the reason `.work-group-head` gives: the two
+     resolve identically on an item page today because it draws no toolbar, and
+     that is exactly what makes the literal dangerous — it is a rule that goes
+     wrong on the day somebody adds one, with nothing to say it was ever a
+     choice. */
+  top: var(--sticky-top);
+}
+
+/* A metadata list, not a panel layout: two columns sized for compact pairs,
+   with the label track fixed so every value in the panel starts on one line. */
+/* A value nothing in this company explains, or one a filter cannot reach.
+   Said in a word beside the value rather than by dimming it: "archived" and
+   "this build could not read it" are different facts and neither is a shade. */
+.work-field-state {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  margin-left: var(--space-1);
+}
+
+.work-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+.work-check.done .work-check-name {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.work-check-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A comment carrying a QUESTION wears the caution rail: somebody owes it an
+   answer, which is the one state in a thread that is about the reader. */
+.work-ask {
+  box-shadow: inset 2px 0 0 var(--caution);
+}
+.work-hist {
+  display: flex;
+  flex-direction: column;
+}
+/* AN ENTRY IS AS LONG AS THE CHANGE WAS, so this row is a variable height and
+   every rule below is written for one taller than a line.
+
+   The description carried `.truncate`, which is right for a cell with a shape —
+   a title, a handle, a key — and wrong for this one. A create moves every field
+   the applier compares (`internal/tracker`'s `TaskDeltas`: title, status,
+   assignee, priority, project, type, tags, sprint, due, start, estimate, points,
+   capped at `MaxDeltas`) and `describeHistory` renders a clause each, so ~250
+   characters arrived in a cell about 100 wide and the ellipsis fell inside
+   `Status: ` — on a panel with a page of unused height under it.
+
+   A SHORTER STRING IS NOT THE ALTERNATIVE. The panel's whole subject is what
+   moved, so a cap hides the same clauses the clip did — and it would not help at
+   all with the real cost: `quiet` and the `turn →` link were in this same inline
+   box, after the description, so the clip took the row's only control out of
+   sight and left it in the tab order. They have their own track now. */
+.work-hist-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  /* SEPARATED BY MORE THAN THEIR OWN LEADING, which `--space-1` was not: 4px of
+     padding put 8px between two entries while the lines inside one sit 18px
+     apart, so a wrapped panel read as a single block of prose with no boundary
+     anywhere. The hairline is what every other variable-height list here already
+     uses — `.work-feed-row`, `.thread-entry`. */
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  /* STATED rather than inherited from `body`, because the glyph's offset below
+     is computed from it. */
+  line-height: var(--lh-normal);
+  min-width: 0;
+}
+.work-hist-row:last-child {
+  border-bottom: none;
+}
+.work-hist-row > svg {
+  color: var(--text-faint);
+  /* ON THE ENTRY'S FIRST LINE, never in the middle of it. The row aligns on the
+     FIRST baseline, so the timestamp stays level with the opening line; an icon
+     centred in the ROW tracks the row's HEIGHT instead and slides to the middle
+     of a four-line create, pointing at nothing. `start` plus one line's
+     half-leading lands it exactly where `center` landed it while every entry was
+     a single line, so this changes nothing about a one-line row and fixes every
+     taller one. 12px is the `xs` glyph's own edge; `1em` is this row's own font
+     size. */
+  align-self: start;
+  margin-top: calc((1em * var(--lh-normal) - 12px) / 2);
+}
+/* The description, wrapping. `anywhere` rather than `break-word`: a value can be
+   a uuid or a JSON object — `describeHistory`'s `scalar` stringifies both — and
+   neither carries a space to break at, so an unbreakable run would paint over
+   the timestamp beside it once the clip is gone. */
+.work-hist-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The tail: what the row's sentence must not be able to swallow. */
+.work-hist-tail {
+  display: flex;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+.work-hist-when {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The activity feed's own grid: when, what, which item, who. */
+.work-feed-row {
+  display: grid;
+  grid-template-columns: 68px 96px 76px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+.work-feed-row:last-child {
+  border-bottom: none;
+}
+.work-feed-when,
+.work-feed-who {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.work-feed-what {
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+/* A ROW IS NOT AN INLINE LINK — see the rule in components.css. Every
+   row-shaped anchor the tracker adds joins the same set. */
+a.work-card,
+a.work-row,
+a.work-cal-chip {
+  color: inherit;
+  text-decoration: none;
+}
+a.work-card:hover,
+a.work-row:hover,
+a.work-cal-chip:hover {
+  text-decoration: none;
+}
+
+/* ---- Responsive ---------------------------------------------------------
+   Two steps, and each is where one of the layout's own promises stops being
+   keepable: the peek stops fitting beside the body before the rail stops
+   fitting beside the main column.
+
+   THE FIRST STEP IS MEASURED FROM THE BOARD, not guessed. Three panes are
+   the sidebar, the project rail and the peek, and what is left over is the
+   board. A column is 292px and the gap is 12, so two columns need 596 and
+   three need 900 — and at 1280, a perfectly ordinary laptop, what was left
+   was 316. One column beside a detail panel is not a board. The threshold is
+   therefore where TWO columns still fit beside everything else, which is
+   around 1500, rather than the 1180 this was first written at: below it the
+   peek overlays, which costs nothing, because the board underneath is
+   exactly what the reader came back to. */
+
+@media (max-width: 1500px) {
+  .work-body[data-peek="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The peek becomes a drawer over the body rather than a column beside it,
+     on the shell's own veil — a panel squeezed to 200px is a panel nobody
+     can read, and hiding it would lose the reader's selection. */
+}
+
+/* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
+   beside a board — there is no third column competing with it — so its
+   properties rail sits beside the body for as long as both are readable. */
+@media (max-width: 1180px) {
+  .work-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .work-item-side {
+    position: static;
+  }
+}
+
+@media (max-width: 860px) {
+  /* The rail becomes a scrolling strip of chips above the head: a company
+     with nine projects still needs to reach all nine. */
+  /* FOUR COLUMNS ON A PHONE: type, key, title, status. The tracks are
+     re-declared on the LIST, since that is where they live — a row is a
+     subgrid of whatever the list has — and the three cells that are gone
+     are dropped rather than emptied, or they would each still hold a
+     column of nothing. */
+  .work-rows {
+    grid-template-columns: 16px 70px minmax(0, 1fr) auto;
+  }
+  .work-cell-prio,
+  .work-cell-due,
+  .work-cell-who,
+  .work-row .work-row-when {
+    display: none;
+  }
+  .work-cal-cell {
+    min-height: 76px;
+  }
+  .work-feed-row {
+    grid-template-columns: 62px minmax(0, 1fr) auto;
+  }
+  .work-feed-row .work-feed-kind {
+    display: none;
+  }
+}
+
+/* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, which is
+   right for a model's speech — its own line breaks are load-bearing there and
+   it is not markdown. A page body and a work item's description ARE markdown
+   by contract, so they carry `.md` beside it: the whitespace rule goes back to
+   normal (the renderer decides what a break is) and the block elements it
+   emits get the spacing a document needs. */
+.prose.md {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+/* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
+   siblings. The other way round — a `margin: 0` reset per element type after
+   the sibling rule — is how the rhythm died: the shorthand resets margin-top
+   too, at the same specificity and later in the file, so headings, paragraphs
+   and lists all ran together with no gap at all. */
+.prose.md :where(p, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, .md-table) {
+  margin: 0;
+}
+.prose.md > * + * {
+  margin-top: var(--space-3);
+}
+.prose.md h2,
+.prose.md h3,
+.prose.md h4,
+.prose.md h5,
+.prose.md h6 {
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--heading);
+}
+/* A heading opens a section, so it gets more air above it than a paragraph —
+   except the first one, which has the panel's own padding above it already. */
+.prose.md > * + :is(h2, h3, h4, h5, h6) {
+  margin-top: var(--space-5);
+}
+.prose.md h2 {
+  font-size: var(--fs-md);
+}
+.prose.md h3 {
+  font-size: var(--fs-sm);
+}
+.prose.md h4,
+.prose.md h5,
+.prose.md h6 {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.prose.md ul,
+.prose.md ol {
+  padding-inline-start: var(--space-5);
+}
+.prose.md li + li {
+  margin-top: var(--space-1);
+}
+.prose.md li > ul,
+.prose.md li > ol {
+  margin-top: var(--space-1);
+}
+/* A task list keeps its box on the line rather than in the marker's place:
+   the marker is what says "list", and the box is what says "done". */
+.prose.md ul.md-tasks {
+  list-style: none;
+  padding-inline-start: 0;
+}
+.prose.md ul.md-tasks > li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+/* The item's own content is ONE column beside the box, never a second cell
+   of the row: a sublist belongs under the line it hangs off, not beside it. */
+.prose.md .md-task-body {
+  min-width: 0;
+  flex: 1;
+}
+.prose.md .md-task-body > * + * {
+  margin-top: var(--space-2);
+}
+.prose.md ul.md-tasks input[type="checkbox"] {
+  margin-top: 0.2em;
+  /* The box is a RENDERING of what the document says and this surface writes
+     nothing, so it is disabled — and a disabled control at its browser
+     default reads as greyed-out noise beside the text it belongs to. */
+  accent-color: var(--accent);
+  opacity: 0.85;
+}
+.prose.md blockquote {
+  margin: 0;
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.prose.md hr {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--space-4) 0;
+}
+.prose.md a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose.md img {
+  max-width: 100%;
+  border-radius: var(--r-sm);
+}
+
+/* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
+   written for a document and can be wider than the column it lands in here. */
+.md-table {
+  overflow-x: auto;
+}
+.md-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--fs-2xs);
+}
+.md-table th,
+.md-table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+.md-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* A LINE DIFF. Monospace and line-numbered on both sides, because the two
+   numbers are what a reader uses to find the paragraph in the version beside
+   it. Marked with a glyph as well as a tint: colour alone is not a signal, and
+   a printed or forced-colours render loses the tint entirely. */
+.diff {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-normal);
+}
+.diff-section + .diff-section,
+.diff-skip + .diff-line {
+  border-top: 1px solid var(--border-subtle);
+}
+/* A GAP SAYS WHAT IT STANDS FOR. Silently closed, a document edited at both
+   ends looks like one rewritten in the middle. */
+.diff-skip {
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-2xs);
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 3.5ch 3.5ch 2ch minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: 1px var(--space-3) 1px var(--space-2);
+}
+.diff-no {
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+}
+.diff-mark {
+  user-select: none;
+  text-align: center;
+}
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-line.is-add {
+  background: var(--positive-soft);
+}
+.diff-line.is-add .diff-mark {
+  color: var(--positive-ink);
+}
+.diff-line.is-remove {
+  background: var(--critical-soft);
+}
+.diff-line.is-remove .diff-mark {
+  color: var(--critical-ink);
+}
+.diff-add-ink {
+  color: var(--positive-ink);
+}
+.diff-del-ink {
+  color: var(--critical-ink);
+}
+
+/* The fires a cron expression works out to — a plain ordered list without the
+   numbers, because the order is the point and the ordinal is not: a reader
+   counts down from "next", not up from one. */
+.fires {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* ---- The timeline ------------------------------------------------------
+   A date axis drawn as absolute positions over a fixed-width strip rather
+   than as a CSS grid: a bar's left and width come from `lib/timeline.ts` in
+   day columns, and a grid would need one track per day — three hundred and
+   seventy of them at the cap, each of which the engine lays out.
+
+   The strip scrolls horizontally inside the panel and the NAME column does
+   not, so a reader who has scrolled to November still knows which row is
+   which. */
+.tl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-3);
+}
+.tl-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.tl-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.tl-band-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  color: var(--heading);
+}
+.tl-band-count {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tl-none {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* THE SCROLLER holds the axis; the names are laid over its left edge and
+   pinned, so the two never drift out of row alignment. */
+.tl-scroll {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.tl-inner {
+  position: relative;
+  /* The names sit over the left of the strip, so the bars start clear of
+     them. A margin rather than padding: the absolute positions inside are
+     measured from the content box. */
+  margin-left: 260px;
+  min-width: max-content;
+}
+.tl-axis {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tl-tick {
+  position: absolute;
+  top: 5px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  padding-left: 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tl-today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+.tl-rows {
+  position: relative;
+}
+.tl-rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-subtle);
+}
+.tl-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent-line);
+}
+.tl-arrows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.tl-arrow {
+  fill: none;
+  stroke-width: 1.5;
+}
+.tl-arrow.is-open {
+  stroke: var(--critical-ink);
+}
+.tl-arrow.is-cleared {
+  stroke: var(--border-strong);
+}
+.tl-head {
+  fill: var(--border-strong);
+}
+
+.tl-bar {
+  position: absolute;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-decoration: none;
+  border: 1px solid transparent;
+  min-width: 10px;
+}
+.tl-bar:hover {
+  filter: brightness(1.06);
+}
+.tl-bar.selected {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.tl-bar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-bar[data-tone="planned"] {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.tl-bar[data-tone="active"] {
+  background: var(--info-soft);
+  border-color: var(--info-ink);
+  color: var(--info-ink);
+}
+.tl-bar[data-tone="done"] {
+  background: var(--positive-soft);
+  border-color: var(--positive-ink);
+  color: var(--positive-ink);
+}
+.tl-bar[data-tone="overdue"] {
+  background: var(--caution-soft);
+  border-color: var(--caution-ink);
+  color: var(--caution-ink);
+}
+.tl-bar[data-tone="blocked"],
+.tl-bar[data-tone="critical"] {
+  background: var(--critical-soft);
+  border-color: var(--critical-ink);
+  color: var(--critical-ink);
+}
+/* A ONE-DAY BAR IS A MARKER, not a span: the two dashed ends say the other
+   end of the span was never stated, so nobody reads it as work that takes
+   exactly one day. */
+.tl-bar[data-kind="deadline"],
+.tl-bar[data-kind="began"] {
+  border-style: dashed;
+}
+.tl-bar[data-kind="inverted"] {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    var(--critical-soft) 4px,
+    var(--critical-soft) 8px
+  );
+}
+
+.tl-names {
+  position: absolute;
+  left: 0;
+  top: 24px;
+  z-index: 3;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border-subtle);
+}
+.tl-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  text-decoration: none;
+  min-width: 0;
+}
+.tl-name:hover {
+  background: var(--surface-hover);
+}
+.tl-name.selected {
+  background: var(--accent-soft);
+}
+
+.tl-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tl-unscheduled {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tl-aside-note {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.tl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.tl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 28ch;
+  padding: 2px var(--space-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  text-decoration: none;
+}
+.tl-chip:hover {
+  background: var(--surface-hover);
+}
+/* A NARROW BAR'S LABEL, beside it. `pointer-events: none` so it never eats a
+   click meant for the bar it names or for one further along the row. */
+.tl-bar-aside {
+  position: absolute;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ---- The workload -------------------------------------------------------
+   A grid rather than a table, for the same reason `.work-grid` is one: the
+   columns line up across every row, and a row is a flex line that can wrap
+   its badges without the cells losing their alignment. */
+.wl {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wl-head,
+.wl-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1.6fr) minmax(120px, 2fr) 5rem 6rem;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+}
+.wl-head {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wl-row + .wl-row {
+  border-top: 1px solid var(--border-subtle);
+}
+.wl-row:hover {
+  background: var(--surface-hover);
+}
+.wl-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-decoration: none;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.wl-handle {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.wl-counts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.wl-open {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.wl-soft {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.wl-num {
+  text-align: right;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.wl-from {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* THE TRACK IS LONGER THAN CAPACITY, so over-capacity has somewhere to go.
+   A bar that filled at 100% would draw a person at capacity and a person at
+   three times it identically — which is the one comparison the screen is
+   for. */
+.wl-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.wl-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  /* A LOAD OF ZERO AGAINST A REAL CAPACITY IS STILL A ROW WITH A BAR, and it
+     is two pixels rather than nothing: somebody declared to take eight points
+     and holding none is a fact worth seeing beside the person holding twelve,
+     and an empty track there would read as the no-capacity case. */
+  min-width: 2px;
+}
+.wl-bar.is-positive {
+  background: var(--positive);
+}
+.wl-bar.is-caution {
+  background: var(--caution);
+}
+.wl-bar.is-critical {
+  background: var(--critical);
+}
+/* THERE IS NO NEUTRAL BAR. A row with no declared capacity draws an empty
+   track, because the track IS the comparison and there is nothing to compare
+   against — the em dashes in the two columns beside it are what say so. A
+   hairline here claimed to distinguish "nobody declared a capacity" from
+   "this person holds nothing" and could not: both have no fraction, so both
+   drew the same two pixels. */
+/* WHERE CAPACITY IS, drawn whether or not the bar reaches it, so a reader
+   sees the target as well as the load. */
+.wl-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--text-muted);
+  opacity: 0.55;
+  z-index: 1;
+}
+
+/* ---- "Change this with your assistant" ---------------------------------
+   Closed by default and quiet when closed: it is the answer to a question a
+   reader has occasionally, not a control the screen is about. */
+.toolcall {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+.toolcall-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-align: left;
+}
+.toolcall-toggle:hover {
+  color: var(--text);
+}
+.toolcall-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.toolcall-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.toolcall-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+/* A DASHED EDGE ON THE IRREVERSIBLE ONE, not a red fill: it is still just
+   text on a page, and a block that shouted would be a delete button. */
+.toolcall-row.is-destructive {
+  border-style: dashed;
+  border-color: var(--critical-ink);
+}
+.toolcall-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.toolcall-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+.toolcall-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* ---- The Inbox ---------------------------------------------------------- */
+
+/* THE PULSE STRIP. The first fold of the landing screen, and the reason a
+   healthy company does not render as a blank page — see `routes/inbox/Pulse.tsx`
+   for the argument. It is a row that WRAPS rather than a grid: these are eight
+   facts read left to right, and a grid would change their reading order with
+   the viewport. */
+.pulse {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+.pulse-fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  /* THE ONLY TRANSITION ON THIS STRIP, and it is on colour. The figures
+     re-render on every push, and a transition on anything geometric would
+     make a number arriving look like the strip moving. */
+  transition: background var(--dur-fast) var(--ease);
+}
+.pulse-fact:hover {
+  background: var(--surface-hover);
+  text-decoration: none;
+}
+.pulse-fact:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.pulse-glyph {
+  display: flex;
+  align-self: center;
+  color: var(--text-faint);
+}
+.pulse-value {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  /* TABULAR, AND WITH A FLOOR. A figure going from 9 to 10 on a poll would
+     otherwise widen its own cell and shove the seven facts to its right along
+     by a character. Two digits of room is where the jitter stops being
+     visible; a wider number simply grows, once. */
+  font-variant-numeric: tabular-nums;
+  min-width: 2ch;
+  text-align: right;
+}
+.pulse-value[data-tone="caution"] {
+  color: var(--caution-ink);
+}
+.pulse-value[data-tone="critical"] {
+  color: var(--critical-ink);
+}
+.pulse-label {
+  font-size: var(--fs-2xs);
+}
+
+/* TWO PANES. The list keeps its width when the detail changes, because the
+   detail column is present from the first paint — a pane that appears on the
+   first click reflows the list under the pointer, so the row a reader clicked
+   is no longer the row they are looking at. 46% is the plan's own split. */
+.inbox-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 46fr) minmax(0, 54fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.inbox-detail {
+  position: sticky;
+  /* Under whatever band the page already parks at the top of the scroller. */
+  top: var(--sticky-top);
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* ONE PANE UNDER THE PLAN'S PHONE WIDTH. A human teammate answering an ask
+   from their phone is this product's second named reader, and this is the one
+   screen drawn for them: the list first, the detail under it. */
+@media (max-width: 860px) {
+  .inbox-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .inbox-detail {
+    position: static;
+  }
+}
+
+.inbox-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.inbox-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.inbox-band-count {
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 2ch;
+}
+/* A BAND WITH NOTHING IN IT STILL SAYS WHAT IT IS. Drawn as a quiet block
+   rather than as an empty state, because an empty state is a whole screen's
+   worth of furniture and there are two of these on one page. */
+.inbox-quiet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+/* THE BAND'S FILTERS SIT IN ITS OWN FLOW. The reason rail moved out of the list
+   so a reason matching nothing still draws the chip that would lift it;
+   `.facet-row`'s bottom margin exists for a parent with no gap, and here it is
+   ADDED to the band's own gap. */
+.inbox-band > .facet-row {
+  margin-bottom: 0;
+}
+
+.inbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background var(--dur-fast) var(--ease);
+}
+.inbox-row:last-child {
+  border-bottom: none;
+}
+.inbox-row:hover {
+  background: var(--surface-hover);
+}
+.inbox-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* THE SELECTED ROW, which is the one the pane beside it is showing. The bar is
+   inside the padding rather than a border, so selecting a row does not move
+   its text by a pixel. */
+.inbox-row[aria-current] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* Read is quieter, never hidden: an inbox you have read is still the record of
+   what reached you. */
+.inbox-row[data-read] .inbox-row-body {
+  color: var(--text-muted);
+}
+.inbox-row-body {
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+/* A FIXED CELL, filled or not. Rendered only when unread it was a dot that
+   came and went as a poll landed, and every row's text stepped sideways with
+   it. */
+.inbox-unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: none;
+}
+.inbox-unread[data-on] {
+  background: var(--accent);
+}

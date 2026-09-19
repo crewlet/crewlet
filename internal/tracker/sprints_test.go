@@ -2,7 +2,9 @@ package tracker_test
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -175,5 +177,135 @@ func TestANamedSprintNeedsItsProject(t *testing.T) {
 		"container": "workspace", "sprint": "none",
 	}); err != nil {
 		t.Errorf("sprint=none was refused at company scope: %v", err)
+	}
+}
+
+// A TASK IS FILED INTO A SPRINT THE PROJECT MINTED, OR INTO NONE.
+//
+// The schedule tool's schema says `sprint` is a number `sprint_report` lists,
+// and nothing checked it: any positive integer was stored, and the task then
+// pointed at a membership that does not exist. `sprint_report` and the
+// burndown both refuse that sprint with [tracker.ErrNoSprint], so the work was
+// filed where no report can show it while the seat was told the write worked.
+//
+// A REFUSAL RATHER THAN AN UNAVAILABLE, which is the answer an undeclared TAG
+// gets: a sprint number comes from a model reading a schema that only
+// describes it, so absent is overwhelmingly a number nobody minted, and
+// "retry" would be advice that never comes good.
+func TestATaskCannotBeFiledIntoASprintNobodyMinted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// A CREATE naming a sprint the project has not minted.
+	unminted := newTask("ghost")
+	unminted.Key = "ENG-ghost"
+	unminted.Sprint = ptr(99)
+	_, err := r.writer.CreateTask(t.Context(), "op-ghost", unminted, nil)
+	if err == nil {
+		t.Fatal("a task was filed into sprint 99, which nobody minted — no " +
+			"report can show it and the caller was told it worked")
+	}
+	if !strings.Contains(err.Error(), "sprint 99") {
+		t.Errorf("the refusal does not name the sprint: %v", err)
+	}
+	// AND IT SAYS WHERE TO LOOK, which is the whole difference between a
+	// refusal somebody can act on and one they can only retry.
+	if !strings.Contains(err.Error(), "sprint_report") {
+		t.Errorf("the refusal names no way to find the real ones: %v", err)
+	}
+
+	// AN UPDATE takes the same gate.
+	inSprint(t, r, "real", nil)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-move", "real", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Sprint: ptr(99)},
+		tracker.ChangeSprint, nil); err == nil {
+		t.Error("a task was MOVED into sprint 99, which nobody minted")
+	}
+
+	// AND A MINTED ONE IS ACCEPTED, so the gate refuses the unminted rather
+	// than the sprint field.
+	seedSprintWindow(t, r, 1, tracker.SprintActive,
+		time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(13*24*time.Hour), nil)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-real", "real", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Sprint: ptr(1)},
+		tracker.ChangeSprint, nil); err != nil {
+		t.Errorf("a minted sprint was refused: %v", err)
+	}
+
+	// AND TAKING A TASK OUT names no sprint, so it passes whatever the
+	// project has minted.
+	r.drain()
+	if _, err := r.writer.UpdateTask(t.Context(), "op-out", "real", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Sprint: ptr(0)},
+		tracker.ChangeSprint, nil); err != nil {
+		t.Errorf("clearing a sprint was refused: %v", err)
+	}
+}
+
+// A PROJECT MOVE IS CHECKED AGAINST THE SPRINT IT WOULD CARRY.
+//
+// A sprint number is minted by ONE project and means nothing in another, so
+// re-homing a task is the one gesture that always invalidates the number it
+// already holds — and it was the one gesture that skipped the check, because
+// the gate asked whether the PATCH named a sprint. A task moved out of ENG's
+// sprint 1 into a project that had never minted a sprint 1 landed pointing at
+// a membership that does not exist: gone from ENG's burndown because it is no
+// longer in ENG, absent from the destination's because that sprint is not
+// there, and refused by `sprint_report` with ErrNoSprint. The write said it
+// worked.
+func TestMovingATaskCarriesItsSprintOnlyWhereTheDestinationMintedIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// A SECOND PROJECT, with a counter of its own and no sprints at all.
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
+		tracker.ProjectSubject("OPS"), "", tracker.Project{
+			V: 1, Key: "OPS", Name: "Operations",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, tracker.ChangeProjectCreated, nil); err != nil {
+		t.Fatalf("seed the destination project: %v", err)
+	}
+	r.drain()
+
+	start := time.Now().UTC().Add(-time.Hour)
+	seedSprintWindow(t, r, 1, tracker.SprintActive, start,
+		start.Add(14*24*time.Hour), nil)
+	inSprint(t, r, "carried", ptr(1))
+
+	// MOVED WITHOUT NAMING A SPRINT: refused, because the number it keeps
+	// is not the destination's.
+	_, err := r.writer.UpdateTask(t.Context(), "op-move", "carried", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Project: ptr("OPS")},
+		tracker.ChangeMoved, nil)
+	if err == nil {
+		t.Fatal("a task moved into OPS carrying ENG's sprint 1, which OPS " +
+			"never minted — no report can show it and the caller was told " +
+			"it worked")
+	}
+	// AND THE REFUSAL NAMES THE REMEDY THE CALLER CAN REACH. They did not
+	// type a sprint, so being pointed at the destination's list of sprints
+	// names nothing they sent: what they have to do is decide this task's
+	// sprint in the same edit.
+	for _, want := range []string{"sprint 1", "OPS", "`sprint`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %s: %v", want, err)
+		}
+	}
+
+	// TAKING IT OUT IN THE SAME EDIT IS THE WAY THROUGH.
+	if _, err := r.writer.UpdateTask(t.Context(), "op-move-out", "carried", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Project: ptr("OPS"), Sprint: ptr(0)},
+		tracker.ChangeMoved, nil); err != nil {
+		t.Fatalf("a move that clears the sprint was refused: %v", err)
+	}
+	r.drain()
+
+	// AND A MOVE THAT DOES NOT CHANGE THE PROJECT IS NOT A MOVE, so it is
+	// not an occasion to re-judge a sprint that did not move. Restating the
+	// home passes even though the task is now sprintless in OPS.
+	if _, err := r.writer.UpdateTask(t.Context(), "op-restate", "carried", "OPS",
+		tracker.NoIfMatch, tracker.TaskPatch{Project: ptr("OPS")},
+		tracker.ChangeMoved, nil); err != nil {
+		t.Errorf("restating a task's own project was refused: %v", err)
 	}
 }

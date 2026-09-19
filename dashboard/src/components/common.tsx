@@ -8,11 +8,36 @@
  * zero callers beside another with all of them.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { href, useParam } from "~/app/router.tsx";
-import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
+import type { ReactNode } from "react";
+import {
+  Avatar,
+  Button,
+  Callout,
+  EmptyState,
+  InlineCode,
+  Section as UiSection,
+  Tag,
+  cx,
+} from "@crewlethq/ui";
+import {
+  CableGlyph,
+  DatabaseGlyph,
+  KeyGlyph,
+  ScheduleGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
+// STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
+// value, and uilet's glyphs are components. The name -> drawing lookup stays
+// in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
+// at once - the same call `app/frame/cells.tsx` makes for the same reason.
+import { Mark } from "~/ui/glyph.tsx";
+import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
+import { href } from "~/app/router.tsx";
+import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
 import {
+  roundLabel,
   runState,
   seatPath,
   seatTone,
@@ -21,435 +46,62 @@ import {
   toneOf,
   type Seat,
 } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
-import {
-  ALL_ITEMS,
-  Avatar,
-  Button,
-  Callout,
-  Card,
-  cx,
-  DataTable,
-  EmptyState,
-  EmptyValue,
-  formatRelative,
-  InlineCode,
-  Link,
-  RelativeTime,
-  Stack,
-  tableColumns,
-  Tag,
-  useNow,
-  VisuallyHidden,
-} from "@crewlethq/ui";
-import type {
-  ButtonSize,
-  ButtonVariant,
-  DataTableItemsPerPage,
-  DataTableProps,
-  DataTableSortState,
-  DataViewColumn,
-} from "@crewlethq/ui";
-import {
-  ArrowDownwardGlyph,
-  CheckGlyph,
-  DatabaseGlyph,
-  ErrorGlyph,
-  InboxGlyph,
-  InfoGlyph,
-  KeyGlyph,
-  ScheduleGlyph,
-  WarningGlyph,
-} from "@crewlethq/icons/glyphs";
 
 /**
- * How tall a record block grows before it scrolls itself, in px.
+ * How tall a block of machine text grows before it scrolls itself, in px.
  *
- * Twenty-five lines of the mono face at the size a block is set in, which is
- * about as much of a record as a reader takes in before scrolling anyway.
- * uilet's CodeBlock is unbounded without a ceiling, and the records these hold
- * are a whole turn, a whole configuration and a whole event payload: one of
- * them at nine hundred lines pushes everything under it off the screen.
+ * 460px, which was the block stylesheet's own `max-height` and therefore the
+ * height every one of these blocks has had since they were written — not a new
+ * number. That rule is gone with the block it dressed, so this constant is now
+ * the only place the ceiling is written down at all, which is where it belongs:
+ * a height a caller passes cannot also be a height a stylesheet imposes, and
+ * the two would drift. It has to be STATED at each call because uilet's
+ * CodeBlock is unbounded unless a caller says otherwise, and unbounded is
+ * wrong for every record this dashboard shows: a phase's verbatim system
+ * prompt runs to tens of kilobytes, an event payload and a whole configuration
+ * to hundreds of lines, and one of them at nine hundred lines pushes
+ * everything under it off the screen.
+ *
+ * ONE CONSTANT, because it was five: a named one on the phase card and the
+ * bare literal `460` at four call sites on the event and turn screens, which
+ * is exactly how the phase card's ceiling and the event screen's come to
+ * disagree with nothing to say so.
  */
 export const RECORD_MAX_HEIGHT = 460;
-
-/**
- * The page sizes every table in this dashboard offers.
- *
- * The design system's own row, said here because the two defaults below are
- * chosen against it: a size a screen opens on has to be one of these, or the
- * chip row in the settings frame opens with nothing marked. The All chip the
- * frame draws beside them is the component's, and it is a WORD rather than a
- * count, so a table that gains a row does not quietly start paging.
- */
-export const TABLE_PAGE_SIZES = [5, 10, 20, 50, 100];
-
-/**
- * How many rows a table opens with, and why the two numbers differ.
- *
- * A PANEL table sits in a card beside other cards, and ten rows is as much as
- * one can take before it pushes its neighbours off the screen. A LIST screen
- * owns the whole page, where ten rows is a pager a reader works rather than
- * reads: twenty is about one screenful at the compact density, which is what
- * somebody scanning an event log wants before they reach for the chevrons.
- */
-export const PANEL_PAGE_SIZE = 10;
-export const LIST_PAGE_SIZE = 20;
-
-/**
- * Where a table's choices live: the URL for what a reader would send someone,
- * this browser's storage for what only this browser knows.
- *
- * THE SPLIT, AND WHY IT FALLS HERE. Five of a table's choices are facts about
- * WHAT IS ON SCREEN: which page, how many rows it holds, which columns are
- * shown, in what order, and how they are sorted. Every one of them is part of
- * the answer a reader would send a colleague, so every one is a URL parameter
- * and the link carries it. The other two are facts about the BROWSER somebody
- * is reading in: whether cells wrap at this window width, and how wide each
- * column was dragged. A link cannot carry a pixel width that means anything on
- * another screen, so those two are kept under `storageKey` and only those two.
- * The design system keeps the same rule from its side: a controlled choice is
- * never read from storage and never written to it, so the two can never
- * disagree on the way back in.
- *
- * THE PARAMETERS ARE PREFIXED BY THE TABLE where a screen draws more than one,
- * because Fleet draws three and Seat draws three: `seats.page` is the seat
- * placement table's page and `duties.page` is the duty table's. A screen with
- * one table leaves the prefix off, so the event log's is plainly `?page=4`.
- *
- * THEY REPLACE RATHER THAN PUSH (`useParam`'s filter kind). A page, a size and
- * a column list are positions within the screen a reader is already on, not
- * screens they called for; and the table itself moves the page back to one
- * whenever a sort or a filter changes, which as a pushed entry would make the
- * Back button walk a maze nobody asked for. Back still leaves the screen with
- * the reader's choices intact in the entry it returns to.
- *
- * THE STORAGE KEY NAMES THE SCREEN AND THE TABLE, never the component: two
- * tables on one route would otherwise share one set of column widths, and the
- * wider of them would keep re-teaching the narrower its own.
- */
-export interface TableChoicesOptions<T> {
-  /** The route this table is on. It names the storage entry, never a parameter. */
-  screen: string;
-  /** Which table on that route. The screen's only table leaves it out. */
-  table?: string;
-  /** The columns as declared, which is what a hidden or reordered set is read against. */
-  columns: readonly DataViewColumn<T>[];
-  /**
-   * How many rows the table opens with, before a reader picks a size.
-   *
-   * A list screen leaves it out and takes [LIST_PAGE_SIZE]; the panel default
-   * is said once, by [RecordTable], rather than at each of its call sites.
-   */
-  defaultItemsPerPage?: number;
-  /** Which column it opens ordered by. Absent from the URL means this one. */
-  defaultSort?: DataTableSortState | null;
-  /**
-   * A value that changes whenever the SCREEN's own filters change, which puts
-   * the reader back on page one.
-   *
-   * The design system does this for the filters and the sort it owns, and the
-   * list view does not hand a screen's own filter values down to it, so the
-   * one case it cannot see is the one a screen has to say. A reader who
-   * narrows a log to six rows while on page four is otherwise shown the empty
-   * end of a list that no longer has four pages.
-   */
-  filterKey?: string;
-}
-
-/** Every choice a table holds, as the props that hold it. */
-export interface TableChoices {
-  page: number;
-  onPageChange: (next: number) => void;
-  itemsPerPage: DataTableItemsPerPage;
-  onItemsPerPageChange: (next: DataTableItemsPerPage) => void;
-  /**
-   * How many rows the screen opens with, handed to the table as well.
-   *
-   * Same reason as [TableChoices.defaultSort] below: the size is controlled,
-   * so this seeds nothing, and what it answers is Reset to Default. Without
-   * it the frame resets to the design system's own ten, so a list screen that
-   * opens at twenty came back from a reset on a size it never chose and its
-   * link then carried `per=10`.
-   */
-  defaultItemsPerPage: number;
-  itemsPerPageOptions: number[];
-  visibleColumns: Record<string, boolean>;
-  onVisibleColumnsChange: (next: Record<string, boolean>) => void;
-  columnOrder: string[];
-  onColumnOrderChange: (next: string[]) => void;
-  sort: DataTableSortState | null;
-  onSortChange: (next: DataTableSortState | null) => void;
-  /**
-   * The order the screen opens in, handed to the table as well as read here.
-   *
-   * The sort is controlled, so this seeds nothing: what it answers is the
-   * settings frame's Reset to Default, which has no default to put back
-   * without it and leaves the table ordered by nothing at all. Passing it
-   * also keeps the URL honest, because the parameter's own fallback is this
-   * value, so a reset lands back on a clean link rather than on `sort=none`.
-   */
-  defaultSort: DataTableSortState | null;
-  storageKey: string;
-  paginated: true;
-  resizable: true;
-  /**
-   * The cog, which is now the ONE way to a table's columns.
-   *
-   * The Columns button beside it is gone from the design system, so the
-   * settings frame is where a reader hides a column, brings one back or drags
-   * the order. A table that turned this off would draw no control at all.
-   */
-  showSettings: true;
-}
-
-/** A sort as a URL parameter. `none` is a reader who sorted by nothing. */
-function encodeSort(sort: DataTableSortState | null | undefined): string {
-  return sort?.key && sort.direction ? `${sort.key}:${sort.direction}` : "none";
-}
-
-/**
- * A sort read back out of a URL, which is the least trusted place there is.
- *
- * A key no column declares is not a sort the table could apply, so it answers
- * the same as `none` rather than leaving the table ordered by a column that is
- * not there.
- */
-function decodeSort(value: string, keys: readonly string[]): DataTableSortState | null {
-  const [key, direction] = value.split(":");
-  if (!key || !keys.includes(key)) return null;
-  return { key, direction: direction === "desc" ? "desc" : "asc" };
-}
-
-/** A comma-separated list of column keys, unknown names dropped. */
-function decodeKeys(value: string, keys: readonly string[]): string[] {
-  return value
-    .split(",")
-    .map((key) => key.trim())
-    .filter((key) => keys.includes(key));
-}
-
-/** A page size read back out of a URL. Anything else is the screen's own. */
-function decodeItemsPerPage(value: string, fallback: number): DataTableItemsPerPage {
-  if (value === ALL_ITEMS) return ALL_ITEMS;
-  const count = Number.parseInt(value, 10);
-  return Number.isFinite(count) && count > 0 ? count : fallback;
-}
-
-export function useTableChoices<T>({
-  screen,
-  table = "",
-  columns,
-  defaultItemsPerPage = LIST_PAGE_SIZE,
-  defaultSort = null,
-  filterKey,
-}: TableChoicesOptions<T>): TableChoices {
-  const prefix = table ? `${table}.` : "";
-  // The declared keys, in the declared order, and only the ones the table will
-  // hold: a column with no key is one it drops, so a hidden or reordered set
-  // naming one would be naming a column nobody can see.
-  //
-  // Held as ONE STRING first. A screen whose cells render an elapsed time
-  // rebuilds its column array on every tick, so nothing below may be keyed on
-  // WHICH array arrived; what it says is the same string a second later.
-  const declaredOrder = columns
-    .map((column) => column.key)
-    .filter(Boolean)
-    .join(",");
-  const defaultHidden = columns
-    .filter((column) => column.key && column.defaultVisible === false)
-    .map((column) => column.key)
-    .join(",");
-  const declared = useMemo(
-    () => (declaredOrder === "" ? [] : declaredOrder.split(",")),
-    [declaredOrder],
-  );
-  const defaultSortParam = encodeSort(defaultSort);
-
-  const [pageParam, setPageParam] = useParam(`${prefix}page`, "1");
-  // Each parameter's fallback is the value this table opens on, so a reader
-  // who picks it back is a reader with a clean URL again.
-  const [perParam, setPerParam] = useParam(`${prefix}per`, String(defaultItemsPerPage));
-  const [sortParam, setSortParam] = useParam(`${prefix}sort`, defaultSortParam);
-  const [hiddenParam, setHiddenParam] = useParam(`${prefix}hide`, defaultHidden);
-  const [orderParam, setOrderParam] = useParam(`${prefix}cols`, declaredOrder);
-
-  const page = Math.max(1, Math.trunc(Number(pageParam)) || 1);
-  const itemsPerPage = decodeItemsPerPage(perParam, defaultItemsPerPage);
-  const sort = useMemo(() => decodeSort(sortParam, declared), [sortParam, declared]);
-  const visibleColumns = useMemo(() => {
-    const hidden = new Set(decodeKeys(hiddenParam, declared));
-    return Object.fromEntries(declared.map((key) => [key, !hidden.has(key)]));
-  }, [hiddenParam, declared]);
-  const columnOrder = useMemo(() => decodeKeys(orderParam, declared), [orderParam, declared]);
-
-  // The page is put back to one by a filter, and by nothing else. Not by the
-  // rows changing underneath it: on a live screen that is every event the
-  // reader is not looking at, and it used to throw them off page four several
-  // times a minute.
-  const filtered = useRef<string | null>(null);
-  useEffect(() => {
-    const was = filtered.current;
-    filtered.current = filterKey ?? null;
-    if (was === null || was === (filterKey ?? null)) return;
-    setPageParam("1");
-  }, [filterKey, setPageParam]);
-
-  return {
-    page,
-    onPageChange: (next) => setPageParam(String(Math.max(1, Math.trunc(next)))),
-    itemsPerPage,
-    onItemsPerPageChange: (next) => setPerParam(next === ALL_ITEMS ? ALL_ITEMS : String(next)),
-    defaultItemsPerPage,
-    itemsPerPageOptions: TABLE_PAGE_SIZES,
-    visibleColumns,
-    onVisibleColumnsChange: (next) =>
-      setHiddenParam(declared.filter((key) => next[key] === false).join(",")),
-    columnOrder,
-    onColumnOrderChange: (next) =>
-      setOrderParam(next.filter((key) => declared.includes(key)).join(",")),
-    sort,
-    onSortChange: (next) => setSortParam(encodeSort(next)),
-    defaultSort,
-    // The SCREEN and the TABLE, and nothing narrower. Two tables on one route
-    // would otherwise share one set of widths and each keep re-teaching the
-    // other its own. Deliberately not the record the screen is showing: a
-    // seat's turn table is the same columns on every seat, so the width a
-    // reader dragged on one is the width they want on the next.
-    storageKey: `crewlet_table_${screen}${table ? `_${table}` : ""}`,
-    paginated: true,
-    resizable: true,
-    showSettings: true,
-  };
-}
-
-/** What a panel decides about its own table. Everything else is decided once. */
-export type RecordTableProps<T> = Pick<
-  DataTableProps<T>,
-  | "getRowKey"
-  | "rowKey"
-  | "onRowClick"
-  | "getRowHref"
-  | "isSelected"
-  | "rowTone"
-  | "rowActions"
-  | "emptyMessage"
-  | "stableOrder"
-  | "loading"
-  | "error"
-> & {
-  screen: string;
-  table: string;
-  rows: readonly T[];
-  columns: readonly DataViewColumn<T>[];
-  defaultSort?: DataTableSortState | null;
-};
-
-/**
- * A record table: the rows a panel of this dashboard holds, and the chrome a
- * reader reshapes them with.
- *
- * A COMPONENT RATHER THAN A BUNDLE OF PROPS, which is what it was. Where a
- * table's choices live is now the URL, and a screen that draws its table
- * inside a condition (every seat tab does) cannot call a hook at the point it
- * spreads a bundle in. What it draws is entirely the design system's: it adds
- * no element of its own at all.
- *
- * WHAT IT DECIDES, so that thirteen call sites do not each decide it: the
- * compact variant, the settings frame and a page of ten. What a call site
- * decides is its rows, its columns, which column names the row
- * (`hideable: false`) and what the table opens sorted by.
- *
- * HOW MANY ROWS THERE ARE IS THE CARD HEADER'S, said by its `count` chip. The
- * line this used to draw under the rows counted the PAGE, so on every panel
- * holding more than ten rows the two numbers disagreed by design: the header
- * said sixty-three and the line under the rows said ten. One number, above the
- * rows, where a reader looks for the panel's own facts. Which rows of how many
- * are in front of them is still the pager's own announcement.
- *
- * DENSITY IS DELIBERATELY NOT PASSED, and that is a decision rather than an
- * omission. The reader's own three-step density, the one the rail's switcher
- * sets, reaches these rows already: it scales the spacing and size tokens the
- * table is built out of, so Compact tightens a panel table with nothing
- * passed. The table's own two-step `density` prop answers a different
- * question, which the package states at the rule that implements it: the
- * comfortable step is for a table inside a section card with 24px of inner
- * padding, where the compact step reads cramped against the chrome around it.
- * These panels pad their header by `--spacing-4` and their table by the
- * table's own inset, so the compact step is the one that lines up, and the
- * prop stays where the design system left it.
- */
-export function RecordTable<T>({
-  screen,
-  table,
-  rows,
-  columns,
-  defaultSort = null,
-  ...rest
-}: RecordTableProps<T>) {
-  const choices = useTableChoices({
-    screen,
-    table,
-    columns,
-    defaultItemsPerPage: PANEL_PAGE_SIZE,
-    defaultSort,
-  });
-  const { columns: byKey, order } = useMemo(() => tableColumns(columns), [columns]);
-  return (
-    <DataTable<T>
-      {...rest}
-      {...choices}
-      data={[...rows]}
-      columns={byKey}
-      defaultColumnOrder={order}
-      variant="compact"
-    />
-  );
-}
-
-/**
- * The rail a seat tile takes for what it is doing.
- *
- * Three, and `quiet` is deliberately absent rather than neutral: a seat with
- * nothing to say draws no mark, where a neutral rail would be a line every
- * idle seat carried and nobody could read past.
- */
-const SEAT_RAIL: Record<string, "info" | "warning" | "danger" | undefined> = {
-  working: "info",
-  needs: "warning",
-  broken: "danger",
-};
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
   name,
   handle,
   human,
-  size = "xs",
+  size = "sm",
 }: {
   name: string;
   handle?: string;
   human?: boolean;
-  size?: "xs" | "sm";
+  size?: "sm" | "md";
 }) {
   const target = handle || name;
   return (
-    <Link
-      // SUBTLE, which is the design system's word for this exact case: a seat's
-      // name is IDENTITY, and the accent is reserved for saying where the
-      // reader is. A name rendered in the accent everywhere it appears is
-      // identity-colouring by accident, which is what a bare anchor does, since
-      // the document baseline paints every one of them in the accent ink. The
-      // affordance is the hover state and the cursor.
-      variant="subtle"
-      className="row"
-      style={{ gap: "var(--spacing-2)", minWidth: 0 }}
-      href={href(["seats", target])}
+    <a
+      // `seat-chip`, not a bare link: a seat's name is IDENTITY, and the
+      // accent is reserved for saying where the reader is. A name rendered in
+      // the accent everywhere it appears is identity-colouring by accident.
+      // The affordance is the hover state and the cursor.
+      className="row seat-chip"
+      style={{ gap: "var(--space-2)", minWidth: 0 }}
+      href={href(["company", "people", target])}
     >
+      {/* `dashed` IS our `human`, in uilet's own words: its Avatar doc calls
+          the drawn edge "a HUMAN seat: the engine does not run it", which is
+          the structural fact ours carried. `decorative` because the name is
+          printed immediately beside it — without it the row reads "Ada
+          Lovelace avatar, Ada Lovelace". */}
       <Avatar name={name} size={size} variant={human ? "dashed" : "solid"} decorative />
       <span className="truncate">{name}</span>
-    </Link>
+    </a>
   );
 }
 
@@ -462,7 +114,7 @@ export function StateBadge({
 }) {
   const state = runState(agent, sandboxes);
   return (
-    <Tag variant={toneOf(state)} dot>
+    <Tag variant={uiletTone(toneOf(state))} dot>
       {stateLabel(state)}
     </Tag>
   );
@@ -481,48 +133,64 @@ export function SeatCard({
   const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
+  // Decoded ONCE, by the helper the attention queue also reads: the number on
+  // this card and the sentence in that row are the same reading of one field.
+  const round = call ? roundLabel(call.round_num) : null;
   return (
-    <Card
-      href={href(seatPath(seat))}
-      variant="subtle"
-
-      /* The rail is what the seat is DOING, never who it is, and `quiet`
-         takes none at all: an idle seat used to draw a glowing tile that
-         read as activity. */
-      {...(SEAT_RAIL[tone] ? { rail: SEAT_RAIL[tone] } : {})}
-    >
-      <Stack gap={2}>
-        <div className="row">
-          <Avatar
-            name={seat.name}
-            size="lg"
-            variant={seat.kind === "human" ? "dashed" : "solid"}
-            decorative
-          />
-          <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-            <strong className="truncate t-body">{seat.name}</strong>
-            {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
-          </div>
-          {seat.kind === "human" ? (
-            <Tag appearance="outline">human</Tag>
-          ) : (
-            <StateBadge agent={agent} sandboxes={sandboxes} />
-          )}
+    // `seatPath`, not a handle spelled out again: a seat the engine reported no
+    // handle for is addressed by NAME, and `#/company/people/` opens nothing.
+    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
+      <div className="row">
+        <Avatar
+          name={seat.name}
+          size="lg"
+          variant={seat.kind === "human" ? "dashed" : "solid"}
+          decorative
+        />
+        <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+          <strong className="truncate t-body">{seat.name}</strong>
+          <span className="truncate t-caption mono">@{seat.handle}</span>
         </div>
-        <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
-        {call?.in_progress && (
-          <div className="row gap-1">
-            <Tag variant="info">{call.phase}</Tag>
-            <span className="t-caption t-num">
-              round {call.round_num >= 0 ? call.round_num + 1 : <EmptyValue label="Not reported" />}
-            </span>
-            <span className="spacer" />
-            <RelativeTime className="t-caption" value={call.updated_at} now={now} />
-          </div>
+        {seat.kind === "human" ? (
+          <Tag appearance="outline">human</Tag>
+        ) : (
+          <StateBadge agent={agent} sandboxes={sandboxes} />
         )}
-        {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
-      </Stack>
-    </Card>
+      </div>
+      <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
+      {call?.in_progress && (
+        <div className="row gap-1">
+          {/* THE PHASE IN THE PHASE'S OWN HUE, drawn by the one component that
+              holds the table. Phase is the single categorical identity this
+              product spends colour on outside a chart, and the whole reason it
+              spends it is that a reader FOLLOWS a phase across screens — so one
+              `info` pill for every phase cost twice: `execute` and `review` were
+              the same fill side by side on the roster, and the same phase was a
+              different colour one screen over from the phase card, the turn card
+              and the Trace, Seat and Model screens. `PhaseTag` also lowercases
+              (the value is a store column and nothing normalises its case on the
+              way out) and names an absent phase, where this drew a coloured gap.
+              The note it replaces called the miss deliberate because `PhaseTag`
+              was somebody else's file during the uilet port; it is a `~/ui`
+              primitive this module already imports for `uiletTone`, so there was
+              never a second spelling to avoid — only a second colour. */}
+          <PhaseTag phase={call.phase} />
+          {/* NOT A BARE DASH. "round —" on a seat that is plainly working reads
+              as a field the engine failed to report; the engine reported it
+              exactly — `-1` is the opening frame a phase publishes before its
+              first provider call, so the phase has started and its first model
+              round has not come back. `t-num` stays: it is what keeps the digits
+              from jittering as the round advances, and it does nothing to a
+              word. */}
+          <span className="t-caption t-num" title={round?.hint}>
+            {round?.text}
+          </span>
+          <span className="spacer" />
+          <span className="t-caption">{relTime(call.updated_at, now)}</span>
+        </div>
+      )}
+      {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
+    </a>
   );
 }
 
@@ -538,15 +206,19 @@ export function AttentionRow({ item }: { item: Attention }) {
   const inner = (
     <>
       <span className="attention-icon">
-        <item.icon size="sm" />
+        <Mark name={item.icon} size="sm" />
       </span>
       <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
-        <span className="t-body" style={{ fontWeight: "var(--font-weight-medium)" }}>
+        <span className="t-body" style={{ fontWeight: "var(--fw-medium)" }}>
           {item.title}
         </span>
         <span className="t-caption">{item.detail}</span>
       </span>
-      {item.at && <RelativeTime className="t-caption nowrap" value={item.at} now={now} />}
+      {item.at && (
+        <time className="t-caption nowrap" dateTime={item.at} title={fmtDateTime(item.at)}>
+          {relTime(item.at, now)}
+        </time>
+      )}
     </>
   );
   if (!item.path) {
@@ -557,7 +229,11 @@ export function AttentionRow({ item }: { item: Attention }) {
     );
   }
   return (
-    <a className="attention-row" data-severity={item.severity} href={href(item.path, item.query)}>
+    <a
+      className="attention-row clickable"
+      data-severity={item.severity}
+      href={href(item.path, item.query)}
+    >
       {inner}
     </a>
   );
@@ -575,58 +251,170 @@ export function EventRow({
   event,
   onOpen,
   showDate,
-  depth = 0,
-  mark,
 }: {
   event: FeedRow;
   onOpen?: () => void;
   showDate?: boolean;
-  /**
-   * How far in this row's actor sits, in nesting steps. A trace draws its
-   * spans as a tree, and a row that carried its own copy of this grid was a
-   * second four-column layout drifting from this one a column at a time.
-   */
-  depth?: number;
-  /** Drawn under the summary: a trace's own span bar. */
-  mark?: ReactNode;
 }) {
   const now = useNow();
-  return (
-    <a
-      className={cx("feed-row", event.failed && "failed")}
-      href={href(["events", event.id])}
-      onClick={onOpen}
-    >
+  const body = (
+    <>
       <time
         className="feed-time"
         dateTime={event.timestamp}
-        title={[fmtDateTime(event.timestamp), formatRelative(event.timestamp, now)]
-          .filter(Boolean)
-          .join(" · ")}
+        title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
       >
         {showDate ? fmtDateTime(event.timestamp) : fmtTime(event.timestamp)}
       </time>
-      <span className="feed-actor truncate" style={depth ? { paddingLeft: depth * 12 } : undefined}>
-        {depth > 0 && <span className="muted">└ </span>}
-        {event.actor || "engine"}
-      </span>
+      <span className="feed-actor truncate">{event.actor || "engine"}</span>
       <span className="feed-what truncate">
         {event.failed && (
-          <>
-            <ErrorGlyph size="xs" className="feed-failed-mark" />
-            <VisuallyHidden>Failed</VisuallyHidden>{" "}
-          </>
+          <WarningGlyph
+            size="xs"
+            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
+          />
         )}
         {event.summary || event.type}
-        {mark}
       </span>
       <span className="feed-tail">
         {event.source && <span className="truncate">{event.source}</span>}
         <span className="muted">{humanize(event.category) || "system"}</span>
       </span>
+    </>
+  );
+  return (
+    <a
+      className={cx("feed-row", event.failed && "failed")}
+      href={href(["activity", "events", event.id])}
+      onClick={onOpen}
+    >
+      {body}
     </a>
   );
 }
+
+/**
+ * A named band of a screen.
+ *
+ * uilet's `Section` is this, and it brings the half ours never had: the
+ * heading is a REAL heading at the level the surrounding surface declares, so
+ * a screen's outline has no gaps and nothing inside it counts levels by hand.
+ * Ours rendered a `t-heading` span, which is a heading to a reader who can see
+ * one and nothing at all to a reader navigating by them.
+ *
+ * The props keep our names so no caller changes: `hint` is its `description`.
+ */
+export function Section({
+  title,
+  hint,
+  actions,
+  children,
+}: {
+  title: ReactNode;
+  hint?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <UiSection title={title} description={hint} actions={actions}>
+      {children}
+    </UiSection>
+  );
+}
+
+/**
+ * What each refusal MEANS, in the reader's terms.
+ *
+ * A TABLE OVER THE TYPE, not a chain of string comparisons, and the type is
+ * the point: `QueryErrorCode` names the nine codes the engine can send and was
+ * declared, documented and never used to type anything — so a branch comparing
+ * against `"unavaliable"` compiled cleanly and quietly rendered the generic
+ * failure for a projection that was merely catching up. Two of the nine had no
+ * branch at all for the same reason: `closed` told the reader "the engine
+ * refused this query", which it did not — the socket went away.
+ *
+ * `Record<QueryErrorCode, …>` is what makes that checkable: a code added to
+ * the type without a sentence here is a compile error.
+ */
+const REFUSALS: Record<QueryErrorCode, ReactNode> = {
+  unauthorized: (
+    // `action` IS the spacer-then-control our markup spelled by hand: a
+    // Callout puts its control at the trailing edge, so the `spacer` span
+    // that used to push the button there has nothing left to do.
+    <Callout
+      variant="warning"
+      icon={<KeyGlyph size="md" />}
+      action={
+        // The banner used to say "set a token" and offer nothing that could.
+        // With anonymous reads allowed the socket is never refused, so the
+        // dialog's only other doors — a socket refusal, and the palette —
+        // both stay shut on exactly the screen that needs it.
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
+          Set token
+        </Button>
+      }
+    >
+      This answer is auth-gated. It needs an API token matching one of your{" "}
+      <InlineCode tone="inherit">api.auth.tokens</InlineCode> entries.
+    </Callout>
+  ),
+  no_event_store: (
+    <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>
+      This node keeps no event log, so there is no history to read. Set{" "}
+      <InlineCode tone="inherit">store.path</InlineCode> in{" "}
+      <InlineCode tone="inherit">crewlet.yaml</InlineCode> to make it durable.
+    </Callout>
+  ),
+  // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
+  // variant's own mark, and for neutral that is the info glyph and for danger
+  // the error glyph — which is exactly what these passed by hand. An icon prop
+  // repeating the variant is a second place for the two to disagree.
+  unknown_query: (
+    <Callout variant="neutral">
+      The engine does not serve this answer — the subsystem behind it is not running on this node.
+    </Callout>
+  ),
+  bad_params: (
+    <Callout variant="warning">
+      The engine refused this request: something it needs was missing or not a value it accepts.
+      Retrying sends the same request — this is the screen&rsquo;s bug to fix, not a fault on the
+      node.
+    </Callout>
+  ),
+  unavailable: (
+    <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
+      This node has not finished reading the company&rsquo;s own records yet — its projection is
+      still catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+      <strong> This is not an empty company.</strong>
+    </Callout>
+  ),
+  not_found: (
+    <Callout variant="neutral">
+      There is no such record. The link may point at something that was removed.
+    </Callout>
+  ),
+  timeout: (
+    <Callout variant="warning" icon={<ScheduleGlyph size="md" />}>
+      The engine did not answer within 10 seconds. It may be under load.
+    </Callout>
+  ),
+  // THE TWO THAT HAD NO SENTENCE. Both used to render "the engine refused
+  // this query", which is wrong about each of them in a different way.
+  query_failed: (
+    <Callout variant="danger">
+      The engine tried to answer and failed. This is a fault on the node rather than a refusal — its
+      log says what went wrong.
+    </Callout>
+  ),
+  closed: (
+    // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
+    // uilet vendors and says the same thing about a connection that went away.
+    <Callout variant="neutral" icon={<CableGlyph size="md" />}>
+      The connection went away before this answered. Nothing refused it; the screen reads again once
+      the socket is back.
+    </Callout>
+  ),
+};
 
 /**
  * What an empty or failed answer means, said precisely.
@@ -644,381 +432,37 @@ export function QueryState({
 }: {
   error: string | null;
   loading: boolean;
-  empty?: { title: ReactNode; hint?: ReactNode };
+  /**
+   * `hint` IS REQUIRED, which is uilet's `EmptyState` rule and the reason this
+   * component exists at all: "No model calls" on a window nothing ran in and
+   * on a node whose store could not be read are the same headline and
+   * completely different problems, and only the second sentence separates
+   * them. It was optional while one caller in the tree had no second sentence
+   * (`routes/cost/Spend.tsx`); that one now says what to do about it, so the
+   * type says what the component always meant.
+   */
+  empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
-  if (error === "unauthorized") {
-    return (
-      <Callout variant="warning" icon={<KeyGlyph size="sm" />}>
-        <span>
-          This answer is auth-gated. It needs an API token matching one of your{" "}
-          <InlineCode>api.auth.tokens</InlineCode> entries.
-        </span>
-        <span className="spacer" />
-        {/* The banner used to say "set a token" and offer nothing that could.
-            With anonymous reads allowed the socket is never refused, so the
-            dialog's only other doors — a refusal, and the engine panel — both
-            stay shut on exactly the screen that needs it. */}
-        <Button variant="secondary" size="small" leadingIcon={<KeyGlyph />} onClick={requestToken}>
-          Set token
-        </Button>
-      </Callout>
-    );
-  }
-  if (error === "no_event_store") {
-    return (
-      <Callout variant="neutral" icon={<DatabaseGlyph size="sm" />}>
-        <span>
-          This node keeps no event log, so there is no history to read. Set{" "}
-          <InlineCode>store.path</InlineCode> in <InlineCode>crewlet.yaml</InlineCode> to make it
-          durable.
-        </span>
-      </Callout>
-    );
-  }
-  if (error === "unknown_query") {
-    return (
-      <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
-        <span>
-          The engine does not serve this answer. The subsystem behind it is not running on this
-          node.
-        </span>
-      </Callout>
-    );
-  }
-  if (error === "bad_params") {
-    return (
-      <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
-        <span>
-          The engine refused this request: something it needs was missing or not a value it accepts.
-          Retrying sends the same request, so this is the screen's bug to fix rather than a fault on
-          the node.
-        </span>
-      </Callout>
-    );
-  }
-  if (error === "unavailable") {
-    return (
-      <Callout variant="neutral" icon={<ScheduleGlyph size="sm" />}>
-        <span>
-          This node has not finished reading the company's own records yet, so its projection is
-          still catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
-          <strong> This is not an empty company.</strong>
-        </span>
-      </Callout>
-    );
-  }
-  if (error === "not_found") {
-    return (
-      <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
-        <span>There is no such record. The link may point at something that was removed.</span>
-      </Callout>
-    );
-  }
-  if (error === "timeout") {
-    return (
-      <Callout variant="warning" icon={<ScheduleGlyph size="sm" />}>
-        <span>The engine did not answer within 10 seconds. It may be under load.</span>
-      </Callout>
-    );
-  }
+  const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
+  if (refusal) return <>{refusal}</>;
+  // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
+  // evolves additively — and naming it is more use than calling it a refusal.
   if (error) {
     return (
-      <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
-        <span>The engine refused this query ({error}).</span>
+      <Callout variant="danger">
+        The engine answered with a code this build does not know ({error}).
       </Callout>
     );
   }
   if (loading) return null;
   if (empty) {
     return (
-      <EmptyState
-        size="compact"
-        icon={<InboxGlyph />}
-        title={empty.title}
-        // WHY it is empty, and what would fill it. A caller that says nothing
-        // gets the honest sentence rather than a blank line: the query
-        // answered, and this is what it answered with.
-        description={empty.hint ?? "The engine answered this query with nothing."}
-      />
+      // `size="compact"` IS our `inline`, and the default mark is the inbox
+      // glyph ours passed by hand — so both props this used to spell are the
+      // component's own defaults now.
+      <EmptyState size="compact" title={empty.title} description={empty.hint} />
     );
   }
   return <>{children}</>;
-}
-
-/**
- * How long the download's confirmation holds before the control offers its
- * action again.
- *
- * Long enough to be read at a glance, short enough that a reader who wants it
- * twice is not waiting on it. A REFUSAL is not on this clock, for the reason
- * in the click handler below.
- */
-const DOWNLOAD_HOLD_MS = 2000;
-
-export interface DownloadButtonProps {
-  /**
-   * The text, or a THUNK that produces it.
-   *
-   * The thunk is not a convenience. On a live record the thing worth saving is
-   * assembled from everything on the screen, and a screen that pushes twice
-   * per tool round would serialize the whole record on every push for a button
-   * nobody has pressed. Resolved on the press, it costs nothing until it is
-   * asked for.
-   */
-  text: string | (() => string);
-  /** The name to offer it under. Sanitised here, see [safeFilename]. */
-  filename: string;
-  /** What the file is, for the browser that has to open it again. */
-  mime?: string | undefined;
-  /** The label at rest. */
-  label?: string | undefined;
-  /** The label once the browser has taken the file. */
-  startedLabel?: string | undefined;
-  /** The label when the browser refused. */
-  failedLabel?: string | undefined;
-  /** Read out on success. Names the file by default, which is the useful half. */
-  startedMessage?: string | undefined;
-  /** Read out on failure. */
-  failedMessage?: string | undefined;
-  size?: ButtonSize | undefined;
-  variant?: ButtonVariant | undefined;
-  title?: string | undefined;
-  className?: string | undefined;
-}
-
-/**
- * Hand the same text to the reader as a FILE, and say whether it landed.
- *
- * THE SIBLING OF UILET'S `CopyButton`, over the same bytes and in the same
- * prop shape, because the two things an operator does with a record are
- * different: one is pasted into a thread, the other is attached to a bug
- * report and opened weeks later. A clipboard also holds exactly one thing, so
- * copying two turns to compare them is not a gesture that exists.
- *
- * It lives here rather than in `@crewlethq/ui` because the design system has
- * no download control at 0.3.0, and everything below is behaviour rather than
- * appearance: it composes the package's own Button and adds no styling of its
- * own. The moment uilet gains one, this becomes a call to it.
- *
- * Two failure modes, both checked up front rather than assumed, and one of
- * them is worse than a dead button:
- *
- *  1. **No `URL.createObjectURL`** leaves nothing to point a saveable link
- *     at, and a `data:` URL is the wrong fallback: several engines cap it
- *     around two megabytes and a self-iterating turn's JSON goes past that,
- *     so it would work on the small records nobody needs it for and fail
- *     silently on the large ones.
- *  2. **No `download` attribute** makes the click NAVIGATE to the payload
- *     instead of saving it, which looks enough like something happening that
- *     nobody checks.
- *
- * What it reports is a HAND-OFF and never a saved file: there is no completion
- * event on an `<a download>`, and a browser's automatic-multiple-download gate
- * can stop it silently after the click. The NAME is the half that is true and
- * the half worth saying, since a reader who cannot see the download shelf has
- * nothing else to tell them what to open.
- */
-export function DownloadButton({
-  text,
-  filename,
-  mime = "application/json;charset=utf-8",
-  label = "Download",
-  startedLabel = "Downloading",
-  failedLabel = "Download failed",
-  startedMessage,
-  failedMessage = "the browser refused the download",
-  size = "small",
-  variant = "secondary",
-  title,
-  className = "row gap-1",
-}: DownloadButtonProps) {
-  // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
-  // running is not a DOM change and a live region announces changes only. A
-  // second refusal would otherwise leave a reader who cannot see the button
-  // with silence. Keyed on the count, the status node is REPLACED rather than
-  // re-rendered, which is a change.
-  const [{ state, attempt }, setOutcome] = useState<{
-    state: "idle" | "done" | "failed";
-    attempt: number;
-  }>({ state: "idle", attempt: 0 });
-  // The confirmation's timeout outlives the component otherwise, and a screen
-  // left during the seconds after a click would set state on something
-  // unmounted. The hand-off itself is synchronous, so there is nothing else
-  // in flight to guard.
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const name = safeFilename(filename);
-  const onClick = useCallback(() => {
-    const ok = saveTextFile(typeof text === "function" ? text() : text, name, mime);
-    setOutcome((prior) => ({ state: ok ? "done" : "failed", attempt: prior.attempt + 1 }));
-    clearTimeout(timer.current);
-    // A CONFIRMATION SETTLES BACK. A REFUSAL DOES NOT. Two seconds after a
-    // download the reader is looking at the browser's shelf rather than at
-    // the button, and a control that has reverted to offering its action is
-    // indistinguishable from one that was never pressed. So a refusal holds
-    // until the next click, which is the gesture a reader who wants to retry
-    // makes anyway.
-    if (ok) {
-      timer.current = setTimeout(
-        () => setOutcome((prior) => ({ ...prior, state: "idle" })),
-        DOWNLOAD_HOLD_MS,
-      );
-    }
-  }, [text, name, mime]);
-
-  const said =
-    state === "done"
-      ? (startedMessage ?? `download started, ${name}`)
-      : state === "failed"
-        ? failedMessage
-        : "";
-
-  return (
-    <span className={className}>
-      <Button
-        variant={variant}
-        size={size}
-        leadingIcon={
-          state === "done" ? (
-            <CheckGlyph />
-          ) : state === "failed" ? (
-            <ErrorGlyph />
-          ) : (
-            <ArrowDownwardGlyph />
-          )
-        }
-        onClick={onClick}
-        title={state === "failed" ? said : title}
-      >
-        {state === "done" ? startedLabel : state === "failed" ? failedLabel : label}
-      </Button>
-      {/* Announced, not just drawn: the icon swap is the only signal a sighted
-          reader gets, and a screen reader gets none of it.
-
-          A SIBLING of the button, never a child. A button's accessible name is
-          computed from its contents, so inside it this would name the control
-          "Downloading download started, turn-t-1.json". */}
-      <VisuallyHidden>
-        <span role="status">
-          <span key={attempt}>{said}</span>
-        </span>
-      </VisuallyHidden>
-    </span>
-  );
-}
-
-/**
- * Save `text` to the reader's machine as `filename`, and report whether the
- * browser took it.
- *
- * The blob URL is revoked on the NEXT macrotask rather than here: the click
- * only QUEUES the download, and freeing the entry inside the same task races
- * the fetch that is about to read it. Not revoking at all is the other
- * failure, since the blob is a second copy of the whole record held for the
- * life of the tab, and a reader comparing records clicks this several times.
- */
-function saveTextFile(text: string, filename: string, mime: string): boolean {
-  if (typeof URL.createObjectURL !== "function" || !("download" in HTMLAnchorElement.prototype)) {
-    return false;
-  }
-  let url = "";
-  try {
-    url = URL.createObjectURL(new Blob([text], { type: mime }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    // In the document for the one synchronous call: not every engine
-    // dispatches an activation behaviour on a node that is in no document,
-    // and there is no state to leave behind either way.
-    document.body.appendChild(link);
-    try {
-      link.click();
-    } finally {
-      link.remove();
-    }
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
-}
-
-/** Longer than any extension in use, so a `.` deep inside a name is not read
- *  as one when a long name has to be cut. */
-const MAX_EXTENSION = 12;
-/**
- * Every filesystem a reader of this dashboard is on allows at least 255
- * BYTES, and the browser appends its own " (1)" to deduplicate against what
- * is already in the folder; eCryptfs stops at 143. 120 clears all three with
- * room to spare.
- */
-const MAX_FILENAME = 120;
-
-/**
- * A filename the reader will actually get, out of whatever the caller had.
- *
- * The name is composed from data, since a turn id comes off the URL, and the
- * `download` attribute is only a SUGGESTION: the browser sanitises it its own
- * way, stripping path separators and whatever else each engine dislikes.
- * Deciding it here means a name that arrived as `../etc/passwd` or with a
- * newline in it never reaches that guess.
- *
- * UNICODE-AWARE, and that is not a nicety. `\w` is ASCII-only, so an
- * ASCII-only class collapses a whole non-Latin stem to a single `-` and the
- * leading strip below then takes that hyphen AND the extension's own
- * separator with it. What has to be excluded is the separators and the
- * invisibles, and not one of those is a letter, a mark or a number in any
- * script.
- */
-function safeFilename(name: string): string {
-  const cleaned = name.replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, "-").replace(/-{2,}/g, "-");
-  // An extension is a dot with SOMETHING after it and not much: a `.` deep
-  // inside a long name is part of the name, and a trailing one is not an
-  // extension at all, as well as being illegal on Windows.
-  const dot = cleaned.lastIndexOf(".");
-  const tail = cleaned.length - dot;
-  const ext = dot >= 0 && tail >= 2 && tail <= MAX_EXTENSION ? cleaned.slice(dot) : "";
-  // THE STEM IS WHAT GETS STRIPPED AND WHAT GETS CUT, never the extension: a
-  // name that loses its `.json` opens in the wrong application on every
-  // desktop there is. Leading dots are what make `..` a traversal and `.turn`
-  // a hidden file, and they can only ever be in the stem.
-  const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
-  if (!stem) return `download${ext}`;
-  return cutToBytes(stem, MAX_FILENAME - byteLength(ext)) + ext;
-}
-
-const encoder = new TextEncoder();
-
-/** How many BYTES a string takes on a filesystem, which is what limits it. */
-function byteLength(s: string): number {
-  return encoder.encode(s).length;
-}
-
-/**
- * Cut to a byte budget, on whole characters.
- *
- * `MAX_FILENAME` is a BYTE limit and `slice` counts UTF-16 code units, which
- * are the same thing only for ASCII. The sanitizer above deliberately keeps
- * letters in every script, so the gap is not hypothetical: 120 units of
- * Japanese is 360 bytes, past ext4's 255 and well past eCryptfs's 143.
- *
- * Iterated with `for…of`, which walks CODE POINTS rather than units: a cut
- * that lands between the halves of a surrogate pair leaves a lone surrogate,
- * which is not valid UTF-8 and reaches the disk as a replacement character.
- */
-function cutToBytes(s: string, max: number): string {
-  if (max <= 0) return "";
-  if (byteLength(s) <= max) return s;
-  let out = "";
-  let used = 0;
-  for (const ch of s) {
-    const n = byteLength(ch);
-    if (used + n > max) break;
-    out += ch;
-    used += n;
-  }
-  return out;
 }

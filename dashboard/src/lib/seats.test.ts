@@ -3,17 +3,24 @@
 /**
  * The org index every screen consumes, and the seat-state rules.
  *
- * The index is built from what the ENGINE derived, never from a second
- * implementation of its rules. So these cases are not about manager
- * resolution or lead inheritance, which are Go's to test: they are about
- * laying the engine's answer over the authored tree faithfully, and about
- * saying "unknown" rather than guessing when the answer is missing or does not
- * describe the tree it arrived with.
+ * THE HIERARCHY IS THE ENGINE'S. The projection fixture is written out field
+ * for field from `internal/api`'s `OrgProjection` with its public `derived`
+ * block, because every reporting line, inherited lead and placement pinned
+ * here is a READING of that block rather than a rule this client applies: the
+ * TypeScript copy that used to apply them had drifted from Go on four counts,
+ * and nothing compared the two.
+ *
+ * It is resolved ONCE, into an index, because doing it per screen is how the
+ * previous dashboard came to walk the whole roster once per rendered row: its
+ * `managerOf` was a linear scan called per seat AND again per row, roughly
+ * 80,000 array scans per event push on a 200-seat company.
  */
 
 import { describe, expect, test } from "vitest";
 import {
   indexOrg,
+  llmChain,
+  mcpEnvOf,
   runState,
   seatPath,
   seatSettings,
@@ -22,29 +29,19 @@ import {
   staleness,
   STALE_MS,
   STALLED_MS,
+  unitDirectLabel,
+  unitSeatsLabel,
+  unitSettings,
+  unitTally,
+  UNIT_TOTAL_HINT,
 } from "./seats.ts";
 import type {
   CompanyDocument,
-  Derived,
   DerivedSeat,
-  DerivedUnit,
   OrgProjection,
-  OrgSeat,
-  OrgUnit,
   SandboxEntry,
 } from "~/protocol/index.ts";
 
-/**
- * The anonymous projection for a small company, exactly as `internal/api`'s
- * `OrgProjection` writes it: authored positions, no credentials, and the
- * public `derived` block with its paths omitted.
- *
- * `Designer` is a ROOT seat in the document whose `unit: Backend` the engine
- * honoured, which is why the derived block has it in Backend and the
- * projection, which does not carry `unit`, has it at the root. `İlker Demir`
- * is here for his handle: the engine derives `ilker-demir`, which no
- * JavaScript lowercasing of the name produces.
- */
 const seat = (over: Partial<DerivedSeat> & Pick<DerivedSeat, "handle" | "name">): DerivedSeat => ({
   kind: "agent",
   placed_by_ref: false,
@@ -56,70 +53,14 @@ const seat = (over: Partial<DerivedSeat> & Pick<DerivedSeat, "handle" | "name">)
   ...over,
 });
 
-const derived: Derived = {
-  seats: [
-    seat({ handle: "jane-founder", name: "Jane Founder", kind: "human", reports: ["ceo"] }),
-    seat({
-      handle: "ceo",
-      name: "CEO",
-      manager: "jane-founder",
-      managers: ["jane-founder"],
-      reports: ["vpe"],
-    }),
-    seat({ handle: "ilker-demir", name: "İlker Demir", manager: "ceo", managers: ["ceo"] }),
-    seat({
-      handle: "vpe",
-      name: "VP Engineering",
-      manager: "ceo",
-      managers: ["ceo"],
-      reports: ["dev-a", "dev-b", "designer"],
-      auto_reports: ["dev-a", "dev-b", "designer"],
-      onboarding_chain: ["Engineering"],
-    }),
-    seat({
-      handle: "dev-a",
-      name: "Dev A",
-      manager: "vpe",
-      managers: ["vpe"],
-      onboarding_chain: ["Engineering", "Backend"],
-    }),
-    seat({ handle: "dev-b", name: "Dev B", manager: "vpe", managers: ["vpe"] }),
-    seat({
-      handle: "designer",
-      name: "Designer",
-      placed_by_ref: true,
-      manager: "vpe",
-      managers: ["vpe"],
-    }),
-  ],
-  units: [
-    {
-      name: "Engineering",
-      type: "department",
-      lead: "vpe",
-      lead_inherited: false,
-      channel: "eng",
-      channel_inherited: false,
-      seats: ["vpe"],
-    },
-    {
-      name: "Backend",
-      type: "team",
-      lead: "vpe",
-      lead_inherited: true,
-      channel: "eng",
-      channel_inherited: true,
-      seats: ["dev-a", "dev-b", "designer"],
-    },
-  ],
-};
-
 const org: OrgProjection = {
   name: "Acme",
   roles: [
-    { name: "Jane Founder", kind: "human", manages: ["CEO"], availability: "weekdays" },
-    { name: "CEO", handle: "ceo", manages: ["VP Engineering"] },
-    { name: "İlker Demir", goal: "Keep the books" },
+    { name: "Jane Founder", kind: "human", manages: ["CEO"] },
+    { name: "CEO", handle: "ceo", manages: ["Engineering"] },
+    // A root seat whose `unit:` reference the ENGINE moved into Backend. The
+    // document writes it above every unit; only the derived block says where
+    // it actually sits.
     { name: "Designer" },
   ],
   units: [
@@ -127,428 +68,279 @@ const org: OrgProjection = {
       name: "Engineering",
       type: "department",
       lead: "VP Engineering",
-      channel: "eng",
-      knowledge: ["Engineering handbook"],
       roles: [{ name: "VP Engineering", handle: "vpe" }],
-      children: [{ name: "Backend", roles: [{ name: "Dev A" }, { name: "Dev B" }] }],
-    },
-  ],
-  derived,
-};
-
-const index = indexOrg(org);
-const byName = (name: string) => index.byName.get(name)!;
-
-describe("the engine's derived hierarchy, laid over the authored tree", () => {
-  test("every seat is indexed once, in the engine's own order", () => {
-    expect(index.hierarchy).toBe(true);
-    expect(index.seats.map((s) => s.name)).toEqual([
-      "Jane Founder",
-      "CEO",
-      "İlker Demir",
-      "VP Engineering",
-      "Dev A",
-      "Dev B",
-      "Designer",
-    ]);
-  });
-
-  test("a handle is the one the engine reports, never one derived here", () => {
-    // A JavaScript lowercasing of "İlker" emits a dotted i the engine's does
-    // not, and the handle keys the seat's memory: a client-derived handle is
-    // a seat that loses everything it remembered the first time it is saved.
-    expect(byName("İlker Demir").handle).toBe("ilker-demir");
-    expect(index.byHandle.get("ilker-demir")?.name).toBe("İlker Demir");
-    expect(byName("Dev A").handle).toBe("dev-a");
-  });
-
-  test("a root seat the engine moved into its unit sits in that unit, and says why", () => {
-    const designer = byName("Designer");
-    expect(designer.unit?.name).toBe("Backend");
-    expect(designer.placedByRef).toBe(true);
-    expect(index.rootSeats.map((s) => s.name)).toEqual(["Jane Founder", "CEO", "İlker Demir"]);
-    expect(index.units[1]?.seats.map((s) => s.name)).toEqual(["Dev A", "Dev B", "Designer"]);
-  });
-
-  test("an inherited lead is the engine's, and is marked as inherited", () => {
-    // It behaves identically to an explicit lead everywhere in the engine, so
-    // hiding the difference is how an operator comes to think a unit is
-    // unmanaged.
-    const [engineering, backend] = index.units;
-    expect(engineering?.lead?.name).toBe("VP Engineering");
-    expect(engineering?.leadInherited).toBe(false);
-    expect(backend?.lead?.name).toBe("VP Engineering");
-    expect(backend?.leadInherited).toBe(true);
-    expect(backend?.declaredLead).toBe("");
-    expect(backend?.type).toBe("team");
-    expect(backend?.channelInherited).toBe(true);
-  });
-
-  test("the unit chain follows the tree, outermost first", () => {
-    expect(byName("Dev A").unitChain.map((u) => u.name)).toEqual(["Engineering", "Backend"]);
-    expect(index.topUnits.map((u) => u.name)).toEqual(["Engineering"]);
-    expect(index.units[1]?.parent?.name).toBe("Engineering");
-  });
-
-  test("reporting lines are the engine's, resolved to seats", () => {
-    expect(byName("Dev A").manager?.name).toBe("VP Engineering");
-    expect(byName("CEO").manager?.name).toBe("Jane Founder");
-    expect(byName("Jane Founder").manager).toBeNull();
-    expect(byName("VP Engineering").reports.map((s) => s.name)).toEqual([
-      "Dev A",
-      "Dev B",
-      "Designer",
-    ]);
-    expect(byName("VP Engineering").autoReports.length).toBe(3);
-  });
-
-  test("what the document writes is kept as written", () => {
-    // `manages` unexpanded: the expansion is the engine's, above.
-    expect(byName("Jane Founder").manages).toEqual(["CEO"]);
-    expect(byName("Jane Founder").kind).toBe("human");
-    expect(index.units[0]?.knowledge).toEqual(["Engineering handbook"]);
-  });
-
-  test("a seat's page is addressed by its handle", () => {
-    expect(seatPath(byName("İlker Demir"))).toEqual(["seats", "ilker-demir"]);
-  });
-});
-
-describe("an engine that sends no derived hierarchy", () => {
-  const { derived: _omitted, ...older } = org;
-  const bare = indexOrg(older);
-
-  test("the seats are still listed, where the document wrote them", () => {
-    expect(bare.hierarchy).toBe(false);
-    expect(bare.seats.map((s) => s.name).sort()).toEqual(
-      ["CEO", "Designer", "Dev A", "Dev B", "Jane Founder", "VP Engineering", "İlker Demir"].sort(),
-    );
-    // NOT moved: whether the engine honoured `unit:` is its conclusion.
-    expect(bare.byName.get("Designer")?.unit).toBeNull();
-    expect(bare.byName.get("Designer")?.placedByRef).toBe(false);
-  });
-
-  test("a handle is known only where the document declares one", () => {
-    expect(bare.byName.get("CEO")?.handle).toBe("ceo");
-    expect(bare.byName.get("İlker Demir")?.handle).toBe("");
-    // And its page is still reachable, by name.
-    expect(seatPath(bare.byName.get("İlker Demir")!)).toEqual(["seats", "İlker Demir"]);
-    // Keys stay unique for the seats nobody declared a handle for.
-    expect(new Set(bare.seats.map((s) => s.key)).size).toBe(bare.seats.length);
-  });
-
-  test("a position key never collides with a declared handle", () => {
-    // `s1` is a valid handle, and it used to be the second seat's position key
-    // as well: two React siblings, and two DOM ids, with one key.
-    const clash = indexOrg({
-      roles: [{ name: "First", handle: "s1" }, { name: "Second" }, { name: "Third", handle: "s1" }],
-    });
-    expect(new Set(clash.seats.map((s) => s.key)).size).toBe(3);
-    expect(clash.byName.get("First")?.key).toBe("s1");
-  });
-
-  test("nothing only the engine could conclude is invented", () => {
-    for (const s of bare.seats) {
-      expect(s.manager).toBeNull();
-      expect(s.reports).toEqual([]);
-    }
-    // A declared lead is a fact of the document; an inherited one is not.
-    expect(bare.units[0]?.lead?.name).toBe("VP Engineering");
-    expect(bare.units[1]?.lead).toBeNull();
-    expect(bare.units[1]?.leadInherited).toBe(false);
-  });
-});
-
-describe("a derived block that does not describe its tree is not believed", () => {
-  const variants: [string, (d: Derived) => Derived][] = [
-    ["a unit missing", (d) => ({ ...d, units: d.units!.slice(1) })],
-    [
-      "a unit renamed",
-      (d) => ({ ...d, units: d.units!.map((u, i) => (i === 1 ? { ...u, name: "Frontend" } : u)) }),
-    ],
-    ["a seat missing", (d) => ({ ...d, seats: d.seats!.slice(1) })],
-    [
-      "a seat the tree does not have",
-      (d) => ({ ...d, seats: d.seats!.map((s, i) => (i === 0 ? { ...s, name: "Nobody" } : s)) }),
-    ],
-    [
-      "a manager that is no seat",
-      (d) => ({ ...d, seats: d.seats!.map((s, i) => (i === 1 ? { ...s, manager: "ghost" } : s)) }),
-    ],
-    [
-      "a seat in two units",
-      (d) => ({ ...d, units: d.units!.map((u) => ({ ...u, seats: ["vpe"] })) }),
-    ],
-    [
-      "a repeated handle",
-      (d) => ({ ...d, seats: d.seats!.map((s, i) => (i === 2 ? { ...s, handle: "ceo" } : s)) }),
-    ],
-  ];
-
-  test.each(variants)("%s", (_name, mutate) => {
-    const broken = indexOrg({ ...org, derived: mutate(derived) });
-    expect(broken.hierarchy).toBe(false);
-    // Every seat is still there once, from the authored tree.
-    expect(broken.seats.length).toBe(7);
-  });
-
-  test("a repeated name pairs by the handle it declares, never by position", () => {
-    // Only a revision stored before names had to be unique can hold this. The
-    // engine lists the root "Designer" AFTER Backend's own "Designer", since
-    // it moved the root one into the unit, which is the reverse of the
-    // document's order: paired in turn, each would carry the other's goal.
-    const repeated: OrgProjection = {
-      roles: [{ name: "Designer", handle: "designer-root", goal: "Root goal" }],
-      units: [
+      children: [
         {
           name: "Backend",
-          roles: [{ name: "Designer", handle: "designer-unit", goal: "Unit goal" }],
+          type: "team",
+          // No lead: it inherits VP Engineering from the parent.
+          roles: [{ name: "Dev A" }, { name: "Dev B" }],
         },
       ],
-      derived: {
-        seats: [
-          seat({ handle: "designer-unit", name: "Designer" }),
-          seat({ handle: "designer-root", name: "Designer", placed_by_ref: true }),
-        ],
-        units: [
-          {
-            name: "Backend",
-            type: "team",
-            lead: "",
-            lead_inherited: false,
-            channel: "",
-            channel_inherited: false,
-            seats: ["designer-unit", "designer-root"],
-          },
-        ],
-      },
-    };
-    const built = indexOrg(repeated);
-    expect(built.hierarchy).toBe(true);
-    expect(built.byHandle.get("designer-root")?.goal).toBe("Root goal");
-    expect(built.byHandle.get("designer-root")?.placedByRef).toBe(true);
-    expect(built.byHandle.get("designer-unit")?.goal).toBe("Unit goal");
-
-    // A handle the tree does not declare for that name is not this tree.
-    const foreign = indexOrg({
-      ...repeated,
-      derived: {
-        ...repeated.derived!,
-        seats: [
-          seat({ handle: "designer-unit", name: "Designer" }),
-          seat({ handle: "someone-else", name: "Designer" }),
-        ],
-        units: [{ ...repeated.derived!.units![0]!, seats: ["designer-unit", "someone-else"] }],
-      },
-    });
-    expect(foreign.hierarchy).toBe(false);
-  });
-
-  test("null lists are empty lists, as Go marshals a nil slice", () => {
-    const empty = indexOrg({ name: "Blank", derived: { seats: null, units: null } });
-    expect(empty.hierarchy).toBe(true);
-    expect(empty.seats).toEqual([]);
-  });
-});
-
-describe("the operator-gated half of a seat", () => {
-  const doc: CompanyDocument = {
-    name: "Acme",
-    roles: [{ name: "CEO", email: "ceo@example.com", llm: { default: "fast", review: "big" } }],
+    },
+  ],
+  derived: {
+    seats: [
+      seat({ handle: "jane-founder", name: "Jane Founder", kind: "human", reports: ["ceo"] }),
+      seat({
+        handle: "ceo",
+        name: "CEO",
+        manager: "jane-founder",
+        managers: ["jane-founder"],
+        reports: ["vpe", "dev-a", "dev-b"],
+      }),
+      seat({ handle: "vpe", name: "VP Engineering", manager: "ceo", managers: ["ceo"] }),
+      seat({ handle: "dev-a", name: "Dev A", manager: "ceo", managers: ["ceo"] }),
+      seat({ handle: "dev-b", name: "Dev B", manager: "ceo", managers: ["ceo"] }),
+      seat({
+        handle: "designer",
+        name: "Designer",
+        placed_by_ref: true,
+        manager: "vpe",
+        managers: ["vpe"],
+        auto_reports: null,
+      }),
+    ],
     units: [
       {
         name: "Engineering",
-        roles: [{ name: "VP Engineering" }],
-        children: [
-          {
-            name: "Backend",
-            mcp_env: { github: { GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
-            roles: [{ name: "Dev A", mcp_env: { tracker: { TOKEN: "__redacted__" } } }],
-          },
-        ],
+        type: "department",
+        lead: "vpe",
+        lead_inherited: false,
+        channel: "",
+        channel_inherited: false,
+        seats: ["vpe"],
+      },
+      {
+        name: "Backend",
+        type: "team",
+        lead: "vpe",
+        lead_inherited: true,
+        channel: "",
+        channel_inherited: false,
+        seats: ["dev-a", "dev-b", "designer"],
       },
     ],
-  };
+  },
+};
 
-  test("a seat's settings are its own entry, with its home unit beside it", () => {
-    const found = seatSettings(doc, byName("Dev A"));
+const index = indexOrg(org);
+
+/** The same company, from an engine that reports no derived hierarchy. */
+const { derived: _omitted, ...older } = org;
+const authored = indexOrg(older);
+
+describe("the engine's hierarchy", () => {
+  test("every role becomes a seat, wherever the document wrote it", () => {
+    expect(index.seats.map((s) => s.name).sort()).toEqual([
+      "CEO",
+      "Designer",
+      "Dev A",
+      "Dev B",
+      "Jane Founder",
+      "VP Engineering",
+    ]);
+    expect(index.hierarchy).toBe(true);
+  });
+
+  // THE HANDLE IS THE ENGINE'S AND IS NEVER DERIVED HERE. The copy this
+  // replaced lower-cased "İlker" into `i-lker` where Go derives `ilker`, and
+  // the handle keys a seat's memory — so a link pinning the client's version
+  // pointed at nothing.
+  test("a handle is the engine's, and is unknown where it did not say", () => {
+    expect(index.byName.get("Dev A")?.handle).toBe("dev-a");
+    expect(index.byName.get("CEO")?.handle).toBe("ceo");
+    // Without the block, only a DECLARED handle is known.
+    expect(authored.byName.get("CEO")?.handle).toBe("ceo");
+    expect(authored.byName.get("Dev A")?.handle).toBe("");
+    expect(authored.hierarchy).toBe(false);
+  });
+
+  // A LINK STILL REACHES A SEAT WITH NO REPORTED HANDLE: the seat screen
+  // resolves a name as well as a handle, and the rule lives in one place.
+  test("a seat with no reported handle is addressed by name", () => {
+    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["company", "people", "dev-a"]);
+    expect(seatPath(authored.byName.get("Dev A")!)).toEqual(["company", "people", "Dev A"]);
+  });
+
+  // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
+  // above every unit; its `unit:` reference put it in Backend.
+  test("a root seat the engine placed sits in its unit, and says it was placed", () => {
+    const designer = index.byName.get("Designer")!;
+    expect(designer.unit?.name).toBe("Backend");
+    expect(designer.placedByRef).toBe(true);
+    expect(index.rootSeats.map((s) => s.name).sort()).toEqual(["CEO", "Jane Founder"]);
+    // Without the block it sits where it was WRITTEN, and nothing claims more.
+    expect(authored.byName.get("Designer")!.unit).toBeNull();
+    expect(authored.byName.get("Designer")!.placedByRef).toBe(false);
+  });
+
+  test("a unit with no lead of its own takes the inherited one, marked", () => {
+    // It behaves identically to an explicit lead everywhere in the engine, so
+    // hiding the difference is how an operator comes to think a unit is
+    // unmanaged.
+    const backend = index.units.find((u) => u.name === "Backend")!;
+    expect(backend.effectiveLead?.name).toBe("VP Engineering");
+    expect(backend.leadInherited).toBe(true);
+    expect(index.units.find((u) => u.name === "Engineering")!.leadInherited).toBe(false);
+    expect(index.byName.get("Dev A")?.unitLead).toBe("VP Engineering");
+    expect(index.byName.get("Dev A")?.unitChain.map((u) => u.name)).toEqual([
+      "Engineering",
+      "Backend",
+    ]);
+    // An INHERITED lead is the engine's conclusion, so without the block the
+    // unit has none rather than one this client cascaded.
+    expect(authored.units.find((u) => u.name === "Backend")!.effectiveLead).toBeNull();
+    expect(authored.units.find((u) => u.name === "Engineering")!.effectiveLead?.name).toBe(
+      "VP Engineering",
+    );
+  });
+
+  test("reporting lines are the engine's, and unknown without them", () => {
+    expect(
+      index.byName
+        .get("CEO")!
+        .reports.map((r) => r.name)
+        .sort(),
+    ).toEqual(["Dev A", "Dev B", "VP Engineering"]);
+    expect(index.byName.get("Dev A")!.manager?.name).toBe("CEO");
+    expect(index.byName.get("CEO")!.manager?.name).toBe("Jane Founder");
+    // NOT NOBODY: the engine did not say.
+    expect(authored.byName.get("Dev A")!.manager).toBeNull();
+    expect(authored.byName.get("CEO")!.reports).toEqual([]);
+  });
+
+  // A BLOCK THAT DOES NOT DESCRIBE THIS TREE IS NOT HALF A HIERARCHY. A chart
+  // drawn from one that disagrees with its own seats is a chart that lies.
+  test("a derived block that does not match the tree is refused whole", () => {
+    const mismatched = indexOrg({
+      ...org,
+      derived: { ...org.derived!, seats: (org.derived!.seats ?? []).slice(0, 2) },
+    });
+    expect(mismatched.hierarchy).toBe(false);
+    expect(mismatched.byName.get("Dev A")!.manager).toBeNull();
+
+    // And one naming a handle that belongs to no seat in it.
+    const dangling = indexOrg({
+      ...org,
+      derived: {
+        ...org.derived!,
+        seats: (org.derived!.seats ?? []).map((d) =>
+          d.handle === "dev-a" ? { ...d, manager: "nobody-here" } : d,
+        ),
+      },
+    });
+    expect(dangling.hierarchy).toBe(false);
+
+    // A UNIT'S MEMBERSHIP IS THE SAME KIND OF CLAIM, and it has its own guard:
+    // a unit naming a handle no seat in the block carries would otherwise
+    // leave that unit a member short and every seat placed from it wrong,
+    // silently.
+    const phantom = indexOrg({
+      ...org,
+      derived: {
+        ...org.derived!,
+        units: (org.derived!.units ?? []).map((u) =>
+          u.name === "Backend" ? { ...u, seats: [...(u.seats ?? []), "ghost"] } : u,
+        ),
+      },
+    });
+    expect(phantom.hierarchy).toBe(false);
+  });
+
+  test("a human seat holds a place in the hierarchy", () => {
+    // Addressable-only: no runtime, no inbox, no LLM — but escalation has to
+    // terminate at a person.
+    const founder = index.byName.get("Jane Founder");
+    expect(founder?.kind).toBe("human");
+    expect(founder?.reports.map((r) => r.name)).toEqual(["CEO"]);
+  });
+
+  test("nobody manages themselves", () => {
+    for (const s of index.seats) {
+      expect(s.reports.map((r) => r.name)).not.toContain(s.name);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The guarded half
+// ---------------------------------------------------------------------------
+
+// EVERYTHING BELOW IS OFF THE COMPANY DOCUMENT, not the projection. `/org` is
+// anonymously readable, so email, the model chain, the token budget, contact
+// identities, `mcp_env`, `space:` and `id:` are not on it at all.
+const doc: CompanyDocument = {
+  name: "Acme",
+  roles: [
+    { name: "Jane Founder", kind: "human", contact: { slack_user_id: "U0FOUNDER" } },
+    { name: "CEO", handle: "ceo", email: "ceo@example.com", token_budget: 250000 },
+  ],
+  units: [
+    {
+      name: "Engineering",
+      id: "eng",
+      mcp_env: { github: { GITHUB_HOST: "example.com" } },
+      roles: [{ name: "VP Engineering", handle: "vpe" }],
+      children: [
+        {
+          name: "Backend",
+          space: "ENG",
+          mcp_env: { github: { GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
+          roles: [
+            { name: "Dev A", mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } } },
+            { name: "Dev B" },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+describe("what only the company document says", () => {
+  test("a seat is found by the name the document addresses it by", () => {
+    const found = seatSettings(doc, index.byName.get("CEO")!);
     expect(found.state).toBe("found");
-    if (found.state !== "found") return;
-    expect(found.role.mcp_env?.tracker?.TOKEN).toBe("__redacted__");
-    expect(found.unit?.name).toBe("Backend");
-    const ceo = seatSettings(doc, byName("CEO"));
-    expect(ceo.state === "found" && ceo.unit).toBeNull();
+    expect(found.state === "found" && found.role.email).toBe("ceo@example.com");
+    expect(found.state === "found" && found.role.token_budget).toBe(250000);
   });
 
-  test("a seat the document does not hold is missing, not someone else's", () => {
-    expect(seatSettings(doc, byName("Designer")).state).toBe("missing");
-    expect(seatSettings(null, byName("CEO")).state).toBe("missing");
+  // THE PROJECTION AND THE DOCUMENT CAN DISAGREE for a moment either side of
+  // an apply, and a seat that is in one and not the other is a state to say
+  // rather than a blank panel.
+  test("a seat the document does not hold is missing, not empty", () => {
+    expect(seatSettings(doc, index.byName.get("Designer")!).state).toBe("missing");
+    expect(seatSettings(null, index.byName.get("CEO")!).state).toBe("missing");
   });
 
-  test("two seats with one name are ambiguous rather than a guess", () => {
-    const twice: CompanyDocument = { roles: [{ name: "CEO" }, { name: "CEO", email: "x" }] };
-    expect(seatSettings(twice, byName("CEO")).state).toBe("ambiguous");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Properties, over companies nobody wrote by hand
-// ---------------------------------------------------------------------------
-
-/**
- * mulberry32: a seeded PRNG written here rather than a dependency, so a
- * failing case is reproducible from the seed it prints and the suite adds
- * nothing to package.json.
- */
-function prng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/**
- * A random company and a derived block that is consistent with it: random
- * nesting, random root seats moved into random units, random reporting lines
- * between real handles.
- */
-function company(random: () => number): OrgProjection {
-  const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)]!;
-  let seatCount = 0;
-  let unitCount = 0;
-  const newOrgSeat = (): OrgSeat => ({ name: `Seat ${seatCount++}` });
-  const newOrgUnit = (depth: number): OrgUnit => {
-    const unit: OrgUnit = {
-      name: `Unit ${unitCount++}`,
-      roles: Array.from({ length: Math.floor(random() * 3) }, newOrgSeat),
-    };
-    if (depth < 3) {
-      unit.children = Array.from({ length: Math.floor(random() * 3) }, () => newOrgUnit(depth + 1));
-    }
-    return unit;
-  };
-  const roles = Array.from({ length: Math.floor(random() * 4) }, newOrgSeat);
-  const units = Array.from({ length: Math.floor(random() * 3) }, () => newOrgUnit(0));
-
-  // The engine's view: units depth-first, root seats possibly attached.
-  const flat: OrgUnit[] = [];
-  const visit = (u: OrgUnit) => {
-    flat.push(u);
-    (u.children ?? []).forEach(visit);
-  };
-  units.forEach(visit);
-  const members = new Map<OrgUnit, string[]>(
-    flat.map((u) => [u, (u.roles ?? []).map((r) => r.name)]),
-  );
-  const kept: string[] = [];
-  const placed = new Set<string>();
-  for (const role of roles) {
-    if (flat.length && random() < 0.4) {
-      members.get(pick(flat))!.push(role.name);
-      placed.add(role.name);
-    } else {
-      kept.push(role.name);
-    }
-  }
-  const order = [...kept, ...flat.flatMap((u) => members.get(u)!)];
-  const handleOf = (name: string) => name.toLowerCase().replace(/\s+/g, "-");
-  const handles = order.map(handleOf);
-  const seats: DerivedSeat[] = order.map((name) => {
-    const managers = handles.filter(() => random() < 0.15);
-    return {
-      handle: handleOf(name),
-      name,
-      kind: random() < 0.2 ? "human" : "agent",
-      placed_by_ref: placed.has(name),
-      manager: managers[0] ?? "",
-      managers,
-      reports: handles.filter(() => random() < 0.1),
-      auto_reports: null,
-      onboarding_chain: null,
-    };
-  });
-  const derivedUnits: DerivedUnit[] = flat.map((u) => ({
-    name: u.name,
-    type: "team",
-    lead: members.get(u)!.length && random() < 0.5 ? handleOf(pick(members.get(u)!)) : "",
-    lead_inherited: random() < 0.3,
-    channel: "",
-    channel_inherited: false,
-    seats: members.get(u)!.map(handleOf),
-  }));
-  return { name: "Generated", roles, units, derived: { seats, units: derivedUnits } };
-}
-
-/** Every structural invariant the screens rely on, for one index. */
-function invariants(built: ReturnType<typeof indexOrg>, org: OrgProjection, seed: number): void {
-  const at = `seed ${seed}`;
-  const total = (org.roles ?? []).length + countSeats(org.units ?? []);
-  expect(built.seats.length, at).toBe(total);
-  expect(new Set(built.seats).size, at).toBe(total);
-  expect(new Set(built.seats.map((s) => s.key)).size, at).toBe(total);
-
-  // Every seat is either at the root or a member of exactly the unit it names.
-  const inUnits = built.units.flatMap((u) => u.seats);
-  expect(inUnits.length + built.rootSeats.length, at).toBe(total);
-  for (const unit of built.units) {
-    for (const member of unit.seats) expect(member.unit, at).toBe(unit);
-    expect(unit.chain.at(-1), at).toBe(unit);
-    for (let i = 1; i < unit.chain.length; i++) {
-      expect(unit.chain[i]!.parent, at).toBe(unit.chain[i - 1]);
-    }
-  }
-  for (const s of built.seats) {
-    expect(s.unitChain.at(-1) ?? null, at).toBe(s.unit);
-    if (s.manager) expect(s.managers.includes(s.manager), at).toBe(true);
-  }
-}
-
-function countSeats(units: OrgUnit[]): number {
-  return units.reduce((n, u) => n + (u.roles ?? []).length + countSeats(u.children ?? []), 0);
-}
-
-describe("properties", () => {
-  // A fixed base, so CI runs the same cases every time and a failure names
-  // the seed that reproduces it.
-  const BASE_SEED = 0x5eed;
-  const CASES = 300;
-
-  test("a consistent derived block is believed, and the index is well formed", () => {
-    for (let i = 0; i < CASES; i++) {
-      const seedValue = BASE_SEED + i;
-      const generated = company(prng(seedValue));
-      const built = indexOrg(generated);
-      expect(built.hierarchy, `seed ${seedValue}`).toBe(true);
-      invariants(built, generated, seedValue);
-    }
+  // TWO SEATS WITH ONE NAME can only come from a revision stored before names
+  // had to be unique, and attributing either one's settings to the page would
+  // be a guess.
+  test("a name held by two seats is ambiguous rather than the first match", () => {
+    const twice: CompanyDocument = { ...doc, roles: [...(doc.roles ?? []), { name: "CEO" }] };
+    expect(seatSettings(twice, index.byName.get("CEO")!).state).toBe("ambiguous");
   });
 
-  test("a derived block missing any one seat is refused, and nothing is lost", () => {
-    for (let i = 0; i < CASES; i++) {
-      const seedValue = BASE_SEED + CASES + i;
-      const random = prng(seedValue);
-      const generated = company(random);
-      const seats = generated.derived!.seats!;
-      if (!seats.length) continue;
-      const drop = Math.floor(random() * seats.length);
-      const damaged = {
-        ...generated,
-        derived: { ...generated.derived!, seats: seats.filter((_, j) => j !== drop) },
-      };
-      const built = indexOrg(damaged);
-      expect(built.hierarchy, `seed ${seedValue}`).toBe(false);
-      invariants(built, damaged, seedValue);
-    }
+  test("mcp_env merges DOWN the unit chain with the seat's own winning", () => {
+    const env = mcpEnvOf(seatSettings(doc, index.byName.get("Dev A")!), "agent").github;
+    expect(env?.GITHUB_HOST).toBeUndefined();
+    expect(env?.GITHUB_TOKEN).toBe("${DEV_A_TOKEN}");
+    const inherited = mcpEnvOf(seatSettings(doc, index.byName.get("Dev B")!), "agent").github;
+    expect(inherited?.GITHUB_TOKEN).toBe("${BACKEND_TOKEN}");
+  });
+
+  // A HUMAN SEAT RUNS NO TOOLS, so it inherits none of its unit's credentials.
+  test("a human seat inherits no tool credentials", () => {
+    const found = seatSettings(doc, index.byName.get("Dev B")!);
+    expect(Object.keys(mcpEnvOf(found, "human"))).toEqual([]);
+  });
+
+  test("a unit's guarded fields are read from the document, and only from it", () => {
+    expect(unitSettings(doc, { name: "Engineering" })?.id).toBe("eng");
+    expect(unitSettings(doc, { name: "Backend" })?.space).toBe("ENG");
+    expect(unitSettings(null, { name: "Backend" })).toBeNull();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Live state
-// ---------------------------------------------------------------------------
 
 describe("what a seat is doing", () => {
   const box: SandboxEntry = {
@@ -580,9 +372,20 @@ describe("what a seat is doing", () => {
 
   test("waiting on a person and having fallen over are DIFFERENT tones", () => {
     // Both stopped, and only one is a failure. Red is reserved for failure.
-    expect(seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "awaiting_input" }])).toBe(
-      "needs",
-    );
+    //
+    // THE ENGINE'S OWN WORD. This asserted `awaiting_input`, which
+    // `sandbox.PendingRun` cannot write, so the case passed against a fixture
+    // no engine produces while the real state reached no tone at all.
+    expect(
+      seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "awaiting_clarification" }]),
+    ).toBe("needs");
+    // A box reaped past its pause TTL is the same fact one step worse.
+    expect(seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "reseed" }])).toBe("needs");
+    // And a running one is not waiting on anybody — without this the rule
+    // could be "any sandbox at all" and still pass.
+    expect(
+      seatTone({ id: "a", role: "Dev A", state: "idle" }, [{ ...box, status: "running" }]),
+    ).toBe("working");
     expect(
       seatTone(
         {
@@ -603,7 +406,7 @@ describe("what a seat is doing", () => {
       "no forward progress",
     );
     expect(statusLine(undefined)).toBe("not running on this node");
-    expect(statusLine(null, { seat: byName("Jane Founder") })).toBe("weekdays");
+    expect(statusLine(null, { seat: index.byName.get("Jane Founder")! })).toContain("human");
   });
 });
 
@@ -620,5 +423,115 @@ describe("staleness", () => {
 
   test("a missing stamp makes no claim", () => {
     expect(staleness(undefined, now)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The model chain, in every shape the config accepts
+// ---------------------------------------------------------------------------
+
+// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
+// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
+// client declared a string, so an array rendered as `fast,backup` and a
+// mapping as `[object Object]`, and any consumer calling a string method on
+// one threw on a config the engine accepts.
+describe("llmChain", () => {
+  test("reads all three shapes the engine marshals", () => {
+    expect(llmChain("fast")).toEqual(["fast"]);
+    expect(llmChain(["fast", "backup"])).toEqual(["fast", "backup"]);
+    expect(llmChain({ default: "big", judge: "tiny" })).toEqual(["big", "tiny"]);
+  });
+
+  // A SEAT THAT SAYS NOTHING takes the default provider, and that is not the
+  // same as a seat pinned to a provider called "".
+  test("an unset field is an empty chain, not a chain of one empty key", () => {
+    expect(llmChain(undefined)).toEqual([]);
+    expect(llmChain("")).toEqual([]);
+    expect(llmChain([])).toEqual([]);
+    expect(llmChain({})).toEqual([]);
+  });
+
+  // THE SAME KEY REACHED THROUGH TWO PHASES IS NOT TWO MODELS. Without this
+  // the common mapping — one strong model for most phases, a cheap one for the
+  // judge — reads as five models on the seat page.
+  test("one key named by several phases is listed once", () => {
+    expect(
+      llmChain({ default: "big", review: "big", judge: "tiny", sandbox: ["big", "tiny"] }),
+    ).toEqual(["big", "tiny"]);
+  });
+
+  // A PHASE FALLS BACK TO `default`, exactly as the engine's own resolution
+  // does — so asking for the judge of a seat that never named one answers the
+  // model the judge will actually run on.
+  test("a named phase falls back to default", () => {
+    const llm = { default: "big", judge: "tiny" };
+    expect(llmChain(llm, "judge")).toEqual(["tiny"]);
+    expect(llmChain(llm, "review")).toEqual(["big"]);
+    // And a flat chain answers the same for every phase, because it is one.
+    expect(llmChain(["fast", "backup"], "judge")).toEqual(["fast", "backup"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A unit's headcount
+// ---------------------------------------------------------------------------
+
+/**
+ * TWO HONEST NUMBERS, AND ONE PLACE THAT DECIDES WHICH.
+ *
+ * Every surface used to count for itself and draw the answer bare: the
+ * workspace rail summed the whole subtree, the org chart's block counted the
+ * unit's own members, the roster's group head counted whatever was on screen,
+ * and the unit page printed three figures over two different trees. So
+ * "Leadership" carried 5, 2 and a third number across one product, with
+ * nothing anywhere saying which question any of them had answered.
+ *
+ * The fixture is the shape that makes the difference visible: Engineering
+ * holds one seat of its own and one sub-unit holding three.
+ */
+describe("a unit's headcount", () => {
+  const engineering = index.units.find((u) => u.name === "Engineering")!;
+  const backend = index.units.find((u) => u.name === "Backend")!;
+
+  test("counts its own members and its subtree separately", () => {
+    expect(unitTally(engineering)).toEqual({ direct: 1, total: 4, subUnits: 1 });
+    // A LEAF'S TWO ANSWERS AGREE, which is why most units never showed the bug.
+    expect(unitTally(backend)).toEqual({ direct: 3, total: 3, subUnits: 0 });
+  });
+
+  // THE SUBTREE INCLUDES A SEAT THE DOCUMENT PUT SOMEWHERE ELSE. `Designer` is
+  // written above every unit and the ENGINE placed it in Backend, so a count
+  // derived from the document's own nesting would miss it — and did, on the
+  // one surface that walked `org.units` instead of the index.
+  test("the subtree is the engine's placement, not the document's nesting", () => {
+    expect(engineering.allSeats.map((s) => s.handle).sort()).toEqual([
+      "designer",
+      "dev-a",
+      "dev-b",
+      "vpe",
+    ]);
+  });
+
+  // ONE SENTENCE PER SURFACE, and the appended clause only where the two
+  // numbers differ: "3 seats, 3 directly" reads as two facts about a team that
+  // has one.
+  test("says the subtree first and names the direct count only when it differs", () => {
+    expect(unitSeatsLabel(unitTally(engineering))).toBe("4 seats, 1 directly");
+    expect(unitSeatsLabel(unitTally(backend))).toBe("3 seats");
+  });
+
+  // THE OTHER HALF, for a surface that can only ever show direct members: a
+  // seat sits in exactly one group, so a roster grouped by unit is the unit's
+  // own members and nothing under it.
+  test("a roster group says that it is the direct members", () => {
+    expect(unitDirectLabel(3)).toBe("3 seats directly in it");
+    expect(unitDirectLabel(1)).toBe("1 seat directly in it");
+  });
+
+  // AND THE HEADLINE NUMBER CARRIES ITS OWN SENTENCE. A bare number beside a
+  // name is read as "how many there are"; this is what the rail's badge and
+  // the unit page's fact both hand a reader instead.
+  test("the total's hint names what it counted", () => {
+    expect(UNIT_TOTAL_HINT).toContain("everything under it");
   });
 });

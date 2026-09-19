@@ -364,12 +364,15 @@ func (s *Service) TokenRollup() tokens.Rollup {
 	if s.handles != nil {
 		handles = s.handles()
 	}
+	// The window this rollup actually covers, reported rather than assumed:
+	// the client prints it beside the numbers, and a figure labelled with
+	// the wrong window is worse than an unlabelled one. The projection
+	// evicts on a rolling window, so its top edge is this instant.
+	now := time.Now()
 	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
 		Handles: handles,
-		// The window this rollup actually covers, reported rather than
-		// assumed: the client prints it beside the numbers, and a figure
-		// labelled with the wrong window is worse than an unlabelled one.
-		SinceDays: livestate.LiveSpendWindowDays(),
+		Since:   now.Add(-livestate.LiveSpendWindow),
+		Until:   now,
 	})
 }
 

@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,49 @@ func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("the trash answers %v, want %v — newest removal first, "+
 				"not the rank each task held on a board it has left", got, want)
+		}
+	}
+}
+
+// AND A READER MAY ASK FOR THE OTHER END OF IT.
+//
+// The default above is what an unsorted trash gets. `sort=removed` is the
+// column asked for by name, and it was REFUSED by the parser for as long as
+// the trash had no tab: the order existed, and nothing could name it.
+//
+// Both directions, because only one of them can be wrong at a time and each
+// is wrong in a way that reads as working. A key the parser admits and
+// [sortColumns] lacks is silently DROPPED — the answer comes back in the
+// default order, which for this query is descending, so an ascending request
+// that was thrown away is indistinguishable from one that was honoured.
+func TestTheTrashCanBeAskedForTheOldestRemovalFirst(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"first", "second", "third"} {
+		inSprint(t, r, id, nil)
+	}
+	for i, id := range []string{"second", "third", "first"} {
+		r.at = wednesday.Add(time.Duration(i) * time.Minute)
+		if _, err := r.writer.RemoveTask(t.Context(), "op-rm-"+id, id, "ENG",
+			false, nil); err != nil {
+			t.Fatalf("RemoveTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	r.at = wednesday
+
+	for _, c := range []struct {
+		sort string
+		want []string
+	}{
+		{"removed", []string{"second", "third", "first"}},
+		{"-removed", []string{"first", "third", "second"}},
+	} {
+		got := ids(r.ask(map[string]any{
+			"container": "project:ENG", "removed": "true", "sort": c.sort,
+		}))
+		if !slices.Equal(got, c.want) {
+			t.Errorf("sort=%s answers %v, want %v", c.sort, got, c.want)
 		}
 	}
 }

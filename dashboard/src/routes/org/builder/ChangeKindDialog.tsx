@@ -225,8 +225,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
           <Callout variant="danger">
             {name} is the Datadog fallback, and an alert whose tags name no seat has to wake an
             agent seat. It is the company's only agent seat, so add another before changing this
-            one, or disconnect Datadog.{" "}
-            <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+            one, or disconnect Datadog. <ScreenLink to="integrations">Open Integrations</ScreenLink>
           </Callout>
         ) : (
           <ConfigField

@@ -491,15 +491,26 @@ func (f *Fleet) CountChannelMessage(_ context.Context, id string, at time.Time) 
 
 // OpenChannels returns every channel still open, by id.
 func (f *Fleet) OpenChannels(context.Context) ([]coord.Channel, error) {
+	return f.listChannels(coord.Channel.Open), nil
+}
+
+// AllChannels returns every channel this store still holds, by id.
+func (f *Fleet) AllChannels(context.Context) ([]coord.Channel, error) {
+	return f.listChannels(func(coord.Channel) bool { return true }), nil
+}
+
+// listChannels is the one walk both listings take — see the KV store's own
+// note: two near-identical loops are how one of them stops matching.
+func (f *Fleet) listChannels(keep func(coord.Channel) bool) []coord.Channel {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []coord.Channel
 	for _, id := range slices.Sorted(maps.Keys(f.channels)) {
-		if ch := f.channels[id]; ch.Open() {
+		if ch := f.channels[id]; keep(ch) {
 			out = append(out, ch)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // PurgeChannels deletes channels closed before the cutoff.

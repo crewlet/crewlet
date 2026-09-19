@@ -28,3 +28,15 @@ func GitHubSecretForTest(s Secrets, handle string) string { return githubSecret(
 // its own "P" — which a delivery test cannot see, because both readings
 // accept the same payload.
 func DatadogSummaryForTest(body map[string]any) string { return datadogSummary(body) }
+
+// DeliveryTagsForTest exposes the filterable dimensions one delivery's stored
+// row carries.
+//
+// Asserted directly because the thing it decides is invisible from a route:
+// what a listing can say about a delivery WITHOUT reading its payload. A
+// deliveries screen pages the log, and the payload is deliberately not in a
+// listing — so a dimension missing here is one an operator can only get by
+// fetching a payload per row, which is the pattern the tags exist to retire.
+func DeliveryTagsForTest(handle, key string) map[string]string {
+	return deliveryTags(delivery{handle: handle, key: key})
+}

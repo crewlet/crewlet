@@ -19,7 +19,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import type { ComponentProps, ElementType } from "react";
+import type { ComponentProps, ElementType, ReactElement } from "react";
 import {
   OrgTable,
   OrgTableActions,
@@ -513,4 +513,38 @@ export function installMedia(initial: boolean): {
       else delete (globalThis as Record<string, unknown>).matchMedia;
     },
   };
+}
+
+/**
+ * Render `ui` with every box reporting itself as overflowing, and hand back
+ * the container.
+ *
+ * jsdom lays nothing out, so every scroll and client dimension it reports is
+ * 0 and no block can ever overflow on its own — which makes the branch a
+ * design system's `focusWhenScrollable` turns on unreachable from a suite.
+ * Overriding the pair the block compares is what makes it reachable at all,
+ * and it is the REAL branch: the same measurement a browser answers
+ * differently at one viewport and the next.
+ *
+ * HERE RATHER THAN IN EACH SUITE, because two screens now need it — a bridged
+ * run's tool log and a seat's thread — and a measurement fake written twice
+ * is two fakes that disagree about what a box reports the day one of them is
+ * tuned. The pair is restored in a `finally`, so a case cannot leave every
+ * later one measuring a box jsdom never laid out.
+ */
+export function overflowing(ui: ReactElement, axis: "height" | "width" = "height"): HTMLElement {
+  const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";
+  const client = axis === "height" ? "clientHeight" : "clientWidth";
+  const had = {
+    scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, scroll),
+    client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, client),
+  };
+  Object.defineProperty(HTMLElement.prototype, scroll, { configurable: true, value: 4000 });
+  Object.defineProperty(HTMLElement.prototype, client, { configurable: true, value: 460 });
+  try {
+    return render(ui).container;
+  } finally {
+    if (had.scroll) Object.defineProperty(HTMLElement.prototype, scroll, had.scroll);
+    if (had.client) Object.defineProperty(HTMLElement.prototype, client, had.client);
+  }
 }

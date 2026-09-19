@@ -28,6 +28,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -53,6 +54,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
@@ -1546,6 +1548,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
+			// RANKED SEARCH, gated on its own index rather than on
+			// the tracker: the rows are the fleet's and the lexical
+			// index is this node's own, so a node still building one
+			// answers every board question and cannot rank a word.
+			// The accessor already returns an untyped nil in that
+			// case, which is what the registration check needs.
+			WorkSearch: nativeWorkSearch(e),
+			// The seat's own thread ledger, and its counterparty
+			// profiles. Both are per-node stores, both have been
+			// written since their subsystems landed, and neither
+			// reached a screen: the conversations panel drew an
+			// empty list for every seat and the memory answer
+			// carried a `counterparties` key that was always `[]`.
+			Conversations:  ledgerstore.NewConversations(e.Backends().Store),
+			Counterparties: learning.NewCounterparties(e.Backends().Store),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -1813,19 +1830,55 @@ func (r engineRuntime) Tools() []api.ToolInfo {
 		return nil
 	}
 	entries := company.Tools.List()
+	// THE REGISTRY'S OWN PREDICATE for where a tool delivers, never
+	// re-derived here: it is not "was this served by MCP" — a proven
+	// read-only MCP tool delivers nowhere, and the native tracker's
+	// comment tool delivers although it is a builtin. A second derivation
+	// would show one answer on the screen and enforce another at the fence.
+	delivers := company.Tools.Deliveries()
 	out := make([]api.ToolInfo, 0, len(entries))
 	for _, entry := range entries {
-		source := "builtin"
-		if server, ok := entry.FromMCP(); ok {
-			source = server
-		}
-		out = append(out, api.ToolInfo{
-			Name:        entry.Name(),
-			Description: entry.Tool.Description(),
-			Source:      source,
-		})
+		out = append(out, toolInfo(entry, delivers[entry.Name()]))
 	}
 	return out
+}
+
+// toolInfo is one registry entry as the catalogue carries it.
+//
+// A FUNCTION RATHER THAN A LOOP BODY so it can be exercised without an engine.
+// The mapping had a defect nothing could reach: it re-spelled the origin
+// instead of passing the registry's own, and every reader of the prefix — the
+// screen's origin column, its per-origin counts, the published reference —
+// silently read a company running MCP servers as one running none.
+func toolInfo(entry tools.Entry, delivers string) api.ToolInfo {
+	return api.ToolInfo{
+		Name:        entry.Name(),
+		Description: entry.Tool.Description(),
+		// THE REGISTRY'S OWN GRAMMAR, passed through rather than
+		// re-spelled: `builtin`, or `mcp:` and the bare server name.
+		// This stripped the prefix and sent the server's name alone,
+		// which disagreed with every reader of it — the screen's
+		// origin column splits on the colon and rendered the server
+		// as if it were the grammar's own word, its "from MCP
+		// servers" count tested for the prefix and therefore read
+		// zero on a company running servers, and the published API
+		// reference documents the prefixed form.
+		Source: entry.Origin,
+		Annotations: api.ToolAnnotations{
+			Title:       entry.Annotations.Title,
+			ReadOnly:    entry.Annotations.ReadOnly.String(),
+			Destructive: entry.Annotations.Destructive.String(),
+			Idempotent:  entry.Annotations.Idempotent.String(),
+			OpenWorld:   entry.Annotations.OpenWorld.String(),
+		},
+		Delivers: delivers,
+		// The schema the MODEL is offered, read rather than rebuilt. The
+		// map is the tool's own and this path only serialises it; an MCP
+		// server restarting replaces the whole Tool rather than writing
+		// into its schema, so there is nothing here for a running turn to
+		// race with.
+		InputSchema: entry.Tool.Parameters(),
+	}
 }
 
 func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
@@ -2635,4 +2688,18 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 		report, _ := e.RetentionReport(ctx)
 		return report
 	}
+}
+
+// nativeWorkSearch is this node's ranked item search, as the read surface
+// wants it — converted for [nativeWork]'s reason.
+//
+// SEPARATE FROM [nativeWork], because the two are absent independently: a node
+// can hold the whole board and no lexical index at all, while it is building
+// one. Folding them into one seam would leave the board unregistered on a node
+// that can answer every question on it.
+func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
+	if s := e.WorkSearch(); s != nil {
+		return s
+	}
+	return nil
 }

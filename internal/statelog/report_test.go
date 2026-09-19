@@ -545,3 +545,137 @@ func TestTheReportNamesTheLevelItCouldAnswerAt(t *testing.T) {
 			"claim would be true of half the document", partial.ReadLevel)
 	}
 }
+
+// A TERM THAT BINDS NOTHING SAYS SO, RATHER THAN PRINTING 2^64-1.
+//
+// [statelog.SeqUnbounded] is the identity for the minimum the trim takes
+// across the terms — chosen to lose a comparison, never to describe a
+// position. It reached the retention screen as a sequence anyway: a solo
+// fleet's snapshot floor and an unpinned log's min_hold both rendered
+// `18446744073709552000` beside their own prose saying nothing was pinning
+// anything. Not even the right digits, because a JSON number is a float64 and
+// 2^64-1 is two thousand short of representable in one — so a reader could not
+// have recovered the sentinel even knowing to look for it.
+//
+// Both halves are asserted: the STATE the screen switches on, and the number
+// on the wire, because the state alone would let the sentinel keep riding
+// along in a field the type documents as meaningless.
+func TestATermThatBindsNothingReportsUnboundedRatherThanTheSentinel(t *testing.T) {
+	t.Parallel()
+	in := statelog.TrimInputs{
+		Now:             reportAt,
+		Counted:         []statelog.NodePosition{{NodeID: "node-1", Seq: 900, At: reportAt}},
+		CountedReadable: true,
+		// NO HOLDS AND ONE NODE: the first makes min_hold unbounded, the
+		// second makes the snapshot floor unbounded. They are the only
+		// two terms that can be, and both are ordinary healthy states.
+		HoldsReadable:  true,
+		BackupFloor:    880,
+		BackupAt:       reportAt.Add(-time.Hour),
+		HasBackupFloor: true,
+		BackupMaxAge:   24 * time.Hour,
+		FeedAckFloor:   890,
+		HasFeed:        true,
+		FeedReadable:   true,
+		AgeFloor:       800,
+		HoldStale:      statelog.TrimHoldStale,
+	}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Domains: []statelog.DomainInputs{{
+			Domain:         "tracker",
+			Stream:         "CREWLET_TRACKER",
+			Replay:         statelog.ReplayStrict,
+			FirstSeq:       700,
+			LastSeq:        900,
+			StreamReadable: true,
+			TrimFloor:      700,
+			Decision:       statelog.Trim(in.Terms()),
+		}},
+	})
+	for _, name := range []statelog.TermName{statelog.TermMinHold, statelog.TermSnapshotFloor} {
+		got := term(t, rep.Domains[0], name)
+		if got.State != statelog.TermUnbounded {
+			t.Errorf("%s binds nothing and reports state %q; a term permitting "+
+				"everything is not an ordinary sequence, and reporting it as one "+
+				"is what put 2^64-1 on the screen", name, got.State)
+		}
+		if got.Seq != 0 {
+			t.Errorf("%s carries seq %d; a sequence goes on the wire only where "+
+				"it is one, and %d is the trim's own identity for a minimum",
+				name, got.Seq, statelog.SeqUnbounded)
+		}
+	}
+
+	// AND THE TRIM ITSELF IS UNAFFECTED. The sentinel's whole job is to lose
+	// the minimum, so a fleet with nothing pinning it trims to the lowest
+	// term that IS a position — never to 2^64-1, and never blocked.
+	if got := rep.Domains[0].BlockedBy; got != "" {
+		t.Errorf("a healthy unpinned fleet reports blocked_by %q", got)
+	}
+	if got := rep.Domains[0].TrimTo; got != 800 {
+		t.Errorf("trim_to is %d, want the age floor at 800: an unbounded term "+
+			"must lose the minimum rather than win it", got)
+	}
+}
+
+// AND A TERM PERMITTING NOTHING YET IS DISTINGUISHABLE FROM ONE WITH NO
+// SEQUENCE AT ALL.
+//
+// `seq` carried `omitempty`, which drops exactly the value a young fleet's
+// binding term has. A term permitting removal up to 0 — the state that holds
+// the trim, and therefore the one an operator opened this screen to read —
+// went onto the wire looking identical to an unreadable term, and a reader
+// could only recover it by assuming an absent field meant zero, which for the
+// unreadable one it does not.
+func TestASequenceOfZeroSurvivesTheWire(t *testing.T) {
+	t.Parallel()
+	in := statelog.TrimInputs{
+		Now: reportAt,
+		// A NODE THAT HAS APPLIED NOTHING: `applied` is 0, readable, and
+		// binding — a fleet on its first minute.
+		Counted:         []statelog.NodePosition{{NodeID: "node-1", Seq: 0, At: reportAt}},
+		CountedReadable: true,
+		HoldsReadable:   true,
+		BackupFloor:     880,
+		BackupAt:        reportAt.Add(-time.Hour),
+		HasBackupFloor:  true,
+		BackupMaxAge:    24 * time.Hour,
+		FeedAckFloor:    890,
+		HasFeed:         true,
+		FeedReadable:    true,
+		AgeFloor:        800,
+		HoldStale:       statelog.TrimHoldStale,
+	}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Domains: []statelog.DomainInputs{{
+			Domain:         "tracker",
+			Stream:         "CREWLET_TRACKER",
+			Replay:         statelog.ReplayStrict,
+			FirstSeq:       700,
+			LastSeq:        900,
+			StreamReadable: true,
+			TrimFloor:      700,
+			Decision:       statelog.Trim(in.Terms()),
+		}},
+	})
+	got := term(t, rep.Domains[0], statelog.TermApplied)
+	if got.State != statelog.TermKnown {
+		t.Fatalf("a node at position 0 reports state %q; it was read, so it is ok "+
+			"and its sequence is the answer", got.State)
+	}
+	blob, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(blob), `"seq":0`) {
+		t.Errorf("a term permitting nothing yet serialises as %s, with no `seq` "+
+			"in it: absent and zero are different answers and the reader cannot "+
+			"tell them apart", blob)
+	}
+}

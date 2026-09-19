@@ -32,6 +32,15 @@ import (
 //
 // Declared here rather than imported as a concrete store so this package
 // depends on the shape, and so the memory twin answers it too.
+//
+// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter:
+// a run's record is deleted the moment the run settles, so [sandbox.Active] is
+// every status a record can hold and "every run this store holds" and "the
+// active ones" name one set. A `status=` parameter selecting `done` or
+// `failed` would be a question whose answer is structurally empty — worse than
+// absent, because an empty board reads as "nothing failed" rather than "this
+// is not where that is recorded". How a run ENDED is on the event stream: the
+// resumed turn's own events, or a `sandbox_run_failed` naming the reason.
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 }
@@ -76,6 +85,28 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		// WHO IS WAITING, which is the question a board full of parked
+		// runs exists to answer and had no field for. Persisted rather
+		// than re-derived precisely because the resumed turn does not see
+		// its trigger — empty means nobody is waiting, which is the safe
+		// half.
+		"reply": run.Reply,
+		// THE BRIDGE'S OWN TOOL LOG. A native loop keeps its calls in
+		// memory and the turn writes them at the end; a bridged run's are
+		// made by a process outside the engine, minutes or hours apart
+		// and possibly across a restart, so this row is the only copy
+		// there is. `bridge_calls_elided` says how many were cut from the
+		// middle, because a log that silently skips is a log that lies
+		// about what the run did.
+		"bridge_calls":        run.BridgeCalls,
+		"bridge_calls_elided": run.BridgeCallsElided,
+		// THE THREE IDENTIFIERS a person needs to find this run in
+		// somebody else's system: the coding CLI's own session, the
+		// command the engine launched, and the chain of asks that led
+		// here.
+		"session_id":       run.SessionID,
+		"command_id":       run.CommandID,
+		"delegation_chain": run.DelegationChain,
 	}
 }
 

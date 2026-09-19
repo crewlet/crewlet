@@ -69,6 +69,22 @@ var TermNames = []TermName{
 // Valid reports whether a term name off the wire is one this build knows.
 func (t TermName) Valid() bool { return slices.Contains(TermNames, t) }
 
+// SeqUnbounded is the [Term.Seq] of a term that DOES NOT BIND.
+//
+// It is the identity for the minimum [TrimDecision] takes across the terms, so
+// a term permitting everything never wins that minimum and the arithmetic has
+// no case for it. That is the whole reason it is the largest value there is —
+// it is chosen to lose a comparison, not to describe a position.
+//
+// WHICH IS WHY IT NEVER LEAVES THIS PACKAGE AS A NUMBER. A sequence is a
+// stream's own counter and no fleet reaches 2^64, so this value on a screen is
+// a sentinel that escaped rather than a figure anybody can act on: the
+// retention screen printed `18446744073709552000` beside "nothing is pinning
+// the log" — not even the right digits, since a JSON number is a float64 and
+// this one is two thousand short of representable. [TermUnbounded] is what a
+// report says instead.
+const SeqUnbounded = ^uint64(0)
+
 // Term is one term's answer.
 //
 // THREE-VALUED IN EFFECT: a term permits removal up to a sequence, refuses
@@ -284,7 +300,7 @@ func (in TrimInputs) applied() Term {
 		return Term{Name: TermApplied, Detail: "the fleet counts no nodes, which " +
 			"cannot be true while this one is running"}
 	}
-	lowest := ^uint64(0)
+	lowest := SeqUnbounded
 	var who string
 	for _, n := range in.Counted {
 		if n.Generation < in.Generation {
@@ -316,7 +332,7 @@ func (in TrimInputs) minHold() Term {
 	if !in.HoldsReadable {
 		return Term{Name: TermMinHold, Detail: "the holds could not be listed"}
 	}
-	lowest := ^uint64(0)
+	lowest := SeqUnbounded
 	var who string
 	var live int
 	for _, h := range in.Holds {
@@ -338,7 +354,7 @@ func (in TrimInputs) minHold() Term {
 	if live == 0 {
 		// NOTHING IS PINNED, which is not a refusal: it permits removing
 		// everything the other terms permit.
-		return Term{Name: TermMinHold, Seq: ^uint64(0), Known: true,
+		return Term{Name: TermMinHold, Seq: SeqUnbounded, Known: true,
 			Detail: "nothing is pinning the log"}
 	}
 	return Term{Name: TermMinHold, Seq: lowest, Known: true, Detail: fmt.Sprintf(
@@ -381,7 +397,7 @@ func (in TrimInputs) snapshotFloor() Term {
 	// backup — which the backup term already gates. Saying so here stops a
 	// reader concluding this term deadlocks one node.
 	if len(in.Counted) < 2 {
-		return Term{Name: TermSnapshotFloor, Seq: ^uint64(0), Known: true,
+		return Term{Name: TermSnapshotFloor, Seq: SeqUnbounded, Known: true,
 			Detail: "a single node takes no snapshots; its recovery artefact is a " +
 				"backup, which the backup term gates"}
 	}

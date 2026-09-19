@@ -3,6 +3,7 @@ package org
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -200,5 +201,60 @@ func TestADuplicateErrorCarriesEveryEntity(t *testing.T) {
 				t.Errorf("DuplicateError renders %q, want the grouped message", dup.Error())
 			}
 		})
+	}
+}
+
+// A THIRD SEAT ON ONE ACCOUNT IS STILL ONE MISTAKE.
+//
+// The pairwise reading is the one to guard against, because it looks right
+// until a third seat arrives: three seats on one Slack id are three PAIRS, so
+// a validator comparing them two at a time reports two problems, and NEITHER
+// message names all three. Whoever reads it edits one line, revalidates, and
+// meets the collision again — and [internal/config] can only place a problem
+// beside the seats the error names, so the third seat gets no marker at all.
+//
+// It is also the case the table above cannot reach: every other duplicate
+// kind is keyed on a name or a handle, and only an identity is keyed on one
+// value of one contact FIELD, which is what the grouping has to be per.
+func TestThreeSeatsOnOneAccountAreOneMessageNamingEveryOne(t *testing.T) {
+	t.Parallel()
+	ada := &Role{Name: "Ada", Kind: KindHuman,
+		Contact: &HumanContact{SlackUserID: "U0FOUNDER"}}
+	rui := &Role{Name: "Rui", Kind: KindHuman,
+		Contact: &HumanContact{SlackUserID: "U0FOUNDER"}}
+	mei := &Role{Name: "Mei", Kind: KindHuman,
+		Contact: &HumanContact{SlackUserID: "U0FOUNDER"}}
+	o := normalized(&Organization{Name: "T", Roles: []*Role{ada}, Units: []*Unit{
+		{Name: "Engineering", Roles: []*Role{rui}},
+		{Name: "Product", Roles: []*Role{mei}},
+	}})
+
+	var found []*DuplicateError
+	err := o.Validate()
+	for _, leaf := range leaves(err) {
+		var dup *DuplicateError
+		if errors.As(leaf, &dup) && dup.Kind == DuplicateIdentity {
+			found = append(found, dup)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d identity duplicates in %v, want ONE naming all three "+
+			"rather than one per pair", len(found), err)
+	}
+	dup := found[0]
+	if !dup.Kind.Valid() || dup.Key != "U0FOUNDER" {
+		t.Errorf("kind %q key %q, want %q %q", dup.Kind, dup.Key,
+			DuplicateIdentity, "U0FOUNDER")
+	}
+	// IN THE ORDER MET, walking the chart, so the problems a caller places
+	// land in document order rather than in map order.
+	if want := []*Role{ada, rui, mei}; !reflect.DeepEqual(dup.Seats, want) {
+		t.Errorf("seats = %v, want %v", roleNames(dup.Seats), roleNames(want))
+	}
+	for _, name := range []string{"Ada", "Rui", "Mei"} {
+		if !strings.Contains(dup.Error(), name) {
+			t.Errorf("the message %q does not name %s, so that seat is the "+
+				"one nobody is told to edit", dup.Error(), name)
+		}
 	}
 }

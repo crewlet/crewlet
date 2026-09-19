@@ -52,8 +52,8 @@
 
 import { useId, useRef, useState, type ReactNode } from "react";
 
-import { withProblems } from "./Problems.tsx";
-import { complete, rank, referenceAt, type Typing } from "~/lib/secretref.ts";
+import { withProblems } from "~/ui/Problems.tsx";
+import { complete, rank, referenceAt, type Typing } from "~/ui/secretref.ts";
 import { Combobox, FormField, InputAffix, Select, Textarea } from "@crewlethq/ui";
 
 export type FieldKind =

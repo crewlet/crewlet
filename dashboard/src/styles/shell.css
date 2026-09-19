@@ -1,0 +1,209 @@
+/* ===========================================================================
+   What the page column itself is made of: the ONE scroll container, the
+   toolbar a screen puts its own controls in, the degraded banner, the command
+   palette, and the narrow-layout drawer.
+
+   THE FRAME IS NOT HERE. The rail, the workspace sidebar, the page bar, the
+   state bar, the detail rail and the grid are `frame.css`, which loads after
+   this file. What is left here is the page's own furniture — and it is what
+   survived: the single-sidebar layout this file used to declare (.app, .nav,
+   .topbar, .brand, .screen-head and their eleven relatives) was deleted with
+   the markup that used it, rather than left in place to fight the frame's own
+   rules for the same elements.
+   ======================================================================== */
+
+.screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+}
+
+/* THE TOOLBAR OWNS THE TOP OF THE SCROLLER, so everything else that sticks
+   starts below it. Asked with `:has` on the whole screen rather than on a
+   direct child, because a toolbar rendered inside a tab panel or a panel is
+   still sticky against this same scroller and still covers the same band.
+   The offset is ONE band of controls: a toolbar narrow enough to wrap is
+   taller than that and a column head then parks under its second row — the
+   only alternative is measuring the band in JS and writing the property from
+   a ResizeObserver, which puts a layout read in the scroll path to buy a
+   pixel at the one width where the grid is already dropping columns. */
+.screen:has(.toolbar) {
+  --sticky-top: var(--toolbar-h);
+}
+
+/* THE SCREEN ASKED FOR THE HEIGHT INSTEAD OF THE SCROLL. `data-fill` is set
+   by the shell from a screen's own request (`app/fill.tsx`), never by a
+   selector reaching into a screen for a class neither of them owns — which is
+   what the rule this replaces did, and why it stopped matching the day the
+   markup under it moved.
+
+   A CANVAS FILLS THE BOX ITS SCREEN GIVES IT rather than growing the page: a
+   wheel turned over a page that scrolls lands in a canvas half off screen. So
+   while the request holds, this scroller stops being one and the column takes
+   what is left of the window. The bottom padding goes with it — it is landing
+   room under a page that ends, and there is no end to scroll to here. */
+.screen[data-fill] {
+  /* AND IT BECOMES A COLUMN, which is the half that was missing and the half
+     the `flex` below is worthless without: `.screen` is a BLOCK container, so
+     a flex shorthand on its child means nothing at all and `.screen-inner`
+     kept taking its height from its content. Measured against a running
+     engine — the builder's canvas lens rendered its toolbar and then a chart
+     2px tall, on a company the chart lens draws as six seats in three units:
+     every card was there, laid out in a world of zero height inside a
+     viewport of zero height inside a column that had nothing to fill.
+
+     The rule this replaced was `.screen-inner:has(.org-builder-body.fill)`,
+     which named a class in another package's file — and `.screen-inner` was
+     itself the flex container then, so nothing had to be said about the
+     scroller. Moving the request onto the scroller moved the container with
+     it, and the declaration did not follow. */
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+.screen[data-fill] > .screen-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: var(--space-5);
+}
+
+.screen-inner {
+  /* NO MAX WIDTH. The page column is already bounded by the rail and the
+     workspace sidebar, and a cap inside it throws away exactly the width the
+     two-level navigation just bought — a grid of forty rows reading at 1560px
+     on a 2560px screen with 500px of grey either side. Prose and forms get
+     their measure from `--measure` where they need one; tables, boards and
+     charts genuinely want the viewport. */
+  padding: var(--space-5) var(--space-5) var(--space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0;
+  background: var(--bg);
+  min-width: 0;
+  /* A FLOOR, NOT A HEIGHT. The band is what `--sticky-top` offsets the grid's
+     column heads by, so it has to be a real number even on a screen whose
+     toolbar holds one short chip — and a fixed height would clip the wrapped
+     row instead, which is the case the floor deliberately lets grow. */
+  min-height: var(--toolbar-h);
+}
+
+.palette {
+  width: min(620px, 100%);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: min(60dvh, 520px);
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+
+.palette-input {
+  width: 100%;
+  height: var(--row-h-lg);
+  padding: 0 var(--space-4);
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+
+.palette-results {
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.palette-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  text-align: left;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.palette-item[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.palette-item .palette-hint {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.palette-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+.drawer-veil {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+  z-index: calc(var(--z-drawer) - 1);
+}
+
+.drawer-toggle {
+  display: none;
+}
+
+/* ---- Narrow -------------------------------------------------------------
+   The page's own rules only: the rail and the sidebar carry theirs in
+   frame.css, where the columns they belong to are declared. */
+
+@media (max-width: 860px) {
+  .drawer-toggle {
+    display: inline-flex;
+  }
+
+  /* THE BOTTOM PADDING CLEARS THE RAIL, which is a bottom bar at this width
+     (frame.css). Derived from `--rail-bar-h` rather than eyeballed, because a
+     bar whose height and a page whose clearance are two literals is a list
+     whose last row goes under the navigation the day either one moves. The
+     safe-area inset is the home indicator on a modern phone, which the bar
+     also pads for — it is counted once here and once there because they are
+     two boxes stacked on the same edge. */
+  .screen-inner {
+    padding: var(--space-4) var(--space-3)
+      calc(var(--rail-bar-h) + env(safe-area-inset-bottom, 0px) + var(--space-6));
+  }
+}

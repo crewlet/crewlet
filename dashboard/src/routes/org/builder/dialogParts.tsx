@@ -12,7 +12,7 @@ import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
 
-import { Problems } from "~/components/Problems.tsx";
+import { Problems } from "~/ui/Problems.tsx";
 import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
@@ -65,6 +65,43 @@ export function EditorSection({
 }
 
 /**
+ * Every screen the builder links out to, and where it is.
+ *
+ * ONE TABLE, AND A NAME AT THE CALL SITE. Twelve links in this lens named
+ * their destination as a path literal — `to="integrations"` — which is
+ * twelve copies of a fact that belongs to `app/nav.ts`, and the failure of a
+ * wrong copy is a link that renders, clicks and lands on "there is no such
+ * screen". That is not hypothetical here: every one of them was written
+ * against a flat route table (`#/integrations`, `#/schedules`, `#/secrets`)
+ * and this application puts those screens under a workspace, so the whole set
+ * went dead at once and nothing in the build said so.
+ *
+ * A NAME CANNOT BE WRONG IN THAT WAY. `ScreenName` is a closed union, so a
+ * destination this table does not have is a type error at the call site, and
+ * a screen that MOVES is one line here. `builderLinks.test.ts` is the other
+ * half: it holds each entry against `app/nav.ts`'s own destinations, which is
+ * the only thing that can catch a table that is internally consistent and
+ * points nowhere.
+ */
+export const SCREENS = {
+  integrations: ["admin", "integrations"],
+  schedules: ["activity", "schedules"],
+  /** The company's credentials. The screen is "Credentials"; the engine's
+   *  word, and this lens's, is secrets — see `/secrets`. */
+  secrets: ["admin", "credentials"],
+  config: ["admin", "config"],
+  fleet: ["admin", "fleet"],
+} as const satisfies Record<string, readonly [string, ...string[]]>;
+
+/** A screen the builder can send a reader to. */
+export type ScreenName = keyof typeof SCREENS;
+
+/** The route segments of a named screen, as `href` and `nav.to` take them. */
+export function screenPath(name: ScreenName): string[] {
+  return [...SCREENS[name]];
+}
+
+/**
  * A link to another screen, in the caption register that keeps reading as a
  * link.
  *
@@ -73,9 +110,9 @@ export function EditorSection({
  * (`useLeaveGuard`), the same as Back; a click that opens another tab or
  * window moves nothing here and is left alone by the browser itself.
  */
-export function ScreenLink({ to, children }: { to: string[]; children: ReactNode }) {
+export function ScreenLink({ to, children }: { to: ScreenName; children: ReactNode }) {
   return (
-    <a className="t-link" href={href(to)}>
+    <a className="t-link" href={href(screenPath(to))}>
       {children}
     </a>
   );
@@ -86,7 +123,7 @@ export function NotConnected({ tool }: { tool: Tool }) {
   return (
     <p className="builder-note muted">
       {TOOL_NAMES[tool]} is not connected.{" "}
-      <ScreenLink to={["integrations"]}>Connect it from Integrations</ScreenLink>
+      <ScreenLink to="integrations">Connect it from Integrations</ScreenLink>
     </p>
   );
 }
@@ -104,7 +141,7 @@ export function ReadOnlyFact({
   label: string;
   children: ReactNode;
   reason: ReactNode;
-  link?: { to: string[]; label: string };
+  link?: { to: ScreenName; label: string };
 }) {
   return (
     <div className="builder-fact col gap-1">
@@ -322,7 +359,7 @@ export function StrandedNotes({ stranded }: { stranded: readonly StrandedSchedul
           <li key={`${s.unit}/${s.schedule}`}>{strandedSentence(s)}</li>
         ))}
       </ul>
-      <ScreenLink to={["schedules"]}>Open Schedules</ScreenLink>
+      <ScreenLink to="schedules">Open Schedules</ScreenLink>
     </Callout>
   );
 }
@@ -367,8 +404,8 @@ export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBe
     <div className="col gap-2">
       <p className="t-body">
         These stay until you decommission them.{" "}
-        <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>{" "}
-        <ScreenLink to={["secrets"]}>Open Secrets</ScreenLink>
+        <ScreenLink to="integrations">Open Integrations</ScreenLink>{" "}
+        <ScreenLink to="secrets">Open Secrets</ScreenLink>
       </p>
       <ul className="builder-list">
         {entries.map(({ key, name, made, references }) => (
@@ -522,7 +559,7 @@ export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] 
       {links.length > 0 && (
         <p className="row wrap gap-3">
           {links.map((link) => (
-            <ScreenLink key={link} to={[link]}>
+            <ScreenLink key={link} to={link}>
               {PROBLEM_LINKS[link]}
             </ScreenLink>
           ))}

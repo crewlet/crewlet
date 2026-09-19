@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -20,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -29,6 +32,52 @@ type memorySandbox struct{}
 
 func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
+}
+
+// declaration finds the ONE file under the dashboard tree whose source matches
+// `pattern`, and hands back its first capture.
+//
+// A GATE OVER A CONSTANT IS A GATE OVER THE CONSTANT. Reading it from a fixed
+// path makes every such gate a second thing that breaks when a screen moves —
+// and breaks LOUDLY but WRONGLY, reporting a drift between two lists neither of
+// which changed. Keyed on the declaration, a move and a rename are both
+// invisible, and the two failures that matter are the ones it names: nothing
+// declares it, which is a gate certifying nothing; and TWO files declare it,
+// which is two copies that can drift from each other as well as from the
+// engine.
+func declaration(t *testing.T, pattern string) string {
+	t.Helper()
+	re := regexp.MustCompile(pattern)
+	var found []string
+	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir(), !strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx"):
+			return nil
+		case strings.Contains(d.Name(), ".test."):
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if m := re.FindStringSubmatch(string(source)); m != nil {
+			found = append(found, m[1])
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("the dashboard tree at %s could not be walked, so this gate "+
+			"certifies nothing: %v", dashboardTree, err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d files under %s match %s, want exactly one — none is a "+
+			"gate certifying nothing, and two are two copies that can drift "+
+			"from each other as well as from the engine",
+			len(found), dashboardTree, pattern)
+	}
+	return found[0]
 }
 
 // dashboardTree is the room source this sweep reads. Relative, because the
@@ -108,7 +157,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Company:  func() *config.Company { return cfg },
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
-		Runs:     fakeRuns{},
+		Runs:     &fakeRuns{},
 		Diary:    &learning.Diary{},
 		Episodes: &learning.Episodes{},
 		Skills:   &learning.Skills{},
@@ -118,6 +167,11 @@ func everySeam(t *testing.T) queries.Sources {
 		Config:   surface,
 		Work:     emptyWork{},
 		Pages:    emptyPages{},
+		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
+		// no index is a real shape this sweep can describe.
+		WorkSearch:     emptyWork{},
+		Conversations:  emptyConversations{},
+		Counterparties: emptyCounterparties{},
 		// THE RETENTION DOCUMENT, which the Fleet screen's replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
@@ -176,6 +230,18 @@ func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
 	return tracker.SprintListing{}, nil
 }
 
+func (emptyWork) Burndown(context.Context, tracker.BurndownQuery, time.Time) (
+	tracker.Burndown, error) {
+
+	return tracker.Burndown{}, nil
+}
+
+func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time) (
+	tracker.WorkloadAnswer, error) {
+
+	return tracker.WorkloadAnswer{}, nil
+}
+
 func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
 	tracker.ActivityAnswer, error) {
 
@@ -192,6 +258,38 @@ func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracke
 	return tracker.PersonState{}, nil
 }
 
+func (emptyWork) Inbox(context.Context, tracker.InboxQuery, time.Time) (
+	tracker.InboxAnswer, error) {
+	return tracker.InboxAnswer{}, nil
+}
+
+func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
+	tracker.RoutingAnswer, error) {
+	return tracker.RoutingAnswer{}, nil
+}
+
+func (emptyWork) Search(context.Context, string, int) ([]tracker.Ranked, error) {
+	return nil, nil
+}
+
+// emptyConversations and emptyCounterparties are the two per-seat stores with
+// nothing in them, on emptyWork's terms.
+type emptyConversations struct{}
+
+func (emptyConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
+	return nil, nil
+}
+
+func (emptyConversations) History(context.Context, string, string, int) ([]ledger.Session, error) {
+	return nil, nil
+}
+
+type emptyCounterparties struct{}
+
+func (emptyCounterparties) List(context.Context, string) ([]learning.Profile, error) {
+	return nil, nil
+}
+
 type emptyPages struct{}
 
 func (emptyPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
@@ -202,7 +300,16 @@ func (emptyPages) Get(context.Context, string, statelog.Freshness) (pages.Detail
 	return pages.Detail{}, nil
 }
 
-func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.Container, error) {
+func (emptyPages) Activity(context.Context, pages.PageActivityQuery) (pages.PageActivity, error) {
+	return pages.PageActivity{}, nil
+}
+
+func (emptyPages) Revision(context.Context, string, int, statelog.Freshness) (
+	pages.Revision, bool, error) {
+	return pages.Revision{}, false, nil
+}
+
+func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
 	return nil, nil
 }
 
@@ -211,6 +318,7 @@ func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.Conta
 type fakeChannels struct{}
 
 func (fakeChannels) OpenChannels(context.Context) ([]coord.Channel, error) { return nil, nil }
+func (fakeChannels) AllChannels(context.Context) ([]coord.Channel, error)  { return nil, nil }
 
 // EVERY QUERY A ROOM MAKES IS A QUERY THIS SERVER ANSWERS.
 //
@@ -286,5 +394,93 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 		t.Errorf("this build answers %q and no room asks for it — either a "+
 			"reader was lost, or the answer should go with whatever used to "+
 			"call it", kind)
+	}
+}
+
+// AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.
+//
+// The applier records, per change and per recipient, the ONE reason of twenty
+// under which that person heard about it — the fact no commercial tracker
+// keeps. It reaches a screen through `work_inbox`, and a reason the client has
+// no phrase for renders as its own snake_case value: a log line where a
+// sentence belongs, on the surface a person reads first.
+//
+// This is the `rooms` idiom one level down: the client's table is read from
+// ITS OWN SOURCE rather than restated here, so the gate cannot drift towards
+// claiming the pair agree. A phrase the client carries for a reason nothing
+// writes is checked too — that is how a renamed reason leaves a dead entry
+// behind and a live one missing.
+func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
+	t.Parallel()
+	// FOUND RATHER THAN ADDRESSED — see [declaration]. This table has not
+	// moved, but a gate that names a path is one more thing a reorganisation
+	// breaks, and it breaks by reporting a drift that did not happen.
+	table := declaration(t, `(?s)const PHRASES: Record<[^>]*> = \{(.*?)\n\};`)
+	// The table is `key: { short: …, why: … }`, one per line.
+	entry := regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*\{`)
+	phrased := map[string]bool{}
+	for _, m := range entry.FindAllStringSubmatch(table, -1) {
+		phrased[m[1]] = true
+	}
+	if len(phrased) == 0 {
+		t.Fatal("no phrases were found at all, so this gate certifies nothing")
+	}
+	for _, reason := range tracker.Reasons {
+		if !phrased[string(reason)] {
+			t.Errorf("the engine writes %q and the client has no phrase for it, "+
+				"so it renders as its own snake_case value on the one screen a "+
+				"person reads first", reason)
+		}
+		delete(phrased, string(reason))
+	}
+	for leftover := range phrased {
+		t.Errorf("the client phrases %q and nothing writes it — a renamed reason "+
+			"leaves exactly this behind", leftover)
+	}
+}
+
+// AND EVERY DIMENSION THE COST AXIS OFFERS IS ONE THE ENGINE ACCEPTS.
+//
+// `token_series` refuses an unknown `group` naming what it takes, which is the
+// right refusal — and it turns a control offering a seventh value into a chart
+// that never loads rather than one drawn on the wrong dimension. The screen's
+// list and [tokens.Groups] are therefore one closed set written twice, and
+// this is the gate that says so.
+//
+// The client's table is read from ITS OWN SOURCE rather than restated here,
+// the `rooms` idiom: a gate carrying its own copy of the list drifts towards
+// claiming the pair agree. A value the client offers and the engine dropped is
+// checked too — that is how a renamed group leaves a dead control behind.
+func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
+	t.Parallel()
+	// THE `GROUPS` TABLE ITSELF, not every `{value, label}` pair on the
+	// screen: the compare control is the same shape one line away, and a
+	// sweep over the whole file read its "previous" as a seventh dimension.
+	//
+	// FOUND RATHER THAN ADDRESSED. This read the screen at
+	// `routes/Spend.tsx` and went red the day the screens were grouped by
+	// workspace, reporting a drift between two lists that had not changed.
+	// A gate over a constant is a gate over the constant, and the file it
+	// happens to sit in is not the subject.
+	block := declaration(t, `(?s)const GROUPS = \[(.*?)\] as const;`)
+	entry := regexp.MustCompile(`value: "([a-z_]+)"`)
+	offered := map[string]bool{}
+	for _, m := range entry.FindAllStringSubmatch(block, -1) {
+		offered[m[1]] = true
+	}
+	if len(offered) == 0 {
+		t.Fatal("no dimensions were found at all, so this gate certifies nothing")
+	}
+	for _, group := range tokens.Groups {
+		if !offered[string(group)] {
+			t.Errorf("the engine buckets by %q and the screen does not offer it, "+
+				"so a dimension the company can be read on is unreachable", group)
+		}
+		delete(offered, string(group))
+	}
+	for leftover := range offered {
+		t.Errorf("the screen offers %q and the engine refuses it, so picking it "+
+			"draws no chart at all — a renamed group leaves exactly this behind",
+			leftover)
 	}
 }

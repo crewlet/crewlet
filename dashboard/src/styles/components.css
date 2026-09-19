@@ -1,0 +1,592 @@
+/* The component library.
+ *
+ * One recipe per thing, and every one of them reads tokens rather than
+ * literals. The rule that keeps this file honest: a component may not
+ * introduce a colour, a radius, a font size or a spacing step that is not a
+ * token — if it needs one, the token is what gets added.
+ */
+
+/* ---- Surface ------------------------------------------------------------
+   Panel is THE surface. Everything on a screen is a panel, a row inside one,
+   or a control. On dark the top hairline is the elevation; on light the shadow
+   is — one recipe, two grounds, no second component. */
+
+.panel-foot {
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* One remark in a thread — a work item's and a page's alike, which is why it
+   is a class rather than either screen's own rule. The block is what separates
+   two comments: without one, an author line and the body above it read as one
+   paragraph, and a thread is a wall. Quiet ground rather than a border, since
+   it sits INSIDE a panel that already has one. */
+.comment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+
+/* A FIGURE COLUMN, fixed width and right-aligned, so a header label and the
+   values under it line up.
+
+   `.row` is a flex line with a gap and nothing else, so a trailing figure
+   after a `.spacer` lands wherever its own text ends. That is right for ONE
+   figure — the spacer pushes both the header and the value to the same right
+   edge — and wrong the moment there is a second: three figures of differing
+   widths sit adjacent, and the labels above them sit adjacent at their own
+   widths, so nothing is a column. */
+.num-col {
+  flex: none;
+  width: 5.5rem;
+  text-align: right;
+}
+
+/* AND THE BLOCK THEY ARE COLUMNS OF SCROLLS, because three of them at 5.5rem
+   plus a phase tag is 370px and a phone is 390 with the card's own padding
+   taken out of it — measured at 332px of room, so the tokens column was cut
+   off, and `.num-col` exists precisely to make these three line up.
+
+   SIDEWAYS HERE, where a grid gets a card instead (see frame.css). The two
+   shapes take opposite answers for a reason: a grid's flexible tracks resolve
+   to ZERO the moment its wrap becomes a scroller, and its cells are prose. A
+   fixed 5.5rem figure column has no such collapse and no prose in it, and the
+   whole value of the block is that the three figures sit under their own
+   headings — which wrapping them would destroy, since the header row and each
+   value row would break at different points.
+
+   `max-content` ON THE ROWS is the half that makes it work: without it a flex
+   line inside a scrollport is still sized to the port, its items shrink or
+   overflow, and the header stops lining up with the values it heads. The
+   `min-width` is what keeps the spacer able to push the figures right on a
+   screen where the block already fits. */
+.num-block {
+  overflow-x: auto;
+}
+
+.num-block > .row {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* A count beside a section title. Neutral by design: a coloured count is a
+   claim about severity that a number alone cannot support. */
+.count-chip {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--surface-inset);
+  border-radius: var(--r-full);
+  padding: 1px var(--space-2);
+  min-width: 20px;
+  text-align: center;
+}
+
+/* ---- Status dot ---------------------------------------------------------
+   The shape half of a status, and the last of this file's status recipes:
+   the pill and the button that used to head this section are uilet's Tag and
+   Button now. Colour is never the only carrier — every dot sits beside its
+   own word. */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-faint);
+  flex: none;
+}
+.dot.positive {
+  background: var(--positive);
+}
+.dot.caution {
+  background: var(--caution);
+}
+.dot.critical {
+  background: var(--critical);
+}
+.dot.info {
+  background: var(--info);
+}
+.dot.accent {
+  background: var(--accent);
+}
+.dot.working {
+  background: var(--info);
+  animation: pulse-dot 1.8s var(--ease) infinite;
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A link that IS a row takes the page's text colour, not the link colour.
+   Otherwise every seat name in every list renders in the accent — which is
+   identity-colouring by accident, and the accent is reserved for saying where
+   the reader IS. The affordance is the hover state and the cursor. */
+a.seat-card,
+a.list-row,
+a.feed-row,
+a.org-node,
+a.seat-chip {
+  color: inherit;
+  text-decoration: none;
+}
+a.seat-chip:hover {
+  color: var(--accent-ink);
+}
+a.seat-card:hover,
+a.list-row:hover,
+a.feed-row:hover,
+a.org-node:hover {
+  text-decoration: none;
+}
+
+/* ---- Table --------------------------------------------------------------
+   ONE table is left in the product, and it is not a list.
+
+   Every list is a `DataGrid` now (see app/frame/DataGrid.tsx), which is a CSS
+   grid rather than a `<table>` because its columns, its sort and its bands are
+   all things the URL carries. What remains here is the retention screen's
+   per-domain terms: a block that already titled itself, with no header row and
+   nothing to sort — a table in the sense the element means, rather than a list
+   of objects. So this is the quiet nested treatment and nothing else; the
+   sortable-header chrome, the row hover and the selected and failed marks went
+   with the component that drew them. */
+
+.table {
+  width: 100%;
+  font-size: var(--fs-2xs);
+}
+.table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 0;
+  vertical-align: middle;
+}
+.table td:first-child {
+  padding-left: 0;
+  white-space: nowrap;
+}
+
+/* AND ON A PHONE ITS ROW IS A BLOCK, for the reason `DataGrid`'s row is a card
+   at the same width (see frame.css): four columns, two of them whole
+   sentences, do not have 390px between them. Measured there at 536px wide with
+   the page at 390 — and unlike the grid there is no scroller anywhere above
+   it, so 146px of every remedy was simply GONE, which on the one screen whose
+   subject is "what is blocking the trim and what do I do about it" takes the
+   answer off the screen.
+
+   NO LABELS, unlike the grid's cards: these four cells are a term's name in
+   code, its sequence or state, what was read, and what to do — each one reads
+   as itself, and the name at the top of the block is what the other three are
+   about. The rule between rows is what separates one term from the next; the
+   table had none, because a row was a line.
+
+   `display: block` ON EVERY LEVEL, because a `<table>` element ignores its
+   children's display unless the table itself stops being one: leaving `.table`
+   as a table and blocking only the rows leaves the anonymous table box in
+   place, and the columns come back. */
+@media (max-width: 860px) {
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+  }
+  .table tr {
+    padding: var(--space-2) 0;
+  }
+  .table tr + tr {
+    border-top: 1px solid var(--border-subtle);
+  }
+  .table td {
+    padding: 1px 0;
+  }
+  /* THE NAME IS THE BLOCK'S HEAD, so it keeps its own line and its nowrap —
+     a term name is an identifier and breaking it mid-word helps nobody. */
+  .table td:first-child {
+    padding-bottom: var(--space-1);
+  }
+}
+
+/* ---- List row -----------------------------------------------------------
+   The non-tabular list: an activity feed, a search result, a conversation. */
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--row-h);
+  min-width: 0;
+  text-align: left;
+  width: 100%;
+}
+.list-row:last-child {
+  border-bottom: none;
+}
+.list-row.clickable {
+  cursor: pointer;
+}
+.list-row.clickable:hover {
+  background: var(--surface-hover);
+}
+.list-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.list-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+
+/* ---- Controls ----------------------------------------------------------- */
+
+/* THE TEXT FIELD IS uilet's `Input`, the picker is its `Select` and the
+   labelled row around them is its `FormField`, so `.input`, `.input-affixed`,
+   `.input-affix`, `.input.is-reference`, `.field` and `.hint` are gone from
+   here: the scheme affix is `InputAffix` in the control's leading slot, and a
+   field holding a `${VAR}` asks for `appearance="reference"` rather than
+   carrying our own face for it. What is left below is the one part of that
+   field the package has no register for — the sealed-entry completion list. */
+
+/* THE SECRET COMPLETION LIST, over the field that opened it.
+ *
+ * ABSOLUTE, so a list of eight names does not push the rest of a form down
+ * the moment somebody types `$` and pull it back up when they finish the
+ * word: a field that moves under a caret is a field people stop typing in.
+ */
+.input-suggests {
+  position: relative;
+}
+.input-suggest-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  /* BOUNDED AND SCROLLED. A company with forty sealed entries would
+     otherwise draw a list past the bottom of the dialog. */
+  max-height: 12rem;
+  overflow-y: auto;
+  /* OPAQUE, and --surface-1 is the token that is: this floats over a dialog
+     that is already a surface, and a translucent one let the help line and
+     the fields beneath show through the names. */
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+}
+.input-suggest {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  /* THE SAME FACE A REFERENCE WEARS in the box above and on the Secrets
+     screen: these are the names that go in one, and a list drawn in the
+     page's prose font reads as prose rather than as values. */
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.input-suggest.is-active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Segmented control — lenses, tabs, ranges. One implementation; the system
+   this replaces had lens tabs, room tabs and filter pills as three. */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-inset);
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.segmented > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: calc(var(--control-h) - 6px);
+  padding: 0 var(--space-3);
+  border-radius: calc(var(--r-sm) - 1px);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.segmented > button:hover {
+  color: var(--text);
+}
+/* A RADIO GROUP, so the state attribute is aria-checked. The role moved from
+   `tab` to `radio` because not one call site controls a tabpanel — see
+   `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
+   is how a correct role ships with the selected segment drawn as unselected. */
+.segmented > button[aria-checked="true"] {
+  background: var(--surface-1);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.segmented.sm > button {
+  height: calc(var(--control-h-sm) - 4px);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-3xs);
+}
+
+/* Tabs — the in-page navigation a section owns. The STRIP is uilet's
+   SegmentedControl now; what is left here is the panel it switches.
+
+   THE PANEL CARRIES THE COLUMN THE SCREEN WOULD HAVE GIVEN ITS CHILDREN.
+   Before the tab relationship existed, a screen's switched sections were
+   direct children of `.screen-inner` — a flex column with a gap — and they
+   took their vertical rhythm from it. Wrapping them in one panel element puts
+   a plain block between the column and them, so without this every panel on
+   the Seat screen renders with its cards butted together. Nothing in the test
+   suite can see that: the markup is correct either way.
+
+   The focus ring is suppressed because the panel takes a tab stop for reach
+   rather than for interaction — a reader lands here on their way INTO the
+   content, and a box drawn around 600px of page is noise rather than a cue.
+   It stays keyboard-reachable; only the outline goes. */
+.tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.tabpanel:focus {
+  outline: none;
+}
+
+/* ---- Meter --------------------------------------------------------------
+   A budget, a share, a fill. The track is always drawn: a bar with no track is
+   a bar whose maximum the reader has to guess. */
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.meter-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+.meter-fill[data-tone="caution"] {
+  background: var(--caution);
+}
+.meter-fill[data-tone="critical"] {
+  background: var(--critical);
+}
+.meter-fill[data-tone="positive"] {
+  background: var(--positive);
+}
+.meter-fill[data-tone="neutral"] {
+  background: var(--text-faint);
+}
+.meter-legend {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+/* ---- Inline code -------------------------------------------------------- */
+
+code.inline {
+  font-size: 0.92em;
+  background: var(--surface-inset);
+  border-radius: var(--r-xs);
+  padding: 1px 4px;
+  color: var(--text-secondary);
+  /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
+     public base URLs. Without this the chip is pushed whole onto its own
+     line and the sentence around it is torn into fragments. */
+  overflow-wrap: anywhere;
+}
+/* A REFUSAL'S PROBLEMS, one per line.
+ *
+ * A validation refusal is several of them joined with newlines, and HTML
+ * collapses those: the banner showed one run-on paragraph in which the second
+ * problem's config path landed inside the first one's sentence. A reader
+ * could not tell how many things were wrong, let alone which.
+ */
+.problems {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* INHERITED, not restated — and that is uilet's `InlineCode` now, which the
+   problems are drawn with: `tone="inherit"` is the chip inside a message that
+   carries that message's ink, and `variant="reference"` is the `${VAR}` face
+   that says a name of a sealed entry rather than a path in the document. The
+   two recipes that used to follow this one, `.field-error code.inline` and
+   `.field-error code.inline.is-reference`, only ever reached a chip inside a
+   FIELD's error: the same chip inside the setup dialog's danger banner kept
+   its own quiet grey, which is the half nobody noticed. */
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  padding: 1px 5px;
+  color: var(--text-muted);
+}
+
+/* ---- Overlay ------------------------------------------------------------ */
+
+/* WHAT IS LEFT HERE IS THE VEIL, and only because the command palette still
+   draws one: every dialog in the product is `@crewlethq/ui`'s Modal now, which
+   brings its own overlay, frame and head/body/foot bands. The four recipes
+   that used to follow this one — .dialog, .dialog-head, .dialog-body and
+   .dialog-foot — went with the component that wrote them.
+
+   The palette keeps ours because it is a modal whose header IS its input: it
+   takes uilet's layer WITHOUT uilet's frame (see app/CommandPalette.tsx), so
+   the ground it sits on has to be declared somewhere, and this is where. */
+.veil {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg-sunken) 72%, transparent);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-16) var(--space-4) var(--space-4);
+  z-index: var(--z-modal);
+  animation: fade var(--dur) var(--ease);
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+/* The palette is its one caller now — `.palette`, in shell.css. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ---- Chart -------------------------------------------------------------- */
+
+.chart {
+  width: 100%;
+  overflow: visible;
+}
+.chart .axis-line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+.chart .grid-line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+/* A stacked column per time bucket — see StackedTimeSeries.
+ *
+ * The columns FLEX EQUALLY and never wrap: one bucket is one column whatever
+ * the window's length, so 24 hours and 30 days draw the same chart at two
+ * densities rather than one chart and one overflowing row. A minimum width of
+ * one pixel is what keeps an empty bucket's gap visible at the widest window.
+ */
+.stackseries {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+}
+.stackseries-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 1px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+.stackseries-stack {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 1px;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+  background: var(--surface-inset);
+}
+.stackseries-stack > span {
+  display: block;
+  width: 100%;
+}
+/* The prior period as a MARK AT ITS OWN HEIGHT, not a second set of bands: a
+ * comparison needs a height, and a ghost drawn in its own hues is a chart with
+ * twice the legend.
+ *
+ * ABOVE the stack (z-index), not behind it. Drawn behind, the mark vanished
+ * the moment the current period was the larger of the two — so "last week was
+ * smaller" and "there is no last week" rendered identically, which is exactly
+ * the comparison this is for. A one-pixel dash over an opaque column reads in
+ * both directions. */
+.stackseries-ghost {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-top: 1px dashed var(--text-secondary);
+}
+
+/* The palette's scope hints, with the one in use marked: a sigil nobody is
+   told about is a feature that does not exist. */
+.palette-foot .is-on {
+  color: var(--accent-ink);
+  font-weight: 600;
+}

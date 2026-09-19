@@ -1,0 +1,1642 @@
+/* ===========================================================================
+   The frame: rail, workspace sidebar, page bar, state bar, detail rail, grid.
+
+   Everything here is chrome that every screen wears. A screen's own rules live
+   in screens.css; a reusable piece's rules live in components.css. The split
+   matters because the frame is the only thing on screen that must look
+   identical on all twenty screens — a copy of a rail rule inside a screen is
+   how one screen's chrome starts drifting from the rest.
+
+   THE ACCENT APPEARS TWICE IN THE WHOLE FRAME: the current rail row and the
+   current sidebar row. Colour carries STATE, never identity, and "where you
+   are" is the one piece of state the chrome itself holds.
+   ======================================================================== */
+
+:root {
+  /* 80px, not 68: the label is the point of this rail — a row a reader has to
+     learn by its icon is a row they hover — and the longest workspace name
+     ("Knowledge") needs 60px of it at --fs-3xs. At 68 it ellipsed to
+     "Knowle…", which is the label failing at the one job it has. */
+  --rail-w: 80px;
+  --rail-w-collapsed: 48px;
+  /* The bottom bar's height on a phone. A glyph, its label under it, and the
+     touch target both have to live in: 56px is the floor every platform's own
+     guidance gives for one a thumb hits reliably, and the label needs the
+     rest. It is a token because the page's own bottom padding is derived from
+     it — a bar whose height and a page whose clearance are two literals is a
+     list whose last row goes under the navigation the day either moves. */
+  --rail-bar-h: 62px;
+  /* The page bar keeps the old topbar's height: the two are the same band,
+     and a reader moving between an old bookmark and a new one should not see
+     the content jump. */
+  --page-bar-h: var(--topbar-h);
+  /* Below this the detail rail becomes a drawer. Measured with the sidebar
+     OPEN: 80 rail + 236 sidebar + 420 peek leaves 444px of list, which is
+     under the width a work row needs for a key, a title and an assignee.
+     With the sidebar collapsed the same layout works at 980, which is why the
+     drawer threshold is not simply "small screen" — it is this sum. */
+  --peek-drawer-max: 1180px;
+}
+
+/* ---- The application grid ------------------------------------------------
+   Three columns and one scroll container. ONE, because the router restores a
+   scroll position per history entry and a page with three independent
+   scrollers has three positions and no way to name them. The sidebar and the
+   peek scroll internally; the page is the one the router owns. */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--sidebar-w) minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.app[data-rail-collapsed="true"] {
+  grid-template-columns: var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr);
+}
+
+/* A workspace with no tree of its own — the Inbox and My work are two-pane
+   screens whose scope lives in the page. */
+.app[data-no-sidebar="true"] {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+}
+
+.app[data-no-sidebar="true"][data-rail-collapsed="true"] {
+  grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
+}
+
+/* THE PEEK IS A COLUMN OF THIS GRID, not a child of whichever screen opened
+   it. It used to be a flex child inside the tracker's own three-column
+   layout, which is exactly why no other screen could have one: a second
+   screen would have had to rebuild that layout to hold it.
+
+   The shell mounts it, so the track has to exist here — and it exists ONLY
+   while the rail is open, because an empty fourth column would take its
+   width from every screen that never opens one. `--peek-w` is the reader's
+   own dragged width, published on the ROOT by `DetailRail` — not on the rail
+   itself, which is this grid's own child, and a custom property inherits
+   downward only, so a value set there could never reach the track that sizes
+   it. On the root the column and the panel read one value and cannot
+   disagree about how wide it is.
+
+   AND THE TRACK ONLY EXISTS WHERE THE PEEK IS A COLUMN. Below
+   `--peek-drawer-max` the rail is `position: fixed` (see the drawer block
+   further down), which takes it out of grid flow but does NOT shrink an
+   explicitly sized track — so an unconditional fourth track reserved 420px
+   of empty page at exactly the widths the drawer exists to rescue, and at
+   ≤960 it also out-specified the two-column reset and kept the empty sidebar
+   track as well. 1181 rather than a `calc()` off the token because a custom
+   property cannot be read in a media query; `frame.test.ts` holds the two
+   numbers against each other so they move together. */
+@media (min-width: 1181px) {
+  .app[data-peek="true"] {
+    grid-template-columns:
+      var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
+      var(--peek-w, 420px);
+  }
+
+  .app[data-peek="true"][data-rail-collapsed="true"] {
+    grid-template-columns:
+      var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr)
+      var(--peek-w, 420px);
+  }
+
+  .app[data-peek="true"][data-no-sidebar="true"] {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--peek-w, 420px);
+  }
+
+  .app[data-peek="true"][data-no-sidebar="true"][data-rail-collapsed="true"] {
+    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr) var(--peek-w, 420px);
+  }
+}
+
+/* ---- The reset does not take the focus ring with it ----------------------
+   `all: unset` is how a <button> becomes a plain box, and this file reaches for
+   it five times: the rail's collapse control, the sidebar's twist, a grid's
+   sortable column head, its more-row and a histogram bar. `all` is every
+   property, `outline` among them — so each of those rules sets
+   `outline-style: none` on the element.
+
+   THE RING THEN LOSES A TIE RATHER THAN A FIGHT, which is why nothing about
+   this looks wrong in the file. `base.css`'s `:focus-visible` is one
+   pseudo-class, specificity (0,1,0); `.rail-collapse` is one class, the same
+   (0,1,0). Frame.css is imported after base.css, so the later rule wins and
+   the ring is gone. It is the SAME failure the comment above that
+   `:focus-visible` describes for the design system's components — a tie
+   decided by import order, visible to somebody using the keyboard and to
+   nobody else.
+
+   Measured with a tab walk against a running engine: the rail's collapse
+   control took focus with no ring on every screen in the product, and the
+   sidebar's twist on every screen that has a tree.
+
+   ONE RULE RATHER THAN FIVE, and it states nothing the baseline does not —
+   it re-states exactly what `base.css` says, at a specificity the reset cannot
+   out-rank. `styles/frame.test.ts` holds the two lists together: a sixth
+   `all: unset` that is not named here fails the build. */
+.rail-collapse:focus-visible,
+.side-twist:focus-visible,
+.grid-th:focus-visible,
+.grid-cols-reset:focus-visible,
+.histogram-bar:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---- The global rail ---------------------------------------------------- */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+}
+
+.rail-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--page-bar-h);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.rail-brand img {
+  width: 24px;
+  height: 24px;
+}
+
+.rail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-1);
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rail-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-2) 2px;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  text-decoration: none;
+  position: relative;
+}
+
+.rail-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* THE INK, NOT THE FILL. `--accent` is a fill — it is what a primary button
+   and a meter bar are painted WITH — and `--accent-ink` is the same hue moved
+   to where it can be read as text, which is why every anchor in `base.css`
+   already takes it. Spent as text on the soft ground this row also carries, the
+   fill measures 3.09:1 in dark and 3.81 in light, under the 4.5 small text
+   needs; the ink is 5.96 and 7.34. The rail's current row is the one piece of
+   chrome that says where the reader IS. */
+.rail-row.active {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+/* The current row also carries a bar, so "where you are" survives a viewer
+   who cannot separate the accent from the muted text. It hangs back into the
+   rail's own `--space-1` padding, and the offset is a `calc()` because CSS
+   has no unary minus in front of a function: `-var(--space-1)` parses as a
+   value nothing can compute, the whole declaration is dropped, and `left`
+   falls back to `auto` — which on an abspos child of a centred column flex
+   row is the STATIC position, so the bar painted straight down the middle of
+   the icon it was meant to sit beside. */
+.rail-row.active::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-1));
+  inset-block: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.rail-glyph {
+  position: relative;
+  display: flex;
+}
+
+.rail-label {
+  font-size: var(--fs-3xs);
+  line-height: 1.1;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-badge {
+  position: absolute;
+  top: -5px;
+  right: -9px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: var(--fw-semibold);
+  line-height: 15px;
+  text-align: center;
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+/* AN INK GOES ON THE SOFT, NEVER ON THE FILL. The three rungs are a set:
+   `--caution` is what a thing is painted WITH, `--caution-soft` is the ground
+   it tints, and `--caution-ink` is the one of the three that is a TEXT colour.
+   This badge took the fill as its ground and the ink on top of it, which is the
+   one pairing of the three the design system does not offer: 1.72:1, measured
+   in the browser, on a 9px semibold digit. The count was a dot.
+
+   It is the only place in this tree that puts text on a solid feedback fill —
+   everything else spending `--caution` is a status dot or a meter bar, which
+   carry none. So there is no ink published for that ground, and nothing else
+   to keep consistent with; the badge's own resting state is already a tinted
+   ground with a border and a muted digit, and this is that shape in amber.
+   11.79:1 in dark and 14.72 in light, with the fill kept as the RING so the
+   badge still reads as attention from the corner of an eye. */
+.rail-badge.attention {
+  background: var(--caution-soft);
+  border-color: var(--caution);
+  color: var(--caution-ink);
+}
+
+.rail-lock {
+  position: absolute;
+  bottom: -4px;
+  right: -6px;
+  color: var(--text-faint);
+}
+
+.rail-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-1);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.rail-collapse {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.rail-collapse:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- The workspace sidebar ---------------------------------------------- */
+
+.workspace-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  height: var(--page-bar-h);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.side-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.side-filter {
+  padding: var(--space-2) var(--space-2) 0;
+  flex: 0 0 auto;
+}
+
+.side-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-1) var(--space-4);
+}
+
+.side-section + .side-section {
+  margin-top: var(--space-3);
+}
+
+.side-section-label {
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: var(--space-1) var(--space-2);
+}
+
+.side-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--row-h-sm);
+  padding-left: calc(var(--depth, 0) * var(--space-3));
+}
+
+.side-twist {
+  all: unset;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.side-twist:hover {
+  color: var(--text);
+}
+
+.side-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--fs-xs);
+}
+
+.side-link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.side-row.current > .side-link {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: var(--fw-medium);
+}
+
+.side-sub {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+}
+
+.side-count {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.side-empty {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+/* ---- The page column ---------------------------------------------------- */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* THE BAR WRAPS AT EVERY WIDTH, because what overflows it is CONTENT rather
+   than a viewport. It used to wrap only under 860, and the failure the phone
+   block below describes — the star, Copy link, the viewer chip and the SEARCH
+   TRIGGER, which is the command palette's only pointer affordance, all shoved
+   past the right edge of a bar whose `overflow` is `visible`, so off the edge
+   meant UNREACHABLE — turned out to have a whole second band. A screen's own
+   control group is `flex: 0 0 auto` and the turns list's is 478px: measured at
+   1180px with the rail and the sidebar open, the search trigger was past the
+   edge on the turns list and the event log, and the turns page took the whole
+   DOCUMENT to 1263 so the heading scrolled sideways with it. A 1000px window —
+   a laptop, or half a wide screen — was worse.
+
+   `wrap` costs nothing on a line that fits: a flex container only breaks a
+   line it cannot hold. What stays behind the phone breakpoint is the
+   `flex: 0 0 100%` that forces the controls onto their OWN line unconditionally
+   — that one is a phone decision, not an overflow. A FLOOR RATHER THAN A
+   HEIGHT for the same reason it is one down there: a fixed height clips the
+   second row, and an unwrapped bar is exactly the height it always was. */
+.page-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  height: auto;
+  min-height: var(--page-bar-h);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  flex: 0 0 auto;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+}
+
+.crumb-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out.
+   Every part shrank proportionally, so a page bar holding a long final crumb
+   — a turn's uuid, a page title, an item's summary — starved the ancestors
+   with it: `#/activity/turns/{id}` rendered its trail as `A… / T… / 3c98da…`,
+   with six hundred pixels of free space to the right of the bar. The reader
+   knows which object they are on, because the header below says so in 24px;
+   what they cannot reconstruct from anywhere else is the two links out of it.
+   So the ancestors keep their width and the last part is the one that
+   ellipsises. */
+.crumb-part:not(:last-child) {
+  flex: 0 0 auto;
+}
+
+.crumb-sep {
+  color: var(--text-faint);
+  padding: 0 2px;
+}
+
+.crumb-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crumb-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.crumb-here {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* AND IT NEVER COLLAPSES TO NOTHING. It is the part that absorbs the
+     shrinking, and a page bar carrying eight actions — the turn page does —
+     leaves the trail little enough that "absorbs" became "disappears": the
+     crumb measured zero pixels wide, so the trail ended at a separator with
+     nothing after it. A floor of a few characters keeps an ellipsised stub,
+     which is what `text-overflow` is for and what tells a reader the trail
+     has a last part at all. */
+  min-width: 5ch;
+}
+
+/* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
+   own actions together, so the narrow breakpoint below can move both onto a
+   line of their own with one rule. On a wide bar it is a plain row and changes
+   nothing. */
+.page-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.page-actions {
+  flex: 0 0 auto;
+}
+
+/* ---- The state bar ------------------------------------------------------ */
+
+.state-bar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
+.state-facts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  min-height: 24px;
+}
+
+/* ---- The object header -------------------------------------------------- */
+
+.object-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) 0 var(--space-3);
+}
+
+.object-head.peek {
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+.object-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.object-id {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.object-title {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  margin: 0;
+  min-width: 0;
+}
+
+.object-head.peek .object-title {
+  font-size: var(--fs-lg);
+}
+
+.fact-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding-top: var(--space-1);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.fact-label {
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.fact-value {
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.fact-note,
+.fact-setby {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+}
+
+/* ---- The detail rail ---------------------------------------------------- */
+
+.peek-veil {
+  display: none;
+}
+
+.peek-rail {
+  position: relative;
+  /* THE TRACK SETS THE WIDTH. A width here as well would win over the grid
+     and leave the column it sits in either short or overflowing whenever the
+     two were nudged apart. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+}
+
+.peek-grip {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.peek-grip:hover {
+  background: var(--accent-soft);
+}
+
+.peek-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--page-bar-h);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.peek-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-6);
+}
+
+@media (max-width: 1180px) {
+  .peek-veil {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+    z-index: calc(var(--z-drawer) - 1);
+  }
+
+  .peek-rail {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-drawer);
+    width: min(var(--peek-w, 420px), 92vw);
+    box-shadow: var(--shadow-2);
+  }
+
+  .peek-grip {
+    display: none;
+  }
+}
+
+/* ---- The grid -----------------------------------------------------------
+   THE GRID MAKES NO SCROLLPORT OF ITS OWN. `overflow: clip` rounds the rows
+   off at the border radius exactly as `hidden` did, and it is the whole
+   difference between a sticky header that works and one that cannot: `hidden`
+   makes a SCROLL CONTAINER, a sticky box is confined to its nearest
+   scrollport, and this one has no height constraint — it grows to its rows —
+   so its scroll offset is permanently 0 and `top` was never applied. The
+   scroller is `.screen` (see the note at the top of this file: ONE), which is
+   what the header now sticks against, and it rides off with the bottom of the
+   grid because a sticky box still cannot leave this element's box. */
+
+/* THE COLUMNS BELONG TO THE GRID, NOT TO A ROW.
+   Every row was its own grid container once, each handed the same track list
+   as a string — and a track list is not a layout: `max-content` resolves
+   against the content of ITS OWN container, so each row sized its columns
+   against its own cells alone. Measured against a running engine, a work
+   table's fifth column started at 78.4px in the head and 74px in the rows, and
+   the audit's last column drifted 245px from its own heading; from the WHO
+   column rightwards no value sat under the header that named it.
+   So the tracks are declared HERE, once, and `.grid-head`, `.grid-body`,
+   `.grid-band` and `.grid-row` are `subgrid` passthroughs that adopt them —
+   which is also what makes a cell in the head and a cell twenty rows down
+   contribute to sizing the same track. Everything that is not a row of cells
+   spans the whole width instead, below. */
+.grid-wrap {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: clip;
+  background: var(--surface-1);
+}
+
+/* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
+   reset, and the empty state, which is the one child rendered when the wrap
+   carries no track list at all. A child that forgot this would land in column
+   one and be sized by it. */
+.grid-wrap > * {
+  grid-column: 1 / -1;
+}
+
+/* THE PASSTHROUGHS. Each is a grid whose columns ARE the wrap's, so a cell
+   nested three levels down still lands on the track its header sized. */
+.grid-head,
+.grid-body,
+.grid-band,
+.grid-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+}
+
+/* And the things inside a passthrough that are NOT a row of cells: each is one
+   element across every column rather than a value in the first one. */
+.grid-band-head,
+.grid-band-foot {
+  grid-column: 1 / -1;
+}
+
+.grid-head {
+  align-items: center;
+  /* A REAL HEIGHT, so the band head below can be offset by it rather than by
+     a number somebody measured off a screenshot. --row-h is the product's own
+     row rhythm and clears an 11px label with its padding at every density. A
+     floor rather than a height because `--density: compact` shrinks the
+     padding but not the label, which at a fixed height would put the glyphs
+     0.7px outside a box that clips; the band head then sticks that same sliver
+     high, which is the cheaper of the two errors. */
+  min-height: var(--row-h);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+  position: sticky;
+  /* NOT 0: `.toolbar` is sticky at the top of the same scroller, opaque and
+     at --z-sticky, so a header that stopped at 0 would stop underneath it.
+     See `--sticky-top` in shell.css, which is 0 on a screen with no toolbar
+     rather than a band of empty page above every header. */
+  top: var(--sticky-top);
+  z-index: 2;
+}
+
+.grid-th {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.grid-th.plain {
+  cursor: default;
+}
+
+.grid-th:not(.plain):hover {
+  color: var(--text);
+}
+
+.grid-th.sorted {
+  color: var(--text);
+}
+
+.grid-th.right {
+  justify-content: flex-end;
+}
+
+.grid-th:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* NO OVERFLOW HERE EITHER, and for the same reason: an `auto` that never
+   scrolled was still a scrollport, and it was the one that confined
+   `.grid-band-head`. */
+.grid-body {
+  min-width: 0;
+}
+
+.grid-row {
+  align-items: center;
+  min-height: var(--row-h);
+  border-bottom: 1px solid var(--border-subtle);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  /* The containing block for `.row-link` below. */
+  position: relative;
+}
+
+/* THE ROW'S OWN LINK, STRETCHED OVER IT.
+   The row used to be the anchor, which made every linking cell — a seat, a
+   key — an anchor inside an anchor: invalid, and the parser CLOSES the outer
+   one at the inner, so the row stopped being clickable from that cell
+   onwards. Out of flow, so it takes no grid track. */
+.row-link {
+  position: absolute;
+  inset: 0;
+}
+
+/* AND THE CELLS' OWN LINKS SIT ABOVE IT. Positioned and later in the document
+   than the overlay, so they win the hit test in the same stacking context —
+   without this the overlay swallows every click and a seat chip inside a row
+   would open the row. No `z-index`: introducing one here would put the rows
+   into stacking contexts the sticky header and the peek rail then have to be
+   reasoned about against. */
+.grid-row a:not(.row-link),
+.grid-row button {
+  position: relative;
+}
+
+.grid-row:last-child {
+  border-bottom: none;
+}
+
+.grid-row:hover {
+  background: var(--surface-hover);
+}
+
+.grid-row.selected {
+  background: var(--accent-soft);
+}
+
+.grid-row.cursor {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A FAILED ROW IS MARKED ON ITS EDGE, not tinted: a tinted row competes with
+   the status column that already says so, and two signals for one fact is how
+   a reader learns to trust neither. */
+.grid-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+
+.grid-cell {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A column that shrinks to its content and never wraps — a key, a timestamp,
+   a status. It was declared on the table this grid replaced, and the grid has
+   named it since it was written: the track sizes to the cell's content up to a
+   cap (see `SHRINK_CAP` in DataGrid.tsx), so what this adds is that the CELL
+   does not wrap inside it.
+
+   AND THAT IT DOES NOT PAINT OUTSIDE IT, which the cap made reachable: a
+   nowrap cell whose track is capped is a cell narrower than its own content,
+   and a flex row of tags has no ellipsis to give. Measured on the schedules
+   grid at 1000px — a 128px track holding 164px of tags, the last one spilling
+   36px over the column beside it. `clip` rather than `hidden` for the reason
+   `.grid-wrap` gives above: a scrollport here would be one nothing can scroll,
+   and it would cut the sticky head off at the cell. */
+.grid-th.shrink,
+.grid-cell.shrink {
+  white-space: nowrap;
+  overflow: clip;
+}
+
+.grid-cell.right {
+  justify-content: flex-end;
+}
+
+.grid-band + .grid-band {
+  border-top: 1px solid var(--border);
+}
+
+.grid-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-sunken);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  position: sticky;
+  /* Under the column heads, which are `--row-h` tall and already parked at
+     `--sticky-top`. A band head is confined to its own `.grid-band`, so it
+     leaves with the band rather than stacking up. */
+  top: calc(var(--sticky-top) + var(--row-h));
+  /* Above the rows — which are `position: relative` for the row link and so
+     would otherwise paint over it in document order — and below the column
+     heads at 2. */
+  z-index: 1;
+}
+
+.grid-band-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-weight: var(--fw-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+.grid-band-foot {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  background: var(--bg-sunken);
+}
+
+.grid-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-size: var(--fs-2xs);
+}
+
+.grid-cols-reset {
+  all: unset;
+  /* AFTER the `all: unset`, which resets `grid-column` too — and this rule is
+     later in the sheet than `.grid-wrap > *` at the same specificity, so the
+     full-width band above would be undone here and the button would be sized
+     by the first column. */
+  grid-column: 1 / -1;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-3xs);
+  color: var(--accent-ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+/* ---- Cells -------------------------------------------------------------- */
+
+.cell-date {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cell-seat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cell-seat:hover {
+  text-decoration: underline;
+}
+
+.cell-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cell-glyph {
+  font-size: var(--fs-2xs);
+  line-height: 1;
+}
+
+.cell-status.positive .cell-glyph {
+  color: var(--positive);
+}
+.cell-status.caution .cell-glyph {
+  color: var(--caution);
+}
+.cell-status.critical .cell-glyph {
+  color: var(--critical);
+}
+.cell-status.info .cell-glyph {
+  color: var(--info);
+}
+.cell-status.neutral .cell-glyph {
+  color: var(--text-faint);
+}
+
+.cell-meter {
+  display: inline-block;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.cell-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.cell-meter-fill.positive {
+  background: var(--positive);
+}
+.cell-meter-fill.caution {
+  background: var(--caution);
+}
+.cell-meter-fill.critical {
+  background: var(--critical);
+}
+
+/* ---- Narrow ------------------------------------------------------------- */
+
+@media (max-width: 960px) {
+  .app,
+  .app[data-rail-collapsed="true"],
+  .app[data-no-sidebar="true"] {
+    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
+  }
+
+  .rail-label {
+    display: none;
+  }
+
+  /* AND THE ENGINE'S WORD GOES WITH THEM. `Shell.tsx` already drops it when
+     the READER collapses the rail — but that `collapsed` is a React state and
+     this is a breakpoint, and the two are independent: at 960 and below the
+     rail is 48px wide with `collapsed` still false, so "connected" rendered at
+     61px inside a 48px column and spilled out of both sides of it. The dot is
+     the state and the word is the label for it, and the labels are already
+     gone here. It comes back with them in the bottom bar below, where a row is
+     56px wide and can hold one. */
+  .rail-engine > .truncate {
+    display: none;
+  }
+
+  .workspace-side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: var(--rail-w-collapsed);
+    width: var(--sidebar-w);
+    z-index: var(--z-drawer);
+    transform: translateX(-110%);
+    box-shadow: var(--shadow-2);
+
+    /* AND OUT OF REACH, NOT MERELY OUT OF SIGHT. A transform moves pixels and
+       nothing else: the closed drawer kept EIGHT TAB STOPS — the filter box,
+       the four section links and every project in the tree — so a reader
+       tabbing the page lost focus into a panel 260px off the left edge, with
+       no scroll that could bring it back, and a screen reader read out a whole
+       navigation nobody could see. On twenty of the twenty-four screens.
+
+       `visibility` is the property that takes a subtree out of the focus order
+       AND out of the accessibility tree, and it animates in DISCRETE steps,
+       which is what makes it usable beside a slide: delayed by the slide's own
+       duration on the way out, so the drawer is still drawn while it leaves,
+       and switched with no delay on the way in, so it is reachable the moment
+       it starts arriving. `display: none` cannot do either half — it would
+       skip the animation outright — and `inert` cannot be spelled here at all,
+       because whether this aside is a drawer is a fact about the VIEWPORT and
+       the markup is the same at every width. */
+    visibility: hidden;
+    transition:
+      transform var(--dur) var(--ease),
+      visibility 0s linear var(--dur);
+  }
+
+  .workspace-side[data-open="true"] {
+    transform: none;
+    visibility: visible;
+    transition:
+      transform var(--dur) var(--ease),
+      visibility 0s;
+  }
+}
+
+/* ---- The page's own one-line explanation --------------------------------- */
+
+.page-note {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  max-width: var(--measure);
+}
+
+/* ---- The viewer chip ----------------------------------------------------- */
+
+.viewer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2) 2px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--fs-2xs);
+  max-width: 180px;
+}
+
+.viewer-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- The rail's engine pill ---------------------------------------------- */
+
+/* THE PILL STACKS, exactly as `.rail-row` above does, and for the same
+   reason: the rail is 68px wide and this row carries a dot, a word and an
+   in-flight count side by side. "connected" needs about 52px at `--fs-3xs`,
+   which with the dot, the count, two gaps and the padding does not fit — so
+   `.truncate` cut the one word in the chrome that says whether the engine is
+   reachable down to "co…", permanently, on every screen. A status indicator
+   nobody can read is a status indicator that is not there.
+
+   The dot and the count share the first line because they are both marks; the
+   word takes the second, where it has the rail's whole width. */
+.rail-engine {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-1) 2px;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: var(--fs-3xs);
+  min-width: 0;
+}
+
+/* The marks, on one line above the word. */
+.rail-engine-marks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rail-engine:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- An object's own facts ------------------------------------------------
+   ONE rail, replacing `.kv` (flat, no sections) and `.work-props` (sections,
+   one screen). They had different label widths, different gaps and different
+   rules about an absent value, so the same kind of panel read differently
+   depending on which screen it was on.
+
+   EVERY ROW OF EVERY GROUP IS A DIRECT CHILD OF THIS GRID, which is what
+   keeps the labels in a single column down the whole rail rather than
+   restarting it per section — and it is why PropertiesRail groups with keyed
+   fragments and not with wrapper elements. A `display: contents` wrapper
+   looks equivalent and is not: it removes the BOX but not the node, so the
+   child combinators below stop matching (a `dd` kept the user agent's 40px
+   indent inside its own grid cell) and `:first-child` becomes true for every
+   group's heading rather than for the rail's first one. */
+
+.props {
+  display: grid;
+  grid-template-columns: minmax(92px, max-content) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--fs-xs);
+  align-items: baseline;
+  min-width: 0;
+  margin: 0;
+}
+
+.props > dt {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  min-width: 0;
+}
+
+.props > dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.props-section {
+  grid-column: 1 / -1;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* THE RAIL'S FIRST HEADING HAS NOTHING TO BE SEPARATED FROM, so it loses the
+   hairline — and only it. This reads as the rail's first child because the
+   groups are fragments; under a wrapper per group it was true of every
+   heading, and no group in any rail ever drew its separator. */
+.props-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* WHO SET IT, under the value rather than beside it: the value is what the
+   reader came for and the provenance is why they stayed. A line of its own so
+   a long actor name cannot push the value out of the column. */
+.props-setby {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+}
+
+/* ---- The log's time axis --------------------------------------------------
+   Where in this window things happened, which a page of rows cannot say. The
+   bars are the ENGINE's — see ui/Histogram.tsx — and each one is a control:
+   clicking it narrows the window to the bucket it covers.
+
+   An empty bucket still paints, at a floor its own component sets. A
+   zero-height element is invisible, so an empty stretch would read as a gap in
+   the chart rather than as a quiet stretch in the company. */
+
+.histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  width: 100%;
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.histogram-bar {
+  all: unset;
+  flex: 1;
+  min-width: 2px;
+  background: var(--accent);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  /* A bar is only a control where the caller gave it something to do, and
+     ui/Histogram.tsx renders a div rather than a button where it did not —
+     so the pointer follows the element rather than a class. */
+  cursor: inherit;
+}
+
+button.histogram-bar {
+  cursor: pointer;
+}
+
+button.histogram-bar:hover {
+  background: var(--accent-hover);
+}
+
+.histogram-bar[data-empty] {
+  background: var(--surface-inset);
+}
+
+button.histogram-bar[data-empty]:hover {
+  background: var(--border-strong);
+}
+
+.histogram-bar:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---- Facets --------------------------------------------------------------
+   One dimension of a list, as a row of narrowing chips. WHAT THE COUNTS ARE
+   COUNTS OF is said beside them — over the loaded page or over the whole
+   window, which the rail's own `over` decides — and only where a number is
+   actually drawn: a caption about numbers that are not on screen qualifies
+   nothing. A dimension with nothing to count is a `.segmented`, not this.
+   See ui/FacetRail.tsx. */
+
+.facet-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+/* ---- Key mark -----------------------------------------------------------
+   A mono key mark, wherever a project or item key stands beside prose. */
+.key-mark {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  padding: 1px 4px;
+  border-radius: var(--r-xs);
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+/* ---- Phone: the rail is a bottom bar ------------------------------------ */
+
+/* THE ONE COLUMN A PHONE CANNOT SPARE. At 960 the rail collapses to 48px of
+   icons, which is the right move on a tablet and the wrong one on a 390px
+   phone: it is an eighth of the window spent on navigation, permanently, down
+   the side of every screen — and it is the edge a thumb reaches worst. Every
+   phone-shaped application this product is measured against puts its top-level
+   navigation along the bottom, and so does this one below 860, which is the
+   same width at which the Inbox becomes one pane.
+
+   THE RAIL DOES NOT MOVE IN THE MARKUP. It is the grid's first child and stays
+   there; what changes is that the grid becomes one column with a row for the
+   bar, and the bar is fixed to the bottom edge. Reordering it in the DOM would
+   put the navigation after the page for a screen reader and for Tab, which is
+   the opposite of what this is for. */
+@media (max-width: 860px) {
+  .app,
+  .app[data-rail-collapsed="true"],
+  .app[data-no-sidebar="true"],
+  .app[data-no-sidebar="true"][data-rail-collapsed="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rail {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--z-drawer);
+    flex-direction: row;
+    height: var(--rail-bar-h);
+    border-right: none;
+    border-top: 1px solid var(--border);
+    /* The home indicator on a modern phone sits over the bottom edge, so the
+       last row of anything flush to it is unpressable. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* The brand and the collapse control are both about a COLUMN, and there is
+     no column here. The rest of the foot — the engine pill, the theme — moves
+     into the bar's own row. */
+  .rail-brand,
+  .rail-collapse {
+    display: none;
+  }
+
+  .rail-rows {
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: stretch;
+    padding: 0;
+    overflow-x: auto;
+    /* A bar a thumb drags sideways must not also drag the page behind it. */
+    overscroll-behavior-x: contain;
+  }
+
+  .rail-row {
+    flex: 1 0 auto;
+    justify-content: center;
+    min-width: 56px;
+    border-radius: 0;
+  }
+
+  /* THE BAR MOVES TO THE TOP EDGE OF THE ROW, because on a bottom bar a
+     vertical rule beside the icon is a rule against the screen's edge. */
+  .rail-row.active::before {
+    left: var(--space-2);
+    right: var(--space-2);
+    top: 0;
+    bottom: auto;
+    inset-block: auto;
+    width: auto;
+    height: 2px;
+  }
+
+  /* THE LABEL COMES BACK. It is hidden at 960 because a 48px column cannot
+     hold "Knowledge"; a bar row is 56px wide and can, and a row of eight
+     unlabelled glyphs along the bottom of a phone is exactly the navigation
+     nobody learns. */
+  .rail-label {
+    display: block;
+  }
+
+  /* AND SO DOES THE ENGINE'S WORD, for the same reason and in the same place:
+     the foot is a row of the bar here rather than a 48px column. */
+  .rail-engine > .truncate {
+    display: inline;
+  }
+
+  .rail-foot {
+    flex-direction: row;
+    align-items: center;
+    border-top: none;
+    border-left: 1px solid var(--border);
+    padding: 0 var(--space-2);
+  }
+
+  /* The workspace drawer opens over the page from the left edge now, since
+     the rail no longer holds a column for it to sit beside. */
+  .workspace-side {
+    left: 0;
+  }
+
+  /* THE PAGE'S CLEARANCE OVER THE BAR is `shell.css`'s, derived from
+     `--rail-bar-h` where `.screen-inner`'s padding is already declared. Set
+     here as well it would be two rules at one breakpoint racing on one
+     property, and the loser would be whichever file happened to load second.
+  */
+
+  /* ---- The page bar on a phone ------------------------------------------
+     NOTHING IN THE CHROME MAY SIT OUTSIDE THE VIEWPORT, which is what this
+     bar did. It is one non-wrapping row whose middle — a screen's own control
+     group, portalled in — is `flex: 0 0 auto`, so at 390px it took 364px on
+     the audit and 478px on the turns list and shoved everything after it off
+     the right edge. `overflow` is `visible` there, so off the edge meant
+     UNREACHABLE, not merely out of sight: the star, Copy link, the viewer
+     chip and the SEARCH TRIGGER — the command palette's only pointer
+     affordance, and therefore the only way to the theme and density settings
+     dropped below — were all past x=390 with no way to scroll to them. The
+     trail, meanwhile, shrank to exactly zero pixels wide, so the bar whose
+     whole subject is "where you are, and what you can do about it" answered
+     neither.
+
+     So the bar WRAPS, and the line break is where the division already is:
+     the way in and out stays on the first line, and what this page can do
+     takes the second. That is the shape the file already argues for one rule
+     up — "THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out". */
+  /* The wrap, the floor and the auto height are the BASE rule's now — see the
+     comment on `.page-bar` above, which is where the band this used to miss is
+     written down. What is left here is the phone's own tightening. */
+  .page-bar {
+    padding: 0 var(--space-2);
+    gap: var(--space-1);
+  }
+
+  /* THE SECOND LINE. `flex-basis: 100%` is what breaks it, and `order` is what
+     puts it after the globals rather than before them: in document order the
+     controls sit between the trail and the viewer chip, and a line break there
+     would push the chip and the search trigger down with them. */
+  .page-controls {
+    order: 9;
+    flex: 0 0 100%;
+    min-width: 0;
+    /* AND THEY SCROLL rather than overflow. A screen's control group is as
+       wide as that screen needs — five window buttons and an export on the
+       audit — and at 390px some of them are past the edge whatever the bar
+       does. Scrolling keeps every one of them reachable, which overflowing
+       does not. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* THE GROUP DOES NOT WRAP INSIDE ITS OWN SCROLLER. `.wrap` is on the slot
+     for the wide bar, where wrapping is what keeps a long group inside the
+     page; inside a horizontal scroller it wraps to the scroller's own width
+     instead of scrolling, which is the one thing that would hide the tail
+     again. */
+  .page-controls .page-actions {
+    flex-wrap: nowrap;
+  }
+
+  /* THE VIEWER IS ITS MARK HERE. The chip is 117px of a 390px bar for a name
+     the reader already knows — their own — and the mark alone is the same
+     link to the same page. The anchor keeps its accessible name from `title`,
+     which carries the handle. */
+  .viewer-chip > .truncate {
+    display: none;
+  }
+
+  /* ---- The bottom bar is navigation --------------------------------------
+     `.rail-foot` is `flex: 0 0 auto` and carries the engine pill, the theme
+     switch and the density switch: 250px of a 390px bar, leaving 140px for
+     eight destinations, of which about two and a half were on screen. The
+     rows do scroll, so nothing was unreachable — but a navigation bar that
+     gives 64% of itself to two settings is not a navigation bar.
+
+     THE COLLAPSED RAIL ALREADY MADE THIS DECISION, in `Shell.tsx`: at 80px
+     the foot is the engine pill alone, because a theme switch does not fit.
+     A 390px bar is the narrowest surface in the product, and both settings
+     are in the command palette's `>` scope, which is where a reader who
+     wants them goes. The engine pill stays: it is the one thing in the foot
+     that is a STATE rather than a preference. */
+  .rail-foot > .crewlet-segmented {
+    display: none;
+  }
+
+  /* ---- A ROW IS A CARD ON A PHONE ---------------------------------------
+     A GRID IS COLUMNS, AND 390px DOES NOT HAVE THEM. The audit's six columns
+     want 808px and the work trash's twelve want more; the wrap is
+     `overflow: clip` — deliberately, because a scrollport is what stopped the
+     sticky head working — so everything past the viewport was CUT OFF with
+     nothing to scroll to. WHAT, TO and DETAIL simply did not exist on a phone.
+
+     AND SCROLLING SIDEWAYS IS NOT THE WAY OUT, which is worth writing down
+     because it is the obvious fix and it cannot work here. The flexible tracks
+     are `minmax(0, 1fr)`: the moment the wrap becomes a scroller its content
+     box is the viewport, the `max-content` columns alone already exceed it,
+     and every `1fr` resolves to ZERO. The title column would vanish to make
+     room for a due date. A horizontal scroller needs per-column pixel floors,
+     which is a number invented per grid, nineteen times.
+
+     So the head goes and each cell draws its own name beside its value —
+     `data-label`, set in DataGrid.tsx from the column header when that header
+     is a string. Every value is on screen, nothing is clipped, and the tracks
+     this file declares above simply do not apply at this width.
+
+     THE SUBGRID CHAIN IS UNWOUND DELIBERATELY. `.grid-wrap` above is the one
+     grid and the head, body, bands and rows adopt its tracks with `subgrid`.
+     A card layout is the opposite shape, so each of them goes back to being a
+     block and the row becomes a two-column grid of its own — label, value. */
+  .grid-wrap {
+    display: block;
+  }
+
+  /* THE HEAD GOES, and with it the sort control it carries. That is the real
+     cost of this shape and it is the right trade: a column head a reader
+     cannot see is not an affordance, and `sort=` is in the URL, so a sorted
+     list still arrives sorted from a link or from the wider layout that set
+     it. */
+  .grid-head {
+    display: none;
+  }
+
+  .grid-body,
+  .grid-band {
+    display: block;
+  }
+
+  /* THE CARD. A rule between rows rather than a border box, because a phone
+     list of bordered cards is mostly border — and the row already carries the
+     hover, selection and failure marks this file gives it. */
+  .grid-row {
+    display: block;
+    padding: var(--space-2) var(--space-3);
+    min-height: 0;
+  }
+
+  /* ONE LINE PER CELL: the column's name, then the value.
+     THE LABEL IS A FLEX ITEM, NOT A GRID TRACK. Making the row a two-column
+     grid and the cell `display: contents` looked right and is not: a cell's
+     children then become grid items in their OWN right, so a cell carrying a
+     type mark beside a title — which most of them do — put the mark in the
+     value track and pushed the title onto the next row's label track. Measured
+     at 390px: `work-type`, `work-prio` and two tag spans each broke out past
+     the viewport. A flex line per cell takes any number of children, because
+     the cell keeps the flex box it already has in the wide layout.
+     A FIXED BASIS is what lines the labels up without a shared track. 7rem
+     clears the longest head this product has at `--fs-3xs` uppercase
+     (ASSIGNEE, PRIORITY, UPDATED) and leaves the value the rest of a 390px
+     card. */
+  .grid-cell {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: 1px 0;
+    min-width: 0;
+  }
+
+  /* THE LABEL IS THE COLUMN'S NAME, drawn from the cell's own attribute so
+     nothing has to thread a second copy of the header down here. A cell whose
+     column head was a glyph or empty carries no attribute and draws no label —
+     see DataGrid.tsx — so `::before` is generated only where there is a word
+     for it, and that cell's value then spans both tracks rather than leaving
+     an empty label column. */
+  .grid-cell[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 7rem;
+    font-size: var(--fs-3xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* `shrink` and `right` are COLUMN shapes and there are no columns here: a
+     nowrap cell in a 390px card is a value cut off at the edge, and an
+     end-aligned one is a number floating away from the name that labels it. */
+  .grid-cell.shrink,
+  .grid-cell.right {
+    white-space: normal;
+    justify-content: flex-start;
+  }
+
+  /* AND NEITHER IS `.truncate`, WHICH IS THE SAME MISTAKE ONE LEVEL DOWN. It
+     cuts at a PIXEL, which is right for a cell that is one line of a fixed
+     column and wrong for a value that now owns the width of the card: at 390px
+     the title column — the one field a reader opened the list for — came out
+     as "Interview three desks about hou…" with the rest of the card empty
+     under it, and the audit's detail as "Backfill is running. 22 of 30 day…".
+     Every cut was a cut to nothing.
+
+     WRAPPED RATHER THAN CLAMPED, which is the opposite of what prose takes in
+     a card elsewhere (`base.css`'s `.clamp`) and is deliberate. A clamp bounds
+     one value so it cannot set the height of every row in a feed of forty —
+     and there is no row height to protect here, because a card is already a
+     stack of six to twelve labelled lines each as tall as its own value. What
+     bounds this instead is the engine: a title is at most `tracker.MaxTitle`
+     (256). Writing the clamp here would also be its SECOND copy, which
+     `styles/text.test.ts` fails on purpose.
+
+     `anywhere` for the same reason `.clamp` carries it — a value can be a uuid
+     or a key with no space to break at, and `break-word` leaves the element's
+     min-content width at the whole run. */
+  .grid-cell .truncate {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+}

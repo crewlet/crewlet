@@ -1,24 +1,23 @@
 /**
- * The shell's own surfaces (the token dialog, search and the engine panel)
- * are modals on the same layer stack as every screen's dialogs and drawers.
+ * The frame outlives every screen in it, so what a screen published has to go
+ * when the screen does.
  *
- * They were hand-rolled beside it: each had its own veil, the palette closed
- * on its own Escape, and a window-level listener in the shell closed the
- * palette and the engine panel on a second one. The token dialog is the case
- * that matters most, because a refused request raises it over whatever the
- * operator had open, including an editor drawer with unsaved edits.
+ * `Shell` is mounted once for the life of the tab — `App` renders
+ * `<Shell><Screen/></Shell>`, and only `Screen`'s children remount per route —
+ * so a value a screen writes into the frame is a value the frame will keep
+ * showing over the NEXT screen unless something takes it back. The coverage
+ * facts are the ones where that is worst: they are the state bar's answer to
+ * "can I trust what I am looking at", and only three screens publish them.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { ReactNode } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { Shell, usePageCoverage } from "./Shell.tsx";
 import { Router } from "./router.tsx";
-import { Shell } from "./Shell.tsx";
-import { useFillScreen } from "./fill.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, requestToken } from "~/protocol/index.ts";
-import { AppShell, Modal } from "@crewlethq/ui";
-import { installMedia, isDrawnAs } from "~/testing.tsx";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import type { CoverageFacts } from "~/components/work.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -29,517 +28,274 @@ class InertWebSocket {
   close(): void {}
 }
 
+/** A screen that publishes coverage, as the Inbox does. */
+function Covered({ coverage }: { coverage: CoverageFacts }) {
+  usePageCoverage(coverage);
+  return <div>the covered screen</div>;
+}
+
+/** A screen that publishes none — Admin, Cost, Company and every detail page. */
+function Bare() {
+  return <div>the bare screen</div>;
+}
+
+/** A DIFFERENT component that also publishes, so React really remounts: two
+ *  renders of the same function reconcile, which exercises the deps-changed
+ *  path rather than the unmount/mount ordering this has to get right. */
+function AlsoCovered({ coverage }: { coverage: CoverageFacts }) {
+  usePageCoverage(coverage);
+  return <div>the other covered screen</div>;
+}
+
+const INCOMPLETE: CoverageFacts = {
+  read_level: "linearizable",
+  complete: false,
+  log_seq: 88,
+  applied_through: 41,
+  incomplete: {
+    records: 3,
+    version: 4,
+    from: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 42 },
+    scope: [],
+  },
+};
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // jsdom implements no scrolling at all, and the palette keeps its cursor row
+  // in view — same stub as `CommandPalette.test.tsx`, for the same reason.
+  Element.prototype.scrollIntoView = () => {};
   location.hash = "#/";
 });
 
 afterEach(() => {
-  // Explicit: the suite runs with `globals: false`, so testing-library
-  // registers no cleanup of its own.
   cleanup();
-  vi.restoreAllMocks();
   location.hash = "#/";
 });
 
-function mount(screenContent: ReactNode, store = new Store()) {
-  const socket = new LiveSocket(store);
-  // Saving a token reconnects the socket; there is no engine to dial here.
-  vi.spyOn(socket, "reconnect").mockImplementation(() => {});
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
+function frame(child: ReactNode) {
+  const store = new Store();
+  const view = render(
+    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
       <Router>
-        <Shell>{screenContent}</Shell>
+        <Shell>{child}</Shell>
       </Router>
     </ClientContext.Provider>,
   );
-  return { store, socket };
+  return {
+    store,
+    view,
+    show: (next: ReactNode) =>
+      view.rerender(
+        <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+          <Router>
+            <Shell>{next}</Shell>
+          </Router>
+        </ClientContext.Provider>,
+      ),
+  };
 }
 
-function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {
-  return fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
-}
+describe("the state bar's coverage", () => {
+  test("it is drawn for the screen that published it", () => {
+    frame(<Covered coverage={INCOMPLETE} />);
+    expect(screen.getByText(/applied through 41 of 88/)).toBeDefined();
+    expect(screen.getByText("This answer is incomplete")).toBeDefined();
+    // AND THE LEVEL IS NOT A WORD ON THE SCREEN. `linearizable` is stronger
+    // than this surface's own default; a chip naming it is a label nobody
+    // reads, and the one level that matters then arrives as a changed word
+    // inside it. See [CoverageTags] in components/work.tsx.
+    expect(screen.queryByText("linearizable")).toBeNull();
+  });
 
-/** A screen with an editor drawer open, the way the organization builder's is. */
-function EditorScreen() {
-  const [open, setOpen] = useState(true);
-  return open ? (
-    <Modal
-      open
-      variant="sheet"
-      stackBody
-      title="Edit Software Engineer"
-      onClose={() => setOpen(false)}
-    >
-      <input aria-label="Name" />
-    </Modal>
-  ) : (
-    <p>editor closed</p>
-  );
-}
+  // AND A LEVEL THIS SURFACE DID NOT EXPECT IS SAID IN WORDS.
+  //
+  // `stale`, `session` and `linearizable` are what a dashboard answer is
+  // served at. Anything else means the node could not measure its own distance
+  // from the log — including a level a later engine invents, which is why the
+  // list is the ordinary ones rather than the odd ones: an unknown value is
+  // SHOWN.
+  test("a level this surface did not expect says what it means", () => {
+    frame(
+      <Covered
+        coverage={{
+          read_level: "consistent_prefix",
+          complete: true,
+          log_seq: 9,
+          applied_through: 9,
+        }}
+      />,
+    );
+    expect(screen.getByText("age unknown")).toBeDefined();
+    expect(screen.queryByText("consistent_prefix")).toBeNull();
+  });
 
-test("Escape with the token dialog over a drawer closes only the token dialog", () => {
-  mount(<EditorScreen />);
-  const name = screen.getByLabelText("Name");
-  expect(document.activeElement).toBe(name);
+  // THE ONE THAT SHIPPED. Land on the Inbox, which publishes; click through to
+  // a screen that does not — Admin > Credentials, say — and the inbox's
+  // freshness badge and its "this answer is incomplete" banner stayed in the
+  // bar as claims about data the new screen never read.
+  test("it goes when the screen that published it does", () => {
+    const { show } = frame(<Covered coverage={INCOMPLETE} />);
+    show(<Bare />);
+    expect(screen.getByText("the bare screen")).toBeDefined();
+    expect(screen.queryByText(/applied through/)).toBeNull();
+    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+  });
 
-  // A guarded answer on this screen asks for a credential mid-edit.
-  act(() => requestToken());
-  const token = screen.getByRole("dialog", { name: "API token" });
-  expect(document.activeElement).toBe(screen.getByLabelText("Token"));
-
-  // Tab stays in the token dialog rather than being pulled back to the drawer.
-  screen.getByRole("button", { name: "Save and reconnect" }).focus();
-  press("Tab");
-  expect(token.contains(document.activeElement)).toBe(true);
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "API token" })).toBeNull();
-  expect(screen.getByRole("dialog", { name: "Edit Software Engineer" })).toBeDefined();
-  // And the editor gets its field back, where the operator was typing.
-  expect(document.activeElement).toBe(name);
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Edit Software Engineer" })).toBeNull();
-  expect(screen.getByText("editor closed")).toBeDefined();
+  // …and the reset must not eat the INCOMING screen's own facts, which is why
+  // it is a cleanup on the hook rather than an effect in the Shell keyed on
+  // the route: React flushes a child's effects before its parent's, so a
+  // Shell-level reset would run after the new screen had already published.
+  test("a screen that publishes its own replaces it rather than losing it", async () => {
+    const { show } = frame(<Covered coverage={INCOMPLETE} />);
+    show(
+      <AlsoCovered
+        coverage={{ read_level: "stale", complete: true, log_seq: 9, applied_through: 4 }}
+      />,
+    );
+    // FLUSHED, because a reset that lands LATE is the failure being excluded:
+    // a deferred one — a microtask, a timeout, a parent effect — runs after
+    // the incoming screen has already published and blanks it, and a
+    // synchronous assertion cannot see that happen.
+    await act(async () => {});
+    expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
+    expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
+    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+  });
 });
 
-test("the token field keeps its label over a screen that has a field with the same id", () => {
-  // Not contrived: the dialog is raised over any screen, and "token" is the
-  // obvious id for a screen's own credential field.
-  mount(<input id="token" aria-label="Webhook token" />);
-  act(() => requestToken());
-  const dialog = screen.getByRole("dialog", { name: "API token" });
-  const field = within(dialog).getByLabelText("Token");
-  expect(field.getAttribute("type")).toBe("password");
-  expect(document.activeElement).toBe(field);
-});
-
-test("search opened from its button returns focus there on Escape", () => {
-  mount(<p>screen</p>);
-  const search = screen.getByRole("button", { name: /^Search/ });
-  search.focus();
-  fireEvent.click(search);
-
-  const palette = screen.getByRole("dialog", { name: "Search" });
-  expect(palette.contains(document.activeElement)).toBe(true);
-  expect(document.activeElement?.tagName).toBe("INPUT");
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-  expect(document.activeElement).toBe(search);
-});
-
-test("search opened with a shortcut returns focus to what held it, and one Escape closes it", () => {
-  mount(<button>Retry</button>);
-  const retry = screen.getByRole("button", { name: "Retry" });
-  retry.focus();
-
-  press("/");
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-  // The same chord that opened it closes it again.
-  press("k", { ctrlKey: true });
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-  expect(document.activeElement).toBe(retry);
-
-  press("k", { metaKey: true });
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-  expect(document.activeElement).toBe(retry);
-});
-
-test("the search shortcut does not close search from beneath a token dialog raised over it", () => {
-  mount(<p>screen</p>);
-  press("k", { ctrlKey: true });
-  const input = screen.getByRole("combobox", { name: "Search" });
-  expect(document.activeElement).toBe(input);
-
-  // A guarded answer asks for a credential while search is open.
-  act(() => requestToken());
-  const token = screen.getByLabelText("Token");
-  expect(document.activeElement).toBe(token);
-
-  // The chord belongs to the surface that holds the keyboard. Closing search
-  // from under the dialog would change a page the reader cannot see, and
-  // hand focus to what opened search, behind the dialog's veil.
-  press("k", { ctrlKey: true });
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-  expect(document.activeElement).toBe(token);
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "API token" })).toBeNull();
-  expect(document.activeElement).toBe(input);
-  press("k", { ctrlKey: true });
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-});
-
-test("the search button keeps its name where the narrow layout hides its label", () => {
-  mount(<p>screen</p>);
-  // What the stylesheet's one breakpoint does to the button: the label and
-  // the hint go, and the icon is all that is drawn.
-  const narrow = document.createElement("style");
-  narrow.textContent = ".omni .omni-label, .omni .kbd-combo { display: none; }";
-  document.head.append(narrow);
-  try {
-    const search = screen.getByRole("button", { name: "Search" });
-    expect(search.getAttribute("aria-keyshortcuts")).toBe("Control+K Meta+K /");
-  } finally {
-    narrow.remove();
-  }
-});
-
-test("the shortcut hints name the keys the reader's own keyboard prints, in words", () => {
-  // Not an Apple platform under the suite, so the command key is Control: a
-  // hand-written "⌘K" told everybody else to press a key they do not have.
-  mount(<p>screen</p>);
-  const search = screen.getByRole("button", { name: /^Search/ });
-  expect([...search.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["Ctrl", "K"]);
-  expect(within(search).getByText("Control plus K")).toBeDefined();
-
-  fireEvent.click(search);
-  const palette = screen.getByRole("dialog", { name: "Search" });
-  // The sentence each hint reads: a glyph such as the return arrow or "esc" is
-  // hidden from assistive technology, which hears the key's name instead.
-  const hints = [...palette.querySelectorAll("kbd")].map(
-    (cap) => cap.closest("[aria-hidden]")?.nextElementSibling?.textContent,
-  );
-  expect(hints).toEqual(["Up arrow", "Down arrow", "Enter", "Escape"]);
-  // Every drawn cap is hidden from it: read as glyphs, the row says nothing.
-  expect(
-    [...palette.querySelectorAll("kbd")].every((cap) => cap.closest("[aria-hidden]") !== null),
-  ).toBe(true);
-});
-
-test("the search shortcuts do nothing while a modal holds the keyboard", () => {
-  mount(<p>screen</p>);
-  const pill = screen.getByRole("button", { name: /engine unreachable/ });
-  pill.focus();
-  fireEvent.click(pill);
-  const panel = screen.getByRole("dialog", { name: "Engine" });
-  expect(document.activeElement).toBe(panel);
-
-  // The page behind the panel is inert: search opened over it would sit on
-  // a page the reader cannot reach, and could navigate it away.
-  for (const init of [{ key: "k", metaKey: true }, { key: "k", ctrlKey: true }, { key: "/" }]) {
-    expect(press(init.key, init)).toBe(true);
-    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-    expect(document.activeElement).toBe(panel);
-  }
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
-  expect(document.activeElement).toBe(pill);
-  // Back on the page, the same keys open search again.
-  press("k", { metaKey: true });
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-});
-
-test("search never opens over a dialog whose write is still in flight", () => {
-  // A screen's dialog that may not close yet. Search opened over it could
-  // navigate, and the navigation would unmount the dialog before the
-  // operator saw whether the write took.
-  function Saving() {
-    return (
-      <Modal open stackBody title="Saving" onClose={() => {}} dismissable={false}>
-        <button>Wait</button>
-      </Modal>
+describe("the Inbox rail badge", () => {
+  /** A frame over a socket answering a bound viewer and one page of notices. */
+  function railOver(notices: unknown[], primary_reasons: string[]) {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (
+      socket as unknown as {
+        query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).query = (what: string) => {
+      if (what === "viewer") {
+        return Promise.resolve({
+          operator_id: "U0FOUNDER",
+          operator: true,
+          handle: "ada",
+          name: "Ada",
+          kind: "human",
+        });
+      }
+      if (what === "work_inbox") {
+        return Promise.resolve({
+          handle: "ada",
+          notices,
+          primary_reasons,
+          unread: notices.filter((n) => !(n as { read: boolean }).read).length,
+          primary: notices.filter((n) => primary_reasons.includes((n as { reason: string }).reason))
+            .length,
+        });
+      }
+      return Promise.resolve({});
+    };
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <Shell>
+            <Bare />
+          </Shell>
+        </Router>
+      </ClientContext.Provider>,
     );
   }
-  mount(<Saving />);
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Wait" }));
-  press("k", { ctrlKey: true });
-  press("/");
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-  expect(screen.getByRole("dialog", { name: "Saving" })).toBeDefined();
-});
 
-test("a slash opens search only on its own, never as part of a chord or a composition", () => {
-  mount(<button>Retry</button>);
-  screen.getByRole("button", { name: "Retry" }).focus();
-  for (const init of [
-    { ctrlKey: true },
-    { metaKey: true },
-    { altKey: true },
-    { isComposing: true },
-  ]) {
-    expect(press("/", init)).toBe(true);
-    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+  function notice(reason: string, read: boolean, n: number) {
+    return {
+      record_id: `r-${n}`,
+      log_seq: n,
+      log_stream: "CREWLET_WORK_LOG",
+      log_generation: 1,
+      at: new Date().toISOString(),
+      reason,
+      primary: false,
+      addressed: false,
+      kind: "task_updated",
+      subject_id: `s-${n}`,
+      read,
+    };
   }
-  press("/");
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-});
 
-test("the engine panel hands over to the token dialog, and focus comes back to the engine pill", () => {
-  const store = new Store();
-  store.setAuthRejected(true);
-  mount(<p>screen</p>, store);
-  const pill = screen.getByRole("button", { name: /token refused/ });
-  pill.focus();
-  fireEvent.click(pill);
+  // A BADGE NOBODY CAN DRIVE DOWN IS A BROKEN COUNTER.
+  //
+  // It counted `answer.unread`, which is every notice on the page — and most of
+  // a busy company's notices are things it merely told you: a task you watch
+  // moved, a sprint you are in started. Nobody answers those, so the number
+  // never reached zero however diligent the reader was, and a count that only
+  // ever grows is the first thing that makes a read-only inbox read as broken.
+  // The primary half is small by construction and goes down by answering.
+  test("counts only what the reader is on the hook for", async () => {
+    railOver(
+      [
+        notice("assignee", false, 1), // unread AND primary — the one that counts
+        notice("watcher", false, 2), // unread, not primary
+        notice("sprint_member", false, 3), // unread, not primary
+        notice("assignee", true, 4), // primary, already read
+      ],
+      ["assignee", "mention"],
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
-  const panel = screen.getByRole("dialog", { name: "Engine" });
-  // The action the operator came for, not the Close button before it. (The
-  // banner behind the veil offers the same action; this is the panel's.)
-  const setToken = within(panel).getByRole("button", { name: "Set token" });
-  expect(document.activeElement).toBe(setToken);
-
-  fireEvent.click(setToken);
-  expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
-  expect(document.activeElement).toBe(screen.getByLabelText("Token"));
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "API token" })).toBeNull();
-  expect(document.activeElement).toBe(pill);
-});
-
-test("the engine panel closes on its veil and opens on itself when there is nothing to act on", () => {
-  mount(<p>screen</p>);
-  const pill = screen.getByRole("button", { name: /engine unreachable/ });
-  pill.focus();
-  fireEvent.click(pill);
-
-  const panel = screen.getByRole("dialog", { name: "Engine" });
-  expect(document.activeElement).toBe(panel);
-
-  const veil = panel.parentElement!;
-  // A press inside the panel is not a press on the veil.
-  fireEvent.pointerDown(panel);
-  fireEvent.click(panel);
-  expect(screen.getByRole("dialog", { name: "Engine" })).toBeDefined();
-
-  fireEvent.pointerDown(veil);
-  fireEvent.click(veil);
-  expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
-  expect(document.activeElement).toBe(pill);
-});
-
-test("the sections drawer is a modal on the stack: focus goes in, Tab stays, Escape and a route change close it", async () => {
-  mount(<p>screen</p>);
-  const toggle = screen.getByRole("button", { name: "Sections" });
-  toggle.focus();
-  fireEvent.click(toggle);
-
-  // Only while it is open is the rail a dialog; beside a wide layout it is
-  // the page's own navigation and must not announce itself as modal.
-  const drawer = screen.getByRole("dialog", { name: "Sections" });
-  expect(drawer.tagName).toBe("ASIDE");
-  // It opens on the row for the screen the reader is on.
-  const overview = within(drawer).getByRole("link", { name: /Overview/ });
-  expect(overview.getAttribute("aria-current")).toBe("page");
-  expect(document.activeElement).toBe(overview);
-
-  // Shift+Tab from the first control wraps inside rather than leaving for
-  // the page behind the veil.
-  within(drawer)
-    .getByRole("link", { name: /Crewlet/ })
-    .focus();
-  press("Tab", { shiftKey: true });
-  expect(drawer.contains(document.activeElement)).toBe(true);
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
-  expect(document.activeElement).toBe(toggle);
-
-  // Navigating from the drawer closes it, and focus comes back to the toggle
-  // rather than staying on a link that has just slid out of view.
-  fireEvent.click(toggle);
-  const open = screen.getByRole("dialog", { name: "Sections" });
-  const link = within(open)
-    .getAllByRole("link")
-    .find((a) => a.getAttribute("href") !== "#/")!;
-  link.focus();
-  await act(async () => {
-    location.hash = link.getAttribute("href")!;
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    const badge = document.querySelector(".rail-badge");
+    expect(badge?.textContent).toBe("1");
+    // And NOT the three unread, nor the two primary: each of those is one half
+    // of the question and neither is it.
+    expect(badge?.textContent).not.toBe("3");
+    expect(badge?.textContent).not.toBe("2");
   });
-  expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
-  expect(document.activeElement).toBe(toggle);
+
+  // NOTHING TO ANSWER IS NO BADGE AT ALL. A zero drawn in the caution hue is a
+  // mark a reader checks, and it would be there permanently on a quiet company.
+  test("a page with nothing primary and unread carries no badge", async () => {
+    railOver([notice("watcher", false, 1), notice("assignee", true, 2)], ["assignee"]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(document.querySelector(".rail-badge")).toBeNull();
+  });
 });
 
-test("the sections drawer closes on its veil, and a dialog raised over it closes first", () => {
-  mount(<p>screen</p>);
-  const toggle = screen.getByRole("button", { name: "Sections" });
-  toggle.focus();
-  fireEvent.click(toggle);
-  const drawer = screen.getByRole("dialog", { name: "Sections" });
+// A MODAL DOES NOT OUTLIVE THE SCREEN IT WAS OPENED ON.
+//
+// `Shell` is mounted once for the life of the tab, so what it holds open stays
+// open across every route change unless something takes it back. The drawer
+// already did; the palette did not — press `Ctrl-K`, then Back, and it was
+// still there over a different screen, still offering the objects it had
+// ranked for the one the reader had just left.
+//
+// Picking a palette row closes it on the way out, so what this covers is every
+// OTHER way the route moves while it is open: Back, Forward, a phone's back
+// gesture, a restored history entry.
+describe("what the frame holds open", () => {
+  test("a route change closes the palette, the way it already closed the drawer", async () => {
+    frame(<Bare />);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+    });
+    expect(
+      screen.queryByRole("dialog"),
+      "ctrl-k did not open the palette, so this test proves nothing",
+    ).not.toBeNull();
 
-  // The engine panel opened from the rail sits above it.
-  const pill = within(drawer).getByRole("button", { name: /engine unreachable/ });
-  pill.focus();
-  fireEvent.click(pill);
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
-  expect(screen.getByRole("dialog", { name: "Sections" })).toBe(drawer);
-  expect(document.activeElement).toBe(pill);
-
-  // The veil is the presentational layer the drawer sits beside, which is how
-  // a suite reaches it without naming the class the design system draws.
-  const veil = [...document.querySelectorAll('[role="presentation"]')].at(-1)!;
-  fireEvent.pointerDown(veil);
-  fireEvent.click(veil);
-  expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
-  expect(document.activeElement).toBe(toggle);
-});
-
-test("the sections drawer closes when the layout it belongs to ends", () => {
-  // A tablet turned to landscape crosses the breakpoint with the drawer open,
-  // and the rail becomes the page's own column again under a veil that traps
-  // Tab in it.
-  const media = installMedia(true);
-  try {
-    mount(<p>screen</p>);
-    fireEvent.click(screen.getByRole("button", { name: "Sections" }));
-    expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
-
-    // Still narrow: a change that keeps the layout changes nothing.
-    media.set(true);
-    expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
-
-    media.set(false);
-    expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
-    expect(screen.getByRole("navigation", { name: "Sections" })).toBeDefined();
-  } finally {
-    media.restore();
-  }
-});
-
-// EB16. The density row draws one letter per choice because that is what fits
-// in the rail, and a screen reader was told "S", "M" and "L": three names that
-// say nothing about what pressing one does. The theme row beside it was
-// already right, because its options draw no label at all and fall back to
-// their tooltip.
-test("the rail's settings are announced by what they are, not by the letter drawn", () => {
-  mount(<p>a screen</p>);
-  const density = screen.getByRole("radiogroup", { name: "Density" });
-  expect(
-    within(density)
-      .getAllByRole("radio")
-      .map((radio) => radio.getAttribute("aria-label")),
-  ).toEqual(["Compact", "Normal", "Comfortable"]);
-  const theme = screen.getByRole("radiogroup", { name: "Theme" });
-  expect(
-    within(theme)
-      .getAllByRole("radio")
-      .map((radio) => radio.getAttribute("aria-label")),
-  ).toEqual(["Light", "Follow the system", "Dark"]);
-});
-
-// EB14. Signing out was reachable only through the token dialog, and the token
-// dialog opened only when the engine had REFUSED the token. So an operator on
-// a shared machine, whose token still worked, had no way to drop it: the
-// credential outlived the person who typed it. The rail's settings menu is
-// where it lives now, and it is there whatever the engine thinks of the token.
-test("the token this browser holds can be dropped while the engine still accepts it", () => {
-  localStorage.setItem("crewlet_api_token", "a-working-token");
-  const { socket } = mount(<p>a screen</p>);
-  const setToken = vi.spyOn(socket, "setToken");
-
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: /API token/ }));
-  const dialog = screen.getByRole("dialog", { name: "API token" });
-
-  fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
-  expect(localStorage.getItem("crewlet_api_token")).toBeNull();
-  expect(setToken).toHaveBeenCalledWith("");
-  expect(screen.queryByRole("dialog", { name: "API token" })).toBeNull();
-});
-
-// EB15. The count of turns in flight was a digit next to "⟳", a glyph a screen
-// reader says nothing useful about, so the busiest fact in the rail was read
-// as a bare number with no unit and no subject.
-test("the turns in flight are counted in words, not by a glyph beside a digit", () => {
-  const store = new Store();
-  store.applyHealth({ status: "ok", in_flight: 3 });
-  mount(<p>a screen</p>, store);
-  expect(screen.getByText("3 turns in flight")).toBeDefined();
-});
-
-// EB17. The attention count was a bare number at the end of a row, so it was
-// announced as "Overview 3", which a reader can take for a third overview.
-test("the attention count says what it is counting", () => {
-  const store = new Store();
-  // A seat that failed its last turn is one thing waiting on somebody.
-  store.applyAgents([{ role: "CEO", handle: "ceo", state: "needs_attention" }]);
-  mount(<p>a screen</p>, store);
-  // The NAME is what a screen reader reads, and the words are hidden from
-  // the page, so the row still draws the number alone.
-  expect(screen.getByRole("link", { name: /1 thing waiting on somebody/ })).toBeDefined();
-});
-
-// EB18. The control that opens the narrow layout's drawer said nothing about
-// what it controlled or whether it was open, so a screen reader announced the
-// same button before and after the rail appeared.
-test("the sections control says what it opens and whether it is open", () => {
-  mount(<p>a screen</p>);
-  const toggle = screen.getByRole("button", { name: "Sections" });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeDefined();
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
-});
-
-// EB19. A bare slash opens search, and it is also the first letter of a
-// type-ahead inside a list of choices. Every dropdown in this product is the
-// design system's listbox rather than the platform's own, so the element
-// holding the keys is a div with a role: asked only about INPUT and TEXTAREA,
-// the shell swallowed the press and search opened over the list.
-test("a bare slash inside a list of choices belongs to the list", () => {
-  mount(
-    <div role="listbox" tabIndex={-1} aria-label="Seats">
-      <div role="option" aria-selected="false">
-        /shared
-      </div>
-    </div>,
-  );
-  screen.getByRole("listbox", { name: "Seats" }).focus();
-  expect(fireEvent.keyDown(document.activeElement!, { key: "/" })).toBe(true);
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-
-  // And from the page itself it still opens search.
-  (document.activeElement as HTMLElement).blur();
-  fireEvent.keyDown(window, { key: "/" });
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-});
-
-/**
- * A screen that draws to the bottom of the window gets it, and gives it back.
- *
- * The shell used to answer this with a rule in the org builder's own
- * stylesheet, reaching up at a wrapper the shell drew
- * (`.screen-inner:has(.org-builder-body.fill)`). The design system's shell
- * draws no such wrapper, so the rule stopped matching, the builder's canvas
- * had no definite height left anywhere above it, and the chart lens collapsed
- * to nothing. A request is what replaces it: the screen asks, the shell
- * answers, and neither has to know a class name the other writes.
- */
-function FillingScreen({ on }: { on: boolean }) {
-  useFillScreen(on);
-  return <p>the canvas lens</p>;
-}
-
-/**
- * The element the design system marks, found without naming its class: the
- * shell is the outermost thing this render put on the page.
- */
-function shellRoot(): HTMLElement {
-  let el = document.querySelector("main");
-  while (el?.parentElement?.getAttribute("class") !== null) el = el!.parentElement;
-  if (!(el instanceof HTMLElement)) throw new Error("no shell root");
-  return el;
-}
-
-/** Whether the shell is drawing the layout a filling screen asked for. */
-function fillsTheWindow(): boolean {
-  return isDrawnAs(shellRoot(), AppShell, { fill: true, children: null }, { children: null });
-}
-
-test("a screen that asks for the window's height is drawn with it", () => {
-  mount(<FillingScreen on />);
-  expect(fillsTheWindow()).toBe(true);
-});
-
-test("a screen that does not ask leaves the shell its scroller", () => {
-  mount(<FillingScreen on={false} />);
-  expect(fillsTheWindow()).toBe(false);
+    await act(async () => {
+      location.hash = "#/company";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(
+      screen.queryByRole("dialog"),
+      "the palette survived a route change and is now over a screen it knows nothing about",
+    ).toBeNull();
+  });
 });

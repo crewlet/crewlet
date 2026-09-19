@@ -604,15 +604,35 @@ func (d *DB) Replicated() *DB {
 }
 
 // Estate names which of a node's two databases this handle is on.
-func (d *DB) Estate() Estate { return d.estate }
+//
+// The empty estate on a handle that is not open, which is the meaningful zero:
+// a caller asking which file it is holding while the peer is closed is asking
+// about no file. See [ErrNoEstate] for why nil is a state rather than a bug.
+func (d *DB) Estate() Estate {
+	if d == nil {
+		return ""
+	}
+	return d.estate
+}
 
 // Caps reports what the live driver can do. Probed once at Open — the answers
 // are a property of the compiled-in driver version, so nothing re-measures
 // them per query.
-func (d *DB) Caps() Capabilities { return d.caps }
+func (d *DB) Caps() Capabilities {
+	if d == nil {
+		return Capabilities{}
+	}
+	return d.caps
+}
 
-// Path reports the file this handle owns.
-func (d *DB) Path() string { return d.path }
+// Path reports the file this handle owns, and the empty string on a handle
+// that is not open — the same meaningful zero [DB.Estate] answers with.
+func (d *DB) Path() string {
+	if d == nil {
+		return ""
+	}
+	return d.path
+}
 
 // ReplicatedPath is where the replicated estate lives, whichever estate this
 // handle is.
@@ -621,6 +641,9 @@ func (d *DB) Path() string { return d.path }
 // file — the artefact is a copy of it alone — and it should not have to know
 // whether it is holding the node handle or the replicated one to ask.
 func (d *DB) ReplicatedPath() string {
+	if d == nil {
+		return ""
+	}
 	if d.estate == EstateReplicated {
 		return d.path
 	}
@@ -633,7 +656,12 @@ func (d *DB) ReplicatedPath() string {
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
 // model is configured. See Options.EmbeddingDim for why this is not in the
 // schema.
-func (d *DB) EmbeddingDim() int { return int(d.dim.Load()) }
+func (d *DB) EmbeddingDim() int {
+	if d == nil {
+		return 0
+	}
+	return int(d.dim.Load())
+}
 
 // LearnEmbeddingDim records the width the first time this handle meets one.
 //
@@ -660,6 +688,13 @@ func (d *DB) EmbeddingDim() int { return int(d.dim.Load()) }
 // dimension guard off on a store that has never been told. See
 // TestVectorDimensionUnconfigured.
 func (d *DB) LearnEmbeddingDim(width int) {
+	// A HANDLE THAT IS NOT OPEN LEARNS NOTHING, and says so by doing nothing:
+	// this reports no error, so the only honest answer on a closed handle is
+	// the no-op. See [ErrNoEstate] — an apply in flight when an adoption nils
+	// the peer reaches here legitimately.
+	if d == nil {
+		return
+	}
 	if width <= 0 {
 		return
 	}
@@ -825,6 +860,13 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// now an honest wait at BEGIN, and a connection the pool handed back
 	// dirty. internal/learning carried a private copy of this loop for one
 	// of its twelve callers; the other eleven had none.
+	// THE NIL GUARD IS HERE AND NOT ONLY IN [DB.txOpts], which is where it
+	// was and where it could never run: `pooled(d.busy)` is an ARGUMENT,
+	// evaluated before the call it guards, so a nil handle dereferenced on the
+	// way in and the guard three frames down never saw it. See [ErrNoEstate].
+	if d == nil || d.sql == nil {
+		return ErrNoEstate
+	}
 	return retryTransient(ctx, pooled(d.busy), func() error { return d.tx(ctx, fn) })
 }
 

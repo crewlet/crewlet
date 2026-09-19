@@ -323,6 +323,46 @@ func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, bas
 	}
 }
 
+// MaxRunsListed bounds the run listing.
+//
+// TEN, against the runner's own 32-run memory: this is a "what happened
+// recently here" list beside a Findings tab, and a pass is a heavy record —
+// every finding it observed, each with its own remedy. Ten is more history
+// than an operator scrolls and small enough that the list is one screen.
+const MaxRunsListed = 10
+
+// runs serves GET /setup/integrations/{kind}/runs.
+//
+// THE ROUTE THAT MADE THE OTHER ONE REACHABLE. `runs/{id}` could answer one
+// pass and nothing could name an id, so it was reachable only by a caller that
+// had just started a pass itself — an operator opening a Findings tab had no
+// way in. The listing is deliberately THIS NODE's: a pass is executed by
+// whichever node held the surface's lease and remembered in that node's own
+// process, so the answer says so rather than implying a fleet history it does
+// not have.
+func (s *Service) runs(w http.ResponseWriter, r *http.Request) {
+	kind := integration.Kind(r.PathValue("kind"))
+	if !kind.Valid() {
+		httpjson.FailWith(w, http.StatusNotFound, codeRunNotFound, map[string]string{
+			"hint": "this build knows no integration by that name",
+		})
+		return
+	}
+	recent := s.passes.Recent(kind, MaxRunsListed)
+	if recent == nil {
+		// AN EMPTY LIST, never null: a client rendering `runs.length`
+		// should not have to guard the field as well.
+		recent = []*setup.Run{}
+	}
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"runs": recent,
+		// SAYS WHOSE HISTORY THIS IS. An operator reading an empty list on
+		// a fleet where another node ran the pass is looking at an honest
+		// answer to a question they did not mean to ask.
+		"scope": "this node",
+	})
+}
+
 // runByID serves GET /setup/integrations/{kind}/runs/{id}.
 func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.passes.Get(r.PathValue("id"))

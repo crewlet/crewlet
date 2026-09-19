@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/org?lens=builder&view=table";
+  location.hash = "#/company?lens=builder&view=table";
 });
 
 function mount(options: { readOnly?: boolean } = {}) {

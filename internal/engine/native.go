@@ -369,6 +369,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// gives: a failure costs the projects that did not land and nothing
 	// else, and the next apply retries them.
 	e.applyChart(ctx, c)
+	// AND THE CONTAINERS, for the same reason and on the same terms — see
+	// [Engine.applyContainers], and the bug it fixes.
+	e.applyContainers(ctx, c)
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki)
 	return nil
@@ -762,6 +765,127 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 		}
 	}
 	e.applyChart(ctx, c)
+	e.applyContainers(ctx, c)
+}
+
+// applyContainers makes the knowledge containers this company names exist.
+//
+// # The bug this fixes
+//
+// [pages.Store.EnsureContainer] HAD NO CALLER. Its own doc says it "runs on
+// every boot for every unit's space" and nothing ever ran it, so
+// `pages_containers` was empty in every deployment that ever existed: the
+// Knowledge rail said "this node knows about no containers yet" beside a
+// company whose agents had written pages, `GET /containers` answered `[]`
+// for ever, and the one piece of the knowledge base an operator navigates by
+// was unreachable from a running engine.
+//
+// A page merely NAMES its container — the string is on the page's own row —
+// so the pages themselves were fine and only the thing that lists them was
+// missing. Which is precisely why nothing caught it: every read that takes a
+// container as a parameter worked, and only the read that ENUMERATES them was
+// empty, which is indistinguishable from a company that has none.
+//
+// # Where the keys come from
+//
+// The org chart's spaces, plus the two RESERVED containers. A unit's `space:`
+// is its knowledge identity and a seat's own `space:` is the same thing one
+// level down — the same pair [chartProjects] reads for the tracker. The
+// reserved two are the engine's own: tool skills, and the org root every
+// seat's onboarding chain starts at. Both are materialised because the engine
+// writes into them itself, and a container the engine writes into and cannot
+// list is the same defect one layer in.
+//
+// # Best effort, and idempotent
+//
+// A failure is LOGGED rather than raised, exactly as [Engine.applyChart]
+// explains: this is one clause of an epoch apply and the rest of it stands
+// without it. Running on every apply and every boot is free after the first,
+// because EnsureContainer decides nothing when the row it finds already says
+// what the chart says — which is the guard its own doc was written around.
+func (e *Engine) applyContainers(ctx context.Context, c *Company) {
+	store := e.PagesStore()
+	if store == nil || c == nil {
+		return
+	}
+	var wrote []string
+	for _, want := range chartContainers(c) {
+		_, changed, err := store.EnsureContainer(ctx, want.Key, want.Name, want.Purpose)
+		if err != nil {
+			// EVERY CONTAINER IS ATTEMPTED. One key's refusal must not
+			// leave the rest of a company's knowledge base unlistable,
+			// and the caller is a reconcile that runs again.
+			log.ErrorContext(ctx, "knowledge_container_not_applied",
+				"container", want.Key, "error", err.Error(),
+				"detail", "pages in it are readable by address and the "+
+					"container will not appear in a listing; the next config "+
+					"apply or restart retries it")
+			continue
+		}
+		// ONLY WHAT WAS WRITTEN. This runs on every boot and every apply,
+		// so the ordinary outcome is that every row already says what the
+		// chart says — and a line naming all of them on every restart is
+		// a log that reports a company nobody edited as one that changed.
+		if changed {
+			wrote = append(wrote, want.Key)
+		}
+	}
+	if len(wrote) > 0 {
+		log.InfoContext(ctx, "knowledge_containers_applied", "containers", wrote)
+	}
+}
+
+// chartContainer is one container as the company declares it.
+type chartContainer struct {
+	Key     string
+	Name    string
+	Purpose string
+}
+
+// chartContainers is every knowledge container this company names.
+//
+// DE-DUPLICATED ON THE KEY and FIRST DECLARATION WINS, for the reason
+// [chartProjects] gives for the same shape: two units legitimately share a
+// space, and one container written twice in one pass would contend with
+// itself at the broker and log a failure for a configuration that is fine.
+//
+// The reserved two come LAST, so a company that has somehow named one of them
+// as a unit's space keeps the unit's own name on it rather than having the
+// engine's generic label overwrite what a founder wrote. The config loader
+// refuses that arrangement, so this is the belt to its braces.
+func chartContainers(c *Company) []chartContainer {
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	var out []chartContainer
+	seen := map[string]bool{}
+	add := func(key, name, purpose string) {
+		// UPPER, which is what a container key is everywhere else: a page
+		// carries `ENG` and a chart that wrote `eng` would create a second
+		// container no page is in.
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, chartContainer{Key: key, Name: name, Purpose: purpose})
+	}
+	if c.Org != nil {
+		for unit := range c.Org.AllUnits() {
+			add(unit.Space, unit.Name, unit.Purpose)
+		}
+		for role := range c.Org.AllRoles() {
+			// A SEAT'S OWN SPACE takes the SEAT's name, which is what a
+			// founder naming one on a seat meant — a container for that
+			// seat's own writing rather than for its unit's.
+			add(role.Space, role.Name, "")
+		}
+	}
+	add(c.Config.RootSpaceKey(), "Company",
+		"The organisation's own pages, starting with the Onboarding page every seat reads first.")
+	add(c.Config.SkillsContainerKey(), "Tool skills",
+		"Prompt fragments the engine injects into a phase. Excluded from knowledge search.")
+	return out
 }
 
 // applyChart makes the projects this company's chart names exist.
@@ -1134,7 +1258,14 @@ func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
 	// about the project's work, and rendering `none` beside a unit whose
 	// parent has a lead sends a founder looking for a gap there is not.
 	if role := c.org.EffectiveLead(unit); role != nil {
-		lead.Handle = org.Slugify(role.Name)
+		// THE SEAT'S OWN HANDLE, through the accessor every other namer
+		// of a seat goes through. Slugifying the display name here was a
+		// SECOND derivation, and it disagreed with the first on every
+		// seat whose operator declared a handle: a unit led by "Ada
+		// Okonkwo" with `handle: ada` resolved to `ada-okonkwo`, which
+		// is nobody — so the lead could not be looked up in the chart,
+		// filtered on, asked, or opened as a person.
+		lead.Handle = role.Handle()
 		lead.Kind = tracker.AuthorAgent
 		if role.IsHuman() {
 			lead.Kind = tracker.AuthorHuman

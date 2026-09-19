@@ -1,19 +1,20 @@
 /**
- * Search is a launcher reached from anywhere, and what this file asserts is
- * the ENGINE's half of it: what is offered, in what order, and that opening a
- * result goes where it says.
+ * What the palette PROMISES, held against what it does.
  *
- * The surface is the design system's, so its own rules are its own suite's:
- * the highlight wrapping, the highlighted row staying in the list's view, the
- * veil, the Tab trap. The cases here that touch those are asserting the SEAM,
- * which is what a package bump can move under this application silently.
+ * Every case here is a claim the file makes in prose about itself: the footer
+ * chip says the `@` scope lists "seats and units only", the "Open by id" hint
+ * says a trace id opens "every event that carries it", and the comment over
+ * the work scope says a search that answers nothing because the index is still
+ * building is not a company with no such work. Each of those was false in a
+ * different way, and none of them could fail a type check — a hit that
+ * navigates to the wrong screen, a loop that skips every row, and a read that
+ * failed rendered as an empty result are all perfectly well-typed.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { ALL_NAV } from "./nav.ts";
-import { Router, href } from "./router.tsx";
+import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
@@ -26,127 +27,173 @@ class InertWebSocket {
   close(): void {}
 }
 
+/** The palette, mounted over a store and a socket the case has arranged. */
+function open(arrange?: (store: Store, socket: LiveSocket) => void) {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  arrange?.(store, socket);
+  const view = render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <CommandPalette onClose={() => {}} />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  // BY ROLE, not by its label: the modal shell carries `aria-label="Search"`
+  // too, so a label query finds the dialog as well as the box inside it.
+  const input = screen.getByRole("textbox");
+  return {
+    store,
+    socket,
+    view,
+    type: (value: string) => fireEvent.change(input, { target: { value } }),
+    /** The row carrying this hint — what a reader would click. */
+    row: (hint: string) => screen.getByText(hint).closest("button"),
+  };
+}
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  // jsdom implements no scrolling at all, and the palette keeps the cursor row
+  // in view — same stub as `frame/DataGrid.test.tsx`, for the same reason.
+  Element.prototype.scrollIntoView = () => {};
+  localStorage.clear();
   location.hash = "#/";
 });
 
 afterEach(() => {
-  // Explicit: the suite runs with `globals: false`, so testing-library
-  // registers no cleanup of its own.
   cleanup();
-  vi.restoreAllMocks();
   location.hash = "#/";
 });
 
-function mount(onClose = () => {}) {
-  const store = new Store();
-  store.applyOrg({
-    name: "Acme",
-    roles: Array.from({ length: 30 }, (_, i) => ({
-      name: `Engineer ${i + 1}`,
-      handle: `engineer-${i + 1}`,
-      goal: "Ship the product",
-    })),
+describe("an id pasted out of a log", () => {
+  // THE TRACE PAGE IS THE ONLY SCREEN THAT ASSEMBLES A TRACE. This hit pointed
+  // at `#/activity/events?trace=<id>` instead, and the event log reads no
+  // `trace` parameter — so the reader landed on the WHOLE log, unfiltered,
+  // which reads as a trace that touched everything.
+  test("the trace hit opens the trace, not the whole event log", () => {
+    const id = "22222222-2222-4222-8222-222222222222";
+    const { type, row } = open();
+    type(id);
+    fireEvent.click(row("as a trace — every event that carries it")!);
+    expect(location.hash).toBe(`#/activity/traces/${id}`);
   });
-  const socket = new LiveSocket(store);
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <CommandPalette onClose={onClose} />
-      </Router>
-    </ClientContext.Provider>,
-  );
-  return store;
-}
 
-test("search is a combobox: the arrows move a highlight the input names, and Tab never walks the results", () => {
-  const onClose = vi.fn();
-  mount(onClose);
-  const input = screen.getByRole("combobox", { name: "Search" });
-  const list = screen.getByRole("listbox", { name: "Results" });
-  expect(input.getAttribute("aria-controls")).toBe(list.id);
-  expect(document.activeElement).toBe(input);
-
-  const highlighted = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
-  const first = within(list).getAllByRole("option")[0]!;
-  expect(highlighted()).toBe(first);
-  expect(first.getAttribute("aria-selected")).toBe("true");
-
-  fireEvent.keyDown(input, { key: "ArrowDown" });
-  const second = within(list).getAllByRole("option")[1]!;
-  expect(highlighted()).toBe(second);
-  expect(second.getAttribute("aria-selected")).toBe("true");
-  expect(first.getAttribute("aria-selected")).toBe("false");
-  // Focus stayed where the reader types.
-  expect(document.activeElement).toBe(input);
-
-  // Each group is named by its heading.
-  const seats = within(list).getByRole("group", { name: "Seats" });
-  expect(within(seats).getAllByRole("option")[0]!.textContent).toContain("Engineer 1");
-
-  // No result is a tab stop, so Tab wraps straight back to the input.
-  expect(
-    within(list)
-      .queryAllByRole("option")
-      .some((o) => o.tabIndex >= 0),
-  ).toBe(false);
-  // The trap takes the press (it is the last stop) and puts focus back on it.
-  expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
-  expect(document.activeElement).toBe(input);
-
-  // Enter opens the highlighted result (with no query, the screens in the
-  // rail's order) and closes search.
-  expect(second.textContent).toContain(ALL_NAV[1]!.label);
-  fireEvent.keyDown(input, { key: "Enter" });
-  expect(location.hash).toBe(href(ALL_NAV[1]!.path));
-  expect(onClose).toHaveBeenCalledTimes(1);
+  test("and the event and turn hits still open their own screens", () => {
+    const id = "44444444-4444-4444-8444-444444444444";
+    const { type, row } = open();
+    type(id);
+    fireEvent.click(row("as an event")!);
+    expect(location.hash).toBe(`#/activity/events/${id}`);
+  });
 });
 
-test("a highlight past the end of results that shrank under it stays on a real result", () => {
-  const store = mount();
-  const input = screen.getByRole("combobox", { name: "Search" });
-  const count = screen.getAllByRole("option").length;
-  // Up from the first result wraps to the last, as every list's highlight does.
-  fireEvent.keyDown(input, { key: "ArrowUp" });
-  const options = screen.getAllByRole("option");
-  expect(input.getAttribute("aria-activedescendant")).toBe(options[count - 1]!.id);
+describe("the people scope", () => {
+  const org = {
+    name: "Acme",
+    roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+    units: [
+      {
+        name: "Platform",
+        type: "team",
+        roles: [{ name: "SRE", handle: "sre", goal: "Keep it up" }],
+      },
+    ],
+  };
 
-  // A push removes every seat while the highlight sits on the last of them.
-  act(() => store.applyOrg({ name: "Acme", roles: [] }));
-  const remaining = screen.getAllByRole("option");
-  expect(remaining.length).toBeLessThan(count);
-  const last = remaining[remaining.length - 1]!;
-  expect(input.getAttribute("aria-activedescendant")).toBe(last.id);
-  expect(last.getAttribute("aria-selected")).toBe("true");
+  // THE FOOTER SAYS "seats and units only" — so both, and on an empty term.
+  // The unit loop took `Infinity` as its empty-query score (the seat loop's
+  // per-field no-match sentinel, which `Math.min` folds there and nothing
+  // folds here), so the finiteness guard below it dropped every unit: typing
+  // `@` listed the entire roster and not one unit.
+  test("`@` lists units beside seats before anything is typed", () => {
+    const { type } = open((store) => store.applyOrg(org));
+    type("@");
+    expect(screen.getByText("Units")).toBeDefined();
+    expect(screen.getByText("Platform")).toBeDefined();
+    expect(screen.getByText("Seats")).toBeDefined();
+  });
+
+  test("and a typed term still narrows them", () => {
+    const { type } = open((store) => store.applyOrg(org));
+    type("@plat");
+    expect(screen.getByText("Platform")).toBeDefined();
+    expect(screen.queryByText("CEO")).toBeNull();
+  });
 });
 
-test("a press on a result keeps focus in the search box, and its click opens the result", () => {
-  const onClose = vi.fn();
-  mount(onClose);
-  const input = screen.getByRole("combobox", { name: "Search" });
-  expect(document.activeElement).toBe(input);
-  const option = screen.getAllByRole("option")[2]!;
-  // Prevented: a press on something that is not a control moves focus to
-  // the nearest focusable ancestor, the dialog, which jsdom does not model.
-  expect(fireEvent.mouseDown(option)).toBe(false);
-  expect(onClose).not.toHaveBeenCalled();
-  fireEvent.click(option);
-  expect(location.hash).toBe(href(ALL_NAV[2]!.path));
-  expect(onClose).toHaveBeenCalledTimes(1);
-});
+describe("the work scope is a server query, so it has four answers", () => {
+  const hit = {
+    key: "ENG-1",
+    title: "Authentication rework",
+    // A TYPE, because the palette drew a hardcoded tick for every hit — in a
+    // list that also holds the DESTINATION rows from `nav.ts`, where a tick
+    // legitimately names the Work workspace.
+    type: "bug",
+    status: "in_progress",
+    assignee: "ceo",
+  };
 
-test("a press on the veil closes search on its click, as every modal's veil does", () => {
-  const onClose = vi.fn();
-  mount(onClose);
-  // The veil is the presentational layer the dialog sits inside, which is how
-  // a suite reaches it without naming the class the design system draws it in.
-  const veil = screen.getByRole("dialog").closest('[role="presentation"]')!;
-  // The results are the modal's body, not a popup above it: a popup would
-  // close on the press, before the click a tap ends with, and let that click
-  // land on the screen the veil was covering.
-  fireEvent.pointerDown(veil);
-  expect(onClose).not.toHaveBeenCalled();
-  fireEvent.click(veil);
-  expect(onClose).toHaveBeenCalledTimes(1);
+  /** A socket whose `work_search` answers per term. */
+  function answering(reply: (q: string) => Promise<unknown>) {
+    return (_store: Store, socket: LiveSocket) => {
+      socket.query = ((_what: string, params?: Record<string, unknown>) =>
+        reply(String(params?.q ?? ""))) as typeof socket.query;
+    };
+  }
+
+  test("a refused read says so rather than claiming nothing matched", async () => {
+    // `work_search` is UNREGISTERED on a node with no lexical index — the
+    // engine answers `unknown_query`, which is a fact about the node and not
+    // about the company's work. Rendered as "Nothing matches" it sends the
+    // reader off to file a duplicate for work that already exists.
+    const { type } = open(answering(() => Promise.reject(new Error("unknown_query"))));
+    type("#auth");
+    expect(await screen.findByText(/does not serve this answer/)).toBeDefined();
+    expect(screen.queryByText(/Nothing matches/)).toBeNull();
+  });
+
+  test("a read the socket dropped is not a refusal either", async () => {
+    const { type } = open(answering(() => Promise.reject(new Error("closed"))));
+    type("#auth");
+    expect(await screen.findByText(/connection went away/)).toBeDefined();
+    expect(screen.queryByText(/Nothing matches/)).toBeNull();
+  });
+
+  // A HIT SAYS WHAT KIND OF THING IT IS, and says its status in the reader's own
+  // vocabulary. The row's label is a key and a title, so the type appears
+  // nowhere else on it; and this line printed `item.status` raw, so the palette
+  // said `in_progress` where every other surface in the product says "In
+  // progress".
+  test("a work hit names its type, and its status in words", async () => {
+    const { type } = open(answering(() => Promise.resolve({ hits: [hit], available: true })));
+    type("#auth");
+    expect(await screen.findByText(/Bug · In progress/)).toBeDefined();
+    expect(screen.queryByText(/in_progress/)).toBeNull();
+  });
+
+  test("an answered term with no items does say nothing matched", async () => {
+    const { type } = open(answering(() => Promise.resolve({ hits: [], available: true })));
+    type("#zzz");
+    expect(await screen.findByText(/Nothing matches “zzz”/)).toBeDefined();
+  });
+
+  test("the hits for one term are never shown under the next", async () => {
+    // `useQuery` keeps the previous answer across a change of parameters, so
+    // the palette listed `auth`'s items as hits for `authz` with nothing
+    // saying a query was in flight. A term whose answer has not arrived has no
+    // hits and says it is searching.
+    const { type } = open(
+      answering((q) =>
+        q === "auth" ? Promise.resolve({ hits: [hit], available: true }) : new Promise(() => {}),
+      ),
+    );
+    type("#auth");
+    expect(await screen.findByText(/ENG-1/)).toBeDefined();
+
+    type("#authz");
+    expect(screen.queryByText(/ENG-1/)).toBeNull();
+    expect(screen.getByText("Searching…")).toBeDefined();
+    expect(screen.queryByText(/Nothing matches/)).toBeNull();
+  });
 });

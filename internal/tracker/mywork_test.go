@@ -1,6 +1,8 @@
 package tracker_test
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -193,5 +195,51 @@ func TestMyWorkNamesSomebody(t *testing.T) {
 	}, wednesday); err == nil {
 		t.Error("my_work with no read level answered — a level a surface did " +
 			"not resolve is a label rather than a guarantee")
+	}
+}
+
+// A COLLECTION IS EMPTY OR ABSENT — NEVER NULL, and this is the one place in
+// the tree where that is a wire contract rather than a preference.
+//
+// A nil Go slice marshals to `null`. Every client type declares these keys as
+// arrays, so a screen reads `mine.priorities.length` — which throws on a null
+// and takes the whole page down rather than drawing "nothing here". That is
+// precisely what a person with nothing assigned saw: seven blocks of nothing
+// is the ORDINARY state of this answer, so the empty case is the case it has
+// to be right about.
+//
+// The three-valued nulls elsewhere in this tree are pointers and maps for
+// exactly this reason: a nil SLICE here means one thing and nothing else.
+func TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// Nobody by this handle holds anything at all, which is the case.
+	got := r.myWork("nobody")
+
+	for _, block := range []struct {
+		key  string
+		rows any
+	}{
+		{"priorities", got.Priorities},
+		{"assigned", got.Assigned},
+		{"asked_of_me", got.AskedOfMe},
+		{"checklist_items", got.ChecklistItems},
+		{"collaborating", got.Collaborating},
+		{"watching_recent", got.WatchingRecent},
+		{"unblocked_recent", got.UnblockedRecent},
+	} {
+		if reflect.ValueOf(block.rows).IsNil() {
+			t.Errorf("%s is nil, which marshals to null — a client doing "+
+				".length on it throws", block.key)
+		}
+	}
+
+	// The wire is what the claim is about, so assert on the wire.
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), ":null") {
+		t.Errorf("an empty day marshals a null: %s", raw)
 	}
 }

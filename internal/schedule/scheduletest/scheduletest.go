@@ -235,6 +235,18 @@ func (h *harness) recent(limit int) []schedule.Run {
 	return rows
 }
 
+func (h *harness) recentFor(scope types.ScheduleScope, scopeID, name string,
+	limit int) []schedule.Run {
+
+	h.t.Helper()
+	rows, err := h.l.RecentFor(h.ctx, scope, scopeID, name, limit)
+	if err != nil {
+		h.t.Fatalf("RecentFor(%s/%s/%s, %d): unexpected error: %v",
+			scope, scopeID, name, limit, err)
+	}
+	return rows
+}
+
 func (h *harness) purge(before time.Time) int {
 	h.t.Helper()
 	n, err := h.l.Purge(h.ctx, before)
@@ -419,6 +431,99 @@ var claimCases = []testCase{
 // --- read -----------------------------------------------------------------
 
 var readCases = []testCase{
+	// ONE SCHEDULE'S HISTORY, which the company-wide listing cannot be.
+	//
+	// `Recent` is the whole company's, so twenty schedules firing hourly
+	// fill a page of fifty in two and a half hours: "did the standup fire
+	// this week" was unanswerable while every row of the answer sat in the
+	// table, and a screen that paged the company's and filtered is how a
+	// reader concludes a schedule stopped running.
+	//
+	// EVERY IDENTITY FIELD IS VARIED, one at a time, for the reason this
+	// suite gives about the claim key: a backend narrowing on two of the
+	// three columns passes any case that only ever varies the third.
+	{"one_schedule_is_readable_on_its_own", func(h *harness) {
+		base := aKey()
+		other := base
+		other.ScheduleName = "nightly"
+		otherScope := base
+		otherScope.ScopeID = "docs"
+		otherKind := base
+		otherKind.Scope = types.ScheduleScopeUnit
+
+		for i, key := range []schedule.FireKey{base, other, otherScope, otherKind} {
+			run := aRun(key)
+			run.FireLabel = fmt.Sprintf("2026060%dT0900", i)
+			run.FiredAt = scheduledAt.Add(time.Duration(i) * time.Minute)
+			key.FireLabel = run.FireLabel
+			run.FireKey = key
+			h.claimed(run)
+		}
+
+		got := h.recentFor(base.Scope, base.ScopeID, base.ScheduleName, 10)
+		if len(got) != 1 {
+			h.t.Fatalf("one schedule's history has %d rows, want 1: %v",
+				len(got), keysOf(got))
+		}
+		if got[0].ScheduleName != base.ScheduleName ||
+			got[0].ScopeID != base.ScopeID || got[0].Scope != base.Scope {
+
+			h.t.Errorf("the row is %s, want %s", keyString(got[0].FireKey),
+				keyString(base))
+		}
+		// AND THE COMPANY-WIDE LISTING STILL SEES ALL FOUR, so the
+		// narrowing is a filter rather than a change to what is stored.
+		if all := h.recent(10); len(all) != 4 {
+			h.t.Errorf("the company listing has %d rows, want 4: %v",
+				len(all), keysOf(all))
+		}
+	}},
+
+	// NEWEST FIRST, under the same total order the company listing takes:
+	// two listings ordering one table two ways is the divergence this suite
+	// exists to prevent.
+	{"one_schedule_is_newest_first", func(h *harness) {
+		key := aKey()
+		for i := range 3 {
+			run := aRun(key)
+			run.FireLabel = fmt.Sprintf("2026060%dT0900", i)
+			run.FiredAt = scheduledAt.Add(time.Duration(i) * time.Minute)
+			run.FireKey.FireLabel = run.FireLabel
+			h.claimed(run)
+		}
+		got := h.recentFor(key.Scope, key.ScopeID, key.ScheduleName, 10)
+		if len(got) != 3 {
+			h.t.Fatalf("%d rows, want 3", len(got))
+		}
+		for i := 1; i < len(got); i++ {
+			if got[i].FiredAt.After(got[i-1].FiredAt) {
+				h.t.Fatalf("row %d fired after row %d: %v", i, i-1, keysOf(got))
+			}
+		}
+		// AND THE LIMIT CUTS THE OLDEST, which is what "newest first"
+		// is for.
+		if two := h.recentFor(key.Scope, key.ScopeID, key.ScheduleName, 2); len(two) != 2 ||
+			!two[0].FiredAt.Equal(got[0].FiredAt) {
+
+			h.t.Errorf("a limit of two gave %v, want the two newest", keysOf(two))
+		}
+	}},
+
+	// A NON-POSITIVE LIMIT RETURNS NOTHING, which is the contract's own
+	// reading of "give me no rows" — and the half a backend gets wrong by
+	// passing it to SQL, where a negative LIMIT is unbounded.
+	{"one_schedule_honours_a_non_positive_limit", func(h *harness) {
+		key := aKey()
+		h.claimed(aRun(key))
+		for _, limit := range []int{0, -1} {
+			if got := h.recentFor(key.Scope, key.ScopeID, key.ScheduleName,
+				limit); len(got) != 0 {
+
+				h.t.Errorf("a limit of %d gave %d rows", limit, len(got))
+			}
+		}
+	}},
+
 	{"a_row_round_trips_every_field", func(h *harness) {
 		want := aRun(aKey())
 		want.FiredAt = time.Date(2026, time.June, 8, 9, 0, 12, 0, time.UTC)

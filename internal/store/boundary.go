@@ -119,6 +119,9 @@ var ErrVectorNotFinite = errors.New("store: embedding holds a non-finite value")
 // The cost is a bounded scan of a vector that has just come back from an HTTP
 // round trip — microseconds against tens of milliseconds.
 func (d *DB) EncodeVector(v []float32) ([]byte, error) {
+	if d == nil {
+		return nil, ErrNoEstate
+	}
 	// READ ONCE, then compared and reported: the width is re-stated by every
 	// config apply, and reading it twice could refuse a vector against one
 	// width and name another in the error.

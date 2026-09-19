@@ -39,7 +39,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
-    roundNum: 0,
     roundsUsed: 0,
     exhaustedRounds: false,
     emptyAnswerRounds: 0,
@@ -55,6 +54,9 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     hostIteration: 0,
     backend: "",
     codingAgent: "",
+    sandboxId: "",
+    costUSD: 0,
+    deliveredRefs: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",
     startedAt: "2026-09-02T10:00:00Z",
@@ -71,9 +73,68 @@ const TWO_ROUNDS = phase({
     { round: 2, reasoning: "that is enough", content: "Posted it." },
   ],
   tools: [
-    { name: "read_file", round: 1, args: "{}", result: "contents", failed: false },
-    { name: "submit_work", round: 2, args: "{}", result: "ok", failed: false },
+    {
+      name: "read_file",
+      round: 1,
+      args: "{}",
+      result: "contents",
+      failed: false,
+      durationMs: 0,
+      origin: "builtin",
+      server: "",
+    },
+    {
+      name: "submit_work",
+      round: 2,
+      args: "{}",
+      result: "ok",
+      failed: false,
+      durationMs: 0,
+      origin: "builtin",
+      server: "",
+    },
   ],
+});
+
+describe("a settled phase's zero is a number", () => {
+  /**
+   * ABSENT AND ZERO ARE DIFFERENT FACTS, and a dash claims the first about the
+   * second.
+   *
+   * A phase run on a subscription CLI backend reports no usage at all, and one
+   * the engine stopped before its first call came back has a `total_tokens` of
+   * 0 on a record that is settled. `totalTokens ? … : "—"` printed "not
+   * recorded" for both, on the card an operator opens precisely to find out
+   * which phase was expensive — and the same card already prints the
+   * delegation total through `fmtCount` unconditionally, so the file
+   * contradicted itself.
+   */
+  test("a phase that spent nothing says 0, not “not recorded”", () => {
+    const { container } = render(<PhaseCard record={phase({ totalTokens: 0, failed: true })} />);
+    const tokens = container.querySelector('[title="total tokens"]');
+    expect(tokens?.textContent).toBe("0");
+  });
+
+  test("and the same for the rounds it never took", () => {
+    const { container } = render(<PhaseCard record={phase({ failed: true })} />);
+    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0r");
+  });
+
+  // THE DASH SURVIVES WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
+  // running has not reported its usage yet, which is not the same as having
+  // spent nothing.
+  test("a live phase's zero is still an absence", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ live: true, totalTokens: 0, roundsUsed: 0 })} />,
+    );
+    expect(container.querySelector('[title="total tokens"]')).toBeNull();
+    expect(
+      container.querySelector('[title="this phase has not reported its usage yet"]')?.textContent,
+    ).toBe("—");
+    expect(
+      container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
+    ).toBe("—");
+  });
 });
 
 describe("a round is one block", () => {
@@ -116,11 +177,9 @@ describe("a round is one block", () => {
     // tech with it — leaving the one thing that ties the blocks below
     // together unannounced, so the thinking and its call were read out as two
     // unrelated collapsed rows.
-    render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
-    // Read, not drawn: the numeral a reader sees is the rail's own node, and
-    // the sentence beside it is what a screen reader is given instead.
-    expect(screen.getByText("Round 1")).toBeDefined();
-    expect(screen.getByText("Round 2")).toBeDefined();
+    const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
+    const spoken = [...container.querySelectorAll(".round .sr-only")].map((n) => n.textContent);
+    expect(spoken).toEqual(["Round 1", "Round 2"]);
   });
 
   test("a round that called a tool and said nothing is still that round's block", () => {
@@ -133,8 +192,26 @@ describe("a round is one block", () => {
           roundsUsed: 2,
           narration: [{ round: 2, reasoning: "", content: "Done." }],
           tools: [
-            { name: "read_file", round: 1, args: "{}", result: "contents", failed: false },
-            { name: "submit_work", round: 2, args: "{}", result: "ok", failed: false },
+            {
+              name: "read_file",
+              round: 1,
+              args: "{}",
+              result: "contents",
+              failed: false,
+              durationMs: 0,
+              origin: "builtin",
+              server: "",
+            },
+            {
+              name: "submit_work",
+              round: 2,
+              args: "{}",
+              result: "ok",
+              failed: false,
+              durationMs: 0,
+              origin: "builtin",
+              server: "",
+            },
           ],
         })}
         defaultOpen
@@ -147,42 +224,108 @@ describe("a round is one block", () => {
   });
 });
 
-// A FAILED CALL SAYS SO IN WORDS. It was marked with a red glyph carrying no
-// name, so the row a reader most needs to find was announced exactly like the
-// one above it, and the hue was the only signal anybody got.
-test("a failed tool call is named as failed, not coloured as failed", () => {
-  render(
-    <PhaseCard
-      record={phase({
-        roundsUsed: 1,
-        narration: [{ round: 1, reasoning: "", content: "Trying." }],
-        tools: [
-          { name: "read_file", round: 1, args: "{}", result: "no such file", failed: true },
-          { name: "submit_work", round: 1, args: "{}", result: "ok", failed: false },
-        ],
-      })}
-      defaultOpen
-    />,
-  );
-  expect(screen.getByRole("button", { name: /read_file failed/ })).toBeDefined();
-  expect(screen.getByRole("button", { name: "submit_work" })).toBeDefined();
+// A FAILED CALL SAYS SO IN WORDS. Its mark was a red glyph carrying no
+// accessible name at all, so the row a reader most needs to find was announced
+// exactly like the one above it, and the hue was the only signal anybody got.
+describe("a failed tool call", () => {
+  const withFailure = phase({
+    roundsUsed: 1,
+    narration: [{ round: 1, reasoning: "", content: "Trying." }],
+    tools: [
+      {
+        name: "read_file",
+        round: 1,
+        args: "{}",
+        result: "no such file",
+        failed: true,
+        durationMs: 0,
+        origin: "builtin",
+        server: "",
+      },
+      {
+        name: "submit_work",
+        round: 1,
+        args: "{}",
+        result: "ok",
+        failed: false,
+        durationMs: 0,
+        origin: "builtin",
+        server: "",
+      },
+    ],
+  });
+
+  test("is named as failed rather than only coloured as failed", () => {
+    render(<PhaseCard record={withFailure} defaultOpen />);
+    expect(screen.getByRole("button", { name: /read_file.*failed/i })).toBeDefined();
+  });
+
+  // THE CONTROL. Without it the rule could be "every tool row says failed"
+  // and still pass, which would be the same defect the other way round.
+  test("leaves a call that succeeded unmarked", () => {
+    render(<PhaseCard record={withFailure} defaultOpen />);
+    expect(screen.getByRole("button", { name: /^submit_work/ }).textContent).not.toContain(
+      "failed",
+    );
+  });
 });
 
-/**
- * A HEADER FACT THE ENGINE DID NOT REPORT IS A MARKED ABSENCE.
- *
- * The three facts in this header that can be missing, the model, the round
- * count and the token total, each drew a bare em dash: a mark a screen reader
- * reads as "dash" or skips, and the design system's own absent mark is not
- * one. A reader on the cell with the least to say heard nothing at all, and
- * nothing told them whether the phase used no tokens or whether nobody
- * counted them.
- */
-test("a header fact the engine did not report says so, rather than drawing a dash", () => {
-  render(<PhaseCard record={phase({ model: "", totalTokens: 0, roundNum: 0 })} />);
-  for (const said of ["Model not recorded", "No tool round recorded", "Tokens not reported"]) {
-    expect(screen.getByText(said)).toBeDefined();
-  }
-  // And the punctuation is the design system's, not this file's idea of one.
-  expect(document.body.textContent).not.toContain("\u2014");
+// THE DECISION CHIP IS DRAWN IN THE STATE IT NAMES.
+//
+// It was `=== "self_iterate" ? warning : neutral`, keyed on ONE value, so
+// `blocked` — the executor reporting it could not do the work — drew the
+// ordinary grey pill, indistinguishable from `delivered` two rows up. The
+// fixture leaves `failed`, `exhaustedRounds`, `emptyAnswerRounds` and
+// `rescueFired` at their quiet defaults, so the decision chip is the only
+// warning or danger pill the card can draw.
+describe("the decision chip is drawn in the state it names", () => {
+  test("an executor that could not do the work is not the ordinary pill", () => {
+    const { container } = render(<PhaseCard record={phase({ decision: "blocked" })} />);
+    expect(container.querySelector(".crewlet-tag--warning")).not.toBeNull();
+    // COLOUR IS NEVER THE ONLY CARRIER: the sentence is beside it.
+    expect(screen.getByText("blocked, and said why")).not.toBeNull();
+  });
+
+  // The one the card had no other way to say. A review record never sets the
+  // phase's `failed` flag, so the danger tag in the header does not fire and
+  // this chip was the whole of what a reader got.
+  test("a review that ended the turn is drawn as the failure it is", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ phase: "review", decision: "failed" })} />,
+    );
+    expect(container.querySelector(".crewlet-tag--danger")).not.toBeNull();
+    expect(screen.getByText("failed — the turn will not retry")).not.toBeNull();
+  });
+
+  // AND AN UNEVENTFUL TURN KEEPS THE QUIET PILL, or four status hues are spent
+  // on every row and therefore on none: a seat's feed is mostly made of these.
+  test("an uneventful turn keeps the quiet pill", () => {
+    const { container } = render(<PhaseCard record={phase({ decision: "no_action" })} />);
+    expect(container.querySelector(".crewlet-tag--warning")).toBeNull();
+    expect(container.querySelector(".crewlet-tag--danger")).toBeNull();
+  });
+});
+
+// AND THE ROUND COUNT IS THE ENGINE'S OWN, whatever narrated.
+//
+// `roundNum` held the engine's ZERO-BASED `round_num` on a live record and
+// `rounds_used` on a settled one — one name, two quantities — so a live phase
+// whose rounds narrated nothing counted one short, and the opening frame's `-1`
+// never matched the `=== 0` guard the dash above is for, which rendered "0r".
+describe("the tool-round count", () => {
+  test("a live phase counts the rounds the engine reported, not the ones that narrated", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ live: true, roundsUsed: 3, narration: [], tools: [] })} />,
+    );
+    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("3r");
+  });
+
+  test("a live phase whose first round has not come back draws the marked absence", () => {
+    const { container } = render(
+      <PhaseCard record={phase({ live: true, roundsUsed: 0, narration: [], tools: [] })} />,
+    );
+    expect(
+      container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
+    ).toBe("—");
+  });
 });

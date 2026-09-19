@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -1366,5 +1367,384 @@ func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
 		t.Errorf("naming both gave comment=%q and a whole body=%v — one of "+
 			"them has to win, and it is the narrower",
 			trk.wants.Comment, strings.Contains(got.Output, whole))
+	}
+}
+
+// WHEN A TASK IS DUE, HOW BIG IT IS AND WHICH SPRINT IT IS IN.
+//
+// All five columns have existed since migration 0002, the query grammar
+// filters on every one and sorts on three, a row's `overdue` flag is derived
+// from the due date, and every sprint figure is a sum over the sizing pair.
+// NOTHING COULD SET ANY OF THEM: the only producer of a sprint patch in the
+// tree was the rollover, which moves work already in a sprint — so a sprint
+// could never come to hold anything, an estimate could never exist, and both
+// the overdue predicate and the whole sprint report were dead surface that
+// looked like an empty company.
+func TestACreateSetsWhenAndHowBigAndWhichSprint(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "ship the planner", "project": "ENG",
+		"due": "2031-04-16", "start": "2031-04-01",
+		"estimate_minutes": 240, "points": 8, "sprint": 4,
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	if len(trk.created) != 1 {
+		t.Fatalf("created %d tasks, want 1", len(trk.created))
+	}
+	task := trk.created[0]
+	if task.DueAt == nil || task.DueAt.Format("2006-01-02") != "2031-04-16" {
+		t.Errorf("due is %v, want 2031-04-16", task.DueAt)
+	}
+	// A TOKEN THAT NAMED A DAY SETS THE ALL-DAY FLAG, so a renderer shows
+	// "16 April" rather than "16 April, 00:00" for a date nobody timed.
+	if !task.DueAllDay {
+		t.Error("a date with no time on it did not set the all-day flag")
+	}
+	if task.StartAt == nil || task.StartAt.Format("2006-01-02") != "2031-04-01" {
+		t.Errorf("start is %v, want 2031-04-01", task.StartAt)
+	}
+	if task.EstimateMinutes != 240 || task.Points != 8 {
+		t.Errorf("sizing is %d minutes / %v points, want 240 and 8",
+			task.EstimateMinutes, task.Points)
+	}
+	if task.Sprint == nil || *task.Sprint != 4 {
+		t.Errorf("sprint is %v, want 4 — nothing else in the tree can put a "+
+			"task into one", task.Sprint)
+	}
+}
+
+// THE SAME GRAMMAR THE FILTER READS. A model that can ask for everything due
+// this week can say "due this week" about one task, and a second spelling here
+// would be the copy that stops matching.
+func TestADueDateTakesTheRelativeWordsTheFilterTakes(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "soon", "project": "ENG", "due": "+3d",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	if trk.created[0].DueAt == nil {
+		t.Fatal("`+3d` resolved to no due date at all")
+	}
+	// AND A TOKEN NOTHING CAN READ IS REFUSED BY NAME rather than dropped:
+	// a write that succeeds while silently setting no date is the one a
+	// model reads as having set one.
+	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "whenever", "project": "ENG", "due": "next tuesday-ish",
+	})
+	if !bad.Failed {
+		t.Error("an unreadable due date was accepted, so the task was filed " +
+			"with no date and the answer said it worked")
+	}
+}
+
+// AN UPDATE MOVES THEM, AND `null` TAKES ONE BACK OFF. "Leave the due date
+// alone" and "this has no due date any more" are different edits, and a tool
+// that could only say the first makes a date impossible to remove.
+func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "due": "2031-05-02", "points": 13, "sprint": 7,
+	}); got.Failed {
+		t.Fatalf("update failed: %s", got.Output)
+	}
+	patch := trk.patched[len(trk.patched)-1]
+	if patch.DueAt == nil || patch.DueAt.Format("2006-01-02") != "2031-05-02" {
+		t.Errorf("the patch's due date is %v, want 2031-05-02", patch.DueAt)
+	}
+	if patch.Points == nil || *patch.Points != 13 {
+		t.Errorf("the patch's points are %v, want 13", patch.Points)
+	}
+	if patch.Sprint == nil || *patch.Sprint != 7 {
+		t.Errorf("the patch's sprint is %v, want 7", patch.Sprint)
+	}
+	// A SPRINT MOVE IS ITS OWN KIND, because that is what the change is TO
+	// everybody downstream: the team is told their commitment moved, where
+	// `fields` would tell them a column changed.
+	if kind := trk.kinds[len(trk.kinds)-1]; kind != tracker.ChangeSprint {
+		t.Errorf("a sprint move was filed as %q, want %q", kind, tracker.ChangeSprint)
+	}
+
+	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "due": nil, "sprint": nil,
+	}); got.Failed {
+		t.Fatalf("clearing failed: %s", got.Output)
+	}
+	cleared := trk.patched[len(trk.patched)-1]
+	// A CLEAR IS A VALUE, not an absent field: nil on a patch means "not
+	// named". The applier reads the zero instant and the zero sprint as
+	// empty, exactly as the rollover already spells a clear.
+	if cleared.DueAt == nil || !cleared.DueAt.IsZero() {
+		t.Errorf("a cleared due date is %v, want the zero instant the applier "+
+			"reads as empty", cleared.DueAt)
+	}
+	if cleared.Sprint == nil || *cleared.Sprint != 0 {
+		t.Errorf("a cleared sprint is %v, want 0", cleared.Sprint)
+	}
+	// AND TAKING A TASK OUT IS A SPRINT CHANGE, like putting one in. The
+	// gate read only the SET half, so a removal was filed as `fields` — and
+	// a removal is the half a sprint's team most needs to hear, since it is
+	// commitment leaving their window. The writer's own rollover already
+	// files a cleared sprint under this kind.
+	if kind := trk.kinds[len(trk.kinds)-1]; kind != tracker.ChangeSprint {
+		t.Errorf("a sprint CLEAR was filed as %q, want %q", kind, tracker.ChangeSprint)
+	}
+}
+
+// A SIZE IS NOT NEGATIVE AND A SPRINT IS NUMBERED FROM ONE, and both are
+// refused naming the rule rather than stored — a negative estimate would be
+// subtracted from its own sprint's total.
+func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	for _, args := range []map[string]any{
+		{"title": "x", "project": "ENG", "points": -3},
+		{"title": "x", "project": "ENG", "estimate_minutes": -60},
+		{"title": "x", "project": "ENG", "sprint": 0},
+	} {
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); !got.Failed {
+			t.Errorf("create(%v) was accepted, want a refusal naming the rule", args)
+		}
+	}
+}
+
+// AN UNREADABLE SIZE IS REFUSED, NOT READ AS ZERO.
+//
+// This is the date rule above applied to the half of `readSchedule` that was
+// not written to it. Every one of these fields is a POINTER because its zero
+// is a setting — zero minutes and zero points both mean UNESTIMATED — so a
+// value the parser could not read became `&0`, the write succeeded, and the
+// answer said `applied` while the estimate had been WIPED. A model reads that
+// as having set one.
+//
+// `"2 days"` is the case that makes it more than a missed refusal: the reader
+// was `fmt.Sscanf("%d")`, which takes the leading integer and stops, so a
+// two-day estimate was stored as two MINUTES with nothing to say so.
+func TestAnUnreadableSizeIsRefusedRatherThanReadAsZero(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		field string
+		value any
+	}{
+		{"an estimate in words", "estimate_minutes", "two hours"},
+		{"an estimate with a unit", "estimate_minutes", "2 days"},
+		{"a fractional minute", "estimate_minutes", 1.5},
+		{"points in words", "points", "five"},
+		{"a sprint by name", "sprint", "next"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+			got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+				"title": "sized wrong", "project": "ENG", tc.field: tc.value,
+			})
+			if !got.Failed {
+				t.Fatalf("%s=%v was accepted; the task was filed as "+
+					"UNESTIMATED and the answer said it worked", tc.field, tc.value)
+			}
+			// AND THE REFUSAL NAMES THE FIELD, which is the whole of the
+			// repair: a model cannot fix what it is not told about.
+			if !strings.Contains(got.Output, tc.field) {
+				t.Errorf("the refusal does not name `%s`: %s", tc.field, got.Output)
+			}
+		})
+	}
+}
+
+// AND A NUMBER THAT READS IS STILL TAKEN, so the guard above refuses the
+// unreadable rather than the unfamiliar. A JSON number, a whole float and a
+// numeric string are all the same estimate.
+func TestAReadableSizeIsStillTakenInEverySpelling(t *testing.T) {
+	t.Parallel()
+	for _, value := range []any{90, 90.0, "90"} {
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+		got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+			"title": "sized", "project": "ENG", "estimate_minutes": value,
+		})
+		if got.Failed {
+			t.Fatalf("estimate_minutes=%v (%T) was refused: %s", value, value, got.Output)
+		}
+		if trk.created[0].EstimateMinutes != 90 {
+			t.Errorf("estimate_minutes=%v (%T) stored %d, want 90",
+				value, value, trk.created[0].EstimateMinutes)
+		}
+	}
+}
+
+// AND ZERO IS STILL A VALUE somebody can set, which is what distinguishes this
+// from refusing falsy input: "this takes no time" is a statement, and the
+// pointer is what carries it.
+func TestAnExplicitZeroEstimateIsSet(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "free", "project": "ENG", "estimate_minutes": 0,
+	})
+	if got.Failed {
+		t.Fatalf("an explicit zero estimate was refused: %s", got.Output)
+	}
+}
+
+// A SIZE THAT IS NOT A NUMBER IS REFUSED, and NaN is the one that gets past a
+// range check by definition: every comparison with it is false, so the
+// `points < 0` guard said nothing about it and it reached the writer. An
+// infinity passed the same guard honestly. Neither is a value a sprint's
+// figures can be summed from, and JSON cannot encode either — so the failure
+// would have surfaced somewhere downstream with no memory of who typed it.
+func TestANonFiniteSizeIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		field string
+		value any
+	}{
+		{"points as NaN", "points", "NaN"},
+		{"points as an infinity", "points", "Inf"},
+		{"points as a spelled-out infinity", "points", "infinity"},
+		{"points as a negative infinity", "points", "-Inf"},
+		// `int(+Inf)` is not defined by the language: it lands on the
+		// platform's minimum int, which the negative check then refused
+		// as a NEGATIVE estimate — the right answer for the wrong reason,
+		// naming a sign nobody typed.
+		{"an infinite estimate", "estimate_minutes", math.Inf(1)},
+		{"a NaN estimate", "estimate_minutes", math.NaN()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+			got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+				"title": "sized wrong", "project": "ENG", tc.field: tc.value,
+			})
+			if !got.Failed {
+				t.Fatalf("%s=%v was accepted and reached the writer", tc.field, tc.value)
+			}
+			if !strings.Contains(got.Output, tc.field) {
+				t.Errorf("the refusal does not name `%s`: %s", tc.field, got.Output)
+			}
+		})
+	}
+}
+
+// THE UPDATE SCHEMA ADMITS THE NULL ITS OWN DESCRIPTION PROMISES.
+//
+// Clearing a date, a size or a sprint is done by passing null; `readSchedule`
+// reads it and the description says so. The declared type said `string` and
+// `integer` alone, so a caller that VALIDATES against this schema refuses the
+// null before the tool is reached — a gesture documented, implemented, and
+// unreachable through any strict client.
+//
+// A CREATE STAYS NON-NULLABLE, because a create has nothing to clear: a null
+// there is a value nobody meant rather than an instruction.
+func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	typeOf := func(tool, field string) any {
+		t.Helper()
+		entry, held := reg.Lookup(tool)
+		if !held {
+			t.Fatalf("no %s tool", tool)
+		}
+		props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+		prop, _ := props[field].(map[string]any)
+		return prop["type"]
+	}
+
+	for _, field := range []string{"due", "start", "estimate_minutes", "points", "sprint"} {
+		update := typeOf(builtin.UpdateWorkItemTool, field)
+		types, ok := update.([]string)
+		if !ok {
+			t.Errorf("update's %q is %v (%T), want a union admitting null",
+				field, update, update)
+			continue
+		}
+		if !slices.Contains(types, "null") {
+			t.Errorf("update's %q is %v and cannot express the clear its own "+
+				"description documents", field, types)
+		}
+		// AND THE VALUE TYPE SURVIVES the union: admitting null must not
+		// stop the field accepting what it is for.
+		if len(types) != 2 || types[1] != "null" {
+			t.Errorf("update's %q is %v, want its own type then null", field, types)
+		}
+
+		if create := typeOf(builtin.CreateWorkItemTool, field); create == nil {
+			t.Errorf("create's %q declares no type at all", field)
+		} else if _, union := create.([]string); union {
+			t.Errorf("create's %q is %v; a create has nothing to clear", field, create)
+		}
+	}
+}
+
+// A SCHEDULE EDIT REACHES THE WAKE IT ANNOUNCES.
+//
+// The notification's deltas are computed between the task this tool READ and
+// a snapshot of it with the patch applied. That snapshot was a field-by-field
+// reimplementation of the writer's own merge, and it never learned the
+// schedule fields — so the durable row took the new due date while the
+// snapshot kept the old one, `TaskDeltas` compared a task against itself on
+// exactly those fields, and every date, estimate, size and sprint a seat moved
+// arrived as a change that changed nothing.
+//
+// The snapshot is the writer's merge now, so this asserts the CONSEQUENCE
+// rather than the copy: a test over the field list would pass again the day
+// somebody adds a field to the patch and forgets it, which is the bug.
+func TestASceduleEditReachesTheNotification(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	seed := trk.tasks["ENG-1"]
+	seed.Task.DueAt = nil
+	seed.Task.EstimateMinutes = 30
+	trk.tasks["ENG-1"] = seed
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "due": "2031-04-16", "estimate_minutes": 90,
+	})
+	if got.Failed {
+		t.Fatalf("update failed: %s", got.Output)
+	}
+	notify := trk.notified[len(trk.notified)-1]
+	if notify == nil {
+		t.Fatal("the write carried no notification at all")
+	}
+	for _, field := range []string{"due", "estimate"} {
+		delta, held := notify.Fields[field]
+		if !held {
+			t.Errorf("the wake carries no %q delta, so the card announces a "+
+				"change that changed nothing (fields: %v)", field, notify.Fields)
+			continue
+		}
+		if delta.To == delta.From {
+			t.Errorf("%s moved from %q to %q — the snapshot was compared "+
+				"against itself", field, delta.From, delta.To)
+		}
+	}
+	if got := notify.Fields["estimate"]; got.From != "30m" || got.To != "90m" {
+		t.Errorf("estimate delta = %+v, want 30m → 90m", got)
 	}
 }

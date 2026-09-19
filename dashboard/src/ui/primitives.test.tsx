@@ -1,0 +1,600 @@
+/**
+ * The three affordances a JSON panel is — copy it, save it, select it — and
+ * the one mark this file still draws.
+ *
+ * The three are asserted here rather than on a screen because each was WRONG
+ * in the same way before, or would be — silently. A copy that reached no
+ * clipboard clicked exactly like one that did, select-all took the whole
+ * document while looking like it had done something, and a download whose
+ * anchor carries no `download` attribute opens the JSON in a tab rather than
+ * saving it, which reads as success to everyone including the reader. A test
+ * that only rendered the buttons would have passed through all of them.
+ *
+ * `PhaseTag` joins them for exactly that reason. It is four lines over
+ * `@crewlethq/ui`'s `Tag`, and its whole content is a spelling: a variant the
+ * package does not know renders the NEUTRAL pill rather than failing, so
+ * `execute` where `phase-execute` was meant is a phase that silently stops
+ * being a colour a reader can follow across four screens, and nothing in the
+ * build says so.
+ */
+
+import { StrictMode } from "react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { CopyButton, DownloadButton, PhaseTag } from "./primitives.tsx";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  // `vi.unstubAllGlobals` does not reach a property defined on `document`, so
+  // a stub left here is a stub the next test inherits — and the clipboard's
+  // fallback branch turns on whether this exists at all.
+  delete (document as Partial<Document>).execCommand;
+});
+
+/** Give the component the Clipboard API, and report what it was handed. */
+function withClipboard(): { written: string[]; fail?: boolean } {
+  const state: { written: string[]; fail?: boolean } = { written: [] };
+  vi.stubGlobal("navigator", {
+    ...globalThis.navigator,
+    clipboard: {
+      writeText: (text: string) => {
+        if (state.fail) return Promise.reject(new Error("refused"));
+        state.written.push(text);
+        return Promise.resolve();
+      },
+    },
+  });
+  return state;
+}
+
+async function click(label: string) {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(label, "i") }));
+  });
+}
+
+describe("CopyButton", () => {
+  test("puts the text on the clipboard and says it did", async () => {
+    const clipboard = withClipboard();
+    render(<CopyButton text='{"turn_id":"t-1"}' />);
+
+    await click("copy");
+
+    expect(clipboard.written).toEqual(['{"turn_id":"t-1"}']);
+    // THE FEEDBACK IS THE FEATURE. The clipboard is invisible; without the
+    // control saying so, a working copy and a dead button are the same
+    // event.
+    expect(screen.getByRole("button").textContent).toContain("Copied");
+  });
+
+  test("falls back to execCommand where the Clipboard API is absent", async () => {
+    // Which is not a hypothetical: the API is gated on a secure context, so
+    // it is simply undefined on the http://<lan-ip>:8000 anyone reads the
+    // dashboard of a node that is not their laptop at.
+    vi.stubGlobal("navigator", { ...globalThis.navigator, clipboard: undefined });
+    const copied: string[] = [];
+    const exec = vi.fn(() => {
+      const field = document.querySelector("textarea");
+      copied.push(field?.value ?? "");
+      return true;
+    });
+    Object.defineProperty(document, "execCommand", {
+      writable: true,
+      configurable: true,
+      value: exec,
+    });
+
+    render(<CopyButton text="fallback text" />);
+    await click("copy");
+
+    expect(exec).toHaveBeenCalledWith("copy");
+    expect(copied).toEqual(["fallback text"]);
+    expect(screen.getByRole("button").textContent).toContain("Copied");
+    // The scratch field is not left behind for the next reader to tab into.
+    expect(document.querySelector("textarea")).toBeNull();
+  });
+
+  test("the fallback hands focus back to the control it was taken from", async () => {
+    // `select()` takes focus and `remove()` then drops it on the document
+    // body, so a fallback copy left the reader's next Tab starting from the
+    // top of the page rather than from the button they had just pressed — on
+    // exactly the plain-http origin this branch exists for.
+    vi.stubGlobal("navigator", { ...globalThis.navigator, clipboard: undefined });
+    Object.defineProperty(document, "execCommand", {
+      writable: true,
+      configurable: true,
+      value: () => {
+        // THE THEFT IS STAGED, because jsdom's own `select()` does not move
+        // focus and a browser's does. Without it this case cannot fail, which
+        // is worse than not having it: what is asserted below is the recovery
+        // from the state a real engine leaves, not jsdom's manners.
+        document.querySelector("textarea")?.focus();
+        return true;
+      },
+    });
+
+    render(<CopyButton text="x" />);
+    const button = screen.getByRole("button");
+    button.focus();
+
+    await click("copy");
+
+    expect(screen.getByRole("button").textContent).toContain("Copied");
+    expect(document.activeElement).toBe(button);
+  });
+
+  test("says so when the browser refuses, rather than looking like it worked", async () => {
+    const clipboard = withClipboard();
+    clipboard.fail = true;
+    Object.defineProperty(document, "execCommand", {
+      writable: true,
+      configurable: true,
+      value: () => false,
+    });
+
+    render(<CopyButton text="anything" />);
+    await click("copy");
+
+    expect(screen.getByRole("button").textContent).toContain("Copy failed");
+  });
+
+  test("settles back to Copy so the label is never a stale claim", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    withClipboard();
+    render(<CopyButton text="x" />);
+
+    await click("copy");
+    expect(screen.getByRole("button").textContent).toContain("Copied");
+
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+    const label = screen.getByRole("button").textContent ?? "";
+    expect(label).toContain("Copy");
+    expect(label).not.toContain("Copied");
+  });
+  test("a refusal does NOT settle back, because the reader may not be watching", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const clipboard = withClipboard();
+    clipboard.fail = true;
+    Object.defineProperty(document, "execCommand", {
+      writable: true,
+      configurable: true,
+      value: () => false,
+    });
+    render(<CopyButton text="x" />);
+
+    await click("copy");
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    // Reverting this would put the failure back into the state the control
+    // exists to leave: a button offering its action again is
+    // indistinguishable from one that was never pressed.
+    expect(screen.getByRole("button").textContent).toContain("Copy failed");
+    expect(screen.getByRole("status").textContent).toBe("the browser refused the clipboard");
+  });
+
+  test("an answer that arrives after the screen is gone arms nothing", async () => {
+    vi.useFakeTimers();
+    let settle: (() => void) | undefined;
+    vi.stubGlobal("navigator", {
+      ...globalThis.navigator,
+      clipboard: {
+        writeText: () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          }),
+      },
+    });
+
+    const view = render(<CopyButton text="x" />);
+    await click("copy");
+    // Chrome can hold `clipboard-write` behind a permission prompt, so the
+    // promise is still outstanding when the reader navigates away.
+    view.unmount();
+    const armed = vi.getTimerCount();
+
+    await act(async () => {
+      settle?.();
+      await Promise.resolve();
+    });
+
+    // The unmount cleanup has already run; a late answer that armed the reset
+    // timer would arm the one timer nothing can clear.
+    expect(vi.getTimerCount()).toBe(armed);
+  });
+
+  test("resolves a thunk on click, so a live record is not serialized per frame", async () => {
+    const clipboard = withClipboard();
+    let calls = 0;
+    const produce = () => {
+      calls += 1;
+      return "assembled once";
+    };
+    const { rerender } = render(<CopyButton text={produce} />);
+    // Re-rendered as a streamed frame would: the thunk is not called.
+    rerender(<CopyButton text={produce} />);
+    rerender(<CopyButton text={produce} />);
+    expect(calls).toBe(0);
+
+    await click("copy");
+    expect(calls).toBe(1);
+    expect(clipboard.written).toEqual(["assembled once"]);
+  });
+
+  test("a StrictMode remount leaves the control still able to answer", async () => {
+    // The other half of the `live` flag. StrictMode mounts, unmounts and
+    // mounts again, so a flag only ever CLEARED on the way out stays cleared,
+    // and every click after that would resolve into a component that has
+    // decided it is gone.
+    const clipboard = withClipboard();
+    render(
+      <StrictMode>
+        <CopyButton text="x" />
+      </StrictMode>,
+    );
+
+    await click("copy");
+
+    expect(clipboard.written).toEqual(["x"]);
+    expect(screen.getByRole("button").textContent).toContain("Copied");
+  });
+
+  test("a refusal replaces the offer in the tooltip with the reason", async () => {
+    // The at-rest `title` describes what the button WILL do, which is the one
+    // thing that just did not happen. Every route passes one.
+    const clipboard = withClipboard();
+    clipboard.fail = true;
+    Object.defineProperty(document, "execCommand", {
+      writable: true,
+      configurable: true,
+      value: () => false,
+    });
+    render(<CopyButton text="anything" title="copy this record" />);
+
+    const button = screen.getByRole("button");
+    expect(button.getAttribute("title")).toBe("copy this record");
+    await click("copy");
+    expect(button.getAttribute("title")).toBe("the browser refused the clipboard");
+  });
+
+  test("the status text is not part of the button's accessible name", async () => {
+    withClipboard();
+    render(<CopyButton text="x" />);
+    await click("copy");
+
+    // getByRole matches on the accessible NAME, so an exact-name query is
+    // the assertion: with the live region inside the button, the control
+    // was named "Copied copied to the clipboard".
+    expect(screen.getByRole("button", { name: "Copied" })).toBeDefined();
+    expect(screen.getByRole("status").textContent).toBe("copied to the clipboard");
+  });
+});
+
+describe("DownloadButton", () => {
+  /**
+   * What the primitive handed the browser: the blob it built, the anchor it
+   * clicked, and the object URL it freed afterwards.
+   *
+   * THE BLOB IS THE ASSERTION POINT, never the `blob:` URL that comes back.
+   * Vitest 5's jsdom shim builds that URL by reading `blob[impl]._buffer`,
+   * which jsdom 30 renamed to `_bytes` — so resolving one yields the nine-byte
+   * string "undefined" for every payload, silently. The blob object itself is
+   * jsdom's own and its `text()` is exact.
+   *
+   * The click is intercepted in the CAPTURE phase and cancelled, which does
+   * two jobs at once: it reads the anchor at the instant the primitive clicked
+   * it — href and download already set, still in the document — and it stops
+   * jsdom following the hyperlink, which it does regardless of `download` and
+   * reports as an unattributed "Not implemented: navigation to another
+   * Document" line at the end of the run.
+   */
+  let seen: {
+    blobs: Blob[];
+    clicked: { href: string; download: string; connected: boolean }[];
+    revoked: string[];
+  };
+  let watchAnchors: (event: Event) => void;
+
+  beforeEach(() => {
+    seen = { blobs: [], clicked: [], revoked: [] };
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob: Blob | MediaSource) => {
+      seen.blobs.push(blob as Blob);
+      return `blob:test/${seen.blobs.length}`;
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url: string) => {
+      seen.revoked.push(url);
+    });
+    watchAnchors = (event: Event) => {
+      const target = event.target as HTMLElement;
+      if (target instanceof HTMLAnchorElement) {
+        seen.clicked.push({
+          href: target.href,
+          download: target.download,
+          connected: target.isConnected,
+        });
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("click", watchAnchors, true);
+  });
+
+  afterEach(async () => {
+    // DRAIN THE REVOKE the primitive armed for the next macrotask, before the
+    // spies that record it are torn down.
+    //
+    // A test that leaves it pending hands it to the NEXT test's spies, which is
+    // not a hypothetical: the counter restarts at 1 each time, so the leaked
+    // call recorded `blob:test/1` into a ledger whose own click had not
+    // happened yet, and "frees the object URL" went red about one run in
+    // fourteen. This afterEach is registered after the file's own, and hooks
+    // run last-registered-first, so it drains while the spies and the fake
+    // clock are still installed.
+    await act(async () => {
+      if (vi.isFakeTimers()) vi.advanceTimersByTime(1);
+      else await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    document.removeEventListener("click", watchAnchors, true);
+  });
+
+  test("hands the browser the text, under the name it was given", async () => {
+    render(<DownloadButton text='{"turn_id":"t-1"}' filename="turn-t-1.json" />);
+
+    await click("download");
+
+    expect(seen.blobs).toHaveLength(1);
+    expect(await seen.blobs[0]!.text()).toBe('{"turn_id":"t-1"}');
+    expect(seen.blobs[0]!.type).toBe("application/json;charset=utf-8");
+    expect(seen.clicked).toEqual([
+      { href: "blob:test/1", download: "turn-t-1.json", connected: true },
+    ]);
+    // THE FEEDBACK IS THE FEATURE, as it is for the clipboard: a download
+    // lands in a folder the reader is not looking at.
+    expect(screen.getByRole("button").textContent).toContain("Downloading");
+    // And the announcement NAMES the file, since "Downloaded" tells a reader
+    // who cannot see the download shelf nothing about what to go and open.
+    expect(screen.getByRole("status").textContent).toBe("download started — turn-t-1.json");
+    // The scratch anchor is not left behind for the next reader to tab into.
+    expect(document.querySelector("a")).toBeNull();
+  });
+
+  test("frees the object URL, but only after the click that reads it", async () => {
+    // WITHOUT `shouldAdvanceTime`, unlike the reset case below: this timer is
+    // armed for zero, so a clock that also advances on its own fires it
+    // before the assertion that it has not.
+    vi.useFakeTimers();
+    render(<DownloadButton text="body" filename="x.json" />);
+
+    await click("download");
+    // Not yet: the click QUEUES the download, and revoking inside the same
+    // task races the fetch that is about to read the entry.
+    expect(seen.revoked).toEqual([]);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    // …and not never, either: the blob is a second copy of the whole turn,
+    // and a reader comparing turns clicks this several times.
+    expect(seen.revoked).toEqual(["blob:test/1"]);
+  });
+
+  test("a second identical refusal still reaches the live region", async () => {
+    // An `aria-live` region announces CHANGES, and a refusal holds rather
+    // than settling back — so with the text alone, the second click and every
+    // one after it was silence for a reader who cannot see the button.
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      throw new Error("refused");
+    });
+    render(<DownloadButton text="x" filename="x.json" />);
+
+    await click("download");
+    const first = screen.getByRole("status").firstElementChild;
+    await click("download");
+
+    expect(screen.getByRole("status").textContent).toBe("the browser refused the download");
+    // A NEW NODE, not the same one re-rendered: that is the change.
+    expect(screen.getByRole("status").firstElementChild).not.toBe(first);
+  });
+
+  test("resolves a thunk on click, so a live turn is not serialized per frame", async () => {
+    let calls = 0;
+    const produce = () => {
+      calls += 1;
+      return "assembled once";
+    };
+    const { rerender } = render(<DownloadButton text={produce} filename="x.json" />);
+    // Re-rendered as a streamed frame would: the thunk is not called.
+    rerender(<DownloadButton text={produce} filename="x.json" />);
+    rerender(<DownloadButton text={produce} filename="x.json" />);
+    expect(calls).toBe(0);
+
+    await click("download");
+    expect(calls).toBe(1);
+    expect(await seen.blobs[0]!.text()).toBe("assembled once");
+  });
+
+  test("says so when the browser refuses, rather than looking like it worked", async () => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      throw new Error("refused");
+    });
+
+    render(<DownloadButton text="anything" filename="x.json" />);
+    await click("download");
+
+    expect(screen.getByRole("button").textContent).toContain("Download failed");
+    expect(screen.getByRole("status").textContent).toBe("the browser refused the download");
+  });
+
+  test("refuses outright where an anchor cannot carry a download", async () => {
+    // The one failure worse than a dead button. Without the attribute the
+    // same click NAVIGATES to the JSON — a tab full of text, which looks
+    // enough like something happening that nobody checks it saved.
+    const proto = HTMLAnchorElement.prototype;
+    const had = Object.getOwnPropertyDescriptor(proto, "download")!;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (proto as any).download;
+    try {
+      render(<DownloadButton text="anything" filename="x.json" />);
+      await click("download");
+    } finally {
+      Object.defineProperty(proto, "download", had);
+    }
+
+    expect(seen.clicked).toEqual([]);
+    expect(seen.blobs).toEqual([]);
+    expect(screen.getByRole("button").textContent).toContain("Download failed");
+  });
+
+  test("offers a name a filesystem will take, whatever it was handed", async () => {
+    // A turn id comes off the URL, so the name is composed from data. The
+    // `download` attribute is only a SUGGESTION — each engine sanitises it
+    // its own way — so it is decided here instead, once.
+    render(<DownloadButton text="x" filename={"../etc/pa ss\nwd"} />);
+
+    await click("download");
+
+    expect(seen.clicked[0]!.download).toBe("etc-pa-ss-wd");
+    expect(screen.getByRole("status").textContent).toBe("download started — etc-pa-ss-wd");
+  });
+
+  test("keeps a name whose letters are not Latin, extension and all", async () => {
+    // `\w` is ASCII-only, so an ASCII class collapsed the whole stem to one
+    // `-` and the leading-strip then took that hyphen AND the extension's own
+    // dot with it: this arrived as a file called `json`.
+    render(<DownloadButton text="x" filename={"日本語-résumé.json"} />);
+
+    await click("download");
+
+    expect(seen.clicked[0]!.download).toBe("日本語-résumé.json");
+  });
+
+  test("cuts a long name to a byte budget, not a code-unit one", async () => {
+    // MAX_FILENAME is 120 BYTES — every filesystem in its comment counts
+    // bytes — and `slice` counts UTF-16 code units, which agree only for
+    // ASCII. The sanitizer deliberately keeps letters in every script (the
+    // case above exists for that), so this is reachable rather than
+    // hypothetical: 120 units of Japanese is 360 bytes, past ext4's 255 and
+    // well past eCryptfs's 143.
+    render(<DownloadButton text="x" filename={"日".repeat(400) + ".json"} />);
+
+    await click("download");
+
+    const name = seen.clicked[0]!.download as string;
+    expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(120);
+    // The extension SURVIVES the cut — a name that loses `.json` opens in the
+    // wrong application — and what was cut is the stem.
+    expect(name.endsWith(".json")).toBe(true);
+    expect(name.startsWith("日")).toBe(true);
+  });
+
+  // A cut between the halves of a surrogate pair leaves a lone surrogate, which
+  // is not valid UTF-8: it reaches the disk as U+FFFD, so the name the reader
+  // sees is not the name that was cut.
+  //
+  // SEVERAL EXTENSIONS, because one is not a test. `𠮷` is two UTF-16 units and
+  // four UTF-8 bytes, so a cut that walks units lands between the halves only
+  // when the budget divides to an ODD count — with `.json` it happens to come
+  // out even and reassembles into whole characters by luck. Varying the
+  // extension varies the budget, so the boundary falls both ways.
+  test.each([".json", ".md", ".txt", ".yaml"])(
+    "never cuts a character in half (%s)",
+    async (ext) => {
+      render(<DownloadButton text="x" filename={"𠮷".repeat(200) + ext} />);
+
+      await click("download");
+
+      const name = seen.clicked[0]!.download as string;
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(120);
+      // With the `u` flag a well-formed pair is ONE code point, so this class
+      // matches only a surrogate left on its own.
+      expect(/\p{Surrogate}/u.test(name)).toBe(false);
+      // And the round trip is lossless, which a lone surrogate would not be:
+      // encoding one yields U+FFFD and decoding gives back a different string.
+      expect(new TextDecoder().decode(new TextEncoder().encode(name))).toBe(name);
+    },
+  );
+
+  test("gives a name with no stem left one, rather than a bare extension", async () => {
+    render(<DownloadButton text="x" filename={"../.json"} />);
+
+    await click("download");
+
+    expect(seen.clicked[0]!.download).toBe("download.json");
+  });
+
+  test("collapses runs of separators rather than emitting them", async () => {
+    render(<DownloadButton text="x" filename={"turn - 1 -- draft.json"} />);
+
+    await click("download");
+
+    expect(seen.clicked[0]!.download).toBe("turn-1-draft.json");
+  });
+
+  test("keeps the extension when a name is too long to keep whole", async () => {
+    render(<DownloadButton text="x" filename={`${"t".repeat(400)}.json`} />);
+
+    const name = await click("download").then(() => seen.clicked[0]!.download);
+    expect(name).toHaveLength(120);
+    // A name trimmed to fit that loses its `.json` opens in the wrong
+    // application on every desktop there is.
+    expect(name.endsWith(".json")).toBe(true);
+  });
+});
+
+describe("PhaseTag", () => {
+  // THE PREFIX IS THE WHOLE COMPONENT. uilet's `TagVariant` carries the phase
+  // vocabulary under its own names, separated from the status hues so the two
+  // families can never be confused inside one union — and a bare `execute`
+  // there is not a phase at all.
+  test("draws the three phases uilet has hues for", () => {
+    for (const [phase, variant] of [
+      ["onboarding", "phase-onboarding"],
+      ["execute", "phase-execute"],
+      ["review", "phase-review"],
+    ] as const) {
+      const { container } = render(<PhaseTag phase={phase} />);
+      expect(container.querySelector(`.crewlet-tag--${variant}`)).not.toBeNull();
+      // COLOUR IS NEVER THE ONLY CARRIER: the word is beside it, always.
+      expect(container.textContent).toBe(phase);
+    }
+  });
+
+  // THE ENGINE EMITS MORE PHASES THAN THE DESIGN SYSTEM DRAWS — `subagent`,
+  // `auxiliary` and `judge` — and a phase this build has never heard of is the
+  // same case, because a rolling upgrade puts one on the wire. Neutral is the
+  // honest pill: the word still reads, and nothing claims a hue that would
+  // collide with one of the three.
+  test("a phase with no hue takes the neutral pill rather than none", () => {
+    for (const phase of ["subagent", "auxiliary", "judge", "a_phase_from_a_later_build"]) {
+      const { container } = render(<PhaseTag phase={phase} />);
+      expect(container.querySelector(".crewlet-tag--neutral")).not.toBeNull();
+      expect(container.textContent).toBe(phase);
+    }
+  });
+
+  // A RECORD WITH NO PHASE IS NOT A PHASE CALLED "". An empty pill is a
+  // coloured gap a reader has to hover to interrogate.
+  test("names an absent phase rather than drawing an empty pill", () => {
+    const { container } = render(<PhaseTag phase="" />);
+    // THE LABEL IS THE ASSERTION, not the glyph. `EmptyValue` draws the mark
+    // for the eye and the sentence for everyone else, and the sentence is the
+    // half a hover-only `title` never had.
+    expect(container.querySelector(".crewlet-empty-value")).not.toBeNull();
+    expect(container.textContent).toContain("No phase on this record");
+    expect(container.querySelector(".crewlet-tag--neutral")).not.toBeNull();
+  });
+
+  // The value is a column in the event store, and nothing normalises its case
+  // on the way out — so the lookup does, or a capitalised phase falls through
+  // to neutral and loses its hue on one screen and not the next.
+  test("a phase reaches the table whatever its case", () => {
+    const { container } = render(<PhaseTag phase="Execute" />);
+    expect(container.querySelector(".crewlet-tag--phase-execute")).not.toBeNull();
+    expect(container.textContent).toBe("execute");
+  });
+});
