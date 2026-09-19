@@ -204,6 +204,48 @@ func TestTheStampedIdentityBeatsTheFallback(t *testing.T) {
 	}
 }
 
+// A PARTITION THAT MIXES PRODUCERS IS FILED UNDER THE STATED IDENTITY, not
+// under whichever constituent happened to arrive first.
+//
+// A rolling upgrade puts both shapes on one stream — the retention that
+// carries a seat's wakes has no maxAge, and a parked seat republishes its
+// deliveries for hours — so one partition really can hold an old peer's event
+// with only a partition key beside a new one carrying the identity. Resolved
+// per event, the first constituent decided: an old event in front re-filed the
+// whole turn under the partition key, which for a direct message is exactly
+// the batch its next turn never looks up — the miss this pair of fields was
+// split apart to end.
+//
+// Preferring a STATED identity to an INFERRED one can never disagree with a
+// correct producer, because every event in a partition carries the same
+// identity: it is choosing between two spellings of one answer.
+func TestAMixedPartitionIsFiledUnderTheStatedIdentity(t *testing.T) {
+	older := evOf(t, map[string]any{notify.PartitionField: "chat:D1:root-1"})
+	newer := evOf(t, map[string]any{
+		notify.PartitionField:    "chat:D1:root-1",
+		notify.ConversationField: "chat:D1",
+	})
+	for _, tc := range []struct {
+		name string
+		evs  []*events.Event
+	}{
+		{"the old peer's event arrived first", []*events.Event{older, newer}},
+		{"and the other way round", []*events.Event{newer, older}},
+	} {
+		if got := notify.ConversationIdentityOfAll(tc.evs); got != "chat:D1" {
+			t.Errorf("%s: the partition resolved to %q, want the identity one of "+
+				"its events states", tc.name, got)
+		}
+	}
+	// AND THE INFERENCE STILL HAPPENS when nothing states one, which is the
+	// half a mixed fleet cannot lose: a partition of old events must not
+	// read as having no conversation at all.
+	if got := notify.ConversationIdentityOfAll([]*events.Event{older, older}); got != "chat:D1:root-1" {
+		t.Errorf("a partition of old events resolved to %q, want the one field "+
+			"they carry", got)
+	}
+}
+
 // THE QUEUE MINTS THE SAME FALLBACK NAMESPACE THIS PACKAGE DOES, and nothing
 // else pins the two spellings together: internal/queue holds its own hardcoded
 // copy of "event:" for a key function that answered empty, and it cannot

@@ -221,10 +221,21 @@ func ConversationIdentityOf(ev *events.Event) string {
 // construction, because a source's partition key refines its identity. See
 // [Prompt.ConversationIdentity].
 //
-// Per event it falls back to [PartitionField] for the peer reason
-// [ConversationIdentityOf] gives — a partition of old-build events must not
-// read as having no conversation. A partition that names neither yields "",
-// so the caller decides what that means rather than being handed one event's
+// TWO PASSES, AND THE ORDER IS THE POINT. A STATED identity outranks an
+// INFERRED one across the whole partition, rather than per event — so the
+// fallback to [PartitionField] runs only if no constituent names an identity
+// at all. Folded into one loop, the first event to name EITHER field decided,
+// and a partition can mix producers: a rolling upgrade puts one event from a
+// peer that predates the split, carrying only the partition, in front of one
+// carrying the true identity, and the whole turn is then filed under the
+// partition key — which for a direct message is precisely the batch its next
+// turn never looks up, the failure this split exists to remove.
+//
+// It can never disagree with a correct producer, which is what makes it free:
+// every event in a partition carries the SAME identity, so preferring a
+// stated one to a value inferred from a sibling is choosing between two
+// spellings of one answer. A partition that names neither yields "", so the
+// caller decides what that means rather than being handed one event's
 // fallback as if it described the whole partition.
 func ConversationIdentityOfAll(evs []*events.Event) string {
 	for _, ev := range evs {
@@ -233,6 +244,14 @@ func ConversationIdentityOfAll(evs []*events.Event) string {
 		}
 		if id, _ := ev.Payload[ConversationField].(string); id != "" {
 			return id
+		}
+	}
+	// Nothing STATED one. Now infer, for the peer reason
+	// [ConversationIdentityOf] gives — a partition of old-build events must
+	// not read as having no conversation.
+	for _, ev := range evs {
+		if ev == nil {
+			continue
 		}
 		if key, _ := ev.Payload[PartitionField].(string); key != "" {
 			return key
