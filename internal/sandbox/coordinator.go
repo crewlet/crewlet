@@ -649,8 +649,14 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 		// FAIL OPEN. An unreadable store must not swallow an ordinary
 		// message: handling it as a normal inbound is recoverable, dropping
 		// it is not.
+		// BOTH KEYS. The match turns on the identity and falls back to
+		// the partition for a row parked before an identity was
+		// written, so a line naming one of them cannot say which read
+		// was attempted against what — and on a direct message the two
+		// are different values.
 		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
-			"agent", handle, "conversation", conv.Identity, "error", err.Error())
+			"agent", handle, "conversation", conv.Identity,
+			"partition", conv.Partition, "error", err.Error())
 		return false, nil
 	}
 	if !found {
@@ -668,8 +674,20 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 		// not ALSO run as an unrelated message.
 		return true, nil
 	}
+	// FOUR VALUES, BECAUSE THE MATCH HAS TWO ENDS. The delivery's pair and
+	// the row's pair together are what say WHICH row won and WHY: a row
+	// whose conversation equals the delivery's was admitted on the
+	// identity, a row with no conversation at all was matched on the
+	// partition fallback because it predates the split, and two questions
+	// parked on one direct-message line are told apart by the partitions
+	// alone — [ConversationRef.Best] prefers the row whose batch the reply
+	// arrived in. Logging the identity by itself left every one of those
+	// indistinguishable from the others.
 	log.InfoContext(ctx, "sandbox_clarification_answered",
-		"turn_id", claimed.TurnID, "conversation", conv.Identity)
+		"turn_id", claimed.TurnID,
+		"conversation", conv.Identity, "partition", conv.Partition,
+		"run_conversation", claimed.ConversationKey,
+		"run_partition", claimed.PartitionKey)
 	// The claim CLOSED THE QUESTION and took the seat: the parked run freed
 	// it, and re-entering the Execute loop is work like any other. One move,
 	// so no delivery sees the seat between the two halves.

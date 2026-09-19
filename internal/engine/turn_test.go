@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1534,6 +1537,47 @@ func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 		}
 		if len(r.reqs) != 0 {
 			t.Errorf("%s: a turn ran on a seat parked on a coding run", name)
+		}
+	}
+}
+
+// AND A DISPATCH THAT COULD NOT BE MADE NAMES BOTH KEYS IT WAS CARRYING.
+//
+// The offer carries both because only the store knows which age of row it is
+// matching, so a line naming the identity alone cannot say what was compared
+// against what — and this is the shape where they differ, a top-level reply
+// on a DM line whose question was parked from a thread on it. Not parallel:
+// it swaps the process-wide logger, which this package otherwise leaves at
+// its boot default.
+func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
+	logs := &logBuffer{}
+	logging.Configure(slog.LevelWarn, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (bool, error) {
+		return false, errors.New("the coordination store is unreachable")
+	}
+	d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:D1")})
+
+	records := logs.records(t, "sandbox_answer_dispatch_failed")
+	if len(records) != 1 {
+		t.Fatalf("%d lines recorded the failed dispatch, want one", len(records))
+	}
+	for key, want := range map[string]any{
+		"conversation": "chat:D1", "partition": "chat:D1",
+	} {
+		if records[0][key] != want {
+			t.Errorf("%s = %v, want %v — a reader cannot tell what was "+
+				"compared against what", key, records[0][key], want)
 		}
 	}
 }

@@ -1,9 +1,12 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -12,8 +15,41 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
+
+// captureLogs points the engine logger at a buffer for the length of one test
+// and puts it back afterwards.
+//
+// The writer is mutex-guarded because the root logger is process-wide: this
+// package's TestMain sends every line to io.Discard, and a swap that handed
+// out an unguarded buffer would be a data race the moment anything else in
+// the process logged.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func captureLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	var out syncBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	return &out
+}
 
 // resumeSpy records re-entries and can be made to fail.
 type resumeSpy struct {
@@ -1864,6 +1900,104 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 	calls := rig.resumer.calls()
 	if len(calls) != 1 || calls[0].Run.TurnID != "t1" {
 		t.Fatalf("resumed %+v, want the one run that asked", calls)
+	}
+}
+
+// AND THE LINE THAT RECORDS IT NAMES BOTH ENDS OF THE MATCH.
+//
+// The match has two keys on each side, and which one decided is the whole
+// diagnosis: a row whose conversation equals the delivery's was admitted on
+// the identity, a row with no conversation was matched on the partition
+// fallback because it predates the split, and two questions parked on one
+// direct-message line are told apart by the partitions alone. Logging the
+// identity by itself — which is what this line did once the match moved onto
+// it — left all three indistinguishable, on the exact path where the two
+// values differ and an operator is asking why THIS run woke.
+func TestTheAnsweredLineNamesBothKeysOfBothEnds(t *testing.T) {
+	logs := captureLogs(t)
+	rig := newCoordRig(t)
+	// Parked from a thread on the DM line: conversation chat:D1, partition
+	// chat:D1:root-1.
+	rig.launch("t1")
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+	})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	// A TOP-LEVEL reply on the same line: same conversation, different
+	// batch, so the identity is what admitted this row.
+	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		ConversationRef{Identity: "chat:D1", Partition: "chat:D1"},
+		"use main", nil); err != nil {
+		t.Fatalf("TryResumeFromAnswer: %v", err)
+	}
+
+	line := logs.String()
+	if !strings.Contains(line, "sandbox_clarification_answered") {
+		t.Fatalf("nothing recorded the resume: %q", line)
+	}
+	for _, want := range []string{
+		`conversation=chat:D1`,
+		`partition=chat:D1`,
+		`run_conversation=chat:D1`,
+		`run_partition=chat:D1:root-1`,
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line does not carry %s, so a reader cannot tell "+
+				"which row won or why: %q", want, line)
+		}
+	}
+}
+
+// blindStore is a PendingStore whose conversation lookup cannot be reached.
+//
+// Everything else is the real one: the failure this covers is a read that
+// could not be made, not a store that is absent.
+type blindStore struct {
+	PendingStore
+	err error
+}
+
+func (s blindStore) FindAwaitingByConversation(context.Context, string, ConversationRef) (PendingRun, bool, error) {
+	return PendingRun{}, false, s.err
+}
+
+// AND SO DOES THE LINE FOR A LOOKUP THAT COULD NOT BE MADE.
+//
+// This one FAILS OPEN — an unreadable store must not swallow an ordinary
+// message — so the delivery goes on to be handled as a normal inbound and
+// the only trace that a parked run may have just missed its answer is this
+// line. With one key on it an operator cannot tell which read was attempted
+// against what, which on a direct message is two different values.
+func TestTheLookupFailureNamesBothKeysOfTheDelivery(t *testing.T) {
+	logs := captureLogs(t)
+	rig := newCoordRig(t)
+	rig.coordinator.pending = blindStore{
+		PendingStore: rig.pending,
+		err:          errors.New("the coordination store is unreachable"),
+	}
+
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"},
+		"use main", nil)
+	if err != nil {
+		t.Fatalf("a lookup failure must not fail the delivery: %v", err)
+	}
+	if handled {
+		t.Fatal("a delivery was swallowed by a read that never happened")
+	}
+
+	line := logs.String()
+	if !strings.Contains(line, "sandbox_answer_lookup_failed") {
+		t.Fatalf("nothing recorded the failed lookup: %q", line)
+	}
+	for _, want := range []string{`conversation=chat:D1`, `partition=chat:D1:root-1`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line does not carry %s: %q", want, line)
+		}
 	}
 }
 

@@ -729,8 +729,12 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 	}
 	handled, err := d.Answer(ctx, handle, conv, DescribeTrigger(evs), first(evs))
 	if err != nil {
+		// BOTH KEYS, for the reason the offer carries both: only the
+		// store knows which age of row it is matching, so a line naming
+		// the identity alone cannot say what was compared against what.
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
-			"agent_handle", handle, "conversation", conv.Identity, "error", err)
+			"agent_handle", handle, "conversation", conv.Identity,
+			"partition", conv.Partition, "error", err)
 		return false
 	}
 	return handled
