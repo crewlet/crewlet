@@ -260,8 +260,8 @@ func repliesPage(first, n int, cursor string) string {
 	var b strings.Builder
 	b.WriteString(`{"ok":true,"messages":[{"ts":"1.1","user":"` + human + `","text":"the question"}`)
 	for i := range n {
-		b.WriteString(fmt.Sprintf(`,{"ts":"2.%06d","user":"%s","text":"reply %d"}`,
-			first+i, human, first+i))
+		fmt.Fprintf(&b, `,{"ts":"2.%06d","user":"%s","text":"reply %d"}`,
+			first+i, human, first+i)
 	}
 	b.WriteString("]")
 	if cursor != "" {
@@ -433,7 +433,7 @@ func fatPage(n int) string {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString(fmt.Sprintf(`{"ts":"3.%06d","user":"%s","text":"%s"}`, i, human, body))
+		fmt.Fprintf(&b, `{"ts":"3.%06d","user":"%s","text":"%s"}`, i, human, body)
 	}
 	b.WriteString("]}")
 	return b.String()
