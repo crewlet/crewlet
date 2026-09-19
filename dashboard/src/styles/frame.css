@@ -356,7 +356,7 @@
   font-size: var(--fs-3xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-faint);
+  color: var(--text-muted);
   padding: var(--space-1) var(--space-2);
 }
 
@@ -409,12 +409,12 @@
 
 .side-sub {
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 .side-count {
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
@@ -422,7 +422,7 @@
 .side-empty {
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-2xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* ---- The page column ---------------------------------------------------- */
@@ -540,7 +540,7 @@
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   min-height: 24px;
 }
 
@@ -564,7 +564,7 @@
   font-size: var(--fs-3xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 .object-id {
@@ -601,7 +601,7 @@
   font-size: var(--fs-3xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 .fact-value {
@@ -612,7 +612,7 @@
 .fact-note,
 .fact-setby {
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* ---- The detail rail ---------------------------------------------------- */
@@ -777,7 +777,7 @@
   font-size: var(--fs-3xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-faint);
+  color: var(--text-muted);
   cursor: pointer;
   min-width: 0;
 }
@@ -912,7 +912,7 @@
 
 .grid-band-count {
   margin-left: auto;
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-weight: var(--fw-normal);
   font-variant-numeric: tabular-nums;
 }
@@ -920,7 +920,7 @@
 .grid-band-foot {
   padding: var(--space-1) var(--space-3);
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   background: var(--bg-sunken);
 }
 
@@ -1188,7 +1188,7 @@
   font-weight: var(--fw-medium);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* THE RAIL'S FIRST HEADING HAS NOTHING TO BE SEPARATED FROM, so it loses the
@@ -1208,7 +1208,7 @@
   display: block;
   margin-top: 2px;
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* ---- The log's time axis --------------------------------------------------
@@ -1555,7 +1555,7 @@ button.histogram-bar[data-empty]:hover {
     font-size: var(--fs-3xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-faint);
+    color: var(--text-muted);
     white-space: nowrap;
   }
 

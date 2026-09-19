@@ -143,7 +143,19 @@
      Four rungs onto four. `--text-faint` is DECORATION ONLY in our sheets and
      `--color-text-muted` is theirs for the same job; `--heading` is a shade
      above body in ours and uilet does not draw that distinction, so it takes
-     `text-primary` and headings stop being fractionally darker than text. */
+     `text-primary` and headings stop being fractionally darker than text.
+
+     DECORATION ONLY IS A CONTRAST RULE, not a taste one, and it had decayed
+     onto twenty-six rules before anything measured it. This rung is about 3:1
+     against the ground in BOTH themes — #8f8f95 on white is 3.22, #686b70 on
+     the dark ground 3.35 — which is the floor a MARK takes (WCAG's non-text
+     3:1) and not the 4.5 small text needs. Spent on a word it is a word you
+     cannot read: every grid column head, every sidebar section name, the
+     palette's own scope footer and "No goal has been set." were all sitting
+     there. They take `--text-muted` now, at 6.63 and 7.01, and what is left on
+     this rung is ten marks — two tree characters, a breadcrumb slash, four
+     icons and three icon-only controls. `styles/rungs.test.ts` names all ten
+     with their reasons and fails in both directions. */
   --text: var(--color-text-primary);
   --text-secondary: var(--color-text-secondary);
   --text-muted: var(--color-text-tertiary);

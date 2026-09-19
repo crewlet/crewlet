@@ -2280,6 +2280,14 @@ to.
     7.15. Putting an `-ink` **on** its family's solid fill is the one pairing
     of the three that was never measured — the rail's attention badge did it,
     at 1.72:1 on a 9px digit, so the unread count rendered as a dot.
+16c. **The faint rung is decoration, and that is a contrast rule.**
+    `--text-faint` is about 3:1 against the ground in *both* themes, which is
+    the floor a non-text mark takes and not the 4.5 a word needs. Spent on a
+    word it is a word nobody can read — it had decayed onto twenty-six rules,
+    every grid column head and sidebar section name among them. A word takes
+    `--text-muted` (6.6–7.0:1). What is left on the faint rung is ten marks —
+    two tree characters, a breadcrumb slash, four icons and three icon-only
+    controls — each named in `styles/rungs.test.ts` with the reason it is one.
 17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.
 18. **Everything the page runs or loads is its own bundle.** The engine serves

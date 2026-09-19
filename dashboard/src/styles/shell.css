@@ -136,7 +136,7 @@
   font-weight: var(--fw-medium);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 .palette-item {
@@ -160,7 +160,7 @@
 .palette-item .palette-hint {
   margin-left: auto;
   font-size: var(--fs-2xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -171,7 +171,7 @@
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border-subtle);
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   background: var(--surface-2);
 }
 

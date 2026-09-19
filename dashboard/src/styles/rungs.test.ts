@@ -101,6 +101,108 @@ function inkOnFill(css: string): string[] {
   return out;
 }
 
+/**
+ * A MARK, ONLY. `--text-faint` is about 3:1 against the ground in BOTH themes —
+ * #8f8f95 on white is 3.22, #686b70 on the dark ground 3.35 — which is the
+ * floor WCAG sets for a NON-TEXT mark and not the 4.5 a word needs.
+ *
+ * `uilet.css` has said "DECORATION ONLY" at the alias since it was written, and
+ * nothing measured it: the rung had decayed onto twenty-six rules. Every grid
+ * column head, every sidebar section name and sub-label, the state bar's facts,
+ * a fact's label and its provenance, the properties rail's section heads, the
+ * palette's group heads and its own scope footer — the one thing the palette
+ * doc says must be readable, since "a sigil nobody is told about is a feature
+ * that does not exist" — and the empty states, "No goal has been set."
+ * included. All at three to one, in both themes, at 11px.
+ *
+ * What is left is ten marks, named here with the reason each is one. Two-sided:
+ * a new rule reaching for this rung fails until somebody writes down why it is
+ * a mark, and an entry whose rule is gone fails so the list cannot outlive what
+ * it excuses.
+ */
+describe("the faint rung is decoration", () => {
+  const MARKS: { selector: string; why: string }[] = [
+    {
+      selector: ".faint",
+      why:
+        "The utility, and both call sites are drawings: `Trace.tsx`'s `└` tree " +
+        "branch and `Seat.tsx`'s `→` between the entries of a fallback chain, " +
+        'which carries `title="falls back to"` for the meaning.',
+    },
+    {
+      selector: ".rail-lock",
+      why: 'A KeyGlyph with `title="needs an operator credential"`. An icon, and the title is the text.',
+    },
+    {
+      selector: ".rail-collapse",
+      why:
+        "An icon-only button — a chevron with an `aria-label`. A UI component " +
+        "takes the 3:1 floor rather than 4.5, it clears it, and `:hover` takes " +
+        "it to `--text`.",
+    },
+    {
+      selector: ".side-twist",
+      why: "The sidebar tree's disclosure chevron: the same icon-only control.",
+    },
+    {
+      selector: ".crumb-sep",
+      why: "The `/` between breadcrumb parts. A separator draws a boundary the layout already has.",
+    },
+    {
+      selector: ".cell-status.neutral .cell-glyph",
+      why:
+        "`cells.tsx` renders this glyph `aria-hidden` beside the visible label " +
+        "it reinforces — the same four marks the fill rule above excuses, for " +
+        "the same reason.",
+    },
+    {
+      selector: ".work-type",
+      why: "A work item's type mark: a `Mark` with an `.sr-only` name beside it and a `title`.",
+    },
+    {
+      selector: ".work-nobody",
+      why:
+        'The unassigned mark: a PersonGlyph with an `.sr-only` "Unassigned". ' +
+        "Where the name is also drawn it is a `.muted` span of its own, so this " +
+        "rung paints the glyph and nothing else.",
+    },
+    { selector: ".work-hist-row > svg", why: "The history row's icon — an SVG, never a word." },
+    {
+      selector: ".pulse-glyph",
+      why: "The pulse row's leading icon, likewise: a drawing beside the sentence that says what happened.",
+    },
+  ];
+
+  const faint = SHEETS.flatMap((name) => {
+    const css = readFileSync(join(STYLES, name), "utf8");
+    return rules(css)
+      .filter((r) => /(^|[;\s])color:\s*var\(--text-faint\)/.test(r.body))
+      .map((r) => r.selector);
+  });
+
+  test("nothing paints a word with it", () => {
+    const excused = new Set(MARKS.map((m) => m.selector));
+    expect(
+      faint.filter((sel) => !excused.has(sel)),
+      "this rung is about 3:1 in both themes — a word takes `--text-muted`",
+    ).toEqual([]);
+  });
+
+  test("every mark named is still a mark that exists", () => {
+    const seen = new Set(faint);
+    expect(
+      MARKS.filter((m) => !seen.has(m.selector)).map((m) => m.selector),
+      "these no longer take the faint rung — drop the entry",
+    ).toEqual([]);
+    for (const mark of MARKS) expect(mark.why.length).toBeGreaterThan(40);
+  });
+
+  test("and the scan found the rung at all", () => {
+    expect(faint.length).toBe(MARKS.length);
+    expect(faint.length).toBeGreaterThan(5);
+  });
+});
+
 describe("a fill is not an ink", () => {
   const found = SHEETS.flatMap((name) =>
     fillAsText(readFileSync(join(STYLES, name), "utf8")).map((o) => `${name}: ${o}`),

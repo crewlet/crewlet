@@ -1528,7 +1528,7 @@
   gap: var(--space-2);
   font-size: var(--fs-3xs);
   line-height: var(--lh-normal);
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .int-form-note a {
   color: inherit;
@@ -1757,7 +1757,7 @@
   gap: var(--space-2);
 }
 .int-row-note-when {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
@@ -2091,7 +2091,7 @@ details > summary.int-summary::-webkit-details-marker {
 .work-col-empty {
   padding: var(--space-4) var(--space-3);
   font-size: var(--fs-2xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -2299,7 +2299,7 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .work-row-when {
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -2454,7 +2454,7 @@ details > summary.int-summary::-webkit-details-marker {
 /* FINISHED WORK IS QUIETER, not hidden: a calendar that dropped it would
    answer "what is due" with a month that forgets what was delivered. */
 .work-cal-chip[data-done="true"] {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .work-cal-chip .work-cal-key {
   font-family: var(--font-mono);
@@ -2507,7 +2507,7 @@ details > summary.int-summary::-webkit-details-marker {
    "this build could not read it" are different facts and neither is a shade. */
 .work-field-state {
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   margin-left: var(--space-1);
 }
 
@@ -2520,7 +2520,7 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 0;
 }
 .work-check.done .work-check-name {
-  color: var(--text-faint);
+  color: var(--text-muted);
   text-decoration: line-through;
 }
 .work-check-name {
@@ -2603,7 +2603,7 @@ details > summary.int-summary::-webkit-details-marker {
   white-space: nowrap;
 }
 .work-hist-when {
-  color: var(--text-faint);
+  color: var(--text-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -2624,7 +2624,7 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .work-feed-when,
 .work-feed-who {
-  color: var(--text-faint);
+  color: var(--text-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
