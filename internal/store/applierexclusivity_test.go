@@ -267,13 +267,27 @@ var allowedReplicatedWriter = []allowance{
 			"and serves the handle. A write here is the schema, not a row.",
 	},
 	{
-		Prefix: "internal/engine/", Applier: true,
-		Why: "The wiring that hands the replicated handle to the framework: " +
-			"the reanchor's deps and the version reset it drives. Every " +
-			"write it reaches is allowed on its own terms below.",
+		Prefix: "internal/engine/reanchor.go", Applier: true,
+		Why: "The wiring that hands the replicated handle to the framework " +
+			"for a log reanchor: the deps it builds and the version reset it " +
+			"drives. Every write it reaches is internal/statelog's or " +
+			"internal/tracker/reanchor.go's, each allowed on its own terms. " +
+			"Named by FILE rather than by package, so a new direct write " +
+			"elsewhere in internal/engine still fails.",
 	},
 	{
-		Prefix: "internal/backup/", Applier: true,
+		Prefix: "internal/engine/statelog.go", Applier: true,
+		Why: "Holds the replicated handle to run the framework's own loops — " +
+			"the checkpoint reads, the snapshotter, the adoption. It passes " +
+			"the handle on; it writes no row of its own.",
+	},
+	{
+		Prefix: "internal/engine/retention", Applier: true,
+		Why: "The retention report and the capacity check take the handle to " +
+			"size the FILE and to read the eviction rows. Both read.",
+	},
+	{
+		Prefix: "internal/backup/backup.go", Applier: true,
 		Why: "Takes the handle to copy the FILE — VACUUM INTO and the " +
 			"manifest — never to write a row.",
 	},
