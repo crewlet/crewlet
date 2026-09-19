@@ -362,7 +362,7 @@ func TestASeatsThreadComesBackMarkedWithItsOwnReplies(t *testing.T) {
 	}
 	// The join line is gone: it wakes nobody, so it belongs in a thread
 	// rendered for a seat no more than it belongs in a notification.
-	if len(got) != 4 {
+	if len(got.Messages) != 4 {
 		t.Fatalf("the thread came back as %+v", got)
 	}
 	for i, want := range []struct {
@@ -377,14 +377,21 @@ func TestASeatsThreadComesBackMarkedWithItsOwnReplies(t *testing.T) {
 		{"fixed in 4.2.4", true},
 		{"nice", false},
 	} {
-		if got[i].Text != want.text || got[i].Own != want.own {
-			t.Errorf("message %d came back as %+v, want %+v", i, got[i], want)
+		if got.Messages[i].Text != want.text || got.Messages[i].Own != want.own {
+			t.Errorf("message %d came back as %+v, want %+v", i, got.Messages[i], want)
 		}
 	}
 	// The username a legacy bot message carries is kept, so a sender the
 	// registry cannot resolve still renders as a name.
-	if got[2].SenderName != "agent-swe" {
-		t.Errorf("the bot message lost its username: %+v", got[2])
+	if got.Messages[2].SenderName != "agent-swe" {
+		t.Errorf("the bot message lost its username: %+v", got.Messages[2])
+	}
+	// A thread that ended on its first page is not short at either end, and
+	// says so: the block renders a drop notice and a "go and read the rest"
+	// preamble off these two, and a complete read that set either would
+	// send every seat back to its chat tools for messages it already has.
+	if got.Older != 0 || got.StoppedShort {
+		t.Errorf("a complete thread came back claiming to be short: %+v", got)
 	}
 }
 

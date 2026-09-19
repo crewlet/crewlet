@@ -109,6 +109,28 @@ const threadPreamble = "The chat thread this turn was woken in, oldest first, " 
 	"you. Lines marked **you** are your own earlier replies — do not answer " +
 	"them or repeat what they already said."
 
+// threadStoppedShortPreamble replaces it when the backend could not reach the
+// end of the thread.
+//
+// THE ORDINARY PREAMBLE IS A LIE ON THIS PATH, and the worst available one:
+// it tells the model the newest messages are what woke it, and a read that
+// stopped short is missing precisely the newest — the triggering message
+// included, because a chat backend pages a thread from the OLDEST end (see
+// [notify.Transcript.StoppedShort]). A seat told otherwise answers the last
+// message it happens to have and reports the work delivered, which is the
+// exact failure this whole block exists to stop.
+//
+// So it keeps the two facts that are still true — which thread this is, and
+// what the **you** lines are — drops the one that is not, and spends the
+// difference on the instruction that IS right here: go and read the rest.
+const threadStoppedShortPreamble = "Part of the chat thread this turn was " +
+	"woken in, oldest first. IT STOPS SHORT: this thread is longer than " +
+	"could be read from here, so the newest messages — including the one " +
+	"that woke you — are NOT below. Read the rest of the thread with your " +
+	"chat tools before answering anything that depends on it. Lines marked " +
+	"**you** are your own earlier replies — do not answer them or repeat " +
+	"what they already said."
+
 // threadContext renders the block, and reports how many messages went into
 // it.
 //
@@ -129,11 +151,11 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) (string, int) {
 	// ITS OWN DEADLINE, layered under the turn's: see [ThreadTimeout].
 	read, cancel := context.WithTimeout(ctx, ThreadTimeout)
 	defer cancel()
-	messages, ok := f.src.Threads.ReadThread(read, r.Seat.Handle(), r.Thread)
+	transcript, ok := f.src.Threads.ReadThread(read, r.Seat.Handle(), r.Thread)
 	if !ok {
 		return UnreadableThreadHint, 0
 	}
-	return f.renderThread(messages, r.Thread.Backend)
+	return f.renderThread(transcript, r.Thread.Backend)
 }
 
 // renderThread bounds and renders what came back.
@@ -150,22 +172,27 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) (string, int) {
 // the shared cuts are both wrong here, because [textcut] counts bytes and its
 // own doc says content a turn reasons over is passed whole, and ledger.Elide
 // says outright that it is not for content.
-func (f *Fetcher) renderThread(messages []notify.Message, backend string) (string, int) {
-	lines := make([]string, 0, len(messages))
-	for _, m := range messages {
+func (f *Fetcher) renderThread(read notify.Transcript, backend string) (string, int) {
+	lines := make([]string, 0, len(read.Messages))
+	for _, m := range read.Messages {
 		if line := f.renderPost(m, backend); line != "" {
 			lines = append(lines, line)
 		}
 	}
-	if len(lines) == 0 {
+	if len(lines) == 0 && !read.StoppedShort {
 		return EmptyThreadHint, 0
 	}
 
-	dropped := 0
+	// THE BACKEND'S OWN DROPS COUNT TOO. A paged read holds a window and
+	// says how many older messages it let go of; counting only this
+	// renderer's own would print a number that is true of the slice in
+	// hand and false of the thread, which is worse than no number at all —
+	// a seat reads it as the whole of what it is missing.
+	dropped := read.Older
 	if len(lines) > threadPosts {
 		// The ROOT plus the newest threadPosts-1: the oldest reply is the
 		// first thing worth losing, and the root is never in that range.
-		dropped = len(lines) - threadPosts
+		dropped += len(lines) - threadPosts
 		lines = append(lines[:1], lines[len(lines)-(threadPosts-1):]...)
 	}
 	// The byte ceiling then eats from the same end, and stops at two: the
@@ -176,8 +203,17 @@ func (f *Fetcher) renderThread(messages []notify.Message, backend string) (strin
 	}
 
 	var b strings.Builder
-	b.WriteString(threadPreamble)
-	b.WriteString("\n" + lines[0])
+	if read.StoppedShort {
+		b.WriteString(threadStoppedShortPreamble)
+	} else {
+		b.WriteString(threadPreamble)
+	}
+	// Each part is written only if it exists, because a read that stopped
+	// short before anything renderable leaves the preamble standing alone
+	// — and that preamble is itself the instruction the seat needs.
+	if len(lines) > 0 {
+		b.WriteString("\n" + lines[0])
+	}
 	if dropped > 0 {
 		// SAID OUT LOUD. A silently shortened thread reads as the whole
 		// conversation, and a seat that believes it has seen everything

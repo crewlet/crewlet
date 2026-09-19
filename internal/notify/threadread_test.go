@@ -9,20 +9,21 @@ import (
 
 // reader is one backend's thread reader, recording what it was asked.
 type reader struct {
-	backend string
-	asked   []notify.Thread
-	answer  []notify.Message
-	refuse  bool
+	backend      string
+	asked        []notify.Thread
+	answer       []notify.Message
+	refuse       bool
+	stoppedShort bool
 }
 
 func (r *reader) ThreadBackend() string { return r.backend }
 
-func (r *reader) ReadThread(_ context.Context, _, channel, root string) ([]notify.Message, bool) {
+func (r *reader) ReadThread(_ context.Context, _, channel, root string) (notify.Transcript, bool) {
 	r.asked = append(r.asked, notify.Thread{Backend: r.backend, Channel: channel, Root: root})
 	if r.refuse {
-		return nil, false
+		return notify.Transcript{}, false
 	}
-	return r.answer, true
+	return notify.Transcript{Messages: r.answer, StoppedShort: r.stoppedShort}, true
 }
 
 func chatThread(over map[string]string) map[string]string {
@@ -57,7 +58,7 @@ func TestTheThreadIsReadFromTheBackendThatWokeTheTurn(t *testing.T) {
 		t.Fatal("a thread reply named no thread")
 	}
 	got, ok := set.ReadThread(context.Background(), "swe", thread)
-	if !ok || len(got) != 1 {
+	if !ok || len(got.Messages) != 1 {
 		t.Fatalf("ReadThread = %v, %v", got, ok)
 	}
 	if len(self.asked) != 0 {
@@ -170,5 +171,44 @@ func TestAnIncompleteAddressReachesNoBackend(t *testing.T) {
 	}
 	if len(only.asked) != 0 {
 		t.Errorf("an incomplete address reached the backend: %v", only.asked)
+	}
+}
+
+// A READ THAT STOPPED SHORT SAYS SO THROUGH THE FAN-OUT.
+//
+// The fan-out is the only thing between a backend's answer and the block that
+// renders it, so a routing layer that returned messages alone would erase the
+// one fact the renderer must not smooth over: a chat backend pages a thread
+// from the OLDEST end, so what a bounded read could not reach is the NEWEST
+// message — the one that woke the turn. The block's ordinary preamble says
+// those newest messages are what woke the seat, and on this path that is
+// guaranteed false.
+func TestAReadThatStoppedShortSaysSoThroughTheFanOut(t *testing.T) {
+	t.Parallel()
+	long := &reader{
+		backend:      "slack",
+		answer:       []notify.Message{{Text: "the question"}},
+		stoppedShort: true,
+	}
+	set := notify.NewThreadReaders(long)
+	got, ok := set.ReadThread(context.Background(), "swe", notify.Thread{
+		Backend: "slack", Channel: "C0ENG", Root: "1.1",
+	})
+	if !ok {
+		t.Fatal("a read that stopped short reported itself unreadable")
+	}
+	if !got.StoppedShort {
+		t.Fatalf("the fan-out dropped the stopped-short answer: %+v", got)
+	}
+
+	// And a read that reached the end does NOT claim it stopped, which is
+	// the half that would make the honest sentence permanent noise.
+	whole := notify.NewThreadReaders(&reader{
+		backend: "slack", answer: []notify.Message{{Text: "the question"}},
+	})
+	if complete, _ := whole.ReadThread(context.Background(), "swe", notify.Thread{
+		Backend: "slack", Channel: "C0ENG", Root: "1.1",
+	}); complete.StoppedShort {
+		t.Fatal("a complete read reported itself truncated")
 	}
 }

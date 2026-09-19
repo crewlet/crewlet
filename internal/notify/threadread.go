@@ -56,6 +56,36 @@ type Message struct {
 	Own bool
 }
 
+// Transcript is what a backend read back from a thread.
+//
+// A TYPE RATHER THAN A SLICE, because "this is the thread" and "this is as
+// much of the thread as I could reach" are different answers, and a caller
+// that cannot tell them apart states the first when the second is true. The
+// prompt block this feeds tells a seat that the newest message in front of it
+// is the one that woke the turn — on a read that stopped short, that sentence
+// is guaranteed false.
+type Transcript struct {
+	// Messages are the thread's messages OLDEST FIRST, with the thread's
+	// own root first.
+	Messages []Message
+
+	// Older is how many earlier messages the backend read and dropped to
+	// hold a window of its own. Zero on a backend that answers the whole
+	// thread in one response. Counted rather than lost, so a renderer can
+	// say how many earlier messages are not in front of the seat instead
+	// of implying that none are.
+	Older int
+
+	// StoppedShort says the backend hit a bound of its own before it
+	// reached the end of the thread, so Messages stops short of the
+	// NEWEST — the message that woke the turn included.
+	//
+	// THE ONE STATE A RENDERER MUST NOT SMOOTH OVER. Everything else this
+	// seam drops is older context a seat can do without; this is the thing
+	// it is answering.
+	StoppedShort bool
+}
+
 // Thread is a chat thread that ALREADY EXISTS.
 //
 // The distinction from [Conversation] is the whole reason both types are
@@ -112,7 +142,8 @@ type ThreadReader interface {
 	// ReadThread returns the thread's messages OLDEST FIRST, with the
 	// thread's own root first: the root is what the thread is about, and
 	// a renderer that has to bound the block keeps it whatever else it
-	// drops.
+	// drops. A backend that could not reach the end of the thread says so
+	// on the [Transcript] rather than answering as though it had.
 	//
 	// It never returns an error. A false second result means nothing
 	// could be read — no such seat on this node, a refused credential, a
@@ -121,7 +152,7 @@ type ThreadReader interface {
 	// send an agent to opposite places. A bool rather than an error for
 	// the reason [StatusPoster.SetStatus] returns one: no caller here
 	// acts on which failure it was.
-	ReadThread(ctx context.Context, handle, channel, root string) ([]Message, bool)
+	ReadThread(ctx context.Context, handle, channel, root string) (Transcript, bool)
 }
 
 // ThreadReaders is every chat backend's reader, addressed as one.
@@ -152,9 +183,9 @@ func NewThreadReaders(readers ...ThreadReader) *ThreadReaders {
 // already has to handle — a maintenance-mode node runs no chat transport at
 // all, and a node whose chat instance was unreachable at boot runs none
 // either, so "no reader" is an ordinary state rather than a wiring bug.
-func (r *ThreadReaders) ReadThread(ctx context.Context, handle string, t Thread) ([]Message, bool) {
+func (r *ThreadReaders) ReadThread(ctx context.Context, handle string, t Thread) (Transcript, bool) {
 	if r == nil || handle == "" || t.Backend == "" || t.Channel == "" || t.Root == "" {
-		return nil, false
+		return Transcript{}, false
 	}
 	for _, reader := range r.readers {
 		if reader.ThreadBackend() != t.Backend {
@@ -162,5 +193,5 @@ func (r *ThreadReaders) ReadThread(ctx context.Context, handle string, t Thread)
 		}
 		return reader.ReadThread(ctx, handle, t.Channel, t.Root)
 	}
-	return nil, false
+	return Transcript{}, false
 }

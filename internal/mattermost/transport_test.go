@@ -440,24 +440,32 @@ func TestASeatsThreadComesBackMarkedWithItsOwnPosts(t *testing.T) {
 	// Oldest first, with the root first — and the bookkeeping gone: a
 	// deleted post and a join line wake nobody, so neither belongs in a
 	// thread rendered for a seat.
-	if len(got) != 2 {
+	if len(got.Messages) != 2 {
 		t.Fatalf("the thread came back as %+v", got)
 	}
-	if got[0].Text != "staging redirects in a loop" || got[0].Own {
-		t.Errorf("the root came back as %+v", got[0])
+	if got.Messages[0].Text != "staging redirects in a loop" || got.Messages[0].Own {
+		t.Errorf("the root came back as %+v", got.Messages[0])
 	}
-	if got[1].Text != "on it" || !got[1].Own {
-		t.Errorf("the seat's own reply came back as %+v", got[1])
+	if got.Messages[1].Text != "on it" || !got.Messages[1].Own {
+		t.Errorf("the seat's own reply came back as %+v", got.Messages[1])
 	}
-	if got[0].SenderID != "U-ana" {
-		t.Errorf("the sender id was lost: %+v", got[0])
+	if got.Messages[0].SenderID != "U-ana" {
+		t.Errorf("the sender id was lost: %+v", got.Messages[0])
+	}
+	// AND NOTHING IS CLAIMED MISSING. This endpoint answers the WHOLE
+	// thread in one response — no cursor, no page size — so a transcript
+	// from here can never be short at either end, and a renderer told
+	// otherwise would print a drop notice for messages that are in front
+	// of the seat and tell it to go and read a thread it already has.
+	if got.Older != 0 || got.StoppedShort {
+		t.Errorf("a whole-thread read claimed to be short: %+v", got)
 	}
 	// AND SCOPED TO THE CHANNEL THE TRIGGER NAMED. The endpoint is
 	// addressed by post id alone, so nothing in the request says which
 	// channel the thread is meant to be in — a root id naming a post
 	// somewhere else would render another conversation under this
 	// trigger's own heading.
-	for _, m := range got {
+	for _, m := range got.Messages {
 		if strings.Contains(m.Text, "another channel entirely") {
 			t.Errorf("a post from another channel reached the thread: %+v", m)
 		}

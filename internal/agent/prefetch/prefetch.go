@@ -213,7 +213,7 @@ type Onboarding interface {
 // be read, and the block says so in a different sentence from an empty
 // thread.
 type Threads interface {
-	ReadThread(ctx context.Context, handle string, t notify.Thread) ([]notify.Message, bool)
+	ReadThread(ctx context.Context, handle string, t notify.Thread) (notify.Transcript, bool)
 }
 
 // Parties resolves a chat sender to a colleague in the org.

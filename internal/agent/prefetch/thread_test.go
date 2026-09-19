@@ -16,16 +16,23 @@ import (
 // threads is a chat backend that hands back a canned thread.
 type threads struct {
 	messages []notify.Message
-	refuse   bool
-	asked    []notify.Thread
+	// older and stoppedShort are what a PAGED backend reports about its own
+	// bounds: how many earlier messages it dropped to hold its window, and
+	// whether it gave up before the newest message in the thread.
+	older        int
+	stoppedShort bool
+	refuse       bool
+	asked        []notify.Thread
 }
 
-func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) ([]notify.Message, bool) {
+func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) (notify.Transcript, bool) {
 	s.asked = append(s.asked, t)
 	if s.refuse {
-		return nil, false
+		return notify.Transcript{}, false
 	}
-	return s.messages, true
+	return notify.Transcript{
+		Messages: s.messages, Older: s.older, StoppedShort: s.stoppedShort,
+	}, true
 }
 
 // parties answers the registry lookup the renderer makes.
@@ -48,7 +55,7 @@ func said(who, what string) notify.Message {
 	return notify.Message{SenderID: who, Text: what}
 }
 
-// ── the four invariants ──
+// ── the invariants ──
 
 // AN UNREADABLE THREAD SAYS SOMETHING DIFFERENT FROM AN EMPTY ONE, and the
 // difference is what it tells the seat to do.
@@ -351,6 +358,85 @@ func TestAPanickingThreadReaderCostsOnlyItsOwnBlock(t *testing.T) {
 
 type panickingThreads struct{}
 
-func (panickingThreads) ReadThread(context.Context, string, notify.Thread) ([]notify.Message, bool) {
+func (panickingThreads) ReadThread(context.Context, string, notify.Thread) (notify.Transcript, bool) {
 	panic("a malformed thread")
+}
+
+// A READ THAT STOPPED SHORT NEVER CLAIMS THE NEWEST MESSAGE IS HERE.
+//
+// A chat backend pages a thread from the OLDEST end, so a read bounded before
+// the end of a long thread is missing the NEWEST messages — the one that woke
+// the turn included. The ordinary preamble tells the model those newest
+// messages are what woke it, and on this path that sentence is guaranteed
+// false: a seat believing it answers whichever message it happens to hold and
+// reports the work delivered, which is the exact failure this block exists to
+// stop. So the preamble changes, and what replaces it carries the instruction
+// that IS right here — go and read the rest.
+func TestAReadThatStoppedShortNeverClaimsTheNewestIsHere(t *testing.T) {
+	t.Parallel()
+	blocks := fetch(t, prefetch.Sources{Threads: &threads{
+		messages:     []notify.Message{said("U1", "the root question"), said("U2", "and then")},
+		older:        900,
+		stoppedShort: true,
+	}}, threadRequest(t))
+
+	if strings.Contains(blocks.ThreadContext, "newest messages are what woke") {
+		t.Fatalf("a truncated thread still claims its newest message woke the turn:\n%s",
+			blocks.ThreadContext)
+	}
+	for _, want := range []string{
+		"IT STOPS SHORT",
+		"are NOT below",
+		"the rest of the thread with your chat tools",
+		// Everything the backend dropped is still counted: a seat told
+		// nothing is missing does not go and look.
+		"900 earlier message(s)",
+	} {
+		if !strings.Contains(blocks.ThreadContext, want) {
+			t.Errorf("the truncated block does not say %q:\n%s", want, blocks.ThreadContext)
+		}
+	}
+
+	// AND THE ORDINARY THREAD KEEPS THE CLAIM. The honest sentence has to be
+	// the exception: printed on every turn it would teach every seat to
+	// re-read a thread it was just handed whole.
+	whole := fetch(t, prefetch.Sources{Threads: &threads{
+		messages: []notify.Message{said("U1", "the root question"), said("U2", "and then")},
+	}}, threadRequest(t))
+	if !strings.Contains(whole.ThreadContext, "newest messages are what woke") {
+		t.Fatalf("a complete thread lost the preamble's newest-message claim:\n%s",
+			whole.ThreadContext)
+	}
+	if strings.Contains(whole.ThreadContext, "IT STOPS SHORT") {
+		t.Fatalf("a complete thread claims it stopped short:\n%s", whole.ThreadContext)
+	}
+}
+
+// THE BACKEND'S OWN DROPS ARE COUNTED TOO.
+//
+// A paged backend holds a window of its own and says how many older messages
+// it let go of to keep the newest. A notice built from this renderer's drops
+// alone prints a number that is true of the slice in hand and false of the
+// thread — and understating it is worse than printing nothing, because a seat
+// reads it as the whole of what it is missing.
+func TestTheBackendsOwnDropsAreCountedInTheNotice(t *testing.T) {
+	t.Parallel()
+	const read = 40
+	msgs := []notify.Message{said("U1", "the root question")}
+	for i := 1; i < read; i++ {
+		msgs = append(msgs, said("U2", "reply "+strconv.Itoa(i)))
+	}
+	blocks := fetch(t, prefetch.Sources{Threads: &threads{messages: msgs, older: 610}},
+		threadRequest(t))
+
+	// 610 the backend dropped, plus the 10 this renderer drops to reach its
+	// own thirty.
+	if !strings.Contains(blocks.ThreadContext, "620 earlier message(s)") {
+		t.Fatalf("the notice does not account for the backend's own drops:\n%s",
+			blocks.ThreadContext)
+	}
+	if blocks.ThreadContextPosts != 30 {
+		t.Fatalf("the block rendered %d messages, want the item cap",
+			blocks.ThreadContextPosts)
+	}
 }

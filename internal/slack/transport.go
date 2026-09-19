@@ -345,14 +345,14 @@ func (t *Transport) ThreadBackend() string { return Backend }
 // and a maintenance-mode node runs no chat transport at all — both ordinary,
 // and both must render "the thread could not be read" rather than panicking a
 // turn.
-func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) ([]notify.Message, bool) {
+func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) (notify.Transcript, bool) {
 	t.mu.Lock()
 	s, ok := t.seats[handle]
 	t.mu.Unlock()
 	if !ok || s.client == nil {
-		return nil, false
+		return notify.Transcript{}, false
 	}
-	replies, err := s.client.Replies(ctx, channel, root)
+	read, err := s.client.Replies(ctx, channel, root)
 	if err != nil {
 		// DEBUG, like the indicator's: a refusal here costs the block and
 		// nothing else, the turn runs on the unreadable hint, and a
@@ -360,10 +360,19 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		// on every chat turn of every seat.
 		log.DebugContext(ctx, "slack_thread_unreadable", "handle", handle,
 			"channel", channel, "thread", root, "error", err.Error())
-		return nil, false
+		return notify.Transcript{}, false
 	}
-	out := make([]notify.Message, 0, len(replies))
-	for _, reply := range replies {
+	// BOTH BOUNDS TRAVEL WITH THE MESSAGES. conversations.replies pages
+	// from the oldest end, so what a bounded walk cannot reach is the
+	// NEWEST message — the one that woke this turn — and a renderer handed
+	// the messages alone would present the start of a conversation as the
+	// whole of it.
+	out := notify.Transcript{
+		Messages:     make([]notify.Message, 0, len(read.Messages)),
+		Older:        read.Older,
+		StoppedShort: read.StoppedShort,
+	}
+	for _, reply := range read.Messages {
 		if reply.Skip() != "" {
 			continue
 		}
@@ -371,7 +380,7 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		if body == "" {
 			continue
 		}
-		out = append(out, notify.Message{
+		out.Messages = append(out.Messages, notify.Message{
 			// THE SAME FALLBACK CHAIN [Sender] applies, split
 			// across the two fields: a human and a bot USER carry
 			// `user`, while a legacy bot_message — an incoming

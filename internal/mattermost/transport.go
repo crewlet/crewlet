@@ -424,20 +424,26 @@ func (t *Transport) ThreadBackend() string { return Backend }
 // in maintenance mode starts no chat transport at all — both are ordinary
 // states, and both must render "the thread could not be read" rather than
 // panicking a turn.
-func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) ([]notify.Message, bool) {
+func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) (notify.Transcript, bool) {
 	t.mu.Lock()
 	s, ok := t.seats[handle]
 	t.mu.Unlock()
 	if !ok || s.client == nil {
-		return nil, false
+		return notify.Transcript{}, false
 	}
 	posts, err := s.client.Thread(ctx, root)
 	if err != nil {
 		log.DebugContext(ctx, "mattermost_thread_unreadable", "handle", handle,
 			"channel", channel, "root", root, "error", err.Error())
-		return nil, false
+		return notify.Transcript{}, false
 	}
-	out := make([]notify.Message, 0, len(posts))
+	// NOTHING STOPS SHORT HERE, and the zero values say so rather than
+	// being guessed at: GET /api/v4/posts/{root}/thread answers the WHOLE
+	// thread in one response, with no cursor and no page size, so this
+	// backend has no bound of its own to drop an older message or to stop
+	// before the newest one. Slack's paged read does, which is why
+	// [notify.Transcript] carries the two fields at all.
+	out := notify.Transcript{Messages: make([]notify.Message, 0, len(posts))}
 	for _, post := range posts {
 		if post.Bookkeeping() != "" {
 			continue
@@ -456,7 +462,7 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		if body == "" {
 			continue
 		}
-		out = append(out, notify.Message{
+		out.Messages = append(out.Messages, notify.Message{
 			SenderID: post.UserID,
 			// NO NAME. A Mattermost post carries a user id and nothing
 			// else, so the party registry is the only thing that can
