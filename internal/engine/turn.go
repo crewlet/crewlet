@@ -201,12 +201,14 @@ type Request struct {
 	// back on the merged envelope — plus the line logged when a partition
 	// cannot be merged. Nothing above the dispatch has a use for it.
 	//
-	// That list was three readers, and the one that left is the parked
-	// run's answer match: it wanted the partition ALONE and now wants the
-	// identity, because a person answers on the conversation. The engine's
-	// own prompt tells a seat replying to a top-level direct message to
-	// reply as a thread, so their answer arrives in a finer partition than
-	// the question parked under and the two strings never met.
+	// That list said three readers that WANT the partition, and what
+	// changed is not only the count: the parked run's answer match wanted
+	// it ALONE and now takes both. The identity admits, because a person
+	// answers on the conversation, and the partition only chooses between
+	// what it admitted. The engine's own prompt tells a seat replying to a
+	// top-level direct message to reply as a thread, so their answer
+	// arrives in a finer partition than the question parked under and the
+	// two strings never met.
 	ConversationKey string
 
 	// Depth is the delegation depth this turn inherited: zero for a turn a
