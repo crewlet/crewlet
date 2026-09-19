@@ -21,13 +21,14 @@ import (
 //
 // # What the log removes that the bucket could not
 //
-// The package doc lists three two-key sequences — create, save and rename —
-// each with its own crash state and its own grace rule for stepping over the
-// debris. Every one of them existed because coordination has no multi-key
-// transaction. Here they do not exist: a create is ONE record whose apply
-// writes the title row, the page row, the first revision and the history entry
-// in one transaction, so there is no orphan claim, no orphan revision and no
-// window in which a title is held by a page that was never written.
+// The package doc names the three two-key sequences this domain used to have
+// — create, save and rename — each with its own crash state and its own grace
+// rule for stepping over the debris. Every one of them existed because
+// coordination has no multi-key transaction. Here they do not exist: a create
+// is ONE record whose apply writes the title row, the page row, the first
+// revision and the history entry in one transaction, so there is no orphan
+// claim, no orphan revision and no window in which a title is held by a page
+// that was never written.
 //
 // What the record must still state is the SCOPE — every object its apply
 // touches — because that is what a node which cannot decode it files the

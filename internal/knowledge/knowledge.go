@@ -1,5 +1,6 @@
-// Package knowledge is the backend-neutral seam the Plan-phase "relevant
-// knowledge" prefetch talks to the team knowledge base through.
+// Package knowledge is the backend-neutral seam the turn-start "relevant
+// knowledge" prefetch and the search_knowledge builtin both read the team
+// knowledge base through.
 //
 // Exactly ONE backend per company, chosen by which integration is
 // configured. Two would mean an agent's answer to "what do we already know
@@ -11,12 +12,17 @@
 // The container vocabulary. A caller passes a seat, a plain-text query and
 // ancestor exclusions — never a CQL fragment, a space key or a project list.
 //
-// ONE IMPLEMENTATION SHIPS — Confluence — and the seam is still worth having,
-// for the reason `engine.Knowledge` states: the interface is declared by its
-// CONSUMERS, so adding a second backend is one new implementation rather than
-// a rewrite of everything that searches. A knowledge base narrows reads in its
-// own terms, and a caller that knew Confluence's would be a caller that has to
-// change the day a company runs something else.
+// TWO IMPLEMENTATIONS SHIP, which is what the seam was built for and is now
+// the argument for it rather than a promise about one: the engine's own pages
+// ([internal/pages.Searcher], the default) and Confluence. The interface is
+// declared by its CONSUMERS, so the second backend was one new implementation
+// rather than a rewrite of everything that searches — and a caller that knew
+// Confluence's own narrowing vocabulary would have been a caller to rewrite
+// the day a company ran the native one.
+//
+// [engine.Knowledge] is what picks between them, and it is a NIL CHECK rather
+// than a preference: a company on `backend: confluence` has no native
+// searcher at all, and the config refuses a company that configures both.
 //
 // # The rules every backend honours
 //

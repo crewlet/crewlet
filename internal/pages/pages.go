@@ -13,12 +13,20 @@
 // `integrations.confluence` block — pages in two places with nothing keeping
 // them in step is the cache-with-no-invalidation the whole design is against.
 //
+// That shape is ADR-0002 — the stream is the write-ahead log, these SQL tables
+// are derived from it — and [internal/statelog] is the record's authority. What
+// is particular to a wiki is below.
+//
 // # The three things a wiki has that a tracker does not
 //
 //   - A TITLE IS AN ADDRESS. People link to pages by name, so a title is
-//     unique within its container and claimed first-writer-wins on its own
-//     key. A rename releases the old claim and takes a new one, in that
-//     order, so two pages can never share a name.
+//     unique within its container, and it is what a create ARBITRATES ON:
+//     the record's SUBJECT is the address, not the new page's uuid, because
+//     two writers must contend for a name and two uuids never would. The
+//     title travels as a bounded TOKEN, since a subject is a broker path
+//     and a title is prose carrying spaces, dots and wildcards; the applier
+//     recomputes it from the payload and REFUSES a record that took one
+//     address and claimed another.
 //   - A BODY HAS A HISTORY. Every save writes an immutable revision, and the
 //     last [RevisionsKept] survive. The head carries a monotonic version, and
 //     a save must state the version it edited — the same rule Confluence's
@@ -38,24 +46,31 @@
 // own space by the config loader, and both are named there rather than here
 // so an operator can move either.
 //
-// # The two-key sequences
+// # The two-key sequences this no longer has
 //
-// A page's identity is TWO subjects — its title claim and the page itself —
-// and no append spans two subjects, so a create and a rename are each a pair
-// of records with a window between them. Each states its order and what a
-// crash between the halves leaves:
+// Under the coordination bucket this domain grew up on, a page's identity was
+// TWO keys — its title claim and the page itself — and no write spanned two
+// keys. So a create, a save and a rename were each a SEQUENCE with a window
+// between the halves, and each carried its own account of what a crash in that
+// window left behind: an orphan claim, an orphan revision above the page's own
+// version, an old claim still held. Stepping over that debris needed a GRACE
+// RULE — a refusal older than an hour is an orphan, overwrite it — which is a
+// rule about time rather than about ordering, and the one shape a reader can
+// neither derive nor check.
 //
-//	Create a page   title claim, page, change
-//	                a crash leaves an ORPHAN CLAIM, overwritten by the grace
-//	                rule below and swept after an hour
-//	Save a body     head at the version it edited, revision, change
-//	                a crash leaves an ORPHAN REVISION above the page's
-//	                version; the next writer treats a refusal older than the
-//	                grace as an orphan and overwrites it, so a crash never
-//	                locks a page until the sweep
-//	Rename          new claim, head, old claim released, change
-//	                a crash leaves the old claim held, which blocks only a
-//	                third page taking that name until the sweep
+// Adopting the log removed all three, and that is the clearest thing the
+// adoption bought. A create is ONE record whose apply writes the title claim,
+// the head, the first revision and the history entry in ONE TRANSACTION; so is
+// a save, and so is a rename, which takes the new claim and releases the old
+// inside the same transaction. There is no half-applied state to name, no
+// orphan to step over, and no grace rule anywhere in this package. A crash
+// mid-apply rolls the transaction back and the record is re-applied from the
+// checkpoint, which is the framework's own guarantee rather than this domain's.
+//
+// A RENAME IS STILL ITS OWN OPERATION rather than a field of a save, and for a
+// reason the transaction does not remove: one record has one subject, and a
+// record carrying both an address change and a content change could arbitrate
+// only one of them.
 package pages
 
 import (
@@ -78,20 +93,6 @@ var log = logging.Get("pages")
 // edited by an auto-refiner after every turn would otherwise grow one full
 // copy per turn, for ever.
 const RevisionsKept = 100
-
-// OrphanGrace is how long a half-finished write is left alone before another
-// writer may step over it.
-//
-// THIRTY SECONDS, and the number is doing real work. Within it, an ordinary
-// in-flight write and a crashed one look identical, so stepping over either
-// would destroy a live save; past it, a revision above the page's version can
-// only be a writer that died between its two keys. Shorter races a slow but
-// healthy writer; longer leaves a page locked for a person who is waiting.
-//
-// A page is never locked PERMANENTLY by a crash as a result — which is the
-// alternative this exists to avoid, where an hourly sweep is the only thing
-// that frees an edit somebody is trying to make now.
-const OrphanGrace = 30 * time.Second
 
 // The content caps, in bytes. Refused at the edge naming the field, never
 // silently cut: a page truncated mid-sentence is a procedure somebody will

@@ -1,5 +1,10 @@
 // Package tracker is the engine's own work tracker as a state-log domain.
 //
+// It is the first domain on that framework, so ADR-0002 is the decision every
+// rule below rests on: the stream is the write-ahead log and these SQL tables
+// are derived from it. The record is at adr/0002; [internal/statelog] is its
+// authority and this package restates none of it.
+//
 // # What a record is, and what the subject is for
 //
 // Every change is one RECORD on one ordered log, published to the subject of
