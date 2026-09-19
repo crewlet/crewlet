@@ -42,6 +42,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,56 @@ const Interval = 15 * time.Minute
 // fleet", which is the single-node case: there is nobody to be a singleton
 // among.
 type DutyFunc func(ctx context.Context) (bool, error)
+
+// Scope says who a job's rows belong to, and therefore where it must run.
+//
+// # Why this is an enum and not a bool
+//
+// It was `PerNode bool`, and a bool has a zero value that is a valid SETTING
+// rather than an absence — so a job that never mentioned it was silently a
+// fleet job, which is the wrong answer for every table a node owns its own
+// copy of. Six of the seven local sweeps in [StoreJobs], [LearningJobs],
+// [CounterpartyJobs], [ScheduleJobs] and [LedgerJobs] took that default by
+// omission: `crewlet_events`, `chat_thread_follows`, `agent_diary`,
+// `counterparty_profiles`, `scheduled_runs` and `conversation_sessions` were
+// swept only on the node holding the duty and grew for ever on every peer.
+// The audit log was among them, so the event retention an operator configured
+// applied on one node of the fleet.
+//
+// The two classes are not a spectrum, and the question has exactly one right
+// answer per job: is this state the FLEET agrees on, or state THIS MACHINE
+// owns alone? An enum with no valid zero makes a new job answer it, which a
+// bool cannot — see [New], which refuses a job that did not.
+//
+// The asymmetry is worth naming, because it decides which way this fails. A
+// node-local job left as [Fleet] grows a table for ever on every node but
+// one, and looks identical to a sweep that works to the operator who checks
+// the node it ran on. A fleet job left as [NodeLocal] costs N times the write
+// amplification for one table's worth of benefit and is otherwise correct,
+// since these are idempotent range deletes. Neither is acceptable, but only
+// the first is invisible — which is why the refusal is at construction rather
+// than a warning somebody reads later.
+type Scope string
+
+const (
+	// Fleet is state the whole company agrees on: the sweep runs once
+	// across the fleet, under the duty, because N nodes deleting the same
+	// rows every tick is N times the write amplification for one table's
+	// worth of benefit.
+	Fleet Scope = "fleet"
+
+	// NodeLocal is a table each node owns its own copy of: the sweep runs
+	// on EVERY node, whether or not this one holds the duty, because a
+	// copy nobody sweeps grows for the life of the deployment.
+	NodeLocal Scope = "node_local"
+)
+
+// Valid reports whether s is one of the two answers.
+//
+// The zero value is not one of them, deliberately: an unset scope is a job
+// whose author did not answer the placement question, and that is the state
+// this type exists to make unrepresentable past [New].
+func (s Scope) Valid() bool { return s == Fleet || s == NodeLocal }
 
 // Job is one unit of housekeeping.
 //
@@ -102,22 +153,14 @@ type Job struct {
 	// takes effect without a job rebuilding anything.
 	Run func(ctx context.Context, now, cutoff time.Time) (int64, error)
 
-	// PerNode marks a job that must run on EVERY node rather than once
-	// across the fleet.
+	// Scope says whether this job's rows are the fleet's or this node's
+	// own, and therefore whether it runs under the duty or on every node.
 	//
-	// # Why this is not a detail
-	//
-	// The duty exists to stop N nodes deleting the same rows, which is
-	// exactly right for shared state — and exactly wrong for a table each
-	// node owns its own copy of. A per-node job under the fleet singleton
-	// is swept on one node and grows for ever on all the others, which
-	// looks identical to a sweep that is working: the operator who checks
-	// sees a table being tidied, on the node they happened to check.
-	//
-	// The two classes are not a spectrum. A job is about state the fleet
-	// agrees on, or about state this machine owns alone, and every job has
-	// to say which.
-	PerNode bool
+	// It has no default. [New] refuses a job whose scope is not [Valid],
+	// because the answer is a property of the table that only the author of
+	// the job knows and the cost of guessing it wrong is invisible — see
+	// [Scope] for what the guess cost when the field was a bool.
+	Scope Scope
 
 	// Gate reports whether this job has anything to do at all.
 	//
@@ -133,8 +176,12 @@ type Job struct {
 }
 
 // Purge builds a range-delete job over a retention horizon.
-func Purge(table string, horizon time.Duration, fn func(ctx context.Context, cutoff time.Time) (int64, error)) Job {
-	return Job{Name: table, Horizon: horizon,
+//
+// scope is a PARAMETER rather than a field the caller may forget, for the
+// reason [Scope] gives: the placement question has one right answer per table
+// and no safe default, so the constructor asks it rather than assuming it.
+func Purge(table string, scope Scope, horizon time.Duration, fn func(ctx context.Context, cutoff time.Time) (int64, error)) Job {
+	return Job{Name: table, Scope: scope, Horizon: horizon,
 		Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 			return fn(ctx, cutoff)
 		}}
@@ -145,8 +192,8 @@ func Purge(table string, horizon time.Duration, fn func(ctx context.Context, cut
 // Two width conventions exist across the stores, and normalising here beats
 // either changing a store's signature to suit its sweeper or making every
 // caller remember which is which.
-func PurgeN(table string, horizon time.Duration, fn func(ctx context.Context, cutoff time.Time) (int, error)) Job {
-	return Purge(table, horizon, func(ctx context.Context, cutoff time.Time) (int64, error) {
+func PurgeN(table string, scope Scope, horizon time.Duration, fn func(ctx context.Context, cutoff time.Time) (int, error)) Job {
+	return Purge(table, scope, horizon, func(ctx context.Context, cutoff time.Time) (int64, error) {
 		n, err := fn(ctx, cutoff)
 		return int64(n), err
 	})
@@ -182,7 +229,8 @@ type Worker struct {
 	done   chan struct{}
 }
 
-// New builds a worker, enforcing the interval-below-every-horizon invariant.
+// New builds a worker, enforcing the interval-below-every-horizon invariant
+// and refusing a job that did not say whose rows it sweeps.
 //
 // A horizon at or below the tick is RAISED to the tick and logged, rather
 // than refused. The one horizon an operator sets is the conversation
@@ -190,7 +238,19 @@ type Worker struct {
 // shorter than the sweep would be a hard stop for a soft problem — while
 // silently accepting it would mean a table swept on a schedule that cannot
 // honour its own horizon.
-func New(opts Options) *Worker {
+//
+// A MALFORMED JOB IS REFUSED RATHER THAN DROPPED, and that is the opposite
+// of what this did. It used to skip a job with no Run or no Name and carry
+// on, which is the same silence as the one [Scope] describes: the worker
+// starts, logs the jobs it kept, and the table the dropped job was for grows
+// with nothing anywhere saying a sweep was configured for it. There is no
+// caller for whom "I asked for this job and it is not running" is the
+// outcome they wanted, so it is an error the wiring has to answer for.
+//
+// The error names every offending job in one message rather than the first,
+// because a caller fixing one and re-running to find the next is the loop
+// this is meant to save them.
+func New(opts Options) (*Worker, error) {
 	w := &Worker{
 		interval:  opts.Interval,
 		claimDuty: opts.ClaimDuty,
@@ -202,8 +262,23 @@ func New(opts Options) *Worker {
 	if w.now == nil {
 		w.now = time.Now
 	}
-	for _, j := range opts.Jobs {
-		if j.Run == nil || j.Name == "" {
+	var bad []string
+	for i, j := range opts.Jobs {
+		switch {
+		case j.Name == "":
+			bad = append(bad, fmt.Sprintf("jobs[%d]: no Name — the log has "+
+				"nothing to call it and an operator has nothing to grep", i))
+			continue
+		case j.Run == nil:
+			bad = append(bad, fmt.Sprintf("%s: no Run — set one, or do not "+
+				"register the job", j.Name))
+			continue
+		case !j.Scope.Valid():
+			bad = append(bad, fmt.Sprintf("%s: Scope is %q — set "+
+				"maintenance.Fleet for state the company agrees on, or "+
+				"maintenance.NodeLocal for a table each node owns its own "+
+				"copy of. A node-local job left unset is swept on one node "+
+				"and grows for ever on every peer", j.Name, string(j.Scope)))
 			continue
 		}
 		if j.Horizon > 0 && j.Horizon < w.interval {
@@ -213,7 +288,11 @@ func New(opts Options) *Worker {
 		}
 		w.jobs = append(w.jobs, j)
 	}
-	return w
+	if len(bad) > 0 {
+		return nil, fmt.Errorf("maintenance: %d job(s) cannot be registered: %s",
+			len(bad), strings.Join(bad, "; "))
+	}
+	return w, nil
 }
 
 // Jobs names what this worker sweeps, for logs and tests.
@@ -312,11 +391,11 @@ func (w *Worker) loop(ctx context.Context) {
 // "somebody else swept" and "nothing needed sweeping" are different facts,
 // and an empty map would merge them.
 func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
-	// THE DUTY IS CLAIMED ONCE AND CONSULTED PER JOB. A per-node job runs
-	// whether or not this node holds it, because the table it sweeps is
-	// this node's own — and a fleet job runs only if it does. Skipping
-	// the whole tick on a lost claim would let every node's own tables
-	// grow for as long as one peer holds the duty.
+	// THE DUTY IS CLAIMED ONCE AND CONSULTED PER JOB. A [NodeLocal] job
+	// runs whether or not this node holds it, because the table it sweeps
+	// is this node's own — and a [Fleet] job runs only if it does.
+	// Skipping the whole tick on a lost claim would let every node's own
+	// tables grow for as long as one peer holds the duty.
 	holds, err := w.mayTick(ctx)
 	if err != nil {
 		return nil, err
@@ -325,7 +404,7 @@ func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 	swept := make(map[string]int64, len(w.jobs))
 	var errs []error
 	for _, j := range w.jobs {
-		if !holds && !j.PerNode {
+		if !holds && j.Scope == Fleet {
 			continue
 		}
 		if j.Gate != nil {

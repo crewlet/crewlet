@@ -63,7 +63,7 @@ type DutyDeps struct {
 
 // Jobs is the tracker's housekeeping, as the maintenance worker's own shape.
 //
-// SIX JOBS, all fleet-wide and all gated. The names are the log's, and each
+// SIX JOBS, every one [maintenance.Fleet] and all but one gated. The names are the log's, and each
 // is the table or the walk it is about rather than the code that runs it.
 func Jobs(d DutyDeps) []maintenance.Job {
 	duty := &duty{deps: d}
@@ -72,28 +72,33 @@ func Jobs(d DutyDeps) []maintenance.Job {
 	}
 	return []maintenance.Job{
 		{
-			Name: "tracker_respread",
-			Gate: duty.pendingRespread,
-			Run:  duty.respread,
+			Name:  "tracker_respread",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingRespread,
+			Run:   duty.respread,
 		},
 		{
-			Name: "tracker_duplicate_ranks",
-			Gate: duty.pendingDuplicates,
-			Run:  duty.clearDuplicates,
+			Name:  "tracker_duplicate_ranks",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingDuplicates,
+			Run:   duty.clearDuplicates,
 		},
 		{
-			Name: "tracker_abandoned_merges",
-			Gate: duty.pendingMerges,
-			Run:  duty.finishMerges,
+			Name:  "tracker_abandoned_merges",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingMerges,
+			Run:   duty.finishMerges,
 		},
 		{
-			Name: "tracker_unblocked",
-			Run:  duty.tellUnblocked,
+			Name:  "tracker_unblocked",
+			Scope: maintenance.Fleet,
+			Run:   duty.tellUnblocked,
 		},
 		{
-			Name: "tracker_one_sided",
-			Gate: duty.pendingOneSided,
-			Run:  duty.repairOneSided,
+			Name:  "tracker_one_sided",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingOneSided,
+			Run:   duty.repairOneSided,
 		},
 		// THE ONE JOB THAT IS NOT A REPAIR, and it says so rather than
 		// pretending: a sprint's start and end are CALENDAR boundaries
@@ -102,9 +107,10 @@ func Jobs(d DutyDeps) []maintenance.Job {
 		// them. Its gate is still one indexed read, so a company that
 		// runs no sprints pays exactly that.
 		{
-			Name: "tracker_sprints",
-			Gate: duty.sprintWork,
-			Run:  duty.runSprints,
+			Name:  "tracker_sprints",
+			Scope: maintenance.Fleet,
+			Gate:  duty.sprintWork,
+			Run:   duty.runSprints,
 		},
 	}
 }

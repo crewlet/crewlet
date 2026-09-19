@@ -27,7 +27,7 @@ import (
 // exact failure the maintenance package doc names about the `<domain>_ops`
 // tables, one table over.
 //
-// # PER NODE, and the table's class is why
+// # [maintenance.NodeLocal], and the table's class is why
 //
 // `tracker_notifications` is [statelog.Divergent]: it travels inside a
 // snapshot but is NOT in the identity claim, because what it holds depends on
@@ -49,7 +49,7 @@ func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
 		return nil
 	}
 	return []maintenance.Job{{
-		Name: "tracker_notifications", Horizon: retention, PerNode: true,
+		Name: "tracker_notifications", Scope: maintenance.NodeLocal, Horizon: retention,
 		Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 			return purgeInbox(ctx, db, cutoff)
 		},

@@ -43,10 +43,10 @@ func TestEveryTrackerJobIsGatedOrSaysWhyNot(t *testing.T) {
 				"goes looking costs the same whether or not anything is "+
 				"wrong, on every node, for ever", job.Name)
 		}
-		if job.PerNode {
-			t.Errorf("%s is marked per-node and every tracker job publishes "+
+		if job.Scope != maintenance.Fleet {
+			t.Errorf("%s has scope %q and every tracker job publishes "+
 				"RECORDS — running one on every node is N copies of one "+
-				"record for the applier to arbitrate", job.Name)
+				"record for the applier to arbitrate", job.Name, job.Scope)
 		}
 	}
 }
@@ -296,12 +296,16 @@ func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
 
 func trackerWorker(t *testing.T, r *roundTrip) *maintenance.Worker {
 	t.Helper()
-	return maintenance.New(maintenance.Options{
+	w, err := maintenance.New(maintenance.Options{
 		Jobs: tracker.Jobs(tracker.DutyDeps{
 			DB: r.db, Writer: r.writer, NodeID: "node-a",
 		}),
 		Now: func() time.Time { return wednesday },
 	})
+	if err != nil {
+		t.Fatalf("build the tracker's maintenance worker: %v", err)
+	}
+	return w
 }
 
 func flagged(t *testing.T, r *roundTrip, column string) bool {
