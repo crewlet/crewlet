@@ -388,23 +388,6 @@ func (t *Transport) Handles() []string {
 	return out
 }
 
-// Client exposes a seat's authenticated client, keyed by handle.
-//
-// ONE PER SEAT and never shared, which is the whole point of a bot per
-// agent: every call carries that seat's own token, so the instance
-// attributes it to the agent rather than to one company-wide account.
-// Nothing here creates a post — an agent speaks through the Mattermost MCP
-// server, on this same token — so what this client does is read: the
-// reconnect backfill, and the thread a turn is handed. It can also raise the
-// seat's typing indicator, which nothing running asks it to; see
-// [Transport.SetStatus].
-func (t *Transport) Client(handle string) (*Client, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	s, ok := t.seats[handle]
-	return s.client, ok
-}
-
 // ---------------------------------------------------------------- //
 // notify.ThreadReader
 // ---------------------------------------------------------------- //

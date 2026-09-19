@@ -26,6 +26,10 @@ type instance struct {
 	identities map[string]mattermost.User
 	mu         sync.Mutex
 	typing     []string
+	// reads is the bearer token each thread read arrived on, which is
+	// what says a read was made as ONE seat rather than on a client the
+	// transport shares.
+	reads []string
 }
 
 func newInstance(t *testing.T, identities map[string]mattermost.User) *instance {
@@ -41,6 +45,9 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 				"TimeBetweenUserTypingUpdatesMilliseconds": inst.throttle,
 			})
 		case strings.HasSuffix(r.URL.Path, "/thread"):
+			inst.mu.Lock()
+			inst.reads = append(inst.reads, token)
+			inst.mu.Unlock()
 			if _, ok := inst.identities[token]; !ok {
 				w.WriteHeader(http.StatusUnauthorized)
 				w.Write([]byte(`{"message":"Invalid or expired session"}`))
@@ -101,6 +108,13 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 	return inst
 }
 
+// readTokens is the token each thread read was made on, in order.
+func (i *instance) readTokens() []string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return slices.Clone(i.reads)
+}
+
 func (i *instance) typings() int {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -146,11 +160,16 @@ func TestStartResolvesEachSeatsIdentity(t *testing.T) {
 	if got := tr.Handles(); !slices.Equal(got, []string{"swe"}) {
 		t.Fatalf("Handles = %v", got)
 	}
-	// The SERVER's username wins over the configured one, because the
-	// server is what a person's mention will be matched against.
-	c, ok := tr.Client("swe")
-	if !ok || c.Token() != "tok-swe" {
-		t.Fatalf("the seat's client is %v/%v", c, ok)
+	// AND THE CLIENT BEHIND THAT IDENTITY IS THE SEAT'S OWN — asserted
+	// through the read that uses it rather than through an accessor
+	// exported for this line, which only ever proved the map had an entry.
+	// The instance authenticates every call, so a read that succeeds is a
+	// read made on this seat's token and the recorder names which.
+	if _, ok := tr.ReadThread(t.Context(), "swe", "C1", "root"); !ok {
+		t.Fatal("the seat could not read a thread on its own client")
+	}
+	if got := inst.readTokens(); !slices.Equal(got, []string{"tok-swe"}) {
+		t.Fatalf("the thread was read on %v, want the seat's own token", got)
 	}
 }
 
