@@ -204,9 +204,9 @@ The single source of truth is `internal/slack` (`BotScopes` / `BotEvents`); the 
 | `channels:history`, `channels:read` | public channels — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies` / `channels_list` |
 | `chat:write` | the working indicator (`assistant.threads.setStatus`) + MCP `conversations_add_message` |
 | `files:read` | shared-file notifications |
-| `groups:history`, `groups:read` | private channels — **required**, see the note below |
-| `im:history`, `im:read`, `im:write` | DMs, incl. escalation DMs to human seats |
-| `mpim:history`, `mpim:read` | group DMs — **required**, see the note below |
+| `groups:history`, `groups:read` | private channels — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies`; `groups:read` **required**, see the note below |
+| `im:history`, `im:read`, `im:write` | DMs, incl. escalation DMs to human seats — and the engine's own turn-start thread read, which is the case it exists for: a DM reply is the thinnest trigger there is |
+| `mpim:history`, `mpim:read` | group DMs — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies`; `mpim:read` **required**, see the note below |
 | `reactions:write` | MCP `reactions_add` / `reactions_remove` |
 | `search:read.public` | the bot-token search scope (the plain `search:read` is user-token-only) |
 | `usergroups:read`, `usergroups:write` | MCP `usergroups_*` tools |

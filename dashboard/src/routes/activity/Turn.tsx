@@ -1524,16 +1524,25 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     {
                       properties: [
                         {
-                          // LABELLED, and explained. It is "{source}:{channel}:
-                          // {thread}" — which external thread this turn was
-                          // answering — and it used to be an unexplained
-                          // truncated string under the seat's name.
+                          // LABELLED, and explained. It is the turn's
+                          // CONVERSATION IDENTITY, "{source}:{local}", and it
+                          // used to be an unexplained truncated string under
+                          // the seat's name.
+                          //
+                          // The local half is the surface's own answer to
+                          // "which ongoing conversation is this", not an
+                          // address: a thread in a shared channel is
+                          // "{channel}:{thread}" because there the thread IS
+                          // the conversation, while a direct message is the
+                          // bare "{channel}" however many threads run inside
+                          // it — one line with one person, which is what the
+                          // ledger and a parked sandbox answer are keyed on.
                           label: "Conversation",
                           value: (
                             <span className="row gap-2 baseline">
                               <code className="inline">{conversation}</code>
                               <span className="t-caption">
-                                the external thread this turn served
+                                the external conversation this turn served
                               </span>
                             </span>
                           ),
