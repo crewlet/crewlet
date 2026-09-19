@@ -268,7 +268,46 @@ func toolArrayBytes(t *testing.T, defs []llm.ToolDef) int {
 	return len(encoded)
 }
 
-// A RESUMED PHASE MEASURES THE CONVERSATION IT RE-ENTERS.
+// seedChars is what the engine measures a parked conversation as, rebuilt from
+// what the provider was handed: every message's text, each assistant round's
+// reasoning ONCE — the structured blocks where a round has them, the prose
+// where it does not — and the compact JSON of its tool calls' arguments.
+//
+// Restated here rather than reaching for the engine's own unexported helper,
+// for the reason toolArrayBytes gives: this suite is the one thing holding that
+// helper's answer against what a provider actually received, and a test that
+// calls the function it is checking agrees with itself whatever either of them
+// does. Restating it is also what makes the double-count visible from here — a
+// helper that summed both reasoning fields would have to be written down as
+// summing both.
+func seedChars(t *testing.T, msgs []llm.Message) int {
+	t.Helper()
+	total := 0
+	for _, msg := range msgs {
+		total += len(msg.Content)
+		if len(msg.ThinkingBlocks) > 0 {
+			for _, tb := range msg.ThinkingBlocks {
+				total += len(tb.Thinking) + len(tb.Data)
+			}
+		} else {
+			total += len(msg.ReasoningContent)
+		}
+		for _, tc := range msg.ToolCalls {
+			if len(tc.Arguments) == 0 {
+				total += len(`{}`)
+				continue
+			}
+			encoded, err := json.Marshal(tc.Arguments)
+			if err != nil {
+				t.Fatalf("the fixture's tool call arguments are not JSON: %v", err)
+			}
+			total += len(encoded)
+		}
+	}
+	return total
+}
+
+// A RESUMED PHASE MEASURES THE CONVERSATION IT RE-ENTERS — ALL OF IT.
 //
 // A detached coding run stops the executor mid-loop with its tool call
 // unanswered, and the resume re-enters that same loop from the saved messages
@@ -277,6 +316,13 @@ func toolArrayBytes(t *testing.T, defs []llm.ToolDef) int {
 // carries the most: a whole pre-suspend conversation plus the array. Counting
 // only the tool term would have made it worse, reading as a phase offered
 // every tool and asked nothing.
+//
+// The parked rounds here carry REASONING AND TOOL-CALL ARGUMENTS, which is what
+// a real one carries — `reasoning: true` gives every round a four-figure
+// thinking allowance by default, the tool loop stores the blocks on each
+// assistant message and execstate serialises them into the row — and they were
+// the next term to go missing after the two above: text alone under-reported a
+// resumed executor by the largest thing in its prompt.
 func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -285,10 +331,25 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 			`{"outcome":"blocked","summary":"the run reported a failing build",`+
 				`"evidence":"the box could not compile it"}`),
 	}}
+	state := suspendedAfterTwoRounds()
+	// The shape the Anthropic backend hands back: the blocks verbatim, and
+	// the same thinking text rendered beside them as prose. Added here
+	// rather than to the shared fixture, which the round and duration cases
+	// read for their own reasons.
+	const thought = "the module is untidy, so the box has to run go mod tidy"
+	for i, msg := range state.Messages {
+		if msg.Role != llm.RoleAssistant {
+			continue
+		}
+		state.Messages[i].ReasoningContent = thought
+		state.Messages[i].ThinkingBlocks = []llm.ThinkingBlock{
+			{Type: "thinking", Thinking: thought, Signature: "provider-minted"},
+		}
+	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		pub: pub,
 		resume: &runner.Resume{
-			State:  suspendedAfterTwoRounds(),
+			State:  state,
 			Answer: "the run succeeded, the merge request is open",
 		},
 	})
@@ -302,16 +363,31 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 	}
 	m := got[0]
 	sent := prov.requestsFor("execute")[0]
-	var messages int
+	messages := seedChars(t, sent.Messages)
+	var text, reasoned, args int
 	for _, msg := range sent.Messages {
-		messages += len(msg.Content)
+		text += len(msg.Content)
+		reasoned += len(msg.ReasoningContent)
+		for _, tc := range msg.ToolCalls {
+			args += len(tc.Arguments)
+		}
 	}
-	if messages == 0 {
-		t.Fatal("the fixture sent no message text, so this case cannot tell a fix from a bug")
+	// Each term has to be present in the fixture, or the case cannot tell a
+	// fix from a bug: the meter would report the same figure either way.
+	if text == 0 || reasoned == 0 || args == 0 {
+		t.Fatalf("the fixture sent text=%d reasoning=%d tool-call arguments=%d; a term at "+
+			"zero is a term this case is not holding", text, reasoned, args)
 	}
 	if m.MessageBytes != messages {
 		t.Errorf("message_chars = %d, the provider received %d characters of conversation",
 			m.MessageBytes, messages)
+	}
+	// The double count, named: on this backend's shape ReasoningContent is a
+	// rendering of the blocks beside it, so summing both would report the
+	// prompt's largest term twice.
+	if m.MessageBytes == messages+reasoned {
+		t.Error("message_chars counted the reasoning twice — the blocks and the prose " +
+			"rendering of the same thinking are one term")
 	}
 	// The two a resume does NOT prepend. Reporting them would report bytes
 	// nothing sent, which is the mirror of the bug above.

@@ -157,3 +157,148 @@ func TestAnUnencodableSchemaNamesTheToolItBelongsTo(t *testing.T) {
 		t.Errorf("the json error was restated rather than wrapped: %v", err)
 	}
 }
+
+// A PARKED TURN'S REASONING AND TOOL CALLS ARE IN THE FIGURE, AND THE
+// REASONING IS IN IT ONCE.
+//
+// `reasoning: true` is a shipped config field with a four-figure default
+// thinking allowance per round, the tool loop stores what comes back on every
+// assistant message it appends, and execstate serialises all of it into the
+// parked row — so on a resumed executor this is routinely the largest term the
+// prompt carries. The Anthropic backend puts every thinking block straight back
+// into the request's content blocks and is billed for them, and it ALSO renders
+// the same thinking text into ReasoningContent as prose, so a meter that summed
+// both fields would double exactly that term on exactly that backend.
+func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) {
+	t.Parallel()
+	const (
+		systemText    = "you are the CTO"
+		userText      = "fix the failing build"
+		assistantText = "starting a coding run"
+		toolResult    = "the box says it compiles now"
+		thinkingText  = "the build is red because the module is untidy"
+		redactedData  = "0pAqUeBlOb"
+		signature     = "sig-the-provider-minted-not-the-model"
+		arguments     = `{"task":"go mod tidy"}`
+	)
+	seed := []llm.Message{
+		{Role: llm.RoleSystem, Content: systemText},
+		{Role: llm.RoleUser, Content: userText},
+		{
+			Role:    llm.RoleAssistant,
+			Content: assistantText,
+			ThinkingBlocks: []llm.ThinkingBlock{
+				{Type: "thinking", Thinking: thinkingText, Signature: signature},
+				{Type: "redacted_thinking", Data: redactedData},
+			},
+			// What the Anthropic backend sets BESIDE the blocks: the same
+			// thinking text as prose. It is the double-count hazard, in
+			// the shape the engine actually produces.
+			ReasoningContent: thinkingText,
+			ToolCalls: []llm.ToolCall{
+				{ID: "call-1", Name: "run_sandbox", Arguments: map[string]any{"task": "go mod tidy"}},
+			},
+		},
+		{Role: llm.RoleTool, ToolCallID: "call-1", Content: toolResult},
+	}
+
+	m, err := measurePrompt("", "", seed, nil)
+	if err != nil {
+		t.Fatalf("measurePrompt: %v", err)
+	}
+	want := len(systemText) + len(userText) + len(assistantText) + len(toolResult) +
+		len(thinkingText) + len(redactedData) + len(arguments)
+	if m.messages != want {
+		t.Errorf("message term = %d, want %d — text + thinking (blocks, once) + encoded arguments",
+			m.messages, want)
+	}
+	// Said as its own failure, because these are the two wrong answers and
+	// each has its own reviewer arguing for it.
+	if m.messages == want+len(thinkingText) {
+		t.Error("the thinking was counted twice: ReasoningContent is the Anthropic " +
+			"backend's rendering of the same blocks, not a second term")
+	}
+	if m.messages == want-len(thinkingText)-len(redactedData) {
+		t.Error("the thinking was dropped: Anthropic hands every block back into the " +
+			"request and is billed for it")
+	}
+	if m.messages == want+len(signature) {
+		t.Error("the block's signature was counted: it is a fixed-size opaque token the " +
+			"provider mints, so counting it moves this figure with a vendor's token format")
+	}
+}
+
+// REASONING PROSE STANDS IN WHERE A BACKEND SET NO BLOCKS, so neither field can
+// be dropped outright.
+//
+// The OpenAI backend fills ReasoningContent alone — this endpoint has no field
+// to hand blocks back through — and the cli-agent text backend writes that same
+// prose into the transcript it builds, literally. A meter that only read
+// ThinkingBlocks would report every resumed turn on those backends as having
+// thought nothing.
+func TestReasoningProseIsCountedWhenABackendSetNoBlocks(t *testing.T) {
+	t.Parallel()
+	const (
+		assistantText = "handing this to the box"
+		reasoning     = "the tests name the module, so tidy is the fix"
+	)
+	seed := []llm.Message{{
+		Role:             llm.RoleAssistant,
+		Content:          assistantText,
+		ReasoningContent: reasoning,
+		// No arguments at all, which is a real call shape — and it weighs
+		// the two bytes of `{}` every backend sends for it, not the four
+		// json.Marshal answers for a nil map.
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "submit_work"}},
+	}}
+
+	m, err := measurePrompt("", "", seed, nil)
+	if err != nil {
+		t.Fatalf("measurePrompt: %v", err)
+	}
+	if want := len(assistantText) + len(reasoning) + emptyArgsBytes; m.messages != want {
+		t.Errorf("message term = %d, want %d — the prose plus an empty argument object",
+			m.messages, want)
+	}
+}
+
+// AN ARGUMENT JSON CANNOT ENCODE NAMES ITS OWN CALL, AND DOES NOT ZERO THE
+// TOOL TERM.
+//
+// Unreachable from a real parked row — a suspended conversation reached its map
+// through json.Unmarshal of the stored state, so every value in it is
+// JSON-representable — and that is exactly why the two properties are worth
+// pinning: the row is published whatever happened, so the only account of which
+// term came up short is the error, and a tool array zeroed by a failure in a
+// different term is a figure a reader would take at face value.
+func TestAnUnencodableParkedArgumentNamesItsCallAndSparesTheToolTerm(t *testing.T) {
+	t.Parallel()
+	seed := []llm.Message{{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{
+			{ID: "call-1", Name: "healthy", Arguments: map[string]any{"path": "/a"}},
+			{ID: "call-2", Name: "broken", Arguments: map[string]any{"depth": make(chan int)}},
+		},
+	}}
+	defs := []llm.ToolDef{{Name: "ping"}}
+
+	m, err := measurePrompt("", "", seed, defs)
+	if err == nil {
+		t.Fatal("an argument json cannot encode measured cleanly, so nothing would report it")
+	}
+	if !strings.Contains(err.Error(), `"broken"`) {
+		t.Errorf("error does not name the call to go and look at: %v", err)
+	}
+	var unsupported *json.UnsupportedTypeError
+	if !errors.As(err, &unsupported) {
+		t.Errorf("the json error was restated rather than wrapped: %v", err)
+	}
+	if want := len(`[{"name":"ping"}]`); m.tools != want {
+		t.Errorf("tool term = %d, want %d — the conversation's failure zeroed a term it "+
+			"has nothing to do with", m.tools, want)
+	}
+	if m.messages != len(`{"path":"/a"}`) {
+		t.Errorf("message term = %d, want %d — what was counted before the failure is "+
+			"worth more than a zero", m.messages, len(`{"path":"/a"}`))
+	}
+}

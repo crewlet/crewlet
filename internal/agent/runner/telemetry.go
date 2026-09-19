@@ -393,12 +393,15 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 	}
 	m, err := measurePrompt(system, user, seed, defs)
 	if err != nil {
-		// The row still goes out. A tool_chars of 0 beside a non-zero
-		// tool_count is the visible form of this, and it is worth more
-		// than a phase with no measurement at all — the schema that
-		// could not be encoded here is one the provider call after it is
-		// about to reject for the same reason.
-		log.WarnContext(ctx, "prompt_size_tool_measure_failed", "phase", ph,
+		// The row still goes out, short one term, and it is worth more
+		// than a phase with no measurement at all — whatever could not be
+		// encoded here is what the provider call after it is about to
+		// reject for the same reason. The log line is the only place that
+		// says WHICH term came up short, because the row itself cannot:
+		// a tool_chars of 0 beside a non-zero tool_count is visible, but
+		// a conversation measured short of its own tool-call arguments
+		// reads as a perfectly ordinary figure.
+		log.WarnContext(ctx, "prompt_size_measure_failed", "phase", ph,
 			"turn_id", e.turn.RunID, "error", err)
 	}
 	e.publish(ctx, events.New(types.PromptSize{
@@ -448,28 +451,96 @@ func (m promptMeasure) approximateTokens() int {
 //
 // A SEEDED phase and a fresh one are measured as the loop sends them, which is
 // exclusively one or the other: a resumed loop re-enters its saved messages
-// and the system and user strings are ignored (see [phaseRun]), so counting
-// them here would report bytes no provider receives — and counting only them
-// is what reported every resumed executor at 0/0.
+// and the system and user strings are ignored (see [phaseRun], which switches
+// on the same nil), so counting them here would report bytes no provider
+// receives — and counting only them is what reported every resumed executor at
+// 0/0.
+//
+// THE TWO TERMS ARE MEASURED INDEPENDENTLY and the first failure is returned
+// with both of them filled as far as they got. The caller publishes the row
+// either way, and a term zeroed because a different term could not be encoded
+// is a number nobody can interpret.
 func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) (promptMeasure, error) {
 	m := promptMeasure{toolCount: len(defs)}
+	var failure error
 	if seed == nil {
 		m.system, m.user = len(system), len(user)
 	} else {
-		for _, msg := range seed {
-			m.messages += len(msg.Content)
-		}
+		m.messages, failure = seedBytes(seed)
 	}
 	// Not named `tools`: this file imports the package of that name, and a
 	// local that shadows it is a compile error waiting for the next line
 	// added here.
 	size, err := toolDefBytes(defs)
-	if err != nil {
-		return m, err
-	}
 	m.tools = size
-	return m, nil
+	if failure == nil {
+		failure = err
+	}
+	return m, failure
 }
+
+// seedBytes is what a parked conversation weighs: every message's text, the
+// reasoning each assistant round carries, and the arguments of the tool calls
+// in it. It returns what it managed to count alongside any failure, because
+// the row goes out regardless.
+//
+// THE THINKING TERM IS COUNTED ONCE PER MESSAGE, and that is the whole of the
+// arithmetic here. [llm.Message] carries a model's reasoning in two shapes and
+// a backend sets either or both: the Anthropic backend fills ThinkingBlocks —
+// which it hands straight back into the next call's content blocks and is
+// billed for — and ALSO renders that same thinking text into ReasoningContent
+// as prose, while the OpenAI backend fills ReasoningContent alone and the
+// cli-agent text backend writes exactly that prose into the prompt it builds.
+// So summing both would double the largest term a parked Anthropic turn
+// carries, on the one backend that actually pays for it, and dropping either
+// would report a resumed phase as having thought nothing on the other. The
+// blocks win wherever there are blocks; the prose stands in where there are
+// none.
+//
+// Signature is deliberately out of the sum: it is a fixed-size opaque token
+// the provider mints per block rather than anything a model wrote, so counting
+// it would make this figure move with a vendor's token format instead of with
+// the prompt. A tool call's id and name are out for the same reason — bounded
+// identifiers beside arguments that run to kilobytes.
+func seedBytes(seed []llm.Message) (int, error) {
+	total := 0
+	for _, msg := range seed {
+		total += len(msg.Content)
+		if len(msg.ThinkingBlocks) > 0 {
+			for _, tb := range msg.ThinkingBlocks {
+				// Data is the redacted-thinking payload, which is the
+				// whole of such a block: it has no readable Thinking,
+				// and it is still handed back and still billed.
+				total += len(tb.Thinking) + len(tb.Data)
+			}
+		} else {
+			total += len(msg.ReasoningContent)
+		}
+		for _, tc := range msg.ToolCalls {
+			if len(tc.Arguments) == 0 {
+				total += emptyArgsBytes
+				continue
+			}
+			encoded, err := json.Marshal(tc.Arguments)
+			if err != nil {
+				// NAME THE CALL, as toolDefBytes names the tool: json
+				// reports the offending Go type and a parked
+				// conversation holds one per round.
+				return total, fmt.Errorf("measuring the parked conversation: the "+
+					"arguments of tool call %q cannot be encoded as JSON: %w",
+					tc.Name, err)
+			}
+			total += len(encoded)
+		}
+	}
+	return total, nil
+}
+
+// emptyArgsBytes is what an argument-less tool call weighs on the wire: the two
+// bytes of `{}` both HTTP backends send for one, rather than the four
+// json.Marshal answers for a nil map. A `null` there is a shape no provider
+// ever receives.
+const emptyArgsBytes = len(`{}`)
 
 // toolDefBytes is the compact JSON size of a tool-definition array.
 //

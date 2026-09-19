@@ -1703,9 +1703,10 @@ Four rules replace it, and each one names what it fixes.
    turn reported ~6,900 tokens on a prompt the provider billed 205,000 input
    tokens for. *Messages* is what a **resumed** phase sends in place of a
    system and user pair — a detached coding run re-enters its saved
-   conversation — and reads 0 on every phase that opens one of its own. Five
-   fixed columns overflow a phone, which is what the sideways scroll on
-   `.num-block` is for.
+   conversation, counted with the reasoning each parked round carries and the
+   arguments of its tool calls — and reads 0 on every phase that opens one of
+   its own. Five fixed columns overflow a phone, which is what the sideways
+   scroll on `.num-block` is for.
 
    And then that half grew rule 1's own failure back. `turn_id|phase|iteration`
    is the phase key, and the turn id **is** the work key, so a dispatch that is

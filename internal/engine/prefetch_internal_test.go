@@ -435,7 +435,7 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 
 	e := &Engine{backends: &Backends{Queue: q}}
 	seat := &org.Role{Name: "Tech Lead", DeclaredHandle: "lead"}
-	e.publishPrefetchSummary(t.Context(), seat, "agent-1", "work-3",
+	e.publishPrefetchSummary(t.Context(), seat, "agent-1", "run-3", "work-3",
 		prefetch.Request{}, prefetch.Blocks{
 			ThreadContext:             "- **Ana Ruiz (ana)**: staging redirects in a loop",
 			ThreadContextPosts:        12,

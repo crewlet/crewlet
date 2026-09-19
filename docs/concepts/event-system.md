@@ -266,8 +266,11 @@ provider_fallback          # the chain moved to its next provider. One per
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user
-                           # text, a resumed phase's seeded conversation, and
-                           # the tool-definition array both providers bill as
+                           # text, a resumed phase's seeded conversation — its
+                           # text, each parked round's reasoning (once: the
+                           # thinking blocks, or the prose rendering of them,
+                           # never both) and its tool-call arguments — and the
+                           # tool-definition array both providers bill as
                            # input. The keys are system_chars / user_chars and
                            # say chars because they always have — frozen by
                            # ADR-0006, since a renamed key reads back as 0 on

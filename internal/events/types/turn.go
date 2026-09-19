@@ -99,9 +99,10 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // technically already stored — and reading it back means hauling every phase's
 // whole prompt and response across the driver to count them in Go, which is
 // exactly the cost schema/0015 promoted the spend columns out of the payload
-// to avoid. The measured integers — the text a phase opens with, the tool
-// definitions offered alongside it, how many there were, and one approximation
-// over the lot — answer the question at a scan.
+// to avoid. The measured integers — the text a phase opens with, or the parked
+// conversation a resumed one re-enters instead, the tool definitions offered
+// alongside either, how many there were, and one approximation over the lot —
+// answer the question at a scan.
 //
 // WHAT IT DOES NOT MEASURE, because a meter read as more than it is, is worse
 // than no meter. This row is one phase's OPENING frame: not the whole phase's
@@ -171,18 +172,33 @@ type PromptSize struct {
 	SystemBytes int `json:"system_chars"`
 	UserBytes   int `json:"user_chars"`
 
-	// MessageBytes is the text of the conversation a RESUMED phase
-	// re-enters — its original system and user messages, the assistant
-	// rounds since, and the tool results they collected — and zero for a
-	// phase that opens one of its own. A detached coding run stops the
-	// executor mid-loop and the loop is re-entered later, so its prompt is
-	// a message list rather than a pair of strings; measuring only the pair
-	// reported every resumed executor as a phase with no prompt at all.
+	// MessageBytes is the conversation a RESUMED phase re-enters — its
+	// original system and user messages, the assistant rounds since, and
+	// the tool results they collected — and zero for a phase that opens one
+	// of its own. A detached coding run stops the executor mid-loop and the
+	// loop is re-entered later, so its prompt is a message list rather than
+	// a pair of strings; measuring only the pair reported every resumed
+	// executor as a phase with no prompt at all.
 	//
-	// TEXT, in the same unit as the two above: an assistant round's own
-	// tool-call arguments are structured rather than text and are outside
-	// it, being a fraction of a seed dominated by the system prompt and by
-	// the tool results.
+	// WHAT IS COUNTED, per message: every message's text, each assistant
+	// round's reasoning, and the compact JSON of its tool calls' arguments.
+	// The reasoning is counted ONCE — the structured thinking blocks where a
+	// round has them, the reasoning prose where it does not, never both,
+	// because on Anthropic the prose is a rendering of the same thinking and
+	// summing the two would double the biggest term a parked turn carries.
+	// Reasoning is in the figure at all because it is billed: Anthropic puts
+	// every thinking block back into the request and charges for it, and the
+	// `cli-agent` text backend writes the prose into the prompt literally.
+	//
+	// WHAT IS STILL OUT, in the same spirit as ToolBytes naming the
+	// cli-agent fence as the larger rendering: a thinking block's signature
+	// — a fixed-size opaque token the provider mints per block, so counting
+	// it would move this figure with a vendor's token format rather than
+	// with the prompt — and each tool call's id and name, bounded
+	// identifiers beside arguments that run to kilobytes. Out too is every
+	// per-message envelope a backend adds around all of it (role labels,
+	// content-block framing, the cli-agent transcript's own `## assistant`
+	// headings), so on any backend the real figure is larger than this one.
 	MessageBytes int `json:"message_chars"`
 
 	// ToolBytes is the COMPACT JSON size of the tool-definition array
