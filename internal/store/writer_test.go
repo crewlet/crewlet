@@ -3,29 +3,27 @@ package store_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// buildEvent assembles an event from raw JSON, which is how one arrives off
-// the queue. Going through the envelope's own decoder rather than a struct
-// literal is deliberate: it is the path a real event takes, and it is the only
-// way to produce the case that matters most below — a type this build has
-// never heard of.
-func buildEvent(t *testing.T, body string) *events.Event {
+// serialize is an event as it reaches the tag derivation: the bytes the
+// publish listener marshalled, envelope and payload flattened together.
+//
+// Raw JSON rather than a typed event, which is deliberate and is the whole
+// reason the derivation reads bytes: it is the only way to produce the case
+// that matters most below, a type this build has never heard of.
+func serialize(t *testing.T, body string) []byte {
 	t.Helper()
-	var ev events.Event
-	if err := json.Unmarshal([]byte(body), &ev); err != nil {
-		t.Fatalf("decode event: %v", err)
+	if !json.Valid([]byte(body)) {
+		t.Fatalf("fixture is not JSON: %s", body)
 	}
-	return &ev
+	return []byte(body)
 }
 
-func TestRecordForPromotesTags(t *testing.T) {
+func TestExtractTagsPromotesTheDimensions(t *testing.T) {
 	t.Parallel()
-	ev := buildEvent(t, `{
+	tags := store.ExtractTags(serialize(t, `{
 		"id": "6f1a2b3c-0000-4000-8000-000000000001",
 		"type": "task_assigned",
 		"timestamp": "2026-04-01T12:00:00Z",
@@ -34,117 +32,85 @@ func TestRecordForPromotesTags(t *testing.T) {
 		"agent_id": "agent-9",
 		"role": "engineer",
 		"task_id": "task-4",
+		"turn_id": "turn-3",
 		"sender": "alice",
 		"conversation_key": "slack:C1/T1",
 		"failed": false
-	}`)
+	}`))
 
-	rec, tracked, err := store.RecordFor(ev)
-	if err != nil {
-		t.Fatalf("RecordFor: %v", err)
-	}
-	if !tracked {
-		t.Fatal("agent_phase_started must be stored")
-	}
 	want := map[string]string{
 		"agent_id":         "agent-9",
 		"agent_role":       "engineer",
 		"task_id":          "task-4",
+		"turn_id":          "turn-3",
 		"sender":           "alice",
 		"conversation_key": "slack:C1/T1",
 	}
 	for k, v := range want {
-		if rec.Tags[k] != v {
-			t.Errorf("tag %s = %q, want %q", k, rec.Tags[k], v)
+		if tags[k] != v {
+			t.Errorf("tag %s = %q, want %q", k, tags[k], v)
 		}
 	}
 	// Only set when true, so the tag doubles as a filter for failures.
-	if _, present := rec.Tags["failed"]; present {
-		t.Errorf("failed tag stamped on a successful event: %v", rec.Tags)
-	}
-	if rec.Category != "task" {
-		t.Errorf("category %q, want task", rec.Category)
-	}
-	if !rec.Time.Equal(time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)) {
-		t.Errorf("time %v", rec.Time)
+	if _, present := tags["failed"]; present {
+		t.Errorf("failed tag stamped on a successful event: %v", tags)
 	}
 }
 
-func TestRecordForStampsFailure(t *testing.T) {
+func TestExtractTagsStampsFailure(t *testing.T) {
 	t.Parallel()
-	ev := buildEvent(t, `{
+	tags := store.ExtractTags(serialize(t, `{
 		"id": "6f1a2b3c-0000-4000-8000-000000000002",
 		"type": "agent_phase_completed",
 		"timestamp": "2026-04-01T12:00:00Z",
 		"source": "engine",
 		"failed": true
-	}`)
-	rec, _, err := store.RecordFor(ev)
-	if err != nil {
-		t.Fatalf("RecordFor: %v", err)
-	}
-	if rec.Tags["failed"] != "true" {
+	}`))
+	if tags["failed"] != "true" {
 		t.Fatalf("failed tag = %q; a listing never selects the payload, so this "+
-			"is the only thing that survives into history", rec.Tags["failed"])
+			"is the only thing that survives into history", tags["failed"])
 	}
 }
 
-// TestRecordForReadsUnknownTypes is why these dimensions are read off the
+// TestExtractTagsReadsUnknownTypes is why these dimensions are read off the
 // envelope rather than off a decoded payload: a reader that needs the concrete
-// type sees nothing at all on a type it does not know. A rolling upgrade publishes types the older
-// half has never heard of; those events must still be indexed by the agent
-// they concern.
-func TestRecordForReadsUnknownTypes(t *testing.T) {
+// type sees nothing at all on a type it does not know. A rolling upgrade
+// publishes types the older half has never heard of; those events must still
+// be indexed by the agent they concern.
+func TestExtractTagsReadsUnknownTypes(t *testing.T) {
 	t.Parallel()
-	ev := buildEvent(t, `{
+	tags := store.ExtractTags(serialize(t, `{
 		"id": "6f1a2b3c-0000-4000-8000-000000000003",
-		"type": "task_assigned",
+		"type": "an_event_type_from_the_future",
 		"timestamp": "2026-04-01T12:00:00Z",
 		"source": "engine",
 		"role": "from-the-future",
 		"a2a_context": {"channel_id": "chan-7"},
 		"some_field_this_build_has_never_seen": 42
-	}`)
-	rec, tracked, err := store.RecordFor(ev)
-	if err != nil {
-		t.Fatalf("RecordFor: %v", err)
+	}`))
+	if tags["agent_role"] != "from-the-future" {
+		t.Errorf("agent_role = %q", tags["agent_role"])
 	}
-	if !tracked {
-		t.Fatal("tracked type not recognised")
-	}
-	if rec.Tags["agent_role"] != "from-the-future" {
-		t.Errorf("agent_role = %q", rec.Tags["agent_role"])
-	}
-	if rec.Tags["a2a_channel_id"] != "chan-7" {
-		t.Errorf("a2a_channel_id = %q", rec.Tags["a2a_channel_id"])
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(rec.Payload, &payload); err != nil {
-		t.Fatalf("payload: %v", err)
-	}
-	if payload["some_field_this_build_has_never_seen"] != float64(42) {
-		t.Errorf("unknown field dropped on the way to storage: %v", payload)
+	if tags["a2a_channel_id"] != "chan-7" {
+		t.Errorf("a2a_channel_id = %q", tags["a2a_channel_id"])
 	}
 }
 
-func TestRecordForSkipsUntracked(t *testing.T) {
+// TestExtractTagsIgnoresAWrongTypedField pins the per-field degradation: a
+// value that is not a string zeroes that tag alone rather than failing the
+// whole derivation, which is why every field is read on its own.
+func TestExtractTagsIgnoresAWrongTypedField(t *testing.T) {
 	t.Parallel()
-	ev := buildEvent(t, `{
-		"id": "6f1a2b3c-0000-4000-8000-000000000004",
-		"type": "agent_turn_progress",
-		"timestamp": "2026-04-01T12:00:00Z",
-		"source": "engine"
-	}`)
-	_, tracked, err := store.RecordFor(ev)
-	if err != nil {
-		t.Fatalf("RecordFor: %v", err)
+	tags := store.ExtractTags(serialize(t, `{
+		"type": "task_assigned",
+		"task_id": 42,
+		"sender": "alice"
+	}`))
+	if _, present := tags["task_id"]; present {
+		t.Errorf("a numeric task_id became a tag: %v", tags)
 	}
-	if tracked {
-		t.Fatal("agent_turn_progress is a live-only signal; agent_phase_completed is its durable record")
-	}
-
-	if _, _, err := store.RecordFor(nil); err != nil {
-		t.Fatalf("a nil event must be a no-op, not an error: %v", err)
+	if tags["sender"] != "alice" {
+		t.Errorf("one wrong-typed field cost the rest: %v", tags)
 	}
 }
 
@@ -175,35 +141,10 @@ func TestCategoriesAreKnownValues(t *testing.T) {
 	}
 }
 
-// THE THIRD-PARTY APP A NOTIFICATION EVENT CONCERNS IS A TAG, because a
-// listing deliberately never selects the payload column, so the Integrations
-// room aggregating "how many of this third-party app's deliveries were dropped
-// by the routing gate" has no other way to read it.
-func TestRecordForTagsTheNotificationSource(t *testing.T) {
+func TestAnUntrackedTypeIsNotStored(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{
-		"notification_skipped", "notifications_coalesced", "external_notification",
-	} {
-		t.Run(kind, func(t *testing.T) {
-			t.Parallel()
-			ev := buildEvent(t, `{
-				"id": "6f1a2b3c-0000-4000-8000-000000000009",
-				"type": "`+kind+`",
-				"timestamp": "2026-04-01T12:00:00Z",
-				"source": "engine",
-				"notification_source": "gitlab"
-			}`)
-			rec, tracked, err := store.RecordFor(ev)
-			if err != nil {
-				t.Fatalf("RecordFor: %v", err)
-			}
-			if !tracked {
-				t.Fatalf("%s must be stored", kind)
-			}
-			if got := rec.Tags["notification_source"]; got != "gitlab" {
-				t.Errorf("notification_source tag = %q, want gitlab (tags: %v)",
-					got, rec.Tags)
-			}
-		})
+	if _, ok := store.Category("agent_turn_progress"); ok {
+		t.Fatal("agent_turn_progress is a live-only signal; " +
+			"agent_phase_completed is its durable record")
 	}
 }

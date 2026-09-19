@@ -60,3 +60,58 @@ func TestANonPhaseEventCarriesNoSpend(t *testing.T) {
 		t.Errorf("a non-phase-completion event carried spend: %+v", *rec.Spend)
 	}
 }
+
+// THE INTEGRATIONS ROOM'S TWO COUNTS COME OFF A TAG, and this is the door
+// they come through.
+//
+// A listing never selects the payload column, so `notification_source` is all
+// a historical row carries about which third-party app an outcome concerns —
+// and queries.integrationOf skips a row without it. The tag was declared in
+// internal/store on a mapping function production does not call, while this
+// package, which IS the publish listener, kept a second list that did not have
+// it: every merge and every drop reached the store untagged, and a company
+// whose apps were delivering fine read "0 dropped, 0 merged" for all of them.
+func TestARecordNamesTheIntegrationAnOutcomeConcerns(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		ev   *events.Event
+	}{
+		{"coalesced", events.New(types.NotificationsCoalesced{
+			AgentHandle: "swe", NotificationSource: "gitlab", Count: 3,
+		}, events.TraceContext{})},
+		{"skipped", events.New(types.NotificationSkipped{
+			Handle: "swe", Reason: "self_action", NotificationSource: "gitlab",
+		}, events.TraceContext{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec, ok := observe.Record(tc.ev)
+			if !ok {
+				t.Fatalf("%s is not persisted", tc.ev.Type)
+			}
+			if got := rec.Tags["notification_source"]; got != "gitlab" {
+				t.Errorf("notification_source tag = %q, want gitlab (tags: %v)",
+					got, rec.Tags)
+			}
+		})
+	}
+}
+
+// AND THE TURN A ROW BELONGS TO, which is the other half of the divergence:
+// this list had turn_id and the store's did not, so the copy a test exercised
+// and the copy production ran were each missing what the other had.
+func TestARecordNamesTheTurnItBelongsTo(t *testing.T) {
+	t.Parallel()
+	ev := events.New(types.AgentPhaseStarted{
+		Phase: "execute", TurnID: "turn-7", RoleName: "SWE",
+	}, events.TraceContext{})
+	rec, ok := observe.Record(ev)
+	if !ok {
+		t.Fatal("a phase start is not persisted")
+	}
+	if rec.Tags["turn_id"] != "turn-7" {
+		t.Errorf("turn_id tag = %q; [store.EventLog.Append] reads the column "+
+			"back out of here (tags: %v)", rec.Tags["turn_id"], rec.Tags)
+	}
+}
