@@ -10,6 +10,10 @@
 // Self-hosted Mattermost and GitLab are precisely the HTTP/1.1 endpoints where
 // that costs a full round trip rather than a stream on an existing connection.
 //
+// It is also the worked example of ADR-0008: a rule more than one package
+// needs gets exactly one implementation, because written twice it drifts and
+// nothing compares the copies.
+//
 // ONE transport, not one per client. A per-client clone would be strictly
 // worse than sharing the default: each would keep its own pool, so N clients
 // against one host would hold N pools of idle connections and still reuse

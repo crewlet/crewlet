@@ -3,6 +3,11 @@
 // N node databases, with the checkpoint committed in the same transaction as
 // the rows.
 //
+// This is ADR-0002, and the sentence above is the whole of it: the stream is
+// the write-ahead log and the SQL estate is derived. A write that reaches
+// those rows any other way is the one failure nothing on the node that makes
+// it can see.
+//
 // # This is NOT the store's write-ahead log
 //
 // journal_mode=WAL is the database engine's own local transaction journal:

@@ -24,6 +24,9 @@
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
 //
+// What belongs here rather than in a node's own database is ADR-0003, and the
+// tri-state below is ADR-0005.
+//
 // Three rules carry the correctness of everything above:
 //
 //  1. Every write on behalf of a resource is fenced by the epoch.

@@ -14,6 +14,9 @@
 //
 // NO TRANSACTION SPANS THE TWO and no read joins across them, which is a rule
 // a static walk enforces rather than a convention: a transaction is one file.
+// That is ADR-0004; what may write the replicated one is ADR-0002, and which
+// estate a new table belongs in at all is ADR-0003. The driver this all rests
+// on, and the release matrix it bounds, is ADR-0007.
 //
 // Everything below is true of each of them separately.
 //
