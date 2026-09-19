@@ -177,28 +177,33 @@ func (t *Transport) Apps() map[string]string {
 	return out
 }
 
-// Client exposes a seat's authenticated app client, keyed by handle.
+// running is the ONE per-seat lookup: the identity this node resolved at
+// start and the authenticated client that resolved it, together.
 //
-// ONE PER SEAT and never shared: a Slack app has one bot user and one token,
-// so every call here is made AS that agent and the workspace attributes it to
-// them. Exported for the same reason the self-hosted backend's is — the two
-// transports must not disagree about whether a seat's client is reachable,
-// and this one was reachable only through the unexported status path.
+// TOGETHER RATHER THAN SEPARATELY, because every caller here needs both and
+// the map is REPLACED WHOLE on an apply and on [Transport.Stop] — so two
+// lookups around one operation can straddle that swap and pair one epoch's
+// client with another's identity, or with no identity at all. That is not
+// cosmetic: [Transport.ReadThread] marks the seat's own replies from
+// [Seat.Owns], and an identity lost between the two lookups turns every one
+// of the agent's own posts into a colleague's, which is the confusion this
+// whole read exists to prevent.
 //
-// A seat whose token was refused at boot is not here at all; see
-// [Transport.Start] for why it is dropped rather than run half-configured.
-func (t *Transport) Client(handle string) (*Client, bool) {
+// ONE CLIENT PER SEAT and never shared: a Slack app has one bot user and one
+// token, so every call made through it is made AS that agent and the
+// workspace attributes it to them. A seat whose token was refused at boot is
+// not in the map at all; see [Transport.Start] for why it is dropped rather
+// than run half-configured.
+func (t *Transport) running(handle string) (runningSeat, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	s, ok := t.seats[handle]
-	return s.client, ok
+	return s, ok
 }
 
 // lookup implements [Seats].
 func (t *Transport) lookup(handle string) (Seat, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	s, ok := t.seats[handle]
+	s, ok := t.running(handle)
 	if !ok {
 		return Seat{}, false
 	}
@@ -346,9 +351,7 @@ func (t *Transport) ThreadBackend() string { return Backend }
 // and both must render "the thread could not be read" rather than panicking a
 // turn.
 func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) (notify.Transcript, bool) {
-	t.mu.Lock()
-	s, ok := t.seats[handle]
-	t.mu.Unlock()
+	s, ok := t.running(handle)
 	if !ok || s.client == nil {
 		return notify.Transcript{}, false
 	}
@@ -443,10 +446,8 @@ func (t *Transport) ClearStatus(ctx context.Context, handle, channel, thread str
 }
 
 func (t *Transport) setStatus(ctx context.Context, handle, channel, thread, status string) bool {
-	t.mu.Lock()
-	s, ok := t.seats[handle]
-	t.mu.Unlock()
-	if !ok {
+	s, ok := t.running(handle)
+	if !ok || s.client == nil {
 		return false
 	}
 	if err := s.client.SetStatus(ctx, channel, thread, status); err != nil {

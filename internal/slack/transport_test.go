@@ -395,9 +395,14 @@ func TestASeatsThreadComesBackMarkedWithItsOwnReplies(t *testing.T) {
 	}
 }
 
-// A SEAT'S CLIENT IS REACHABLE BY HANDLE, and a seat whose token was refused
-// has none to reach — so a thread read for it reports not-found rather than
+// A SEAT'S CLIENT IS REACHED BY HANDLE, and a seat whose token was refused has
+// none to reach — so a thread read for it reports not-found rather than
 // dereferencing a nil client.
+//
+// ASSERTED THROUGH THE READ, which is what production reaches a seat's client
+// through. An accessor exported for a test to call answers a different
+// question — whether the map has an entry — and a read that never looked
+// there would pass it.
 func TestARefusedSeatHasNoClientAndNoThread(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
@@ -409,17 +414,23 @@ func TestARefusedSeatHasNoClientAndNoThread(t *testing.T) {
 	if err := tr.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := tr.Client("swe"); !ok {
-		t.Fatal("a running seat has no reachable client")
+	// The seat that came up reads on the client its own token resolved.
+	if _, ok := tr.ReadThread(context.Background(), "swe", "C0ENG", "1.1"); !ok {
+		t.Fatal("a running seat could not reach its own client")
 	}
-	if client, ok := tr.Client("pm"); ok || client != nil {
-		t.Fatalf("a seat with no usable token has a client: %v", client)
+	if got := ws.called("conversations.replies"); got != 1 {
+		t.Fatalf("the running seat's read made %d calls, want 1", got)
 	}
+	// Neither of the two seats this node has no client for reaches the
+	// workspace at all — and neither dereferences the nil one.
 	if _, ok := tr.ReadThread(context.Background(), "pm", "C0ENG", "1.1"); ok {
 		t.Fatal("a thread was read for a seat with no client")
 	}
 	if _, ok := tr.ReadThread(context.Background(), "nobody", "C0ENG", "1.1"); ok {
 		t.Fatal("a thread was read for a seat this node does not run")
+	}
+	if got := ws.called("conversations.replies"); got != 1 {
+		t.Fatalf("a seat with no client called conversations.replies anyway (%d calls)", got)
 	}
 }
 
