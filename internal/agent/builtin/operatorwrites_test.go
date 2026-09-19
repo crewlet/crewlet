@@ -19,8 +19,8 @@ import (
 // re-run turn — which the engine's redelivery guarantees make ordinary —
 // writes once. Outside a turn the derivation fell back to values that were
 // STABLE rather than fresh: `verb + "-" + object` for a task, and the literal
-// string `operator` for the person and sprint tools. So an operation id was
-// stable for the life of the deployment, and the operation ledger collapsed
+// string `operator` for the person tools. So an operation id was stable for
+// the life of the deployment, and the operation ledger collapsed
 // every write after the first as a redelivery.
 //
 // `/operator/mcp` is the only surface that writes with no turn. It is also the

@@ -91,7 +91,7 @@ test("no JSX guard is a bare number", () => {
  *
  * Nine files carried them after the routes moved: an event's link from a phase
  * card, a seat's from a colleague chip, a page's from a search hit, a turn's
- * from an item's history, the sprint report's from an item. Every one of them
+ * from an item's history, a project's from an item. Every one of them
  * is a way OUT of the screen a reader is on, which is the half of navigation
  * the rail cannot provide.
  *

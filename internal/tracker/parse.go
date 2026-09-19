@@ -29,24 +29,13 @@ const (
 	MetaLate       = "late"
 
 	// MetaObject and MetaObjectID are WHAT the change was about, and they
-	// exist because three of the four routable kinds are not tasks. The
+	// exist because two of the three routable kinds are not tasks. The
 	// prompt keys its opener on the object rather than on the change kind:
-	// "a goal you own" and "a sprint you have work in" are different
-	// sentences from "a task you are assigned to", and a builder that had
-	// only the kind would have to infer the noun from a switch that grows
-	// with every kind.
+	// "a goal you own" is a different sentence from "a task you are
+	// assigned to", and a builder that had only the kind would have to
+	// infer the noun from a switch that grows with every kind.
 	MetaObject   = "object"
 	MetaObjectID = "object_id"
-
-	// MetaProjectLead is who may settle a sprint's pending rollover.
-	//
-	// RENDERED AS A NAME rather than branched on, because the prompt is
-	// built per RECIPIENT and an [notify.Inbound] does not say who is
-	// reading it — the routing reason is all it carries, and `sprint`
-	// covers the sprint's assignees and its project lead alike. So the
-	// prompt names the lead in the text and lets the reader see whether
-	// that is them, which is honest for both halves of the audience.
-	MetaProjectLead = "project_lead"
 
 	// MetaVia is WHY this seat is being told, and it is not decoration:
 	// "you were mentioned" and "you are watching this" ask for different
@@ -165,16 +154,16 @@ func registryHas(reg *notify.Registry) func(string) bool {
 //
 // # Why the task id is the SNAPSHOT's and not the subject's
 //
-// Three of the four routable kinds are not tasks, and on those the subject's
-// id is a goal's uuid, a sprint's `KEY.n` or a person's handle. Writing any of
-// those into `item_id` would hand the prompt a pointer that `get_work_item`
+// Two of the three routable kinds are not tasks, and on those the subject's
+// id is a goal's uuid or a person's handle. Writing either of those into
+// `item_id` would hand the prompt a pointer that `get_work_item`
 // cannot resolve — and the prompt would render a "read this task first" block
 // naming something that is not a task, which costs the seat a round and a
 // failed tool call to discover.
 //
 // So the task fields come from the SNAPSHOT, which carries a task only when
 // the wake is genuinely about one: a `prioritised` wake names the task that
-// reached the top of somebody's list, and a goal or sprint wake names none.
+// reached the top of somebody's list, and a goal wake names none.
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	snapshot := record.Notify.Snapshot
 	metadata := map[string]string{
@@ -188,9 +177,6 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		MetaTitle:      snapshot.Title,
 		MetaObject:     string(record.Subject.Kind),
 		MetaObjectID:   record.Subject.ID,
-	}
-	if snapshot.ProjectLead != "" {
-		metadata[MetaProjectLead] = snapshot.ProjectLead
 	}
 	if record.Notify.Excerpt != "" {
 		metadata[MetaExcerpt] = record.Notify.Excerpt
@@ -239,11 +225,6 @@ func objectLabel(snapshot Snapshot, subject Subject) string {
 			return snapshot.GoalName
 		}
 		return "a goal"
-	case KindSprint:
-		if snapshot.SprintName != "" {
-			return snapshot.SprintName
-		}
-		return "a sprint"
 	case KindPerson:
 		return "your priorities"
 	}

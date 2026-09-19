@@ -1647,7 +1647,7 @@ export interface KnowledgeAnswer {
  *  `WorkSummary.blocked`, because a task can be both in progress and blocked
  *  and a single field cannot say so. There is no `close_reason` either —
  *  `cancelled` IS "finished without being delivered", which is what keeps it
- *  invisible to velocity with no second value to keep in step. */
+ *  invisible to a delivery count with no second value to keep in step. */
 export type WorkStatus =
   "todo" | "in_progress" | "in_review" | "done" | "cancelled" | "closed" | (string & {});
 
@@ -1689,7 +1689,6 @@ export interface WorkSummary {
   status_group?: WorkStatusGroup;
   priority?: WorkPriority;
   assignee?: string;
-  sprint?: number;
   parent?: string;
   depth?: number;
   start?: string;
@@ -1725,42 +1724,22 @@ export interface WorkSummary {
 
 /** One person's load, as `work_workload` answers it.
  *
- *  It counts OPEN work — every task assigned to them, in or out of a sprint —
- *  because "is this person overloaded" is a question about their whole queue,
- *  where a sprint report is about one fortnight's commitment. The two numbers
- *  are deliberately different and both are worth having. */
+ *  It counts OPEN work — every task assigned to them, whatever its dates —
+ *  because "who is carrying the most" is a question about a whole queue. */
 export interface WorkloadRow {
   handle: string;
   open: number;
   /** Both measures a company may size in, both carried rather than one
-   *  chosen: which one is used is per PROJECT, so a company-wide answer that
-   *  picked one would be wrong for every project running the other. */
+   *  chosen: which one is used differs by team, so a company-wide answer
+   *  that picked one would be wrong for everybody sizing in the other. */
   points: number;
   estimate_min: number;
-  /** The three shapes of "this is not simply work in progress". A person at
-   *  capacity whose whole queue is blocked has a different problem from one
-   *  who is simply busy. */
+  /** The three shapes of "this is not simply work in progress". A person
+   *  whose whole queue is blocked has a different problem from one who is
+   *  simply busy. */
   blocked: number;
   overdue: number;
   unscheduled: number;
-  /** The sum of what every ACTIVE sprint policy says this person can take,
-   *  in that project's own measure — ABSENT when no policy names them. An
-   *  unset capacity is not a capacity of zero, which would render everybody
-   *  permanently over. */
-  capacity?: number;
-  /** How many projects contributed to it, so a reader can tell a whole
-   *  week's number from part of one. */
-  capacity_from?: number;
-  /** What the capacity counts. Absent with the capacity, and a single value
-   *  because a person whose projects size in DIFFERENT measures has no
-   *  summable capacity at all. */
-  capacity_measure?: "points" | "estimate" | (string & {});
-  over_capacity?: boolean;
-  /** The capacity could not be summed because this person's projects size in
-   *  different units. It is the REASON the capacity is absent, said rather
-   *  than left to look like nobody declared one — those are different facts
-   *  and only one of them is somebody's to fix. */
-  mixed_measures?: boolean;
 }
 
 export interface WorkloadAnswer {
@@ -1971,76 +1950,6 @@ export interface WorkTaskCounts {
   closed: number;
 }
 
-/** One sprint's arithmetic, in the project's own measure.
- *
- *  `measure` is on the row because a bare number is points to one team and
- *  minutes to another. */
-export interface WorkSprintFigures {
-  measure: "points" | "estimate_min";
-  committed: number;
-  added: number;
-  removed: number;
-  done: number;
-  remaining: number;
-  open_after_close: number;
-  tasks: number;
-  /** How many of them carry NO value in the measure — the honesty column. */
-  unestimated: number;
-}
-
-export interface WorkSprintAssignee {
-  handle: string;
-  committed: number;
-  done: number;
-  remaining: number;
-  total: number;
-  tasks: number;
-  /** ABSENT when the project's policy declares none: an unset capacity is not
-   *  a capacity of zero, which would render every assignee permanently over. */
-  capacity?: number;
-  over_capacity?: boolean;
-}
-
-export interface WorkSprintRow {
-  project: string;
-  number: number;
-  name: string;
-  goal?: string;
-  state: "future" | "active" | "closed";
-  start_at: string;
-  end_at: string;
-  closed_at?: string;
-  closed_by?: string;
-  /** ABSENT on anything but an active sprint — a future one has not started
-   *  and a closed one has no remainder. */
-  days_remaining?: number;
-  figures: WorkSprintFigures;
-  by_assignee?: WorkSprintAssignee[];
-  /** A CLOSED sprint whose spillover nobody has decided — the one thing on
-   *  this answer a lead has to act on. */
-  rollover_pending?: boolean;
-  rollover_to?: number;
-  archived?: boolean;
-  version: number;
-}
-
-export interface WorkActiveSprint {
-  number: number;
-  name: string;
-  state: "future" | "active" | "closed";
-  end_at: string;
-  figures: WorkSprintFigures;
-  days_remaining: number;
-}
-
-/** ABSENT on a project that runs no sprints at all, which is not the same as
- *  a project that has none right now. */
-export interface WorkSprintSummary {
-  active?: WorkActiveSprint;
-  next?: number;
-  pending_spillovers?: number[];
-}
-
 export interface WorkProjectRow {
   key: string;
   name: string;
@@ -2048,7 +1957,6 @@ export interface WorkProjectRow {
   unit: WorkUnitRef;
   lead: WorkLeadRef;
   default_assignee?: string;
-  sprints?: WorkSprintSummary;
   task_counts: WorkTaskCounts;
   archived?: boolean;
   version: number;
@@ -2095,73 +2003,7 @@ export interface WorkProjectDetail extends WorkProjectRow {
    *  the middle of a move between scopes is in. */
   shadowed?: string[];
   tags?: WorkProjectTag[];
-  sprint_policy?: Record<string, unknown>;
-  recent_sprints?: WorkSprintRow[];
-  velocity_avg?: number;
   policy_stamp: number;
-  read_level?: ReadLevel;
-  log_seq?: number;
-  applied_through?: number;
-  log_lag?: number;
-  complete: boolean;
-  incomplete?: WorkIncomplete;
-}
-
-/** One instant of a sprint's burndown. */
-export interface WorkBurndownPoint {
-  at: string;
-  /** Everything the sprint was carrying then — delivered, abandoned and
-   *  outstanding alike. Without it the remaining line cannot tell "we
-   *  finished eight points" from "somebody added eight and we finished
-   *  sixteen". */
-  scope: number;
-  /** The part still to do: a task whose status then was in an OPEN group.
-   *  NOT the negation of delivery — `cancelled` is finished and undelivered,
-   *  so a line written that way keeps counting work the team dropped. */
-  remaining: number;
-  /** The part that had landed. `cancelled` is in neither this nor
-   *  `remaining`, so the gap between their sum and `scope` IS the abandoned
-   *  work. */
-  delivered: number;
-}
-
-/** One sprint's day-by-day series. */
-export interface WorkBurndown {
-  project: string;
-  sprint: number;
-  name?: string;
-  measure: "points" | "estimate_min";
-  start_at: string;
-  end_at: string;
-  /** From the start to whichever of the sprint's end and now comes first: a
-   *  running sprint draws to today rather than flat into its own future. */
-  points: WorkBurndownPoint[];
-  /** The scope at the start, which is the height the reference line falls
-   *  from. The line itself is the renderer's — two points and a straight
-   *  edge is not something to send over a wire. */
-  ideal: number;
-  tasks: number;
-  /** How many of them carry no value in the measure — the honesty pair the
-   *  sprint figures already carry. */
-  unestimated: number;
-  read_level?: ReadLevel;
-  log_seq?: number;
-  applied_through?: number;
-  log_lag?: number;
-  complete: boolean;
-  incomplete?: WorkIncomplete;
-}
-
-export interface WorkSprintsAnswer {
-  project: string;
-  sprints: WorkSprintRow[];
-  /** ABSENT where no sprint has closed: a team that has not finished one has
-   *  no velocity, and zero reads as a team that delivers nothing. */
-  velocity_avg?: number;
-  /** Closed sprints below the window this answer covers, NAMED rather than
-   *  silently truncated. */
-  earlier_sprints_dropped?: number;
-  measure: "points" | "estimate_min";
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2449,7 +2291,6 @@ export interface WorkItem {
    *  routing_unit is the mutable half — whose lead hears about it now. */
   filed_unit?: string;
   routing_unit?: string;
-  sprint?: number;
   parent?: string;
   depth?: number;
   type?: WorkType;
@@ -3518,8 +3359,6 @@ export interface QueryMap {
   work_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
-  work_sprints: WorkSprintsAnswer;
-  work_burndown: WorkBurndown;
   work_workload: WorkloadAnswer;
   work_activity: WorkActivityAnswer;
   work_my_work: WorkMyWork;

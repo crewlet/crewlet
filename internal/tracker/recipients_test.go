@@ -76,7 +76,7 @@ func TestTheFirstReasonPerHandleWins(t *testing.T) {
 
 // A BATCH COPY IS NEVER ADDRESSED.
 //
-// A bulk sprint plan is thirty facts to absorb, not thirty asks — and an
+// A bulk re-tag is thirty facts to absorb, not thirty asks — and an
 // addressed wake is one a turn is required to answer.
 func TestABatchCopyIsNeverAddressed(t *testing.T) {
 	t.Parallel()
@@ -319,8 +319,8 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 // the other belongs, and nothing failed when they did.
 func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 	t.Parallel()
-	if len(tracker.Reasons) != 20 {
-		t.Fatalf("%d reasons are enumerated; there are twenty", len(tracker.Reasons))
+	if len(tracker.Reasons) != 19 {
+		t.Fatalf("%d reasons are enumerated; there are nineteen", len(tracker.Reasons))
 	}
 	addressed := 0
 	for _, r := range tracker.Reasons {

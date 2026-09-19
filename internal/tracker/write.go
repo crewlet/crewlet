@@ -121,10 +121,10 @@ type Writer struct {
 	// epochs would write different rows from the same record.
 	//
 	// ON THE WRITER rather than per call, unlike the task wakes' own
-	// [Wake.Notify], because the caller that needs it here is the SPRINT
-	// DUTY: a fleet singleton on a tick, with no tool arguments to carry a
-	// seam through. Nil resolves to no lead, which costs a wake its
-	// fallback recipient and never its delivery.
+	// [Wake.Notify], because the caller that needs it here is a fleet
+	// singleton on a tick, with no tool arguments to carry a seam through.
+	// Nil resolves to no lead, which costs a wake its fallback recipient
+	// and never its delivery.
 	Leads Leads
 
 	// World is the two lookups the custom-field coercion table cannot do
@@ -463,56 +463,6 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 			}
-			// AND A SPRINT THE PROJECT ACTUALLY MINTED, on the home
-			// the patch is landing on rather than the one it left.
-			//
-			// THE EFFECTIVE SPRINT, checked whenever the sprint moves
-			// OR THE PROJECT DOES. A sprint number is minted by one
-			// project and means nothing in another, so a patch that
-			// re-homes a task carries a number the destination has
-			// almost certainly never minted — and gating the check on
-			// `patch.Sprint != nil` made the one gesture that always
-			// invalidates the number the one gesture that skipped the
-			// check. The task landed pointing at a membership the
-			// destination does not have: gone from the old project's
-			// burndown because it is no longer in it, absent from the
-			// new one's because that sprint is not there, and refused
-			// by `sprint_report` with [ErrNoSprint].
-			//
-			// A MOVE TO THE SAME PROJECT IS NOT A MOVE. Comparing
-			// against `current.Project` rather than taking any
-			// non-nil `Project` as a change is what stops an edit
-			// that re-states the home being refused over a sprint
-			// that was archived in the meantime — the sprint did not
-			// move, and this patch is not the place to complain about
-			// it.
-			moved := patch.Project != nil && *patch.Project != current.Project
-			if sprint := patch.Sprint; sprint != nil || moved {
-				home := current.Project
-				if patch.Project != nil {
-					home = *patch.Project
-				}
-				if sprint == nil {
-					sprint = current.Sprint
-				}
-				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := mintedSprint(ctx, tx, home, sprint); err != nil {
-					if patch.Sprint == nil {
-						// THE REMEDY IS THE ONE THE CALLER CAN
-						// REACH. They did not name a sprint, so
-						// being told to check the destination's
-						// list names nothing they typed: what
-						// they have to do is decide this task's
-						// sprint in the same edit.
-						return statelog.Decision{}, fmt.Errorf("tracker: moving "+
-							"task %s to %s would carry sprint %d, which %s has "+
-							"not minted: %w; patch `sprint` in the same edit — 0 "+
-							"takes it out of its sprint", id, home, *sprint,
-							home, err)
-					}
-					return statelog.Decision{}, err
-				}
-			}
 			charged, err := w.chargeHandOff(current, patch)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -678,7 +628,7 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 //     whatever they changed. Somebody looked, so the budget that exists to
 //     notice nobody is looking starts again.
 //   - Anything else leaves the counter alone — the engine's own writes
-//     (a sprint rollover, a duty's repair) neither spend nor forgive.
+//     (a duty's repair) neither spend nor forgive.
 //
 // A no-op assignment does not spend: re-asserting the current assignee is what
 // an idempotent retry looks like, and charging it would let a redelivered
@@ -842,7 +792,7 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 // # Why a writer states it rather than the applier deriving it
 //
 // Because the applier cannot. "What happened" is the caller's own knowledge —
-// it created, it closed a sprint, it purged — and everything derivable from
+// it created, it merged, it purged — and everything derivable from
 // the two document states is already derived. What is NOT derivable is the
 // difference between a catalogue patch and a view save, or between a tombstone
 // and a purge: those are the same operation on different subjects, and the

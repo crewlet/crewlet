@@ -13,9 +13,9 @@
  * So the first fold is the COMPANY, and the queue is under it. Every figure
  * here is true of a healthy company and of a struggling one; none of them can
  * be zero because nothing is wrong. A reader who opens this on a quiet morning
- * sees four seats working, ninety-one open items and a sprint with six days
- * left, and the empty band below it then MEANS something: nothing is waiting
- * on you, on a company that is visibly running.
+ * sees four seats working, ninety-one open items and eleven overdue, and the
+ * empty band below it then MEANS something: nothing is waiting on you, on a
+ * company that is visibly running.
  *
  * # Every figure is a link, and every figure says where it came from
  *
@@ -99,7 +99,6 @@ export const PULSE_GLYPHS = {
   open: <ListGlyph size="xs" />,
   overdue: <ScheduleGlyph size="xs" />,
   blocked: <BlockGlyph size="xs" />,
-  sprint: <CalendarClockGlyph size="xs" />,
   tokens: <TokenGlyph size="xs" />,
   alarms: <WarningGlyph size="xs" />,
 } as const;

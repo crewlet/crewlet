@@ -220,10 +220,10 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Claims: e.backends.Coord,
 			NodeID: nodeID,
 			// THE CHART, read PER CALL. A project's lead is the one
-			// fact a sprint wake needs that the rows cannot give —
-			// `tracker_projects` carries no column for it, because the
-			// applier may not read an org — and the caller that needs
-			// it is the sprint duty, a fleet singleton on a tick with
+			// fact a wake's fallback recipient needs that the rows
+			// cannot give — `tracker_projects` carries no column for
+			// it, because the applier may not read an org — and the
+			// caller that needs it is a fleet singleton on a tick with
 			// no tool arguments to carry a seam through.
 			Leads: liveLeads{engine: e},
 			// AND THE CHART AGAIN, for the one custom-field type whose
@@ -1721,13 +1721,13 @@ func (e *Engine) enterSearch() func() {
 // looking for an authority nobody holds.
 //
 // A PROJECT THIS BUILD CANNOT RESOLVE ANSWERS FALSE, which is the conservative
-// direction: the sprint decision is then refused naming the project rather
-// than made by whoever asked.
+// direction: the policy edit is then refused naming the project rather than
+// made by whoever asked.
 //
 // HERE RATHER THAN AT EITHER CALLER, because both surfaces ask it — a seat's
-// write_project and an operator's manage_sprint — and two copies of "who leads
-// this" is two chances for the seat surface and the operator surface to answer
-// the same question differently about the same person.
+// write_project and an operator's — and two copies of "who leads this" is two
+// chances for the seat surface and the operator surface to answer the same
+// question differently about the same person.
 func LeadsProjectOf(e *Engine) builtin.LeadsProject {
 	return func(_ context.Context, actor, project string) bool {
 		c := e.Company()
@@ -1746,7 +1746,7 @@ func LeadsProjectOf(e *Engine) builtin.LeadsProject {
 			}
 		}
 		// A ROLE'S OWN PROJECT IS LED BY THAT ROLE. A seat that names
-		// its own project plans its own sprints, which is the only
+		// its own project decides how it is filed, which is the only
 		// reading of "the lead" a one-seat project has.
 		for role := range c.Org.AllRoles() {
 			if tracker.ProjectKey(role.Project) == key &&

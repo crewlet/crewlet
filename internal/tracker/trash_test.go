@@ -237,7 +237,7 @@ func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"first", "second", "third"} {
-		inSprint(t, r, id, nil)
+		filedTask(t, r, id)
 	}
 	// REMOVED OUT OF RANK ORDER, each at its own instant, so an answer
 	// ordered by rank and one ordered by removal are different lists. A
@@ -284,7 +284,7 @@ func TestTheTrashCanBeAskedForTheOldestRemovalFirst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"first", "second", "third"} {
-		inSprint(t, r, id, nil)
+		filedTask(t, r, id)
 	}
 	for i, id := range []string{"second", "third", "first"} {
 		r.at = wednesday.Add(time.Duration(i) * time.Minute)

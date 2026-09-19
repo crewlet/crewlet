@@ -230,143 +230,7 @@ own name.
 
 A task carries at most **40** tags, and a project declares at most **512**.
 
-## Sprints and goals
-
-**Sprints** are numbered per project, with a name and dates. A task can be in
-more than one — which is what a carry-over is — and the sprint's own record
-carries what it started with, so a burn-down is a fact rather than a
-reconstruction.
-
-**The engine runs the cadence.** A project's sprint policy says how long a
-sprint is, which weekday it starts on and how many to keep minted ahead, and
-the engine's own duty does the rest on a one-minute tick:
-
-| Step | When | Gated on |
-|---|---|---|
-| **mint** | whenever the project is short of its `ahead` count | — |
-| **start** | at the sprint's own `start_at` | `auto_start` |
-| **close** | at the sprint's own `end_at` | **nothing** — a sprint always closes at its end |
-| **rollover** | on the same tick as the close | `auto_roll` |
-| **archive** | once `archive_after` newer sprints have closed | `archive_after` |
-
-The close is not a setting, and that is deliberate: every figure in a sprint
-report is a predicate over the sprint's own window, so a sprint that ran past
-its end is a number nobody can report on. It changes **no task's status** — the
-close is about the sprint.
-
-What happens to the unfinished work *is* the setting. With `auto_roll` the same
-tick carries it into the next sprint, minting one if the project has none.
-Without it the sprint closes with the spillover **pending** — a state a lead
-settles with `manage_sprint`, and one `sprint_report` reports so somebody can
-see there is a decision waiting. The four choices are `next`, `backlog` (clear
-each task's sprint and leave it in the project — which is what the Backlog
-*is* here), `close` (cancel every open task: abandoned, not delivered) or a
-sprint **number**. Rolling into a closed sprint, or into the sprint being
-rolled, is refused — either would put the work back where the rollover was
-called to take it out of.
-
-The policy itself is the project **lead's or a person's own**, written with
-`write_project(sprints: {...})`. Sending `enabled: false` stops the cadence and
-does **not** close a running sprint — the pointer belongs to the lifecycle, and
-a settings change that ended a team's commitment as a side effect would be the
-worst kind of surprise. A sprint is between 1 and 92 days long and a project
-keeps at most 12 minted ahead; every one of those is refused at the write
-rather than at the duty, which runs on another node where nobody is watching.
-
-`manage_sprint` is an **operator** tool and is additionally gated on leading
-the project **or holding a person's own credential**: a sprint is a commitment
-a team made together, so starting one changes what everybody is expected to
-work on and closing one decides what counted. A seat that could do either would
-be deciding its own team's plan; a person is not a seat.
-
-It resolves the sprint **before** it writes anything, and its refusals are
-three different answers rather than two. A sprint number nobody minted is
-`There is no sprint 9 in ENG` — permanent, and it names `sprint_report` as the
-way to find the ones that exist. A project that is not there is named the same
-way. And a node that holds records it cannot read whose scope reaches the
-question says exactly that instead of either: it does not know whether the
-sprint exists, so it claims neither. Without the resolution the writer answered
-all three as *"sprint ENG.9 is not on this node"* — a transient failure, which
-invites a retry that cannot succeed.
-
-**Capacity.** `sprints.capacity` is what each seat can take in a sprint, keyed
-by handle and stated in that project's own measure — `{"ada": {"points": 8}}`.
-A seat named there is compared against it, in the sprint report and on the
-company-wide workload; a seat that is not has **no capacity**, which is not a
-capacity of zero. Sending the object **replaces** the whole set, because a
-merge could not express a removal: zero is a real capacity, so there is no
-value meaning "this seat no longer has one". `sprints.point_scale` is the
-sibling knob — the estimates this project allows, as a list of numbers, empty
-meaning any.
-
-A task's sprint is refused unless the project it is **landing on** has minted
-it, and that includes a **move**: a sprint number belongs to the project that
-minted it and means nothing in another, so re-homing a task carrying sprint 1
-into a project with no sprint 1 is refused rather than filed. Patch `sprint` in
-the same edit — `0` takes the task out of its sprint — and the refusal names
-both the number and the destination. Without that check the task landed in no
-burndown at all: out of the old project's because it had left, absent from the
-new one's because the sprint was not there.
-
-Membership is a **stay**: the pair of instants a task was in one sprint for,
-recorded by the engine rather than carried by whoever moved it. That is what
-lets `sprint=` mean more than a number. It takes:
-
-| Value | What it selects |
-|---|---|
-| `4` | that sprint, by number |
-| `Kickoff` | that sprint, by name |
-| `active` / `future` / `closed` | every sprint of the project in that state — resolved when the query runs, so a saved board keeps meaning "the sprint that is active now" |
-| `next` | the earliest future sprint, which is a different question from "any future one" |
-| `none` | the **backlog**: unfinished work in no sprint |
-
-Values are comma-separated and OR together, so `sprint=active,next` is what
-somebody planning asks for. Every one of them but `none` names a sprint of one
-project — they are numbered and named per project — so all of them are refused
-at company scope naming the container key that fixes it. `none` means the same
-thing everywhere and is accepted there.
-
-`none` is an absence of an **open** stay rather than of every stay, which is
-what keeps a carry-over out of the backlog: a task pulled forward into the next
-sprint is in that sprint, while one pulled back out of every sprint is
-unplanned work again.
-
-### What a sprint report answers, and what a burndown adds
-
-`sprint_report` gives one row per sprint in a window: **committed** (what it
-started with), **added** (what arrived after the start), **removed** (what was
-pulled out and not carried), **done** (what was DELIVERED inside the sprint's
-own window) and **remaining**, all in whichever of `points` and
-`estimate_minutes` the project's `measure` names. Delivery is not membership,
-so a task can sit in a sprint the whole way through without finishing, or
-finish in one it joined an hour before the close.
-
-**Every figure is valued at the instant it is about.** A task's size has a
-history, so re-estimating it from 3 points to 8 on day five changes the sprint
-from day five onwards and leaves what came before as it was reported:
-`committed` stays the 3 points the team actually took on, `added` counts a task
-at what it was worth when it ARRIVED, `removed` at what it was worth when it
-LEFT, and `done` at the end of the sprint's own window — so a correction made
-after a sprint closed never raises what that sprint is recorded as having
-shipped, and never moves its velocity.
-
-`remaining` is the exception, deliberately: it is the work still to do **now**,
-so it is valued at today's estimate. `unestimated` is the same — it counts the
-tasks carrying no value today, which is what a reader would go and fix.
-
-A task the engine has no size history for is valued at its current size
-throughout, which is what a task applied by an older build reads as until
-something next touches it.
-
-A **burndown** is the same sprint scored at every instant of its window rather
-than at its two ends, and the dashboard draws it over the running sprint. It
-reads the same size history, which is what makes its first point `committed`
-and its last point agree with the panel beside it. Its
-`remaining` is an **open status group** rather than "not delivered", which is
-the whole arithmetic: a task that was cancelled has stopped being work, so
-counting it as remaining makes a descoped sprint run flat and read as a team
-that shipped nothing. The series stops at the reader's own instant, because an
-unlived day is not a measurement.
+## Goals
 
 **Goals** are the tier above projects: a name, owners, dates, a health value
 and a free-text group label. A goal has **targets**, and a target references
@@ -457,7 +321,7 @@ which would invent a deadline nobody set.
 
 Its window is derived from the rows it is drawing, padded to a fortnight so a
 single task has something to be read against and capped at a year and a
-fortnight so one task due in 2031 cannot compress a sprint into four pixels.
+fortnight so one task due in 2031 cannot compress a fortnight into four pixels.
 Grouping applies (`group_by=`), and **each band gets its own axis**: a team
 planning six months out does not squeeze every other team into the corner of
 its window.
@@ -471,7 +335,7 @@ silently: a reader who cannot see the omission reads the arrows as every
 dependency there is.
 
 It is **read-only**. There is no dragging and no resizing: what a drag would
-mean for a task in a sprint, with a dependency, owned by somebody else is a
+mean for a task with a dependency, owned by somebody else, is a
 question with no good answer, and the tracker's own edit surfaces already say
 those things properly. A bar is a link.
 
@@ -486,9 +350,7 @@ everybody.
 a board, a calendar, a timeline, a table and a trash, and none of the six is an
 object: a fresh project needs no setup gesture, a container can never be left
 without a way to look at it, and nothing has to guard against somebody deleting
-the last view. A project running sprints has two more — a sprint board and a
-backlog — because those are the two questions a sprint creates and neither is
-expressible as a default.
+the last view.
 
 **The trash is a query, not a shape.** It is a table carrying `removed=true`
 and `show_closed=true`, which is why it is a builtin *view* rather than a sixth
@@ -593,33 +455,32 @@ correct board.
 
 ## What a seat can do
 
-Fifteen tools, and they are deliberately few — eight that act on a task,
+Fourteen tools, and they are deliberately few — eight that act on a task,
 three that read the container it is filed into, one that writes the one part of
-that container a seat owns, one that reads the company's goals, and two about
+that container a seat owns, one that reads the company's goals, and one about
 CHANGE rather than about state:
 
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
-| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the five **scheduling** arguments below |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the five **scheduling** arguments too, where `null` on any of them CLEARS it |
+| `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
+| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
-| `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the sprint policy (including each seat's `capacity`) and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
+| `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
+| `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `list_work_goals` | the company's goals, what each is at, and the health updates written against them. A read only — setting a goal is a person's |
-| `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 
-### When a task is due, how big it is, and which sprint it is in
+### When a task is due and how big it is
 
-Both write tools take five scheduling arguments, and every one of them is the
+Both write tools take four scheduling arguments, and every one of them is the
 input to something the tracker already reports:
 
 | Argument | What it sets |
@@ -628,11 +489,11 @@ input to something the tracker already reports:
 | `start` | when work on it should start, in the same spellings. |
 | `estimate_minutes` | how long it is expected to take. |
 | `points` | how big it is on the team's own scale. |
-| `sprint` | the sprint number it is planned into. Setting it OPENS the task's membership of that sprint, which is what every sprint figure is derived from. |
 
-`estimate_minutes` and `points` are the two halves of a measure, and a sprint
-figure sums whichever one the project's own `measure` names — so setting the
-other leaves every figure at zero.
+`estimate_minutes` and `points` are the two halves of a size, both carried
+rather than one chosen: which one a team uses is a team's own habit, and the
+totals (`totals=points:sum`, `totals=estimate_min:sum`) and the workload
+answer both.
 
 On an **update**, passing `null` clears the value: "leave the due date alone"
 and "this task has no due date any more" are different edits, and a tool that
@@ -674,13 +535,13 @@ answer if there was no way to look them up first.
 `write_project` is the one project **write** a seat holds, and it holds it for
 one facet: declaring a tag. A project's name, purpose and owning unit are
 **chart-owned** — written by the epoch apply from the org chart and by nothing
-else — so nothing writes them here at all; its field declarations, its sprint
-policy and its default assignee are the **lead's**, and archiving the project
+else — so nothing writes them here at all; its field declarations and its
+default assignee are the **lead's**, and archiving the project
 itself takes a person's own credential. Every one of those is gated inside the
 verb, and each refusal names who can.
 
-An operator holds the same fifteen and more that no seat does:
-`manage_sprint` (above), and the two below. `remove_work_item` puts an item
+An operator holds the same fourteen and more that no seat does, including the
+two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. A
 removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only
@@ -741,41 +602,32 @@ that had somehow grown past the cap as one nobody could leave.
 
 ## Who is carrying how much
 
-**The workload** answers, for everybody at once, what they are holding against
-what they can take. It counts **open** work — every task assigned to them, in
-or out of a sprint — because "is this person overloaded" is a question about
-their whole queue, where a sprint report is about one fortnight's commitment.
-The two numbers are deliberately different and both are worth having.
+**The workload** answers, for everybody at once, what they are holding. It
+counts **open** work — every task assigned to them, whatever its dates —
+because "who is carrying the most" is a question about a whole queue.
 
-A **capacity** is declared on a project's sprint policy —
-`write_project(sprints.capacity)`, keyed by handle, in that project's own
-measure — and counts only while that project has a sprint RUNNING: a capacity is a statement about a fortnight, and
-holding somebody to a number nobody is currently working to is worse than
-holding them to none. A person working across two sprinting projects has both
-capacities and their capacity is the **sum**; the answer says how many projects
-it came from, so you can tell a whole week's number from part of one.
+**Both sizes are carried, never one chosen.** Which of `points` and
+`estimate_min` a team uses is that team's own habit, so an answer that picked
+one would be wrong for everybody sizing in the other.
 
-Three things it will not do:
+Two things it will not do:
 
-- **An undeclared capacity is an absence, never a zero.** A company that has
-  never set one reads as a company nobody can judge — which is true — rather
-  than as a company where everybody is permanently over.
-- **Two measures do not add up.** A person whose projects size in points and in
-  minutes has no summable capacity, and the answer says *that* rather than
-  leaving the capacity absent: "nobody said" and "it cannot be added up" send
-  you to a sprint policy and to two, respectively.
-- **It does not re-rank by how far over somebody is.** The heaviest queue
-  first: one point over a capacity of two would otherwise outrank forty against
-  a capacity nobody declared.
+- **It does not invent a ceiling.** There is no capacity to be over, because
+  there is no number that is "full": a queue of thirty is heavy in one company
+  and a quiet week in another. The dashboard's bar is drawn against the
+  **heaviest queue on screen**, which is a comparison between people rather
+  than against a target nobody set.
+- **It does not re-rank.** The engine answers heaviest first and a screen keeps
+  that order, because a second ordering would make two screens reading one
+  answer disagree about who is at the top.
 
-Beside the total it carries the three shapes of work that is not simply in
-progress — **blocked**, **overdue** and **unscheduled** — because a person at
-capacity whose whole queue is blocked has a different problem from one who is
-simply busy, and a total alone cannot tell them apart.
+Beside the totals it carries the three shapes of work that is not simply in
+progress — **blocked**, **overdue** and **unscheduled** — because a person
+whose whole queue is blocked has a different problem from one who is simply
+busy, and a total alone cannot tell them apart.
 
-`GET /work/workload`, optionally narrowed to one `unit` — which narrows the
-tasks and the capacities together, since narrowing only the first would hold
-somebody to a number covering work the answer does not show.
+`GET /work/workload`, optionally narrowed to one `unit` — the people whose open
+work sits in projects that unit owns.
 
 ## What a person can do
 
@@ -784,10 +636,10 @@ table and the trash over the same queries a seat's tools use, against this
 node's own copy. Every answer says how far behind that copy is.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
-`/operator/mcp`. It serves the same work tools above, twelve more no seat is
+`/operator/mcp`. It serves the same work tools above, eleven more no seat is
 given — `list_work_views`, `save_work_view`, `write_work_goal`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
-`set_priorities`, `manage_sprint`, `remove_work_item` and `restore_work_item`
+`set_priorities`, `remove_work_item` and `restore_work_item`
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
 field different: a write carries the **token's** own name as its author and the
@@ -926,7 +778,7 @@ half an object either fails to parse it or reads the half it got as the whole.
 
 A change that concerns somebody becomes a **wake** — a turn on that seat, with
 a prompt written for the reason it reached them. Most wakes are about a task:
-you were assigned it, mentioned on it, watching it, blocked by it. Four are
+you were assigned it, mentioned on it, watching it, blocked by it. Two are
 not, and they exist because the thing that moved is not a row on a board:
 
 **One wake per person per change**, whatever number of reasons name them: the
@@ -945,11 +797,9 @@ lead only when the change named nobody else at all.
 | Wake | Who hears it | What it asks |
 |---|---|---|
 | `goal_updated` | every owner and every member of the goal | nothing — re-plan your own work if the health moved |
-| `sprint_started` | the seats with work in the sprint, and the project lead | nothing — look at what you committed to |
-| `sprint_closed` | the same | nothing — find where your unfinished work went |
 | `prioritised` | the person whose queue somebody else wrote | **an answer**: take it up, or say why you cannot |
 
-A fifth is about a task and is listed apart from the others because of what it
+A third is about a task and is listed apart from the others because of what it
 says rather than what it is about:
 
 | Wake | Who hears it | What it asks |
@@ -970,16 +820,12 @@ every health update would fill the tracker with "noted, thanks". Being told
 what to do next by somebody above you is a different thing, and silence on it
 is indistinguishable from a message that was lost.
 
-None of the four sends you to `get_work_item` for the object it is about: a
-goal's id and a sprint's number are not task keys, and a pointer at one costs a
-round and a failed tool call to discover. Each names the tool that answers its
-own question — `list_work_goals`, `sprint_report`, `my_work`. A `purged` wake
-sends you nowhere for the sharper version of the same reason: the row is gone
-from every node, so the tool would answer `not_found`.
-
-A **sprint close changes no task's status.** The close is about the sprint;
-what happens to the unfinished work is the rollover, and the wake says which of
-`next`, the backlog, cancelled, or still pending it was.
+Neither of the two sends you to `get_work_item` for the object it is about: a
+goal's id is not a task key, and a pointer at one costs a round and a failed
+tool call to discover. Each names the tool that answers its own question —
+`list_work_goals`, `my_work`. A `purged` wake sends you nowhere for the sharper
+version of the same reason: the row is gone from every node, so the tool would
+answer `not_found`.
 
 ## A person's own state
 

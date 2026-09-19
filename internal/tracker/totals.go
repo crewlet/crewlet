@@ -13,7 +13,7 @@ import (
 
 // Aggregates over the answer's WHOLE set, not over its page.
 //
-// A total is what the question adds up to — "how much work is in this sprint",
+// A total is what the question adds up to — "how much work is on this board",
 // "what has this epic cost" — and a page is fifty rows of it. Computing one
 // over the page would make it change as somebody scrolled, which is the one
 // thing a number on a header must not do.
@@ -111,7 +111,7 @@ type Total struct {
 	// Value is the number, and ABSENT when no row contributed one — which
 	// is not zero: "nothing is estimated" and "everything is estimated at
 	// nothing" are different facts, and a header rendering the second for
-	// the first is how a sprint reads as free.
+	// the first is how an empty board reads as free.
 	Value *float64 `json:"value,omitempty"`
 
 	// At is the instant, for a min or a max over a date column.

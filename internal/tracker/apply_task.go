@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -75,25 +74,6 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// an operator asking who filed something away had no answer.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampArchive(&next, current, held, c); err != nil {
-		return 0, err
-	}
-
-	// AND THE SPRINT HISTORY IS THE APPLIER'S TOO, for the same reason:
-	// a stay is a pair of instants, and instants this engine derives come
-	// from the broker rather than from whoever wrote the record.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := stampSprintStay(&next, current, held, c); err != nil {
-		return 0, err
-	}
-
-	// AND SO IS THE SIZE HISTORY, which every sprint figure about a past
-	// instant is valued from. Stamped after the sprint stay rather than
-	// before, so a record that moves both writes the measure span the
-	// NEW stay opens against — the two share one effective instant, so
-	// the order does not change a value, only which comment a reader
-	// meets first.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := stampMeasure(&next, current, held, c); err != nil {
 		return 0, err
 	}
 
@@ -260,226 +240,6 @@ func stampArchive(task *Task, current Task, held bool, c applyContext) error {
 	return nil
 }
 
-// stampSprintStay records a task entering or leaving a sprint.
-//
-// # Why the applier derives it and no writer carries it
-//
-// `tracker_task_sprints` is ONE ROW PER STAY, and a stay is what every sprint
-// report is derived from: committed, added, removed, remaining and velocity
-// are all read off the from/to pair rather than off the task's current sprint
-// number, because a task that carried over is in TWO sprints and a column
-// could only say one. The pair is two INSTANTS, and an instant this engine
-// derives comes from the broker (see [effectiveOf]) — a writer-supplied one
-// would be one node's clock deciding which sprint a piece of work landed in.
-//
-// It is also why nothing published a stay before: a writer cannot form one. It
-// would have to read the task's current sprint in one transaction and write
-// the boundary in another, and two writers moving one task between sprints
-// would then each close a stay the other had already closed.
-//
-// # The shape
-//
-// A stay OPENS when the task's sprint becomes non-nil and CLOSES when it stops
-// being that number — a move from 4 to 5 does both, in that order, so the
-// history reads as a carry-over rather than as two unrelated memberships. A
-// task that was never in a sprint and still is not produces nothing at all,
-// which is the common case and costs one comparison.
-//
-// THE CAP DROPS THE OLDEST CLOSED STAY and keeps the count, so a report can
-// say how many it is not showing rather than quietly showing fewer. An OPEN
-// stay is never dropped: it is the one the task is in now.
-func stampSprintStay(next *Task, current Task, held bool, c applyContext) error {
-	was := current.Sprint
-	if !held {
-		was = nil
-	}
-	now := next.Sprint
-	if sameSprint(was, now) {
-		return nil
-	}
-	at, err := effectiveOf(c)
-	if err != nil {
-		return err
-	}
-	stays := slices.Clone(next.SprintHistory)
-	if was != nil {
-		// CLOSE THE OPEN STAY ON THE SPRINT IT IS LEAVING, and only that
-		// one: a task re-added to a sprint it already left has two stays
-		// on that number, which is what the primary key's `from_at`
-		// component is for.
-		for i := range stays {
-			if stays[i].Sprint == *was && stays[i].To == nil {
-				stays[i].To = &at
-				if now != nil {
-					// A CARRY-OVER SAYS WHERE IT WENT, so a report
-					// can tell work that rolled forward from work
-					// that was dropped.
-					rolled := *now
-					stays[i].RolledTo = &rolled
-				}
-			}
-		}
-	}
-	if now != nil {
-		stays = append(stays, SprintStay{Sprint: *now, From: at})
-	}
-	next.SprintHistory, next.SprintStaysDropped = capStays(stays,
-		next.SprintStaysDropped)
-	return nil
-}
-
-// sameSprint compares two optional sprint numbers.
-func sameSprint(a, b *int) bool {
-	switch {
-	case a == nil && b == nil:
-		return true
-	case a == nil || b == nil:
-		return false
-	}
-	return *a == *b
-}
-
-// capStays drops the oldest CLOSED stays past [MaxSprintStays], counting them.
-//
-// Closed only, because an open stay is where the task is now — dropping it
-// would make the task's own sprint unreadable from its history. Order is
-// preserved, so the history stays oldest-first and a reader can page it.
-func capStays(stays []SprintStay, dropped int) ([]SprintStay, int) {
-	for len(stays) > MaxSprintStays {
-		cut := -1
-		for i := range stays {
-			if stays[i].To != nil {
-				cut = i
-				break
-			}
-		}
-		if cut < 0 {
-			// EVERY STAY IS OPEN, which a task in sixteen concurrent
-			// sprints would be and nothing else is. Nothing is dropped:
-			// the cap bounds history, not the present.
-			break
-		}
-		stays = append(stays[:cut], stays[cut+1:]...)
-		dropped++
-	}
-	return stays, dropped
-}
-
-// stampMeasure records a task's SIZE changing, as one span per value.
-//
-// # Why the measure needs a history at all
-//
-// Every sprint figure is a statement about a past instant — `committed` is
-// what was in the sprint when it STARTED, `added` what arrived after — and
-// each of them summed the task's CURRENT `points` or `estimate_min`. So
-// re-estimating a task from 3 to 8 on day 5 moved what day 1 had already
-// reported: `committed` rose by five points nobody committed. The burndown
-// was worse, because change in time is its whole subject: it read each
-// member's measure ONCE before walking the sprint's instants, so a sprint
-// that delivered exactly what it took on drew as one handed more work.
-//
-// # Derived here, like the sprint stay above, and for one of the same reasons
-//
-// A span is a pair of INSTANTS, and an instant this engine derives comes from
-// the broker (see [effectiveOf]) rather than from whoever wrote the record.
-//
-// It does NOT share the stay's other reason — a writer genuinely could carry
-// its own size, since it is setting it. What a writer cannot do is close the
-// PREVIOUS span: that needs the value the task held before this record, read
-// in the same transaction the new one is written in, which is exactly what an
-// applier has and a writer does not.
-//
-// Deliberately not recomputed from `tracker_history` the way the status spans
-// are, although the symmetry is inviting. A history row's `fields_json`
-// carries what a PERSON reads — `points` as "8", `estimate` as "90m", an
-// empty string for unset — and a number parsed back out of display text is
-// not the number this engine stored; and [MaxDeltas] trims a record carrying
-// more than thirty-two field changes, so a large patch can drop the points
-// delta outright. A figure cannot rest on a row allowed to omit it.
-//
-// # The shape
-//
-// One span per value, closed when either measure moves. A task's FIRST apply
-// opens one even when nothing is estimated, because a zero is a real size
-// here — it is what "nobody has estimated this" is stored as and what
-// `unestimated` counts — so a sprint that committed an unestimated task has a
-// span to value it at rather than a gap.
-func stampMeasure(next *Task, current Task, held bool, c applyContext) error {
-	if held && current.Points == next.Points &&
-		current.EstimateMinutes == next.EstimateMinutes &&
-		len(next.MeasureHistory) > 0 {
-
-		return nil
-	}
-	at, err := effectiveOf(c)
-	if err != nil {
-		return err
-	}
-	spans := slices.Clone(next.MeasureHistory)
-	// CLOSE WHATEVER IS OPEN, and there is at most one: a task has one
-	// size at a time, unlike its sprints. A span already closed at this
-	// instant is left alone, which is what makes a redelivery a no-op.
-	for i := range spans {
-		if spans[i].To == nil {
-			spans[i].To = &at
-		}
-	}
-	spans = append(spans, MeasureStay{
-		From: at, Points: next.Points, EstimateMin: next.EstimateMinutes,
-	})
-	next.MeasureHistory, next.MeasureSpansDropped = capMeasureSpans(spans,
-		next.MeasureSpansDropped)
-	return nil
-}
-
-// capMeasureSpans drops the oldest CLOSED spans past [MaxMeasureSpans].
-//
-// The same rule as [capStays] and the same reason for it: the open span is the
-// task's size NOW, so dropping it would make the current measure unreadable
-// from the history. Order is preserved, so the history stays oldest-first and
-// "the measure at instant T" is a walk from the end.
-func capMeasureSpans(spans []MeasureStay, dropped int) ([]MeasureStay, int) {
-	for len(spans) > MaxMeasureSpans {
-		cut := -1
-		for i := range spans {
-			if spans[i].To != nil {
-				cut = i
-				break
-			}
-		}
-		if cut < 0 {
-			break
-		}
-		spans = append(spans[:cut], spans[cut+1:]...)
-		dropped++
-	}
-	return spans, dropped
-}
-
-// MeasureAt is what a task was worth at one instant, in both measures.
-//
-// THE SPAN COVERING IT, and before the first span the FIRST span's value
-// rather than zero: a report may ask about an instant older than the history
-// the cap kept, and answering zero there would say the task was unestimated
-// when what is true is that this node no longer knows. The oldest value it
-// does know is the honest answer, and it is also the one that makes a capped
-// history degrade towards the old behaviour rather than towards a lie.
-//
-// A task with no history at all answers zeros, which is what a task carries
-// before its first apply under this build.
-func MeasureAt(spans []MeasureStay, at time.Time) (points float64, estimateMin int) {
-	if len(spans) == 0 {
-		return 0, 0
-	}
-	best := 0
-	for i := range spans {
-		if !spans[i].From.After(at) {
-			best = i
-		}
-	}
-	return spans[best].Points, spans[best].EstimateMin
-}
-
 // effectiveOf is the instant a stamp derived from this record takes.
 //
 // THE BROKER'S, never a clock: the applier reads no clock at all, which is
@@ -586,8 +346,8 @@ func clearableInstant(at *time.Time) *time.Time {
 // merge, and every field added to [TaskPatch] since had to be remembered in
 // two places — so when the schedule fields arrived, the durable row took them
 // and the wake's snapshot did not. The delta was then computed between a task
-// and itself, and every due date, estimate, size and sprint a seat moved
-// reached its notification as a change that changed nothing.
+// and itself, and every due date, estimate and size a seat moved reached its
+// notification as a change that changed nothing.
 //
 // The caller still layers what is genuinely ITS own on top: a wake's
 // recipient list reflects the watch gesture in flight, which the durable sets
@@ -631,16 +391,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.Parent = &parent
 		}
 	}
-	if patch.Sprint != nil {
-		if *patch.Sprint == 0 {
-			task.Sprint = nil
-		} else {
-			sprint := *patch.Sprint
-			task.Sprint = &sprint
-		}
-	}
-	// A ZERO INSTANT IS HOW A PATCH SPELLS "CLEAR IT", exactly as a zero
-	// sprint number does above and for the same reason: an absent field
+	// A ZERO INSTANT IS HOW A PATCH SPELLS "CLEAR IT": an absent field
 	// means "leave it alone", so a clear has to be a VALUE. Stored
 	// verbatim, a zero would be a due date in January of year one — which
 	// every overdue predicate in the tracker reads as the most overdue
@@ -694,7 +445,6 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setSlice(&task.Relations, patch.Relations)
 	setSlice(&task.Dependents, patch.Dependents)
 	setSlice(&task.Checklists, patch.Checklists)
-	setSlice(&task.SprintHistory, patch.SprintHistory)
 	setSlice(&task.FormerKeys, patch.FormerKeys)
 	if patch.Fields != nil {
 		task.Fields = *patch.Fields
@@ -732,7 +482,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_tasks
-			(id, key, project_key, filed_unit, routing_unit, sprint_number,
+			(id, key, project_key, filed_unit, routing_unit,
 			 parent_id, root_id, depth, type, title, body_version, status,
 			 status_group, status_entered_at, priority, prio_rank, rank,
 			 reporter, assignee, start_at, due_at, due_all_day, estimate_min,
@@ -743,12 +493,11 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 unblocked_told_at, search_rev, embed_rev, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
 		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,
-			sprint_number = excluded.sprint_number,
 			parent_id = excluded.parent_id, root_id = excluded.root_id,
 			depth = excluded.depth, type = excluded.type, title = excluded.title,
 			body_version = excluded.body_version, status = excluded.status,
@@ -768,7 +517,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			document = excluded.document
 		WHERE excluded.version > tracker_tasks.version`,
 		task.ID, task.Key, task.Project, task.FiledUnit, task.RoutingUnit,
-		nullableInt(task.Sprint), nullableStringPtr(task.Parent), rootOf(task),
+		nullableStringPtr(task.Parent), rootOf(task),
 		task.Depth, typeOf(task), task.Title, task.BodyVersion,
 		string(statusOf(task)), string(statusOf(task).Group()),
 		string(priorityOf(task)), priorityOf(task).Rank(), string(rank),
@@ -830,47 +579,6 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 				`(?,?,?)`,
 				`ON CONFLICT (task_id, slug) DO NOTHING`,
 				task.Tags, func(s string) []any { return []any{task.ID, task.Project, s} })
-		}},
-		{"tracker_task_sprints", func() (int, error) {
-			// ONE ROW PER STAY, which is what every sprint report is
-			// derived from — and what made `sprint=` answer zero for
-			// every task until something wrote one. The rows are
-			// rebuilt from the document on every apply, like every
-			// other collection here, so a reprocess converges rather
-			// than accumulating.
-			return insertMany(ctx, tx, c.maxVariables, `
-				INSERT INTO tracker_task_sprints
-					(task_id, sprint, project_key, from_at, to_at, rolled_to)
-				VALUES`,
-				`(?,?,?,?,?,?)`,
-				`ON CONFLICT (task_id, sprint, from_at) DO UPDATE SET
-					to_at = excluded.to_at,
-					rolled_to = excluded.rolled_to`,
-				task.SprintHistory, func(v SprintStay) []any {
-					return []any{task.ID, v.Sprint, task.Project,
-						store.EncodeTime(v.From), nullableTime(v.To),
-						nullableInt(v.RolledTo)}
-				})
-		}},
-		{"tracker_measure_spans", func() (int, error) {
-			// ONE ROW PER SPAN of the task's size, which is what every
-			// sprint figure about a past instant is valued from. The
-			// document's own history exploded, rebuilt on every apply
-			// like every other collection here, so a reprocess
-			// converges rather than accumulating.
-			return insertMany(ctx, tx, c.maxVariables, `
-				INSERT INTO tracker_measure_spans
-					(task_id, from_at, to_at, points, estimate_min)
-				VALUES`,
-				`(?,?,?,?,?)`,
-				`ON CONFLICT (task_id, from_at) DO UPDATE SET
-					to_at = excluded.to_at,
-					points = excluded.points,
-					estimate_min = excluded.estimate_min`,
-				task.MeasureHistory, func(v MeasureStay) []any {
-					return []any{task.ID, store.EncodeTime(v.From),
-						nullableTime(v.To), v.Points, v.EstimateMin}
-				})
 		}},
 		{"tracker_relations", func() (int, error) {
 			// `one_sided` IS DERIVED HERE AND NEVER CARRIED. Whether a
@@ -1292,8 +1000,6 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_task_sprints WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_measure_spans WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},

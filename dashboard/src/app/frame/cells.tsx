@@ -3,7 +3,7 @@
  *
  * ONE FUNCTION PER CELL TYPE, because the same value must look the same
  * wherever it appears: an absent number wears the same mark on the spend table
- * and on the sprint report, a date drops its year in both places or in
+ * and on the activity feed, a date drops its year in both places or in
  * neither, and a seat is an avatar and a name rather than a handle on one
  * screen and a display name on the next.
  *

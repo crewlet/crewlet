@@ -200,7 +200,7 @@ func TestTheRoutingBoundIsTheSumOfTheWriteCaps(t *testing.T) {
 		tracker.MaxDependents + tracker.MaxDependents +
 		tracker.MaxThreadParticipants + tracker.MaxChecklists +
 		tracker.MaxGoalOwners + tracker.MaxGoalMembers +
-		tracker.MaxSprintWakeParties + tracker.MaxMentions + 16
+		tracker.MaxMentions + 16
 	if tracker.MaxRoutingRows != want {
 		t.Fatalf("MaxRoutingRows is %d and the write caps sum to %d — a "+
 			"recipient set the engine accepts would be truncated on the way "+

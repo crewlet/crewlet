@@ -203,46 +203,6 @@ func TestARerunPromotionMarksTheParentItDidNotReach(t *testing.T) {
 	}
 }
 
-// ONE PROJECT RUNS ONE SPRINT, AND THE POINTER IS WHERE THAT IS ARBITRATED.
-//
-// The sprint record keeps its own separate veto — a start moves future to
-// active and refuses any other state — so an already-closed sprint can never
-// be resurrected past a nil pointer.
-func TestOneProjectRunsOneSprint(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	seedSprint(t, r, 1)
-	seedSprint(t, r, 2)
-
-	if _, err := r.writer.StartSprint(t.Context(), "op-s1", "ENG", 1); err != nil {
-		t.Fatalf("StartSprint 1: %v", err)
-	}
-	r.drain()
-	if _, err := r.writer.StartSprint(t.Context(), "op-s2", "ENG", 2); err == nil {
-		t.Fatal("a second sprint started while the first was running")
-	} else if !strings.Contains(err.Error(), "running sprint 1") {
-		t.Fatalf("the refusal is %v and does not name the sprint that holds "+
-			"the pointer", err)
-	}
-	r.drain()
-
-	if _, err := r.writer.CloseSprint(t.Context(), "op-c1", "ENG", 1); err != nil {
-		t.Fatalf("CloseSprint: %v", err)
-	}
-	r.drain()
-	// AND A CLOSED SPRINT CANNOT BE RESTARTED, whatever the pointer says.
-	if _, err := r.writer.StartSprint(t.Context(), "op-s3", "ENG", 1); err == nil {
-		t.Fatal("a closed sprint was restarted")
-	} else if !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("the refusal is %v and does not name the state that refused "+
-			"it — the record's own veto is separate from the pointer's", err)
-	}
-	r.drain()
-	if _, err := r.writer.StartSprint(t.Context(), "op-s4", "ENG", 2); err != nil {
-		t.Fatalf("sprint 2 after 1 closed: %v", err)
-	}
-}
-
 // A BULK EDIT IS NOT ATOMIC AND SAYS SO PER TASK.
 //
 // It never was atomic: the caller re-runs the failures, and a result that
@@ -391,20 +351,6 @@ func requireAField(t *testing.T, r *roundTrip) {
 			CreatedAt: wednesday, UpdatedAt: wednesday,
 		}, tracker.ChangeProjectCreated, nil); err != nil {
 		t.Fatalf("declare the field: %v", err)
-	}
-	r.drain()
-}
-
-func seedSprint(t *testing.T, r *roundTrip, number int) {
-	t.Helper()
-	if _, err := r.writer.WriteDocument(t.Context(), "op-sprint-"+string(rune('0'+number)),
-		tracker.SprintSubject("ENG", number), "", tracker.Sprint{
-			V: 1, Project: "ENG", Number: number,
-			Name: "Sprint", State: tracker.SprintFuture,
-			StartAt: wednesday, EndAt: wednesday.AddDate(0, 0, 14),
-			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, tracker.ChangeMoved, nil); err != nil {
-		t.Fatalf("seed sprint %d: %v", number, err)
 	}
 	r.drain()
 }

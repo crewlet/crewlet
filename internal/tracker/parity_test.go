@@ -106,7 +106,7 @@ func TestTheApplierAndTheParserNameTheSamePeople(t *testing.T) {
 	}
 	if addressedCount(quiet) != 0 {
 		t.Fatalf("a bulk gesture still addresses %d people — a lead "+
-			"re-planning a sprint is not thirty people each owing an answer",
+			"re-tagging a backlog is not thirty people each owing an answer",
 			addressedCount(quiet))
 	}
 }

@@ -207,8 +207,8 @@ function Row({
   // WHY THE HAND STATE IS FORGOTTEN RATHER THAN CONSULTED FIRST. `openedByHand
   // ?? forced` alone made one collapse permanent: `??` falls through on null
   // and a twist writes a boolean, so neither force-open could ever apply
-  // again. Collapse a project, then type a filter its sprint matches — the
-  // project row stays (it matches THROUGH its children) and the sprint renders
+  // again. Collapse a unit, then type a filter its child matches — the
+  // parent row stays (it matches THROUGH its children) and the child renders
   // nowhere, which is indistinguishable from a search that found nothing.
   // Navigate into the branch and it is worse: `onPath` is true, the branch is
   // shut, and the row marked `current` is not drawn at all.

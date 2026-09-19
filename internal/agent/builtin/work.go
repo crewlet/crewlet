@@ -189,12 +189,6 @@ type WorkDeps struct {
 	// is resolved per call rather than per surface.
 	ProjectWriter func(actor Actor) ProjectWriter
 
-	// SprintWriter resolves the sprint side for one actor, and is the
-	// operator surface's alone: a sprint is a commitment a team made
-	// together, so starting or closing one is a lead's decision rather
-	// than a seat's.
-	SprintWriter func(actor Actor) SprintWriter
-
 	// TrashWriter resolves the removal and restore side for one actor, and
 	// is the operator surface's alone: a removal hides a task from every
 	// list in the company, and a seat that could hide work it did not want
@@ -503,14 +497,6 @@ func (t *listWorkItems) Parameters() map[string]any {
 					"you pass overrides the view's own.",
 			},
 			"label": map[string]any{"type": "string", "description": "One label to filter on."},
-			"sprint": map[string]any{
-				"type": "string",
-				"description": "A sprint number, a sprint name, or one of " +
-					"`active`, `next`, `future`, `closed` — or `none` for the " +
-					"backlog, which is unfinished work in no sprint. Comma " +
-					"separate to ask for several. Everything but `none` names " +
-					"a sprint of ONE project, so pass `project` with it.",
-			},
 			"removed": map[string]any{
 				"type": "boolean",
 				"description": "True lists the TRASH — items somebody removed " +
@@ -646,7 +632,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// model reads rows, and a grouped answer costs it a shape to unpack for
 	// a heading nobody renders.
 	for _, key := range []string{
-		"assignee", "limit", "sprint", "removed",
+		"assignee", "limit", "removed",
 		"type", "priority", "due", "updated", "created",
 		"reporter", "watcher", "unit", "goal",
 		"sort", "cursor", "view",
@@ -1182,8 +1168,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 		task.Fields = fields
 	}
-	// WHEN IT IS DUE, HOW BIG IT IS AND WHICH SPRINT IT IS IN — see
-	// workschedule.go for why these were filterable and unwritable.
+	// WHEN IT IS DUE AND HOW BIG IT IS — see workschedule.go for why these
+	// were filterable and unwritable.
 	plan, refusal := readSchedule(args, now, t.deps.zone(), CreateWorkItemTool)
 	if refusal != "" {
 		return failed(refusal), nil
@@ -1468,8 +1454,8 @@ func handles(all ...string) []string {
 // nothing and answered `outcome: "applied"` with the FIRST write's position —
 // the worst shape a write surface has, because the caller is told it worked.
 // The same held for a dependency change, a re-removal after a restore, a
-// merge, and (through [callKey]) a priority list, a pin set, an inbox mark and
-// a sprint start.
+// merge, and (through [callKey]) a priority list, a pin set and an inbox
+// mark.
 //
 // [commentID] three hundred lines below has always had this right, and is
 // where the shape comes from: the turn's key where there is one, a fresh uuid
@@ -1832,22 +1818,8 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	if refusal != "" {
 		return patch, kind, refusal
 	}
-	if plan.applyToPatch(&patch) && (plan.Sprint != nil || plan.Cleared["sprint"]) {
-		// A SPRINT MOVE IS ITS OWN KIND, because it is what the change is
-		// TO everybody downstream: the sprint's team is told their
-		// commitment moved, where `fields` would tell them a column
-		// changed. The dates and the sizing stay `fields`, which is what
-		// they are.
-		//
-		// AND TAKING A TASK OUT IS A MOVE, which the set-only gate missed:
-		// `sprint: null` leaves [schedule.Sprint] nil and records the
-		// clear, so a removal — the change a sprint's team most needs to
-		// hear, since it is commitment leaving the window — was filed as
-		// `fields`. The writer's own rollover already spells a clear as
-		// sprint zero under [tracker.ChangeSprint], so this is the tool
-		// path agreeing with it rather than a new rule.
-		kind = tracker.ChangeSprint
-	}
+	// THE DATES AND THE SIZING ARE `fields`, which is what they are.
+	plan.applyToPatch(&patch)
 
 	if v, held := args["title"]; held {
 		title := strings.TrimSpace(argString(map[string]any{"v": v}, "v"))
@@ -1958,8 +1930,8 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 	// be remembered here too — and when the schedule fields arrived the
 	// durable row took them and this snapshot did not. [tracker.TaskDeltas]
 	// then compared a task against itself on exactly those fields, so a due
-	// date, an estimate, a size or a sprint a seat moved reached its
-	// notification as a change that changed nothing.
+	// date, an estimate or a size a seat moved reached its notification as
+	// a change that changed nothing.
 	task = tracker.Patched(task, patch)
 
 	if patch.Watch != nil {

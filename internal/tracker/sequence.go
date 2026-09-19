@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -22,10 +21,10 @@ import (
 //
 // Every single-object write in this domain is ONE append: snapshot, decide
 // inside it, commit at the anchor the same transaction read. There is no
-// "between" and therefore no crash residue. Six gestures cannot reach that
-// shape, because the object they mint from and the object they write are
-// different objects with different arbitration — a key comes from a project's
-// counter and lands on a task, a sprint's pointer lives on its project.
+// "between" and therefore no crash residue. A handful of gestures cannot
+// reach that shape, because the object they mint from and the object they
+// write are different objects with different arbitration — a key comes from a
+// project's counter and lands on a task.
 //
 // So each states FOUR things and this file implements exactly them: the
 // ORDER of its appends, the DURABLE CLAIM that stops two nodes running it at
@@ -36,8 +35,7 @@ import (
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
 // key, because a key is what people paste into chat. An item promotion marks
 // its parent LAST, because the other order leaves an item marked promoted with
-// no subtask behind it. A sprint moves the project's POINTER first, because
-// that pointer is where two nodes racing to start sprint 7 are arbitrated.
+// no subtask behind it.
 //
 // # Every step is a step ON THE LOG
 //
@@ -65,7 +63,7 @@ const (
 	MaxBulkBytes = 8 << 20
 
 	// WalkBatch is one batch of a paced walk — a cross-project move's
-	// descendants, a merge's children, a sprint rollover's spill.
+	// descendants, a merge's children.
 	WalkBatch = 64
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
@@ -105,22 +103,16 @@ type Claims interface {
 // Built through [coord.Class] like every other lease, because these land in
 // the SAME bucket as the fleet's own and a bucket with two naming conventions
 // in it has two grammars to keep right. The class is the key's leading
-// SUBJECT TOKEN, so each of these is filterable on its own — and a rollover's
-// project is a segment of its own for the same reason, rather than a slash
-// inside one.
+// SUBJECT TOKEN, so each of these is filterable on its own.
 const (
-	classBulk     coord.Class = "bulk"
-	classMove     coord.Class = "move"
-	classMerge    coord.Class = "merge"
-	classRollover coord.Class = "rollover"
+	classBulk  coord.Class = "bulk"
+	classMove  coord.Class = "move"
+	classMerge coord.Class = "merge"
 )
 
 func bulkClaim(domain string) string { return classBulk.Resource(domain) }
 func moveClaim(task string) string   { return classMove.Resource(task) }
 func mergeClaim(task string) string  { return classMerge.Resource(task) }
-func rolloverClaim(p string, n int) string {
-	return classRollover.Resource(p, strconv.Itoa(n))
-}
 
 // stepID derives one append's operation id from the gesture's own.
 //
@@ -404,9 +396,6 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return nil, nil, err
 	}
 	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
-		return nil, nil, err
-	}
-	if err := mintedSprint(ctx, tx, task.Project, task.Sprint); err != nil {
 		return nil, nil, err
 	}
 	if err := requiredFields(ctx, tx, project, task); err != nil {
@@ -1125,218 +1114,6 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 	}
 }
 
-// StartSprint moves a project's active sprint on. SEQUENCE 18.
-//
-//	Rs the sprint row; refuse unless it is `future` → A on the PROJECT,
-//	setting the active-sprint pointer at its own version — THIS IS WHERE
-//	THE TWO-NODE RACE IS ARBITRATED → A on the sprint, future → active.
-//
-// CRASH RESIDUE: the pointer moved and the record did not — a project naming a
-// sprint that is still `future`. REPAIRER: the tracker duty reads both rows and
-// completes whichever half is missing; the sprint record's own state machine is
-// what makes that idempotent.
-//
-// # Why the pointer moves FIRST
-//
-// The pointer is the authority for "is another sprint running", so it is what
-// two nodes starting sprint 7 inside one apply linger contend on. Moving the
-// record first would let both pass their own state check and leave the pointer
-// to arbitrate a decision both had already published.
-//
-// The record keeps its own, separate veto: a start moves `future → active` and
-// refuses any other state, so an already-closed sprint can never be resurrected
-// past a nil pointer.
-func (w *Writer) StartSprint(ctx context.Context, opID, project string,
-	number int) (WriteResult, error) {
-
-	return w.moveSprint(ctx, opID, project, number, SprintFuture, SprintActive)
-}
-
-// CloseSprint ends the active one. SEQUENCE 19, and the same order as 18 for
-// the same reason.
-func (w *Writer) CloseSprint(ctx context.Context, opID, project string,
-	number int) (WriteResult, error) {
-
-	return w.moveSprint(ctx, opID, project, number, SprintActive, SprintClosed)
-}
-
-// moveSprint is 18 and 19, which differ only in which transition they permit.
-func (w *Writer) moveSprint(ctx context.Context, opID, project string, number int,
-	from, to SprintState) (WriteResult, error) {
-
-	switch {
-	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a sprint transition names no project")
-	case number < 1:
-		return WriteResult{}, fmt.Errorf("tracker: %d is not a sprint number", number)
-	}
-	at := w.Now()
-
-	// THE POINTER, at the project's own version.
-	pointer := &number
-	if to != SprintActive {
-		pointer = nil
-	}
-	// `ErrExists` FROM THE POINTER IS THE OTHER HALF ALREADY LANDING, not
-	// a failure — it is exactly the interrupted transition this order
-	// leaves and the one the duty exists to complete. Returned to the
-	// caller it made that repair impossible: a close whose pointer moved
-	// and whose record did not could never finish, and the project would
-	// claim to run no sprint while the sprint claimed to be running.
-	//
-	// It is also the ordinary state of a close whose sprint was never
-	// pointed at — a sprint started before this pointer existed, or one
-	// the duty is closing after a restart.
-	if _, err := w.setActiveSprint(ctx, stepID(opID, "pointer"), project,
-		number, from, to, pointer, at); err != nil &&
-		!errors.Is(err, statelog.ErrExists) {
-
-		return WriteResult{}, err
-	}
-
-	// THE RECORD, with its own state machine as the second veto.
-	subject := SprintSubject(project, number)
-	scope := ScopeSet{Subject: true}
-	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     stepID(opID, "sprint"),
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			sprint, held, err := readSprint(ctx, tx, project, number)
-			switch {
-			case err != nil:
-				return statelog.Decision{}, err
-			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: sprint %s.%d "+
-					"is not on this node: %w", project, number,
-					statelog.ErrUnavailable)
-			case sprint.State == to:
-				// ALREADY THERE IS THE REPAIR'S OWN PATH: the duty
-				// completing an interrupted transition finds the half
-				// that landed and writes the half that did not.
-				return statelog.Decision{}, statelog.ErrExists
-			case sprint.State != from:
-				return statelog.Decision{}, fmt.Errorf("tracker: sprint %s.%d "+
-					"is %s, and only a %s sprint becomes %s — a sprint's state "+
-					"moves one way, whatever its project's pointer says",
-					project, number, sprint.State, from, to)
-			}
-			sprint.State = to
-			sprint.UpdatedAt = at
-			if to == SprintClosed {
-				closed := at
-				sprint.ClosedAt, sprint.ClosedBy = &closed, w.Actor
-				// WHAT IT CLOSED WITH, counted HERE and nowhere else.
-				// The column has been on the row and in the applier's
-				// INSERT since the tracker landed, and no writer ever
-				// set it — so `open_at_close` was 0 on every sprint
-				// this engine has ever closed, `rollover_pending` could
-				// never be true, and the close's own card read "closed
-				// with 0 open task(s)" over a sprint holding a
-				// fortnight's unfinished work.
-				//
-				// INSIDE THE DECIDE, because it is a property of the
-				// sprint AT THE MOMENT IT CLOSES: counted before, the
-				// rollover has not run; counted after, the rollover has
-				// already emptied it and the answer is always zero.
-				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-				open, err := countOpenInSprint(ctx, tx, project, number)
-				if err != nil {
-					return statelog.Decision{}, err
-				}
-				sprint.OpenAtClose = open
-			}
-			wake, err := sprintWake(ctx, tx, sprint, to, w.Leads)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			decision, err := w.decide(subject, OpPatch, sprintChangeKind(to),
-				scope, stepID(opID, "sprint"), sprint, wake, at)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			decision.Version = int64(sprint.Version)
-			return decision, nil
-		},
-	})
-}
-
-// setActiveSprint writes the project's pointer, and nothing else about it.
-//
-// `Notify == nil` and `UpdatedAt` untouched: a pointer move is not history.
-func (w *Writer) setActiveSprint(ctx context.Context, opID, project string,
-	number int, from, to SprintState, pointer *int, at time.Time) (WriteResult, error) {
-
-	subject := ProjectSubject(project)
-	scope := ScopeSet{Subject: true}
-	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			current, held, err := readProject(ctx, tx, project)
-			switch {
-			case err != nil:
-				return statelog.Decision{}, err
-			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: project %s is "+
-					"not on this node: %w", project, statelog.ErrUnavailable)
-			}
-			// THE SPRINT'S OWN STATE IS CHECKED HERE TOO, in this same
-			// transaction, and it is not a duplicate of the record's
-			// veto — it is what stops a REFUSED transition leaving the
-			// pointer moved. The pointer is written first because that
-			// is where two nodes racing to start sprint 7 are
-			// arbitrated; without this clause, an attempt to restart a
-			// closed sprint would pass the pointer's own check, move
-			// it, and only then be refused by the record — leaving the
-			// project claiming to run a sprint that is closed.
-			sprint, held, err := readSprint(ctx, tx, project, number)
-			switch {
-			case err != nil:
-				return statelog.Decision{}, err
-			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: sprint %s.%d "+
-					"is not on this node: %w", project, number,
-					statelog.ErrUnavailable)
-			case sprint.State != from && sprint.State != to:
-				return statelog.Decision{}, fmt.Errorf("tracker: sprint %s.%d "+
-					"is %s, and only a %s sprint becomes %s — a sprint's state "+
-					"moves one way, whatever its project's pointer says",
-					project, number, sprint.State, from, to)
-			}
-			if to == SprintActive && current.ActiveSprint != nil &&
-				*current.ActiveSprint != number {
-				return statelog.Decision{}, fmt.Errorf("tracker: project %s is "+
-					"running sprint %d, and one project runs one sprint — close "+
-					"it before starting %d", project, *current.ActiveSprint, number)
-			}
-			if to == SprintClosed && (current.ActiveSprint == nil ||
-				*current.ActiveSprint != number) {
-				// THE POINTER ALREADY MOVED, which is the interrupted
-				// close this order leaves and the duty completes.
-				return statelog.Decision{}, statelog.ErrExists
-			}
-			current.ActiveSprint = pointer
-			// THE POINTER MOVE IS NOT A NOTIFICATION — the sprint's own
-			// record carries that — but it IS a row in the project's
-			// account of itself, so it files under the project's kind
-			// rather than under the bare operation.
-			decision, err := w.decide(subject, OpPatch, ChangeProjectUpdated,
-				scope, opID, current, nil, at)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			decision.Version = int64(current.Version)
-			return decision, nil
-		},
-	})
-}
-
 // ErrBulkInFlight refuses a bulk gesture while another is applying.
 var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")
 
@@ -1502,49 +1279,4 @@ func (w *Writer) drainRows() float64 {
 		return rows
 	}
 	return 1
-}
-
-// mintedSprint refuses a task filed into a sprint the project never minted.
-//
-// THE SCHEMA ALREADY PROMISED THIS — `sprint` is documented as a number
-// `sprint_report` lists for the project — and nothing checked it, so any
-// positive integer was accepted and stored. The task then pointed at a
-// membership that does not exist: `sprint_report` and the burndown both refuse
-// it with [ErrNoSprint], so the work was filed somewhere no report could ever
-// show it, and the seat that filed it was told the write succeeded.
-//
-// A REFUSAL, NOT AN UNAVAILABLE, which is [declaredTags]'s answer for a tag
-// the project has not declared rather than [Writer.refuseCreate]'s for a
-// project this node does not hold — and the difference is which case
-// DOMINATES. A project reaches that check because a caller named one that
-// almost certainly exists, so absent there reads as lag. A sprint number is
-// typed by a model against a schema that merely describes it, so absent here
-// is overwhelmingly a number nobody minted, and `unavailable` would tell that
-// caller to retry a request that can never succeed — the one answer worse
-// than a refusal, because it never ends.
-//
-// The cost is the case the tag check already accepts: a sprint minted moments
-// ago on another node is refused here until this one applies the mint. The
-// message names the sprints the project does have, so a seat re-reads and
-// sees the new one rather than being told to change a request that was right.
-func mintedSprint(ctx context.Context, tx *sql.Tx, project string, number *int) error {
-	if number == nil || *number == 0 {
-		// NOT NAMED, or taken out of its sprint: neither says anything
-		// about a sprint that has to exist.
-		return nil
-	}
-	sprint, held, err := readSprint(ctx, tx, project, *number)
-	switch {
-	case err != nil:
-		return err
-	case !held:
-		return fmt.Errorf("tracker: %s has no sprint %d — `sprint_report` "+
-			"lists the ones it has minted, and `write_project` mints the "+
-			"next", project, *number)
-	case sprint.Archived:
-		return fmt.Errorf("tracker: sprint %d of %s is archived, so no work "+
-			"is filed into it; `sprint_report` lists the ones that take work",
-			*number, project)
-	}
-	return nil
 }

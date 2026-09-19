@@ -5,14 +5,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // TestProjectPolicyIsTheLeads is the authority rule. A project's field
-// declarations and its sprint policy decide how everybody's work in it is
-// filed and planned, which is not a call one seat makes for the team.
+// declarations decide how everybody's work in it is filed, which is not a call
+// one seat makes for the team.
 func TestProjectPolicyIsTheLeads(t *testing.T) {
 	r := newRoundTrip(t)
 	who := "alice"
@@ -255,84 +254,6 @@ func TestAProjectFieldArchiveIsOneWay(t *testing.T) {
 	}
 }
 
-// TestSprintPolicyIsRefusedBeforeItReachesTheDuty. Every one of these is a
-// property of the argument, and the duty that would act on a broken policy
-// runs on another node where nobody is watching a refusal.
-func TestSprintPolicyIsRefusedBeforeItReachesTheDuty(t *testing.T) {
-	r := newRoundTrip(t)
-	for name, policy := range map[string]tracker.SprintPolicy{
-		"no length":        {LengthDays: 0, Ahead: 2},
-		"negative":         {LengthDays: -1},
-		"past a quarter":   {LengthDays: tracker.MaxSprintDays + 1},
-		"too far ahead":    {LengthDays: 14, Ahead: tracker.MaxSprintsAhead + 1},
-		"eighth weekday":   {LengthDays: 14, StartWeekday: time.Weekday(7)},
-		"a day of minutes": {LengthDays: 14, StartMinutes: 24 * 60},
-		"an unknown measure": {LengthDays: 14,
-			Measure: tracker.SprintMeasure("hours")},
-		"a negative estimate": {LengthDays: 14, PointScale: []float64{1, -2}},
-		"a negative capacity": {LengthDays: 14,
-			Capacity: map[string]tracker.Capacity{"alice": {Points: -1}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := r.writer.WriteProject(t.Context(), "op-"+name, "ENG",
-				tracker.ProjectEdit{
-					Sprints: &tracker.SprintPolicyEdit{Policy: &policy},
-				}, tracker.ProjectAuthority{Lead: true})
-			if err == nil {
-				t.Fatalf("a policy with %s was accepted", name)
-			}
-		})
-	}
-	// THE CONTROL, or every case above passes for the wrong reason.
-	good := tracker.SprintPolicy{LengthDays: 14, Ahead: 2, StartWeekday: time.Monday}
-	if _, err := r.writer.WriteProject(t.Context(), "op-good", "ENG",
-		tracker.ProjectEdit{Sprints: &tracker.SprintPolicyEdit{Policy: &good}},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
-
-		t.Fatalf("a well-formed policy was refused: %v", err)
-	}
-}
-
-// TestSprintPolicyOffIsNotTheSameAsUnsent is the pointer's whole reason: a
-// struct that could not tell "leave this alone" from "set it to nothing" would
-// clear a project's field list every time somebody set its default assignee.
-func TestSprintPolicyOffIsNotTheSameAsUnsent(t *testing.T) {
-	r := newRoundTrip(t)
-	policy := tracker.SprintPolicy{LengthDays: 14, Ahead: 1, StartWeekday: time.Monday}
-	if _, err := r.writer.WriteProject(t.Context(), "op-on", "ENG",
-		tracker.ProjectEdit{Sprints: &tracker.SprintPolicyEdit{Policy: &policy}},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
-
-		t.Fatalf("turn sprints on: %v", err)
-	}
-	r.drain()
-
-	// AN UNRELATED EDIT LEAVES IT ALONE.
-	who := "alice"
-	if _, err := r.writer.WriteProject(t.Context(), "op-unrelated", "ENG",
-		tracker.ProjectEdit{DefaultAssignee: &who},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
-
-		t.Fatalf("set the default assignee: %v", err)
-	}
-	r.drain()
-	if got := r.project(tracker.ProjectDetailQuery{Project: "ENG"}); got.SprintPolicy == nil {
-		t.Fatal("an unrelated edit cleared the sprint policy")
-	}
-
-	// AND AN EXPLICIT OFF CLEARS IT.
-	if _, err := r.writer.WriteProject(t.Context(), "op-off", "ENG",
-		tracker.ProjectEdit{Sprints: &tracker.SprintPolicyEdit{}},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
-
-		t.Fatalf("turn sprints off: %v", err)
-	}
-	r.drain()
-	if got := r.project(tracker.ProjectDetailQuery{Project: "ENG"}); got.SprintPolicy != nil {
-		t.Fatal("an explicit off left the sprint policy in place")
-	}
-}
-
 // TestARepeatedProjectEditWritesNothing keeps a form that submits every
 // control from publishing a record per submit.
 func TestARepeatedProjectEditWritesNothing(t *testing.T) {
@@ -396,11 +317,11 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 // It was reachable rather than theoretical: `/operator/mcp` resolves the lead
 // from the ORG CHART by handle and an operator token carries its own name
 // rather than a seat's, so the lookup answered false and `write_project` was
-// refused for every operator in every company — including the founder setting
-// the sprint capacities a workload screen is read against. The archive gate
-// below it already expected an operator, which is what made the hole visible:
-// a person could take a project out of circulation and could not say how its
-// work was planned.
+// refused for every operator in every company — including the founder
+// declaring the fields a project files work under. The archive gate below it
+// already expected an operator, which is what made the hole visible: a person
+// could take a project out of circulation and could not say how its work was
+// filed.
 func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
 	r := newRoundTrip(t)
 	who := "alice"

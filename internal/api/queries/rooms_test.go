@@ -224,18 +224,6 @@ func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery, time.Time)
 	return tracker.ProjectDetail{}, nil
 }
 
-func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
-	tracker.SprintListing, error) {
-
-	return tracker.SprintListing{}, nil
-}
-
-func (emptyWork) Burndown(context.Context, tracker.BurndownQuery, time.Time) (
-	tracker.Burndown, error) {
-
-	return tracker.Burndown{}, nil
-}
-
 func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time) (
 	tracker.WorkloadAnswer, error) {
 

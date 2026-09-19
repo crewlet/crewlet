@@ -611,7 +611,7 @@ perform.
 
 Destroys a task and every row it produced: its own row, its comments, its body
 revisions, its checklist, its field values, its watchers, its relations, its
-dependencies, its status spans, its sprint memberships, and every inbound
+dependencies, its status spans, and every inbound
 reference and key alias that made it resolvable. A marker is written in their
 place, and every later record about that task is dropped for ever — which is
 what stops a redelivery months afterwards resurrecting any of it.

@@ -30,7 +30,7 @@ const (
 	// StatusDone is delivered.
 	StatusDone Status = "done"
 	// StatusCancelled is finished WITHOUT being delivered — abandoned, a
-	// duplicate, or swept away by a sprint close.
+	// duplicate, or closed without being delivered.
 	StatusCancelled Status = "cancelled"
 	// StatusClosed is totally completed and out of the way.
 	StatusClosed Status = "closed"
@@ -108,7 +108,7 @@ var statusTable = map[Status]statusRow{
 	StatusDone: {"Done", GroupDone,
 		"delivered; the work is finished and accepted"},
 	StatusCancelled: {"Cancelled", GroupDone,
-		"finished WITHOUT being delivered — abandoned, a duplicate, or swept away by a sprint close"},
+		"finished WITHOUT being delivered — abandoned, a duplicate, or cancelled"},
 	StatusClosed: {"Closed", GroupClosed,
 		"totally completed and out of the way"},
 }
@@ -125,12 +125,12 @@ func (s Status) Description() string { return statusTable[s].description }
 
 // Delivered is THE measurement predicate, and there is exactly one.
 //
-// Read by children_done, velocity, the burndown, the burnup, cycle and lead
-// time, a goal's task targets and created-vs-resolved. NO BIT IS STAMPED
+// Read by children_done, cycle and lead time, a goal's task targets and
+// created-vs-resolved. NO BIT IS STAMPED
 // ANYWHERE: the status IS the verdict, so two nodes cannot disagree about it
 // and no policy edit can re-decide it for work already finished. Every
 // "abandoned" path in this design simply writes cancelled, which is what
-// makes those tasks invisible to velocity without a second field.
+// makes those tasks invisible to a delivery count without a second field.
 func Delivered(s Status) bool {
 	return s.Group().Finished() && s != StatusCancelled
 }

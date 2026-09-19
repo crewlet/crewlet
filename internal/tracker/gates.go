@@ -344,7 +344,7 @@ type PurgeResult struct {
 // accountability for their project, which is exactly why the reason is
 // `purged` rather than `watcher`.
 //
-// NIL WHEN THERE IS NO LEAD, on [sprintWake]'s rule: a company with nobody to
+// NIL WHEN THERE IS NO LEAD: a company with nobody to
 // tell is told nothing, and the record still names itself `purged` because the
 // kind is the writer's and not the notification's.
 func purgeWake(task Task, reason, actor string, leads Leads) *Notify {

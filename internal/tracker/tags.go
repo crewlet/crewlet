@@ -39,7 +39,7 @@ import (
 // # Why the tag set is its OWN object rather than a field of the project
 //
 // Because of who writes each. Any seat adds a tag, and only a lead edits a
-// project's field declarations and its sprint policy — so on one object every
+// project's field declarations — so on one object every
 // tag add would contend with every policy edit on one subject, and the gate
 // could only ever be "may you write the whole thing". Two subjects make the
 // two authorities two arbitration units.

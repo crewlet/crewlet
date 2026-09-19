@@ -16,7 +16,7 @@
  * Asserted on the QUESTION rather than on the rows: the bleed happens in the
  * engine's SQL, so a fixture answering this query can be given any rows at all
  * and the card renders them. What this screen is responsible for is asking for
- * every row to be filtered on its own — the same thing `Sprints.tsx` already
+ * every row to be filtered on its own — the same thing `Work.tsx` already
  * asks for, one screen over.
  */
 

@@ -194,7 +194,6 @@ describe("the breadcrumb", () => {
       ["inbox"],
       ["work"],
       ["work", "ENG"],
-      ["work", "ENG", "sprints", "3"],
       ["work", "ENG-42"],
       ["company", "people", "ada"],
       ["company", "units", "platform"],
@@ -225,8 +224,8 @@ describe("the breadcrumb", () => {
   // address: a reader two levels into a project has to be able to step back
   // out through the trail.
   test("every crumb but the last carries a path", () => {
-    const crumbs = crumbsFor(["work", "ENG", "sprints", "3"]);
-    expect(crumbs.length).toBe(4);
+    const crumbs = crumbsFor(["knowledge", "ENG", "Deploy runbook"]);
+    expect(crumbs.length).toBe(3);
     for (const crumb of crumbs.slice(0, -1)) {
       expect(crumb.path, `${crumb.label} is not a link`).toBeTruthy();
     }
@@ -374,7 +373,7 @@ describe("the information architecture", () => {
     return out;
   }
 
-  /** `#/work/{KEY}/sprints` → `["work", "{KEY}", "sprints"]`. */
+  /** `#/work/{KEY}/views` → `["work", "{KEY}", "views"]`. */
   const segmentsOf = (route: string): string[] =>
     route
       .replace(/^#\//, "")

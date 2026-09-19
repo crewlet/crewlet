@@ -36,7 +36,6 @@
 import type { ObjectKind, ObjectRef } from "./objects.ts";
 import { ItemPeek } from "~/routes/work/WorkItem.tsx";
 import { ProjectPeek } from "~/routes/work/Work.tsx";
-import { SprintPeek } from "~/routes/work/Sprints.tsx";
 import { GoalPeek } from "~/routes/work/Goals.tsx";
 import { SeatPeek } from "~/routes/company/Seat.tsx";
 import { UnitPeek } from "~/routes/company/Company.tsx";
@@ -79,7 +78,6 @@ export interface PeekProps {
 export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.ReactNode>> = {
   item: ({ id }) => <ItemPeek itemKey={id} />,
   project: ({ id }) => <ProjectPeek projectKey={id} />,
-  sprint: ({ id }) => <SprintPeek id={id} />,
   goal: ({ id }) => <GoalPeek id={id} />,
   page: ({ id }) => <PagePeek id={id} />,
   container: ({ id }) => <ContainerPeek id={id} />,

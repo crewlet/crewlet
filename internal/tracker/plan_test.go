@@ -115,7 +115,6 @@ func registeredQueries() map[string]map[string]any {
 		"recently updated":  {"container": "project:P01", "sort": "-updated"},
 		"the workspace":     {"sort": "-updated"},
 		"my queue":          {"assignee": "ana", "status_group": "active"},
-		"one sprint":        {"container": "project:P01", "sprint": "3"},
 		"the children":      {"container": "project:P01", "parent": "t-00001"},
 		"one subtree":       {"container": "project:P01", "root": "t-00001"},
 		"by spend":          {"container": "project:P01", "sort": "-spend"},
@@ -151,17 +150,10 @@ func registeredQueries() map[string]map[string]any {
 		// already narrows to a thirtieth of the corpus and the residual
 		// predicate rides along, so an index for that predicate is only
 		// ever earned out here.
-		"overdue everywhere":  {"due": "lt:today"},
-		"starting everywhere": {"start": "gt:today"},
-		"finished everywhere": {"show_closed": "recent:168h"},
-		"flagged everywhere":  {"flag": "cycle"},
-		// NO WORKSPACE-SCOPE SPRINT CASE. A sprint is numbered and named
-		// per project, so naming one across the company names a
-		// different sprint in each — refused rather than answered, which
-		// is what makes the project-scoped case above the only one there
-		// is. `sprint=none` is the exception and is registered below,
-		// because the backlog means the same thing everywhere.
-		"the backlog everywhere":  {"sprint": "none"},
+		"overdue everywhere":      {"due": "lt:today"},
+		"starting everywhere":     {"start": "gt:today"},
+		"finished everywhere":     {"show_closed": "recent:168h"},
+		"flagged everywhere":      {"flag": "cycle"},
 		"one status everywhere":   {"status": "in_progress"},
 		"unarchived everywhere":   {"archived": "false"},
 		"by estimate everywhere":  {"estimate": "gt:30"},
@@ -289,13 +281,13 @@ func planStore(t *testing.T) *store.DB {
 			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO tracker_tasks
 					(id, key, project_key, filed_unit, routing_unit,
-					 sprint_number, root_id, type, title, status, status_group,
+					 root_id, type, title, status, status_group,
 					 rank, assignee, batch_id, estimate_min, points,
 					 spend_tokens, due_at, start_at, finished_at,
 					 created_at, updated_at, version, document)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				id, fmt.Sprintf("ENG-%d", i),
-				fmt.Sprintf("P%02d", i%projects), "eng", "eng", i%7, id,
+				fmt.Sprintf("P%02d", i%projects), "eng", "eng", id,
 				[]string{"task", "bug", "epic"}[i%3], "a task",
 				[]string{"todo", "in_progress", "done"}[i%3],
 				[]string{"not_started", "active", "done"}[i%3],

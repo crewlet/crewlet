@@ -100,7 +100,7 @@ func TestATotalAddsUpOnlyWhatTheFilterMatched(t *testing.T) {
 //
 // "Nothing is estimated" and "everything is estimated at nothing" are
 // different facts, and a header rendering the second for the first is how a
-// sprint reads as free.
+// empty board reads as free.
 func TestATotalOverNothingIsAbsentRatherThanZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

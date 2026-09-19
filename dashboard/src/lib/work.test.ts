@@ -134,8 +134,7 @@ test("a type takes the company's own name for it", () => {
 });
 
 // AN UNESTIMATED TASK IS A DASH, never "0m": zero is a measurement and an
-// unsized task is one nobody has sized, which is the difference a sprint
-// report spends a whole column on.
+// unsized task is one nobody has sized, and those are different facts.
 test("an absent estimate is a dash and a present one reads in hours", () => {
   expect(fmtMinutes(undefined)).toBe(EMPTY_VALUE);
   expect(fmtMinutes(0)).toBe(EMPTY_VALUE);
@@ -150,11 +149,10 @@ test("an absent estimate is a dash and a present one reads in hours", () => {
 
 // THE EMPTY COLUMN IS NAMED, and only the client can name it: the label
 // depends on what the axis MEANS, so an empty assignee is "Unassigned" and an
-// empty sprint is "No sprint". A blank heading leaves a column of real work
+// empty tag is "Untagged". A blank heading leaves a column of real work
 // nobody can identify.
 test("an empty group key is named for its own axis", () => {
   expect(groupLabel("assignee", group(""))).toBe("Unassigned");
-  expect(groupLabel("sprint", group(""))).toBe("No sprint");
   expect(groupLabel("tag", group(""))).toBe("Untagged");
   expect(groupLabel("type", group(""))).toBe("No type");
 });
@@ -487,24 +485,6 @@ test("an explicit filter beats the view it was opened from", () => {
   });
   expect(params.assignee).toBe("bo");
   expect(params.q).toBe("login");
-});
-
-// A SPRINT NAMES ONE OF A PROJECT'S OWN, so the engine refuses every value but
-// `none` at the workspace. Sending it anyway turns a board into a refusal the
-// screen would then have to explain.
-test("a sprint filter is dropped at the workspace and kept in a project", () => {
-  expect(
-    build({
-      container: "workspace",
-      view: { sprint: "active" },
-      filters: { ...NO_FILTERS, sprint: "4" },
-    }).sprint,
-  ).toBeUndefined();
-  expect(build({ filters: { ...NO_FILTERS, sprint: "4" } }).sprint).toBe("4");
-  // `none` is the backlog and means the same thing everywhere.
-  expect(build({ container: "workspace", filters: { ...NO_FILTERS, sprint: "none" } }).sprint).toBe(
-    "none",
-  );
 });
 
 // A BOARD IS COLUMNS AND MINTS NO CURSOR; a list is a page. Sending `limit` on

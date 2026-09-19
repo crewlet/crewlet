@@ -58,9 +58,9 @@ lists the project sees what it just filed.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-with the writes attributed to your token rather than to a seat, and twelve more
+with the writes attributed to your token rather than to a seat, and ten more
 beside them that no seat is given: the saved views, the goal and catalogue
-writes, a person's own queue and inbox, sprint management, and the trash.
+writes, a person's own queue and inbox, and the trash.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 

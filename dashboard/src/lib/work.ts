@@ -9,10 +9,10 @@
  * rather than as a missing one.
  *
  * It also exists because the screens now SHARE these answers. A board, a list,
- * a calendar, a peek panel, an item page, My work and the sprint report all
- * draw the same task, and the previous screen's helpers lived inside the one
- * file that happened to need them first — which is how the sprint report came
- * to import a change renderer from the board.
+ * a calendar, a peek panel, an item page and My work all draw the same task,
+ * and the previous screen's helpers lived inside the one file that happened to
+ * need them first — which is how one screen came to import a change renderer
+ * from the board.
  */
 
 // THE ABSENT MARK IS THE DESIGN SYSTEM'S, for the reason `lib/format.ts`
@@ -158,7 +158,6 @@ export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
   { kind: "routed", mark: "fork_right", phrase: "routed it" },
   { kind: "moved", mark: "move_item", phrase: "moved it to another project" },
   { kind: "reparented", mark: "account_tree", phrase: "changed its parent" },
-  { kind: "sprint", mark: "calendar_clock", phrase: "changed the sprint" },
   { kind: "checklist", mark: "list", phrase: "changed a checklist" },
   { kind: "archived", mark: "package_2", phrase: "archived it" },
   { kind: "comment", mark: "chat", phrase: "commented" },
@@ -171,9 +170,6 @@ export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
   { kind: "project_created", mark: "create_new_folder", phrase: "created the project" },
   { kind: "project_updated", mark: "folder", phrase: "changed the project" },
   { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
-  { kind: "sprint_minted", mark: "calendar_today", phrase: "minted a sprint" },
-  { kind: "sprint_started", mark: "bolt", phrase: "started the sprint" },
-  { kind: "sprint_closed", mark: "check_circle", phrase: "closed the sprint" },
   { kind: "goal_updated", mark: "target", phrase: "changed a goal" },
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
@@ -229,8 +225,7 @@ export function healthLabel(health: string): string {
  * An estimate as a person reads it.
  *
  * A MARKED ABSENCE FOR AN ABSENT ONE, never "0m": zero is a measurement and an
- * unestimated task is one nobody has sized, which is the difference a sprint
- * report spends a whole column on.
+ * unestimated task is one nobody has sized, and those are different facts.
  */
 export function fmtMinutes(minutes: number | undefined): string {
   if (!minutes) return EMPTY_VALUE;
@@ -258,8 +253,8 @@ export interface LabelContext {
  * THE EMPTY KEY IS A REAL COLUMN on every axis — "nobody is assigned" is a
  * question a board answers rather than a row it hides — and it is the one the
  * server cannot label, because the label depends on what the axis MEANS: an
- * empty assignee is "Unassigned" and an empty sprint is "No sprint", and
- * rendering either as a blank heading leaves a column of work nobody can name.
+ * empty assignee is "Unassigned" and an empty tag is "Untagged", and rendering
+ * either as a blank heading leaves a column of work nobody can name.
  */
 export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {}): string {
   const key = group.key;
@@ -277,8 +272,6 @@ export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {
       return key ? typeName(key, ctx.types) : "No type";
     case "tag":
       return key ? (ctx.tags?.find((t) => t.slug === key)?.label ?? key) : "Untagged";
-    case "sprint":
-      return key ? `Sprint ${key}` : "No sprint";
     case "parent":
       return key || "No parent";
     default:
@@ -287,14 +280,13 @@ export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {
 }
 
 /** The axes a board may be cut on, with what each is called in the picker. */
-export const GROUP_AXES: { value: string; label: string; projectOnly?: boolean }[] = [
+export const GROUP_AXES: { value: string; label: string }[] = [
   { value: "status", label: "Status" },
   { value: "status_group", label: "Status group" },
   { value: "assignee", label: "Assignee" },
   { value: "priority", label: "Priority" },
   { value: "type", label: "Type" },
   { value: "tag", label: "Tag" },
-  { value: "sprint", label: "Sprint", projectOnly: true },
 ];
 
 /** The orderings a list may ask for. */
@@ -419,9 +411,6 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
         .split(", ")
         .map((slug) => ctx.tags?.find((t) => t.slug === slug)?.label ?? slug)
         .join(", ");
-    // THE RAIL'S OWN ROW READS "Sprint / Sprint 3", so the clause does too.
-    case "sprint":
-      return `Sprint ${value}`;
     // [fmtDate], which is what the Plan group of the rail renders Start and Due
     // with. Not [fmtDateCompact]: dropping the year is for a COLUMN of dates,
     // where the one date not in this year is what has to stand out.
@@ -587,7 +576,6 @@ export interface TrackerFilters {
   type: string;
   priority: string;
   assignee: string;
-  sprint: string;
   /** `open` (the default), `closed`, or empty for everything. */
   scope: string;
   groupBy: string;
@@ -603,7 +591,6 @@ export const NO_FILTERS: TrackerFilters = {
   type: "",
   priority: "",
   assignee: "",
-  sprint: "",
   scope: "open",
   groupBy: "",
   group: "",
@@ -620,7 +607,6 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.type ||
     f.priority ||
     f.assignee ||
-    f.sprint ||
     f.groupBy ||
     f.group ||
     f.sort ||
@@ -660,7 +646,6 @@ export function buildItemsParams(args: {
 }): Record<string, unknown> {
   const { container, shape, view, filters, range } = args;
   const params: Record<string, unknown> = { ...view, container };
-  const inProject = container.startsWith("project:");
 
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
@@ -670,12 +655,6 @@ export function buildItemsParams(args: {
   set("type", filters.type);
   set("priority", filters.priority);
   set("assignee", filters.assignee);
-
-  // A SPRINT NAMES ONE OF A PROJECT'S OWN, so the engine refuses every value
-  // but `none` at the workspace — dropping it here rather than sending a
-  // query that comes back as a refusal the screen would have to explain.
-  if (inProject || filters.sprint === "none") set("sprint", filters.sprint);
-  else if (!inProject) delete params.sprint;
 
   // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
   // what every rule in the tracker is written at, and `done` and `closed` are

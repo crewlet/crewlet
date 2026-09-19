@@ -13,16 +13,15 @@
  *
  * # The id is opaque to the frame
  *
- * A work item is a key or a uuid, a seat is a handle, a sprint is
- * `{KEY}/{n}`, a page is `{CONTAINER}/{Title}`. The frame parses only the
- * FIRST colon, so every one of those survives being carried in a query value —
- * and each kind's own `pathOf` is what turns it back into a route.
+ * A work item is a key or a uuid, a seat is a handle, a page is
+ * `{CONTAINER}/{Title}`. The frame parses only the FIRST colon, so every one
+ * of those survives being carried in a query value — and each kind's own
+ * `pathOf` is what turns it back into a route.
  */
 
 export type ObjectKind =
   | "item"
   | "project"
-  | "sprint"
   | "goal"
   | "seat"
   | "unit"
@@ -53,10 +52,10 @@ export function refToken(ref: ObjectRef): string {
 /**
  * Read a `peek=` value, or null.
  *
- * SPLIT ON THE FIRST COLON ONLY. A sprint is `sprint:ENG/3` and a page is
- * `page:ENG/Deploy runbook` — an id carrying its own separators is the common
- * case rather than the exception, and splitting on every colon would make a
- * title containing one unaddressable.
+ * SPLIT ON THE FIRST COLON ONLY. A page is `page:ENG/Deploy runbook` — an id
+ * carrying its own separators is the common case rather than the exception,
+ * and splitting on every colon would make a title containing one
+ * unaddressable.
  */
 export function parseRef(token: string | null | undefined): ObjectRef | null {
   if (!token) return null;
@@ -88,15 +87,6 @@ export interface KindSpec {
 export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
-  sprint: {
-    label: "Sprint",
-    // `ENG/3` → `#/work/ENG/sprints/3`.
-    pathOf: (id) => {
-      const [key, number] = id.split("/");
-      return ["work", key ?? "", "sprints", number ?? ""];
-    },
-    mono: true,
-  },
   goal: { label: "Goal", pathOf: (id) => ["goals", id] },
   seat: { label: "Seat", pathOf: (id) => ["company", "people", id], mono: true },
   unit: { label: "Unit", pathOf: (id) => ["company", "units", id] },

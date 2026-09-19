@@ -72,13 +72,6 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 
 	watchers := longHandles(tracker.MaxWatchers, 64)
 	tags := longHandles(tracker.MaxTagsPerTask, 64)
-	stays := make([]tracker.SprintStay, 0, tracker.MaxSprintStays)
-	for i := range tracker.MaxSprintStays {
-		to := time.Unix(1_700_000_000, 0).UTC()
-		stays = append(stays, tracker.SprintStay{
-			Sprint: i + 1, From: to.Add(-time.Hour), To: &to,
-		})
-	}
 
 	deltas := make(map[string]tracker.Delta, tracker.MaxDeltas)
 	for i := range tracker.MaxDeltas {
@@ -122,13 +115,12 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 		},
 	}
 	patch := tracker.TaskPatch{
-		Body:          &escaping,
-		Fields:        &fields,
-		Checklists:    &checklists,
-		Relations:     &relations,
-		Watchers:      &watchers,
-		Tags:          &tags,
-		SprintHistory: &stays,
+		Body:       &escaping,
+		Fields:     &fields,
+		Checklists: &checklists,
+		Relations:  &relations,
+		Watchers:   &watchers,
+		Tags:       &tags,
 	}
 	payload, err := json.Marshal(patch)
 	if err != nil {

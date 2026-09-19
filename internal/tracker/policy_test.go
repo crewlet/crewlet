@@ -42,7 +42,7 @@ func TestEveryStatusIsFullyDescribed(t *testing.T) {
 // Delivered is THE measurement predicate — velocity, burndown, cycle time,
 // children_done and a goal's task targets all read it. No bit is stamped
 // anywhere: the status IS the verdict, which is what lets a duplicate closed
-// by a merge and a task a sprint swept away both write "cancelled" and vanish
+// by a merge and a task somebody cancelled both write "cancelled" and vanish
 // from velocity without a second field.
 func TestDeliveredIsTheOneMeasurementPredicate(t *testing.T) {
 	t.Parallel()

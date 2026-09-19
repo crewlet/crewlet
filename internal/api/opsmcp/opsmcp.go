@@ -91,10 +91,10 @@ type Options struct {
 	Leads builtin.Leads
 
 	// LeadsProject answers whether a handle leads the unit that owns a
-	// project — the authority over that project's PLAN, which is a
+	// project — the authority over that project's SETTINGS, which is a
 	// different question from the line above: one is about a person, the
-	// other about a container. Nil REFUSES every sprint decision naming
-	// the project, which is the safe direction.
+	// other about a container. Nil REFUSES every policy edit naming the
+	// project, which is the safe direction.
 	LeadsProject builtin.LeadsProject
 
 	// Company names the company in the server's own title, so an operator

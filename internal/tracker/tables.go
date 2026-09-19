@@ -41,19 +41,19 @@ var SpendColumns = []string{
 // row. A sixth, the binary vector table, is DERIVED — a pure function of a
 // table that is itself outside the identity claim.
 var ReproducibleTables = []string{
-	// The nineteen object tables.
+	// The eighteen object tables.
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
-	"tracker_task_keys", "tracker_projects", "tracker_sprints",
+	"tracker_task_keys", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
 	"tracker_tags", "tracker_views", "tracker_goals",
 	"tracker_persons", "tracker_rank_orders", "tracker_log_generations",
 	"tracker_evictions",
 
-	// The fifteen exploded child tables. Each one exists because a FILTER
+	// The thirteen exploded child tables. Each one exists because a FILTER
 	// or a FIGURE reads it: a collection inside a document cannot be
 	// indexed, and a query that decodes every row's document is a full
 	// scan wearing an index's name.
-	"tracker_task_closure", "tracker_task_sprints", "tracker_measure_spans",
+	"tracker_task_closure",
 	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",
 	"tracker_relations", "tracker_task_deps", "tracker_task_dependents",

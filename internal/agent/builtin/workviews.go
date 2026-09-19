@@ -144,7 +144,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 					"four of its arguments: " + AliasSentence() + ". A " +
 					"custom field is `f.<ref>`. Everything else — assignee, " +
 					"type, priority, due, updated, created, reporter, " +
-					"watcher, unit, goal, sprint, sort, limit, preset — is " +
+					"watcher, unit, goal, sort, limit, preset — is " +
 					"the same word. Refused if any key does not parse, and " +
 					"`view`, `cursor`, `read_level`, `max_lag_seconds`, " +
 					"`max_lag_seq` and `min_position` are refused " +

@@ -77,7 +77,7 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-quiet-status", "t-1", "ENG",
@@ -134,7 +134,7 @@ func TestARecordStatesItsKindExactlyWhenItWritesOne(t *testing.T) {
 	for _, kind := range tracker.ObjectKinds {
 		records := kind.RecordsHistory()
 		switch kind {
-		case tracker.KindTask, tracker.KindProject, tracker.KindSprint,
+		case tracker.KindTask, tracker.KindProject,
 			tracker.KindTags, tracker.KindCatalogue, tracker.KindView,
 			tracker.KindGoal, tracker.KindPerson:
 			if !records {
@@ -155,7 +155,7 @@ func TestARecordStatesItsKindExactlyWhenItWritesOne(t *testing.T) {
 func TestARecordCannotSayOneThingAndAnnounceAnother(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 
 	done := tracker.StatusDone
 	_, err := r.writer.UpdateTask(t.Context(), "op-mismatch", "t-1", "ENG",
@@ -188,7 +188,7 @@ func TestARecordCannotSayOneThingAndAnnounceAnother(t *testing.T) {
 func TestAPurgeTellsTheProjectLead(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 
 	r.writer.Leads = fixedLeads{project: "eng-lead"}
 	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
@@ -259,7 +259,7 @@ func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 func TestAnUnblockedNoticeWithNobodyToTellIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 
 	_, err := r.writer.TellUnblocked(t.Context(), "op-tell", tracker.Unblock{
 		Task: "t-1", Key: "ENG-1", Project: "ENG",
@@ -348,11 +348,11 @@ func historyNotified(t *testing.T, r *roundTrip, kind, id string) bool {
 // gets an opener, a key and a **By:** with nothing between them saying what
 // the person did — which is the one thing the wake exists to carry.
 //
-// It covered twenty of the thirty-two kinds and nothing connected the two
-// lists, so the gap was invisible from both ends. Of the twelve missing,
-// eleven never reach it — `Prompt.Build` dispatches on [MetaObject] first, so
-// a goal, a sprint and a person's queue render through [buildObjectPrompt],
-// and the project, policy, view and catalogue kinds are not routable at all.
+// It covered twenty of the twenty-eight kinds and nothing connected the two
+// lists, so the gap was invisible from both ends. Of the eight missing, seven
+// never reach it — `Prompt.Build` dispatches on [MetaObject] first, so a goal
+// and a person's queue render through [buildObjectPrompt], and the project,
+// policy, view and catalogue kinds are not routable at all.
 // The twelfth was `purged`: task-subject, routable, and rendering no line for
 // the one operation in this engine that cannot be undone.
 //
@@ -371,8 +371,8 @@ func TestEveryRoutableChangeKindRendersWhatHappened(t *testing.T) {
 		tracker.ChangeCollaborators: true, tracker.ChangeWatchers: true,
 		tracker.ChangeTags: true, tracker.ChangeRelations: true,
 		tracker.ChangeRouted: true, tracker.ChangeMoved: true,
-		tracker.ChangeReparented: true, tracker.ChangeSprint: true,
-		tracker.ChangeChecklist: true, tracker.ChangeArchived: true,
+		tracker.ChangeReparented: true,
+		tracker.ChangeChecklist:  true, tracker.ChangeArchived: true,
 		tracker.ChangeComment: true, tracker.ChangeCommentEdited: true,
 		tracker.ChangeCommentResolved: true, tracker.ChangeCommentRemoved: true,
 		tracker.ChangeRemoved: true, tracker.ChangeRestored: true,

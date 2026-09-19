@@ -11,7 +11,7 @@
  *
  * That is now true of the HEADER as well as of the body: both frames open with
  * the same [ObjectHeader] over the same [itemFacts], so the status, priority,
- * type, assignee, sprint and due date are read in one order wherever the task
+ * type, assignee and due date are read in one order wherever the task
  * appears. The page had no title at all before it — it published a status
  * badge into the page bar and went straight to its panels, so the one screen
  * about one task never said which task it was about.
@@ -122,7 +122,7 @@ function linkHeading(link: WorkLink): string {
  * record has been archived. The status itself is a FACT rather than a flag,
  * because every task has one and a badge every task wears says nothing; these
  * two are drawn only for the tasks they are true of, which is what makes them
- * worth the reader's eye. Same argument and same shape as `sprintFlags`.
+ * worth the reader's eye.
  *
  * IT TAKES THE DETAIL RATHER THAN THE TASK, because `blocked` is DERIVED and
  * lives on the answer: whether any dependency is still open is a fact about
@@ -195,9 +195,9 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
  * fact, with the drift landing on the page nobody reads forty times a day.
  *
  * THEY ARE THE PROPERTIES RAIL'S OWN LEADING ROWS, in the rail's own order:
- * status, priority and type out of State, the assignee out of People, the
- * sprint and the due date out of Plan. A reader who scans the header and then
- * the rail below it is reading one object rather than re-learning it.
+ * status, priority and type out of State, the assignee out of People, the due
+ * date out of Plan. A reader who scans the header and then the rail below it
+ * is reading one object rather than re-learning it.
  *
  * NO `setBy` HERE, deliberately, although a [Fact] carries one: who last moved
  * a field is what the rail answers row by row, and the same attribution drawn
@@ -207,9 +207,8 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
  * AN ABSENT PRIORITY, TYPE OR DUE DATE IS DROPPED rather than dashed — a
  * [FactLine] renders no line for an undefined value — because a fresh task has
  * none of the three and a header of em dashes says less than a shorter one.
- * The assignee and the sprint are the exception and are always drawn: nobody
- * holding a task and a task nobody has planned are the two answers a reader
- * comes to this line for, and both are stated in the rail's own words.
+ * The assignee is the exception and is always drawn: nobody holding a task is
+ * an answer a reader comes to this line for, stated in the rail's own words.
  */
 function itemFacts({
   detail,
@@ -254,23 +253,6 @@ function itemFacts({
       ) : (
         <span className="muted">Unassigned</span>
       ),
-    },
-    {
-      label: "Sprint",
-      value:
-        item.sprint !== undefined ? (
-          `Sprint ${item.sprint}`
-        ) : (
-          <span className="muted">Backlog</span>
-        ),
-      // THE SPRINT'S OWN PAGE, not the project's sprint report: `#/work/ENG/
-      // sprints/3` addresses one sprint and is where the rail's `Open ↗` for
-      // it goes, so a link to the whole report would land a reader on every
-      // sprint and leave them to find the one they clicked.
-      path:
-        item.sprint !== undefined
-          ? ["work", item.project, "sprints", String(item.sprint)]
-          : undefined,
     },
     {
       label: "Due",
@@ -324,11 +306,11 @@ export function WorkItem({ id }: { id: string }) {
   // bar. This is what the comment that stood here has always claimed was
   // happening and nothing was doing — the same gap `#/goals/{id}` had beside it.
   //
-  // THE KEY AND NOT THE TITLE, unlike the sprint's crumb and the goal's: a
-  // breadcrumb is the ADDRESS rather than a title, `ENG-42` is an address a
-  // person can read and paste, and the title is on the header immediately
-  // below it. `3` and a goal's uuid are addresses nobody can read, which is
-  // why those two spend their crumb on a name.
+  // THE KEY AND NOT THE TITLE, unlike the goal's crumb: a breadcrumb is the
+  // ADDRESS rather than a title, `ENG-42` is an address a person can read and
+  // paste, and the title is on the header immediately below it. A goal's uuid
+  // is an address nobody can read, which is why it spends its crumb on a
+  // name.
   usePageLabels(item ? { [id]: item.key } : {});
 
   return (
@@ -531,8 +513,8 @@ export function Subtasks({
   /**
    * Open a child in the rail instead of navigating to it.
    *
-   * ONE CALLBACK RATHER THAN A HOOK, for the reason `GoalPanel` and
-   * `SprintPanel` take one: this panel is rendered directly by its own suite,
+   * ONE CALLBACK RATHER THAN A HOOK, for the reason `GoalPanel` takes one:
+   * this panel is rendered directly by its own suite,
    * and `usePeekControls` reads the navigator, so reaching for it here would
    * make every case in that file stand up a router it has no use for.
    *
@@ -1217,23 +1199,6 @@ export function ItemProps({
     {
       name: "Plan",
       properties: [
-        {
-          label: "Sprint",
-          value:
-            item.sprint !== undefined ? (
-              `Sprint ${item.sprint}`
-            ) : (
-              <span className="muted">Backlog</span>
-            ),
-          // THE SPRINT'S OWN PAGE, as in the header above: `#/work/ENG/
-          // sprints/3` addresses one sprint, so a row naming sprint 3 that
-          // landed on the whole report left a reader to find it again.
-          path:
-            item.sprint !== undefined
-              ? ["work", item.project, "sprints", String(item.sprint)]
-              : undefined,
-          setBy: by("sprint"),
-        },
         {
           label: "Start",
           value: item.start_at ? fmtDate(item.start_at) : undefined,
