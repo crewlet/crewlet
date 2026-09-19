@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/coord`
 - **Enforced-by:** `internal/store.TestEveryNodeTableSaysWhoHasToAgreeOnIt`
-- **Measured:** eight tables moved, across five migrations — `internal/store/schema/node/0010` through `0013`, and `0028`
+- **Measured:** nine tables moved, across five migrations — `internal/store/schema/node/0010` took five, `0011`, `0012` and `0013` one each, and `0028` the ninth
 - **Cost-when-tried:** five separate repair migrations, each discovering the previous one was incomplete. `0012` says so in its own text: `a2a_channels` "was the last of the tables migration 0010 should have taken". `0013` said it again about the next one, and `0028` about the one after that.
 - **Tag-status:** unreleased
 

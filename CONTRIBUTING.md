@@ -322,10 +322,15 @@ make test-solo   # internal/e2e, and every other package that runs alone
 - **Every piece of state answers "who has to agree on it?"** — *this node
   alone* is the node's own database file; *every node, identically, derived
   from an ordered log* is the replicated estate, written only by a state log's
-  applier; *the whole company, now* is the coordination store. There is no
-  fourth answer, and "it has always been in the store" is not one of the three:
-  seven tables took that default and cost four repair migrations. The estate
-  gates in `internal/store` will not let a new table skip the question — see
+  applier; *the whole company, now* is the coordination store. There is a
+  FOURTH, and it is narrow: *whichever node holds this seat, and only the
+  current value* is a compacted changelog — see
+  [`adr/0014`](adr/0014-a-compacted-changelog-is-the-fourth-answer.md), which
+  exists because a seat's memory was answered with the first and was forgotten
+  every time placement moved a seat. What is not an answer is "it has always
+  been in the store": nine tables took that default and cost five repair
+  migrations. The estate gates in `internal/store` will not let a new table
+  skip the question — see
   [`adr/0003`](adr/0003-fleet-agreement-state-lives-in-coordination.md) and
   [`adr/0002`](adr/0002-the-stream-is-the-write-ahead-log.md).
 - **Docs are part of the change** — any change to public APIs, config

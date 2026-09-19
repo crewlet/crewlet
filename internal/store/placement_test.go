@@ -18,8 +18,8 @@ import (
 // breaking is its neighbour — anything the COMPANY has to agree on belongs in
 // the coordination store, never in a file one process owns exclusively.
 //
-// Migrations 0010 through 0013 are four post-mortems of it, each discovering
-// that the last repair was incomplete:
+// Migrations 0010 through 0013 and 0028 are five post-mortems of it, each
+// discovering that the last repair was incomplete — nine tables between them:
 //
 //   - 0010 moved `webhook_deliveries`, `rate_limits`, `config_activations`,
 //     `config_apply_status` and `turn_completions`. A vendor retrying a
@@ -32,6 +32,10 @@ import (
 //   - 0012 took `a2a_channels`, and says in its own text that it "was the
 //     last of the tables migration 0010 should have taken".
 //   - 0013 said it again about the next one.
+//   - 0028 said it a fourth time, about `chat_thread_follows`: an inbound
+//     chat message is claimed by ONE node of a competing consumer group, so
+//     a follow recorded on the node that took the mention was invisible to
+//     the node that took the reply.
 //
 // Every one of those tables had a migration describing shared state and a
 // placement that was per node. Nothing compared the two, because the rule was
@@ -284,7 +288,7 @@ var nodeEstatePlacements = []placement{
 // # The node estate only, and that is deliberate
 //
 // The page enumerates this estate table by table because a reader is looking
-// for one of seventeen named things. It describes the REPLICATED estate by
+// for one of sixteen named things. It describes the REPLICATED estate by
 // family — "the tracker's own tables", "the knowledge base's" — because sixty
 // rows would be a schema dump rather than a map, and because a table there is
 // reached through a domain rather than named by an operator. Demanding every

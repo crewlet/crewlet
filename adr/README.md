@@ -40,7 +40,7 @@ columns correlate.
 | One writer of a live stream's config | a static walk | never broken |
 | A skip is not a pass | `internal/skipgate` | never broken since |
 | Every commit is signed off | a script | 61 of 361 commits missed it before the script |
-| Fleet-agreement state belongs in coordination | prose | seven tables, four repair migrations — and an eighth found while writing this |
+| Fleet-agreement state belongs in coordination | prose | eight tables, four repair migrations — and a ninth found while writing this |
 | The replicated estate is written only by an applier | prose | three bypasses, none reviewed as one |
 | Every node-local table is swept on every node | prose, at the field that implements it | six of seven sweeps took the wrong default, including the audit log's |
 | The Makefile matches `ci.yml` | prose | unchecked, and nothing would notice |

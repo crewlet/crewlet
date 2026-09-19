@@ -498,7 +498,7 @@ flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
     DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>seventeen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>eighteen buckets on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -611,8 +611,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are seventeen of them rather than one with prefixes: three in the lease
-store, fourteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are eighteen of them rather than one with prefixes: three in the lease
+store, fifteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

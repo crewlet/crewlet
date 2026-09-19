@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/store`
 - **Enforced-by:** `internal/store.TestNoStatementNamesBothEstates`, `internal/store.TestNoTableIsDeclaredInBothEstates`
-- **Measured:** 17 tables in the node estate, 60 in the replicated one
+- **Measured:** 16 tables in the node estate, 60 in the replicated one
 - **Cost-when-tried:** taken from a single file, a snapshot is a copy of everything followed by a delete — and with no in-place `VACUUM`, the deleted pages ride along in the artefact, the transfer, the checksum and the integrity check anyway.
 - **Tag-status:** unreleased
 
