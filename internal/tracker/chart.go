@@ -29,8 +29,8 @@ import (
 //
 // # What it does not touch
 //
-// Everything a project accumulates in use: its field catalogue, its sprint
-// policy and pointer, its default assignee, its tags, its archived flag. Those
+// Everything a project accumulates in use: its field catalogue, its default
+// assignee, its tags, its archived flag. Those
 // are the operator's and the tools', and a reconcile that rewrote them would
 // undo a person's work every time somebody edited the config.
 //

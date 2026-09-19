@@ -21,8 +21,8 @@ func TestAMergeClosesTheDuplicateAndMovesItsChildren(t *testing.T) {
 	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
 	// twice and its close waits for its mark. See applyWhileWriting.
 	r.applyWhileWriting()
-	inSprint(t, r, "keep", nil)
-	inSprint(t, r, "dup", nil)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
 
 	parent := "dup"
 	child := newTask("kid")
@@ -98,8 +98,8 @@ func TestAMergeLeavesTheChildrenWhenItIsNotAskedToReparent(t *testing.T) {
 	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
 	// twice and its close waits for its mark. See applyWhileWriting.
 	r.applyWhileWriting()
-	inSprint(t, r, "keep", nil)
-	inSprint(t, r, "dup", nil)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
 
 	parent := "dup"
 	child := newTask("kid")
@@ -139,8 +139,8 @@ func TestAMergeRefusesARemovedItemAndSaysToRestoreIt(t *testing.T) {
 	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
 	// twice and its close waits for its mark. See applyWhileWriting.
 	r.applyWhileWriting()
-	inSprint(t, r, "keep", nil)
-	inSprint(t, r, "dup", nil)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
 
 	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "dup", "ENG",
 		false, nil); err != nil {

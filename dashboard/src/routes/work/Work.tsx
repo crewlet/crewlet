@@ -96,11 +96,6 @@ import {
 // what our own `activate="manual"` exists for — arrowing across three options
 // would ask the engine three times.
 import { Segmented } from "~/ui/primitives.tsx";
-// AND OURS FOR THE METER, because the sprint bar below carries a VALUE and no
-// visible label: their legend is all-or-nothing (`hideLabel` hides the value
-// text with the label), and their `meterTone` welds in the polarity "full is
-// bad", so a delivered sprint would draw red. See the report.
-import { Meter } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -147,7 +142,6 @@ import {
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
-  WorkActiveSprint,
   WorkActivityAnswer,
   WorkActivityRecord,
   WorkGroup,
@@ -205,9 +199,9 @@ export function Work({ project = "" }: { project?: string }) {
   //
   // THE PROJECT IS NOT ONE OF THEM ANY MORE: it is a PATH now (`#/work/ENG`),
   // because a project is an object with a page rather than a filter on the
-  // company's list. That is what lets it have sprints, a catalogue and an
-  // activity feed of its own without any of them being a query key on a
-  // screen called "Work".
+  // company's list. That is what lets it have a catalogue and an activity
+  // feed of its own without either being a query key on a screen called
+  // "Work".
   const [viewKey, setViewKey] = useParam("view", "", "section");
   const [month, setMonth] = useParam("month", "", "section");
 
@@ -217,7 +211,6 @@ export function Work({ project = "" }: { project?: string }) {
   const [type, setType] = useParam("type", "");
   const [priority, setPriority] = useParam("priority", "");
   const [assignee, setAssignee] = useParam("assignee", "");
-  const [sprint, setSprint] = useParam("sprint", "");
   const [groupBy, setGroupBy] = useParam("group_by", "");
   const [group, setGroup] = useParam("group", "");
   const [sort, setSort] = useParam("sort", "");
@@ -242,9 +235,9 @@ export function Work({ project = "" }: { project?: string }) {
   // narrowed to one offered no way back. The counts beside each name are the
   // MAINTAINED columns, three reads rather than an aggregate over every task.
   const projects = useQuery("work_projects", undefined, { pollMs: 60_000 });
-  // AND THE CHOSEN PROJECT'S OWN OVERVIEW: its sprint, its lead, the unit that
-  // owns it and its vocabulary — facts about the CONTAINER that a board can
-  // say none of from its rows.
+  // AND THE CHOSEN PROJECT'S OWN OVERVIEW: its lead, the unit that owns it
+  // and its vocabulary — facts about the CONTAINER that a board can say none
+  // of from its rows.
   // ENABLED ON THE SELECTION, not just parameterised by it. The engine
   // refuses this question without a key — correctly, since there is no
   // default project — so passing no params is not "ask for everything", it is
@@ -297,7 +290,6 @@ export function Work({ project = "" }: { project?: string }) {
     type,
     priority,
     assignee,
-    sprint,
     scope,
     groupBy,
     group,
@@ -402,7 +394,6 @@ export function Work({ project = "" }: { project?: string }) {
     setType("");
     setPriority("");
     setAssignee("");
-    setSprint("");
     // TO THE VIEW'S, not to "open": clearing a narrowing returns the screen to
     // what the view asked for, and passing the fallback drops the key from the
     // URL so the view keeps supplying it.
@@ -449,11 +440,6 @@ export function Work({ project = "" }: { project?: string }) {
             <a className="t-link" href={href(["me"])}>
               My work →
             </a>
-            {project && (
-              <a className="t-link" href={href(["work", project, "sprints"])}>
-                Sprints →
-              </a>
-            )}
             <a className="t-link" href={href(["goals"])}>
               Goals →
             </a>
@@ -503,8 +489,8 @@ export function Work({ project = "" }: { project?: string }) {
             parked underneath an opaque band at `--z-sticky`. */}
         <div className="toolbar work-filters">
           {/* THREE GROUPS, not one wrapping row of controls. What the bar
-              draws varies by shape — the type, sprint, group-by and sort
-              pickers each appear on some tabs and not others — and in a single
+              draws varies by shape — the type, group-by and sort pickers
+              each appear on some tabs and not others — and in a single
               wrap context that moved the scope control from x≈345 on List to
               x≈1338 on Board and x≈1155 on Calendar, the same control in three
               places on three tabs. Worse, `.work-summary`'s `margin-left: auto`
@@ -601,29 +587,6 @@ export function Work({ project = "" }: { project?: string }) {
                 ...index.seats.map((s) => ({ value: s.handle, label: s.name })),
               ]}
             />
-            {project && detail?.sprints && (
-              <Select
-                // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
-                // `width: 100%` unless told otherwise, and its own doc says why that
-                // is wrong here: "a filter row of full-width selects is one question
-                // per line, which is not what a filter bar is".
-                width="auto"
-                value={sprint}
-                onChange={(value) => setSprint(String(value))}
-                ariaLabel="Sprint"
-                active={sprint !== ""}
-                options={[
-                  { value: "", label: "Any sprint" },
-                  { value: "active", label: "Active sprint" },
-                  { value: "next", label: "Next sprint" },
-                  { value: "none", label: "Backlog" },
-                  ...(detail.recent_sprints ?? []).map((s) => ({
-                    value: String(s.number),
-                    label: `${s.number} · ${s.name}`,
-                  })),
-                ]}
-              />
-            )}
             {shape !== "calendar" && (
               <Select
                 // A PICKER IN A TOOLBAR, not a field on a form. uilet's Select is
@@ -643,7 +606,7 @@ export function Work({ project = "" }: { project?: string }) {
                 active={groupBy !== ""}
                 options={[
                   { value: "", label: shape === "board" ? "By status" : "No grouping" },
-                  ...GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
+                  ...GROUP_AXES.map((a) => ({
                     value: a.value,
                     label: a.label,
                   })),
@@ -907,12 +870,12 @@ export function Work({ project = "" }: { project?: string }) {
  *
  * The workspace head ranks projects by open work and says how much there is —
  * a bar, three numbers and a name. That is enough to CHOOSE a project and
- * nothing like enough to RECOGNISE one: who leads it, which unit owns it,
- * whether a sprint is running and whether anything has happened this week are
- * facts about the CONTAINER, and a bar carries none of them. So the header is
- * the same facts the project's own page wears — from [projectFacts], so the
- * two cannot drift — and under it the three questions a reader opens a
- * project for: where the work stands, what the sprint is, and what changed.
+ * nothing like enough to RECOGNISE one: who leads it, which unit owns it and
+ * whether anything has happened this week are facts about the CONTAINER, and a
+ * bar carries none of them. So the header is the same facts the project's own
+ * page wears — from [projectFacts], so the two cannot drift — and under it the
+ * two questions a reader opens a project for: where the work stands, and what
+ * changed.
  *
  * # Why the breakdown asks only about OPEN work
  *
@@ -1035,16 +998,6 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
                     )}
                   </QueryState>
                 </div>
-              </Card>
-
-              <Card>
-                <Card.Header
-                  icon={<CalendarTodayGlyph size="sm" />}
-                  subtitle="what the team committed to, and how much of it has landed"
-                >
-                  <Card.Title>{sprintLabel(detail)}</Card.Title>
-                </Card.Header>
-                <SprintFigure detail={detail} />
               </Card>
 
               <Card>
@@ -1219,8 +1172,8 @@ export function WorkspaceHead({
  * One project's own facts — the container half a board cannot say from its rows.
  *
  * ABSENT RATHER THAN EMPTY while the read is in flight: an overview rendered
- * with zeroes is a project that looks unstaffed, unled and out of sprint,
- * which is a conclusion somebody acts on.
+ * with zeroes is a project that looks unstaffed and unled, which is a
+ * conclusion somebody acts on.
  */
 export function ProjectHead({
   detail,
@@ -1263,9 +1216,6 @@ export function ProjectHead({
             </span>
           </Fact>
         )}
-        <Fact label={sprintLabel(detail)}>
-          <SprintFigure detail={detail} />
-        </Fact>
       </div>
     </>
   );
@@ -1279,7 +1229,6 @@ export function ProjectHead({
  * header written twice is two orders as soon as somebody adds a seventh.
  */
 function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact[] {
-  const sprint = detail.sprints?.active;
   return [
     {
       label: "Lead",
@@ -1305,17 +1254,11 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
     { label: "Open", value: <NumberCell value={detail.task_counts.open} /> },
     { label: "Done", value: <NumberCell value={detail.task_counts.done} /> },
     { label: "Closed", value: <NumberCell value={detail.task_counts.closed} /> },
-    // AND NO SPRINT IS NO VALUE. Which KIND of none it is — between sprints,
-    // or a team that does not use them — is a sentence rather than a fact,
-    // and [SprintFigure] below is where it is said; `FactLine` drops a fact
-    // with an empty value rather than printing a word for it.
-    { label: "Sprint", value: sprint ? sprintName(sprint) : "" },
   ];
 }
 
-/** The two findings a project's own record can carry, on the page and in the rail. */
+/** The one finding a project's own record can carry, on the page and in the rail. */
 function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
-  const pending = detail.sprints?.pending_spillovers ?? [];
   return (
     <>
       {/* A UNIT THE CHART NO LONGER HAS is a finding, not a blank: it is what
@@ -1324,12 +1267,6 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
         <Callout variant="warning">
           This project names the unit <span className="mono">{detail.unit.key}</span>, which the
           current org chart does not have — work filed here routes to nobody.
-        </Callout>
-      )}
-      {pending.length > 0 && (
-        <Callout variant="warning">
-          Sprint{pending.length === 1 ? "" : "s"} {pending.join(", ")} closed with the spillover
-          still undecided — the unfinished work is waiting on a lead.
         </Callout>
       )}
     </>
@@ -1357,48 +1294,6 @@ function ProjectCensus({ counts }: { counts: WorkTaskCounts }) {
       <StackedBar segments={segments} />
       <Legend items={segments.map(({ id, label, color }) => ({ id, label, color }))} />
     </>
-  );
-}
-
-/** A running sprint names itself; the number and the name are one string. */
-function sprintName(sprint: WorkActiveSprint): string {
-  return `${sprint.number} · ${sprint.name}`;
-}
-
-/** What the sprint block is CALLED, on the page's fact and on the rail's panel. */
-function sprintLabel(detail: WorkProjectDetail): string {
-  const sprint = detail.sprints?.active;
-  return sprint ? `Sprint ${sprintName(sprint)}` : "Sprint";
-}
-
-/**
- * How much of the sprint has landed, or which kind of no-sprint this is.
- *
- * THE MEASURE IS ALWAYS NAMED, because a bare "8 / 25" is points to one team
- * and minutes to another.
- *
- * TWO DIFFERENT FACTS, and one sentence used to cover both: "this team does
- * not work in sprints" and "this team is between sprints" send a reader to
- * different places, and the answer tells them apart — a project that runs
- * sprints carries a POLICY whether or not one is open right now.
- */
-function SprintFigure({ detail }: { detail: WorkProjectDetail }) {
-  const sprint = detail.sprints?.active;
-  if (!sprint) {
-    return <span className="muted">{detail.sprint_policy ? "none running" : "not used"}</span>;
-  }
-  const measure = sprint.figures.measure === "estimate_min" ? "minutes" : "points";
-  const committed = sprint.figures.committed + sprint.figures.added;
-  return (
-    <span className="col gap-1" style={{ width: "100%" }}>
-      <Meter
-        used={sprint.figures.done}
-        max={Math.max(1, committed)}
-        ariaLabel={`Sprint ${sprint.number} — delivered`}
-        right={`${sprint.figures.done} of ${committed} ${measure} · ${sprint.days_remaining}d left`}
-        fullMeans="achieved"
-      />
-    </span>
   );
 }
 
@@ -1522,7 +1417,6 @@ export function Board({
                   href={hrefOf(row)}
                   selected={selected === row.key}
                   onOpen={() => onOpen(row)}
-                  showSprint={workspace}
                 />
               ))}
               {group.rows.length === 0 && <div className="work-col-empty">Nothing here</div>}

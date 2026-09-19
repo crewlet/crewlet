@@ -243,8 +243,8 @@ func (a *Applier) recomputeSpans(ctx context.Context, tx *sql.Tx, taskID string)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_status_spans
 				(task_id, record_id, status, grp, entered_at, left_at,
-				 project_key, sprint_number)
-			SELECT ?, ?, ?, ?, ?, ?, t.project_key, t.sprint_number
+				 project_key)
+			SELECT ?, ?, ?, ?, ?, ?, t.project_key
 			FROM tracker_tasks t WHERE t.id = ?`,
 			taskID, e.record, string(status), string(status.Group()), e.at, left,
 			taskID); err != nil {

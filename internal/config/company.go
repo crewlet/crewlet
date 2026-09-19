@@ -710,38 +710,28 @@ type Tracker struct {
 	// Native is the engine's own tracker's policy — the settings that
 	// exist because the company owns the tracker rather than renting one.
 	//
-	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: a block of
-	// working days and an inbox horizon on a company running Jira is
-	// config that describes nothing, and the failure it produces is
-	// silence.
+	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: a clock and
+	// an inbox horizon on a company running Jira is config that describes
+	// nothing, and the failure it produces is silence.
 	Native *TrackerNativeConfig `yaml:"native,omitempty" json:"native,omitempty"`
 }
 
 // TrackerNativeConfig is the founder's policy over the engine's own tracker.
 //
-// # Why these three and nothing else
+// # Why these two and nothing else
 //
 // Everything else a tracker could be told is either a fact about the operator
 // (which is Tier A, under `stream.`) or a decision the engine makes once for
-// everybody. What is left is genuinely a company's own: which days it works,
-// which clock its dates mean, and how long a person's inbox keeps a row.
+// everybody. What is left is genuinely a company's own: which clock its dates
+// mean, and how long a person's inbox keeps a row.
 type TrackerNativeConfig struct {
-	// NonWorkingWeekdays are the days this company does not work.
-	//
-	// USED FOR THE CALENDAR AND THE BURNDOWN AND NOTHING ELSE. It shades a
-	// chart and shapes a guideline; it does not stop work being filed, due
-	// or done on a Sunday, because a company that says so is describing
-	// its own rhythm rather than issuing a rule.
-	NonWorkingWeekdays []string `yaml:"non_working_weekdays,omitempty" json:"non_working_weekdays,omitempty" desc:"Days this company does not work — used by the calendar and the burndown guideline. Full English names, e.g. saturday."`
-
 	// Timezone is the company's ONE clock, as an IANA name.
 	//
-	// It resolves a relative date ("next Friday"), places an all-day date
-	// at midnight, and decides where a sprint's window starts and ends. It
-	// is a clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES ONLY — no
-	// duration is measured against it, because a duration measured against
-	// a wall clock changes length twice a year.
-	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"IANA timezone for authored dates and sprint boundaries (default UTC)."`
+	// It resolves a relative date ("next Friday") and places an all-day
+	// date at midnight. It is a clock for AUTHORED INSTANTS AND CALENDAR
+	// BOUNDARIES ONLY — no duration is measured against it, because a
+	// duration measured against a wall clock changes length twice a year.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"IANA timezone for authored dates (default UTC)."`
 
 	// InboxRetentionDays is how long a person's inbox keeps a row.
 	//
@@ -790,49 +780,10 @@ func (t *TrackerNativeConfig) Location() *time.Location {
 	return loc
 }
 
-// NonWorking is the set of weekdays this company does not work.
-func (t *TrackerNativeConfig) NonWorking() map[time.Weekday]bool {
-	if t == nil || len(t.NonWorkingWeekdays) == 0 {
-		return nil
-	}
-	out := make(map[time.Weekday]bool, len(t.NonWorkingWeekdays))
-	for _, name := range t.NonWorkingWeekdays {
-		if day, ok := weekdayNamed(name); ok {
-			out[day] = true
-		}
-	}
-	return out
-}
-
-// weekdayNamed resolves a weekday name, case-insensitively.
-func weekdayNamed(name string) (time.Weekday, bool) {
-	for day := time.Sunday; day <= time.Saturday; day++ {
-		if strings.EqualFold(strings.TrimSpace(name), day.String()) {
-			return day, true
-		}
-	}
-	return 0, false
-}
-
 func (t *TrackerNativeConfig) validate(path Path) error {
 	var p problems
 	if t == nil {
 		return nil
-	}
-	seen := map[time.Weekday]string{}
-	for i, name := range t.NonWorkingWeekdays {
-		day, ok := weekdayNamed(name)
-		if !ok {
-			p.add(idx(at(path, "non_working_weekdays"), i), ErrUnknownValue,
-				"%q is not a weekday — write the full English name, e.g. saturday", name)
-			continue
-		}
-		if first, dup := seen[day]; dup {
-			p.add(idx(at(path, "non_working_weekdays"), i), ErrConflict,
-				"%q repeats %q", name, first)
-			continue
-		}
-		seen[day] = name
 	}
 	if tz := strings.TrimSpace(t.Timezone); tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {

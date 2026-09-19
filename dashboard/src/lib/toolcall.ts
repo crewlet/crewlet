@@ -144,13 +144,8 @@ export function callsFor(subject: Subject): ToolCall[] {
       return [
         {
           tool: "write_project",
-          label: "Set the sprint policy, fields or default assignee",
-          args: { project: id, sprints: { length_days: 14, measure: "points" } },
-        },
-        {
-          tool: "manage_sprint",
-          label: "Start or close a sprint",
-          args: { project: id, action: "start", sprint: 1 },
+          label: "Declare fields or set the default assignee",
+          args: { project: id, default_assignee: "" },
         },
       ];
     case "goal":

@@ -406,7 +406,7 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 //
 // THAT IS WHAT THIS ALWAYS CLAIMED AND NEVER DID. It returned the literal
 // string `operator`, so the operation id it is half of — `prio-<handle>-operator`,
-// `pins-…`, `inbox-…`, `sprint-<action>-<project>-<n>-…` — was stable for the
+// `pins-…`, `inbox-…` — was stable for the
 // life of the deployment, and the ledger collapsed every write after the first
 // as a redelivery. `set_priorities` through `/operator/mcp` wrote one list per
 // person, ever; the second call answered `applied` with the FIRST call's

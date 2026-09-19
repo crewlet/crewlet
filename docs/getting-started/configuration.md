@@ -1008,21 +1008,12 @@ tracker:
                                          #   describes nothing, and is refused
     timezone: Europe/Berlin              # the company's ONE clock, IANA name
                                          #   (default UTC). It resolves "next
-                                         #   Friday", places an all-day date at
-                                         #   midnight and decides where a sprint's
-                                         #   window starts. It is a clock for
-                                         #   AUTHORED instants and calendar
-                                         #   boundaries only — no duration is
-                                         #   measured against it, because a duration
-                                         #   measured against a wall clock changes
-                                         #   length twice a year
-    non_working_weekdays:                # days this company does not work. Shades
-      - saturday                         #   the calendar and shapes the burndown
-      - sunday                           #   guideline, and does nothing else: work
-                                         #   can still be filed, due or done on a
-                                         #   Sunday, because a company that says it
-                                         #   does not work weekends is describing its
-                                         #   rhythm rather than issuing a rule
+                                         #   Friday" and places an all-day date at
+                                         #   midnight. It is a clock for AUTHORED
+                                         #   instants and calendar boundaries only —
+                                         #   no duration is measured against it,
+                                         #   because a duration measured against a
+                                         #   wall clock changes length twice a year
     inbox_retention_days: 365            # how long a person's inbox keeps a row
                                          #   (default 365, 30..3650). THE HISTORY IT
                                          #   POINTS AT IS UNTOUCHED — this is a

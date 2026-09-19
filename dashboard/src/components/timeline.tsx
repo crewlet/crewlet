@@ -4,7 +4,7 @@
  *
  * READ-ONLY, deliberately. No dragging, no resizing, no handle to stretch —
  * a bar is a LINK. Every timeline that offers to move dates has to answer what
- * a drag means when a task is in a sprint, has a dependency, or is somebody
+ * a drag means when a task has a dependency, or is somebody
  * else's, and the answer is a modal dialogue nobody wanted; the tracker's own
  * edit surfaces already say those things properly.
  *

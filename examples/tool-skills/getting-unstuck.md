@@ -81,5 +81,5 @@ I recommend (2) — the v1 interface predates the rate-limit redesign and
 the downstream services are both ours.  Migration is mechanical.
 
 Not blocking anything urgently but the rate-limit incidents from last week
-are still open, so this should land this sprint.
+are still open, so this should land this week.
 ```

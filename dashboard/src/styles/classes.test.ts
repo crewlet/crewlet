@@ -521,11 +521,11 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "is-caution",
-    why: "The same interpolation, for a load between capacity and the over-capacity alarm. See is-positive.",
+    why: "The same interpolation, for a queue at or past the heavy-queue mark. See is-positive.",
   },
   {
     name: "is-critical",
-    why: "The same interpolation, for a load past the alarm or holding work against a capacity of zero. See is-positive.",
+    why: "The same interpolation, for a queue whose every open item is blocked. See is-positive.",
   },
   {
     name: "crewlet-card__title",

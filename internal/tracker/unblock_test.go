@@ -258,16 +258,16 @@ func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 //
 // The scan selected `kind = 'status'`, which is the word the WRITER chose for
 // a patch that may have moved several things — not what the row records. The
-// reachable case is the sprint ROLLOVER CLOSE: it cancels every straggler in
-// the sprint it is emptying, and `StatusCancelled` is in the `done` group,
-// whose own description names this path. So the apply stamps the task
+// reachable case is a BULK CANCEL: `StatusCancelled` is in the `done` group,
+// whose own description names this path. So the apply stamps each task
 // finished and clears every dependency edge naming it a blocker — the
-// dependents are workable — while the record itself is about the sprint.
+// dependents are workable — while the record itself announces whatever else
+// the patch moved.
 //
-// Two things made it permanent rather than merely late. The record is quiet by
-// design ("a rollover is ONE thing that happened"), and nothing outside
-// [tracker.Writer.TellUnblocked] ever fills `Snapshot.Unblocked`, so this scan
-// is the ONLY path by which those people hear. And the horizon was computed
+// Two things made it permanent rather than merely late. Such a record is quiet
+// by design, and nothing outside [tracker.Writer.TellUnblocked] ever fills
+// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
+// hear. And the horizon was computed
 // from the same predicate, so it advanced past the record on the next status
 // row anywhere in the log and never reconsidered it: the file's own promise
 // that "a gap of any length is caught up on the next tick" did not hold for a
@@ -291,17 +291,16 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 		r.drain()
 	}
 
-	// THE BLOCKER IS CANCELLED BY A WRITE THAT CALLS ITSELF A SPRINT
-	// MOVE, which is exactly the shape the rollover close publishes:
-	// quiet, a status into the `done` group, and a kind that is not
-	// `status`.
+	// THE BLOCKER IS CANCELLED BY A WRITE THAT CALLS ITSELF A FIELD EDIT,
+	// which is exactly the shape a bulk cancel publishes: quiet, a status
+	// into the `done` group, and a kind that is not `status`.
 	cancelled := tracker.StatusCancelled
-	clear := 0
-	if _, err := r.writer.UpdateTask(t.Context(), "op-rollover", "t-1", "ENG",
+	points := 0.0
+	if _, err := r.writer.UpdateTask(t.Context(), "op-cancel", "t-1", "ENG",
 		tracker.NoIfMatch,
-		tracker.TaskPatch{Status: &cancelled, Sprint: &clear},
-		tracker.ChangeSprint, nil); err != nil {
-		t.Fatalf("cancel the blocker through a sprint move: %v", err)
+		tracker.TaskPatch{Status: &cancelled, Points: &points},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("cancel the blocker through a field edit: %v", err)
 	}
 	r.drain()
 

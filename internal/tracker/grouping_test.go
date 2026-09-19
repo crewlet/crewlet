@@ -501,7 +501,7 @@ func bulkTasks(t *testing.T, r *roundTrip, n int, project string) {
 // A GROUPING IS REFUSED ON WHAT IT WOULD SORT, never on which keys are present.
 //
 // The gate this replaces asked for "a narrowing filter — a status_group, an
-// assignee, a sprint, a unit or a date bound", and `status_group=not_started`
+// assignee, a unit or a date bound", and `status_group=not_started`
 // satisfies it while narrowing nothing: every open task is already in it. So
 // the case files one row past the ceiling, asks WITH that filter, and expects
 // the refusal anyway — which is the whole difference between a gate on a name

@@ -122,7 +122,7 @@ export interface Timeline {
  * The widest window a set of rows spans, at most this many days.
  *
  * A CAP, because the window is derived from the DATA and one task due in 2031
- * would otherwise compress a sprint into four pixels. Three hundred and
+ * would otherwise compress a fortnight into four pixels. Three hundred and
  * seventy days is a year plus a fortnight: the longest span anybody reads as
  * one picture, and enough that an annual plan's two ends are both on it.
  */

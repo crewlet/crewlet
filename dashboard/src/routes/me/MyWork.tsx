@@ -121,8 +121,8 @@ export function MyWork() {
   // confusion the `viewer` question exists to end.
   const ownDay = whose !== "" && whose === viewer.handle;
   const they = ownDay ? "you" : "them";
-  // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board and the sprint
-  // report take. `whose` is empty until the chart has loaded, and the engine
+  // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board takes. `whose`
+  // is empty until the chart has loaded, and the engine
   // refuses this question without a handle.
   const state = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
     enabled: whose !== "",

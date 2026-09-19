@@ -277,8 +277,6 @@ type Query struct {
 	Goal       string
 	Batch      string
 
-	Sprint []string
-
 	// Any is one level of disjunction, ANDed with the top-level keys.
 	Any []Query
 
@@ -400,7 +398,7 @@ var QueryKeys = []string{
 	"max_lag_seconds", "max_lag_seq", "min_position", "parent", "points", "preset",
 	"priorities", "priority", "q", "read_level", "references", "removed",
 	"reporter",
-	"root", "routing_unit", "show_closed", "sort", "spend", "sprint",
+	"root", "routing_unit", "show_closed", "sort", "spend",
 	"start", "status", "status_entered", "status_group", "subgroup",
 	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
 	"watcher",
@@ -499,7 +497,6 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	q.Unit = csv(p.String("unit"))
 	q.RoutingUnit = csv(p.String("routing_unit"))
 	q.Types = csv(p.String("type"))
-	q.Sprint = csv(p.String("sprint"))
 	q.Flags = csv(p.String("flag"))
 	// KEYS ARE UPPERCASED, because a key is what somebody pasted and
 	// `eng-7` is the same task as `ENG-7`. The project half is minted
@@ -889,7 +886,7 @@ func (q *Query) parseArchived(p Params) error {
 // groupKeys are the groupings a caller may ask for.
 var groupKeys = []string{
 	"status", "status_group", "assignee", "priority", "tag", "type",
-	"project", "sprint", "unit", "routing_unit", "parent",
+	"project", "unit", "routing_unit", "parent",
 	"due:day", "due:week", "start:week",
 }
 

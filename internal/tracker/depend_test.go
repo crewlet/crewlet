@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -21,8 +20,8 @@ import (
 func TestADependencyIsWrittenAtBothEnds(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 
 	result, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
@@ -72,7 +71,7 @@ func TestADependencyIsWrittenAtBothEnds(t *testing.T) {
 func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
+	filedTask(t, r, "dep")
 	blocker := newTask("blk")
 	blocker.Key, blocker.Assignee = "ENG-blk", "bo"
 	if _, err := r.writer.CreateTask(t.Context(), "op-blk", blocker, nil); err != nil {
@@ -112,7 +111,7 @@ func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 func TestABlockerThatCannotTakeTheEdgeRefusesItFirst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
+	filedTask(t, r, "dep")
 
 	_, err := r.writer.Depend(t.Context(), "op-ghost", tracker.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"nope"},
@@ -143,7 +142,7 @@ func TestABlockerThatCannotTakeTheEdgeRefusesItFirst(t *testing.T) {
 func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
+	filedTask(t, r, "dep")
 	blocker := newTask("blk")
 	blocker.Key, blocker.Assignee = "ENG-blk", "bo"
 	if _, err := r.writer.CreateTask(t.Context(), "op-blk", blocker, nil); err != nil {
@@ -221,8 +220,8 @@ func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 	if _, err := r.writer.UpdateTask(t.Context(), "op-half", "dep", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Relate: &tracker.RelationIntent{
 			Add: []tracker.Relation{{Kind: tracker.RelationWaitingOn, Other: "blk"}},
@@ -286,8 +285,8 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 func TestTheAttentionFlagsMatchAnyNotAll(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 	if _, err := r.writer.UpdateTask(t.Context(), "op-half", "dep", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Relate: &tracker.RelationIntent{
 			Add: []tracker.Relation{{Kind: tracker.RelationWaitingOn, Other: "blk"}},
@@ -326,7 +325,7 @@ func TestTheAttentionFlagsMatchAnyNotAll(t *testing.T) {
 func TestTheRelationCapsAreEnforced(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 
 	links := make([]tracker.Relation, 0, tracker.MaxOtherRelations+1)
 	for i := range cap(links) {
@@ -360,8 +359,8 @@ func TestTheRelationCapsAreEnforced(t *testing.T) {
 func TestRestatingAnEdgeIsNotASecondEdge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
-	inSprint(t, r, "t-2", nil)
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
 	for i := range 2 {
 		if _, err := r.writer.UpdateTask(t.Context(), "op-link"+itoa(i), "t-1", "ENG",
 			tracker.NoIfMatch, tracker.TaskPatch{Relate: &tracker.RelationIntent{
@@ -434,8 +433,8 @@ func (r *roundTrip) wakes(t *testing.T) []*tracker.Notify {
 func TestABlockingOnlyChangeReturnsAPosition(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "blk", nil)
-	inSprint(t, r, "dep", nil)
+	filedTask(t, r, "blk")
+	filedTask(t, r, "dep")
 
 	result, err := r.writer.Depend(t.Context(), "op-blocking", tracker.DependencyChange{
 		Task: "blk", Project: "ENG", BlockingAdd: []string{"dep"},
@@ -521,8 +520,8 @@ func TestTheOpenAskInferenceIsIndexServed(t *testing.T) {
 func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 
 	// AN EDGE AUTHORED LONG AGO, on a task edited just now.
 	old := wednesday.AddDate(0, 0, -7)
@@ -578,9 +577,9 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dup", nil)
-	inSprint(t, r, "blk", nil)
-	inSprint(t, r, "keep", nil)
+	filedTask(t, r, "dup")
+	filedTask(t, r, "blk")
+	filedTask(t, r, "keep")
 
 	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 		Task: "dup", Project: "ENG", WaitingOnAdd: []string{"blk"},
@@ -641,12 +640,12 @@ func TestMarkingADuplicateKeepsTheEdgesTheItemAlreadyHad(t *testing.T) {
 // `statelog.ErrConflict` and tells the caller to re-run, and the re-run took
 // the same gate and came up short again. So a task somebody waited on could
 // never be retitled, re-assigned, re-pointed, given a due date or moved into
-// a sprint, for as long as the edge existed.
+// a size, for as long as the edge existed.
 func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
 		Note: "needs the schema first",
@@ -656,18 +655,14 @@ func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	r.drain()
 
 	// NOT A STATUS PATCH — that one always worked, and asserting it would
-	// be asserting the half that was never broken.
-	//
-	// THE SPRINT IS MINTED FIRST, because a task may only be filed into one
-	// the project has: this case is about what a BLOCKER accepts, so it has
-	// to hand the writer an edit that is otherwise unimpeachable.
-	sprint := 3
-	seedSprintWindow(t, r, sprint, tracker.SprintFuture,
-		time.Now().UTC().Add(24*time.Hour), time.Now().UTC().Add(15*24*time.Hour), nil)
+	// be asserting the half that was never broken. An ordinary field edit
+	// is what this case is about: a task somebody waits on takes one like
+	// any other.
+	points := 8.0
 	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "blk", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{
-			Title: ptr("the blocker, retitled"), Sprint: &sprint,
-		}, tracker.ChangeSprint, nil); err != nil {
+			Title: ptr("the blocker, retitled"), Points: &points,
+		}, tracker.ChangeFields, nil); err != nil {
 		t.Fatalf("editing a blocker: %v — a task somebody waits on takes an "+
 			"ordinary edit like any other", err)
 	}
@@ -677,8 +672,8 @@ func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 	if blk.Task.Title != "the blocker, retitled" {
 		t.Errorf("title = %q, want the edit to have landed", blk.Task.Title)
 	}
-	if blk.Task.Sprint == nil || *blk.Task.Sprint != 3 {
-		t.Errorf("sprint = %v, want 3", blk.Task.Sprint)
+	if blk.Task.Points != 8 {
+		t.Errorf("points = %v, want 8", blk.Task.Points)
 	}
 	// AND THE EDGE SURVIVED IT. The apply that took the edit is the same
 	// one that maintains the dependency rows, so a widened scope must not

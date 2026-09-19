@@ -503,9 +503,9 @@ func (c Class) Valid() bool {
 
 // Resource names the lease for one member of this class.
 //
-// Variadic because a claim is sometimes addressed by more than one part — a
-// sprint rollover names a project AND a number — and every part is a segment,
-// so such a claim is still filterable by its class and by its project.
+// Variadic because a claim is sometimes addressed by more than one part, and
+// every part is a segment, so such a claim is still filterable by its class
+// and by its leading part.
 func (c Class) Resource(parts ...string) string {
 	return string(c) + ResourceSeparator + strings.Join(parts, ResourceSeparator)
 }

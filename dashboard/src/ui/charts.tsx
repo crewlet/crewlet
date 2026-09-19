@@ -13,7 +13,7 @@
  *
  *  - `TimeSeries`  — a quantity over time where a series can be a REFERENCE
  *                    rather than a measurement. Theirs fills every series and
- *                    has no dashed stroke, so a sprint's ideal would arrive as
+ *                    has no dashed stroke, so a reference line would arrive as
  *                    a third solid line under a third translucent wash.
  *  - `StackedTimeSeries`
  *                  — a column per bucket, SPLIT INTO BANDS, with the previous

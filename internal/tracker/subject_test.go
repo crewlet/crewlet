@@ -17,8 +17,8 @@ import (
 // is delivered fine, wakes nobody and writes nothing.
 func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	t.Parallel()
-	if len(tracker.ObjectKinds) != 15 {
-		t.Fatalf("%d kinds are enumerated; the log carries fifteen",
+	if len(tracker.ObjectKinds) != 14 {
+		t.Fatalf("%d kinds are enumerated; the log carries fourteen",
 			len(tracker.ObjectKinds))
 	}
 	seen := map[tracker.ObjectKind]bool{}
@@ -105,7 +105,6 @@ func TestEverySubjectRoundTripsThroughTheWire(t *testing.T) {
 		"a counter":    tracker.CounterSubject("ENG"),
 		"a tag set":    tracker.TagsSubject("ENG"),
 		"a rank order": tracker.RankOrderSubject("ENG"),
-		"a sprint":     tracker.SprintSubject("ENG", 7),
 		"an alias":     tracker.AliasSubject("ENG-142", 2),
 		"a catalogue":  tracker.CatalogueSubject(tracker.CatalogueFields),
 		"a person":     tracker.PersonSubject("ana"),

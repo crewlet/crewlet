@@ -13,6 +13,7 @@
  */
 
 import { useMemo } from "react";
+import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
@@ -27,7 +28,7 @@ import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { QueryState } from "~/components/common.tsx";
 import { awaitingPerson, indexOrg, runState, unitDirectLabel, type Seat } from "~/lib/seats.ts";
-import { capacityText, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
+import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -40,25 +41,24 @@ const VIEWS = ["seats", "workload"] as const;
 const GROUPINGS = ["state", "unit", "flat"] as const;
 type Grouping = (typeof GROUPINGS)[number];
 
-/** How wide a load bar is drawn at exactly capacity, as a percentage. */
-const AT_CAPACITY_PCT = 70;
-
 /**
- * Who is carrying how much, against what they can take.
+ * Who is carrying how much.
  *
- * ONE ENGINE READ. The two halves — what somebody holds and what they can hold
- * — live in different places and neither is reachable from the other, so a
- * screen that summed them itself paid one round trip per project and rewrote
- * the three-valued capacity every time. See `work_workload`.
+ * ONE ENGINE READ. Grouped per project a screen paid one round trip each and
+ * rewrote the arithmetic every time. See `work_workload`.
  *
- * The JUDGEMENT is `lib/workload.ts` and is pure: whether somebody is over, by
- * how much, and what to say when nobody declared a capacity at all. An
- * undeclared capacity is an EM DASH, never a zero — a company that never set
- * one would otherwise read as having every person permanently over.
+ * The JUDGEMENT is `lib/workload.ts` and is pure: how heavy a queue is against
+ * the rest of the company, and which seats are holding work they can move none
+ * of. The bar is RELATIVE to the heaviest queue on screen, because there is no
+ * absolute number that is "full".
  */
 function Workload({ seats }: { seats: Seat[] }) {
   const answer = useQuery("work_workload", undefined, { pollMs: 60_000 });
   const rows = useMemo(() => loadRows(answer.data?.rows ?? [], seats), [answer.data?.rows, seats]);
+  // THE HEAVIEST QUEUE ON SCREEN is the bar's own scale — computed once here
+  // rather than per row, so every track on the table is drawn against the
+  // same number.
+  const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
   return (
     <QueryState
       error={answer.error}
@@ -78,11 +78,11 @@ function Workload({ seats }: { seats: Seat[] }) {
             <span>Seat</span>
             <span>Open</span>
             <span>Load</span>
-            <span className="wl-num">Held</span>
-            <span className="wl-num">Capacity</span>
+            <span className="wl-num">Points</span>
+            <span className="wl-num">Estimate</span>
           </div>
           {rows.map((load) => (
-            <LoadRow key={load.handle} load={load} />
+            <LoadRow key={load.handle} load={load} heaviest={heaviest} />
           ))}
         </div>
       </Card>
@@ -97,15 +97,13 @@ function Workload({ seats }: { seats: Seat[] }) {
 }
 
 /** One person's row. */
-function LoadRow({ load }: { load: Load }) {
+function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
   const { open: openPeek } = usePeekControls();
   const tone = loadTone(load);
-  // THE BAR IS RELATIVE TO CAPACITY, drawn so exactly-at-capacity is a fixed
-  // fraction of the track. Over-capacity therefore has somewhere to go and is
-  // VISIBLE as overflow rather than as a full bar that a person at 100% and a
-  // person at 300% would share.
-  const width =
-    load.fraction === null ? 0 : Math.min(100, Math.round(load.fraction * AT_CAPACITY_PCT));
+  // THE BAR IS RELATIVE TO THE HEAVIEST QUEUE ON SCREEN, so the table reads as
+  // a comparison between people rather than against a ceiling nobody set.
+  const fraction = loadFraction(load, heaviest);
+  const width = fraction === null ? 0 : Math.round(fraction * 100);
   return (
     <div className="wl-row" title={loadSentence(load)}>
       {/* A DEAD LINK UNTIL NOW: this hand-built `#/company/seats/…` named a
@@ -114,7 +112,7 @@ function LoadRow({ load }: { load: Load }) {
           `#/company/people/{handle}`, and `href` is what spells it — the one
           place the route and its encoding are written down. A plain click
           peeks instead, which on this table is the whole point: the question
-          is who is over capacity, and answering it should not cost the row
+          is who is carrying the most, and answering it should not cost the row
           the reader was comparing against. */}
       <a
         className="wl-who"
@@ -139,25 +137,19 @@ function LoadRow({ load }: { load: Load }) {
         {load.unscheduled > 0 && <span className="wl-soft">{load.unscheduled} undated</span>}
       </span>
       <span className="wl-track">
-        {/* NOTHING AT ALL WHEN THERE IS NOTHING TO COMPARE. The track is a
-            capacity comparison, and with no capacity there is no comparison
-            to draw — the em dashes beside it say why, and a bar of some
-            arbitrary length would be a proportion of a number nobody set.
-            The mark is drawn whether or not the bar reaches it, so a reader
-            sees the target as well as the load. */}
-        {load.fraction !== null && (
-          <>
-            <span className="wl-mark" style={{ left: `${AT_CAPACITY_PCT}%` }} />
-            <span className={cx("wl-bar", `is-${tone}`)} style={{ width: `${width}%` }} />
-          </>
+        {/* NOTHING AT ALL WHEN NOBODY HOLDS ANYTHING. The track is a
+            comparison against the heaviest queue on screen, and with no queue
+            anywhere there is nothing to compare — a bar of some arbitrary
+            length would be a proportion of a number that does not exist. */}
+        {fraction !== null && (
+          <span className={cx("wl-bar", `is-${tone}`)} style={{ width: `${width}%` }} />
         )}
       </span>
-      <span className="wl-num">
-        {load.state === "unknown" ? <EmptyValue label="Not counted" /> : load.held}
+      <span className={cx("wl-num", load.points === 0 && "wl-soft")}>
+        {load.points === 0 ? <EmptyValue label="Unsized" /> : load.points}
       </span>
-      <span className={cx("wl-num", load.state === "unknown" && "wl-soft")}>
-        {capacityText(load)}
-        {load.from > 1 && <span className="wl-from"> ×{load.from}</span>}
+      <span className={cx("wl-num", load.estimateMin === 0 && "wl-soft")}>
+        {load.estimateMin === 0 ? <EmptyValue label="Unsized" /> : fmtMinutes(load.estimateMin)}
       </span>
     </div>
   );

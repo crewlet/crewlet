@@ -745,8 +745,7 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
  * SEPARATED FROM THE SCREEN because every one of them is a small honest
  * decision about what a number covers, and those are worth reading in one
  * place: which seat states count as working, that `open` is over the projects
- * this answer returned rather than over the company, that the sprint shown is
- * the one closing SOONEST when several run at once, and that a window the
+ * this answer returned rather than over the company, and that a window the
  * engine chose is never labelled "today".
  */
 function usePulse(input: {
@@ -773,13 +772,6 @@ function usePulse(input: {
     const open = projects ? projects.reduce((n, p) => n + p.task_counts.open, 0) : null;
     const overdue = workload ? workload.reduce((n, r) => n + r.overdue, 0) : null;
     const blocked = workload ? workload.reduce((n, r) => n + r.blocked, 0) : null;
-    // THE ONE CLOSING SOONEST. A company running four sprints has four
-    // answers to "how long left", and the earliest deadline is the one a
-    // person is actually up against.
-    const sprint = projects
-      ?.map((p) => p.sprints?.active)
-      .filter((s): s is NonNullable<typeof s> => Boolean(s))
-      .sort((a, b) => a.days_remaining - b.days_remaining)[0];
     const critical = attention.filter((a) => a.severity === "critical").length;
     const facts: PulseFact[] = [
       {
@@ -827,16 +819,6 @@ function usePulse(input: {
         path: ["work"],
         query: { blocked: "1" },
         tone: blocked ? "caution" : undefined,
-      },
-      {
-        key: "sprint",
-        icon: PULSE_GLYPHS.sprint,
-        value: sprint ? sprint.days_remaining : null,
-        label: sprint ? `days left · ${sprint.name}` : "no sprint running",
-        title: sprint
-          ? `The active sprint closing soonest: ${sprint.name}.`
-          : "No project has an active sprint.",
-        path: ["work"],
       },
       {
         key: "tokens",

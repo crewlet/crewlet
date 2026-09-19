@@ -20,11 +20,6 @@ import (
 // fresh project needs no setup gesture, and nothing has to guard against
 // somebody deleting the last view.
 //
-// A project running sprints adds two more — the sprint board and the backlog —
-// because those are the two questions a sprint creates and neither is
-// expressible as a default. They appear only where the project's policy says
-// it runs sprints, so a company that does not use them never sees them.
-//
 // # The order is the person's, and it is two orders
 //
 // Saved views carry a [Rank], which is the strip's own arrangement and is
@@ -106,7 +101,7 @@ type ViewListing struct {
 
 // The implicit views' keys. STABLE STRINGS rather than positions, because a
 // caller stores which tab it was on and a positional key would move the
-// person's tab when a sprint policy is turned on.
+// person's tab whenever the set changed.
 const (
 	ViewKeyList     = "list"
 	ViewKeyBoard    = "board"
@@ -114,16 +109,12 @@ const (
 	ViewKeyTimeline = "timeline"
 	ViewKeyTable    = "table"
 	ViewKeyTrash    = "trash"
-	ViewKeySprint   = "sprint"
-	ViewKeyBacklog  = "backlog"
 )
 
 // Views answers one container's strip.
 //
-// ONE READ TRANSACTION for the saved rows, the viewer's pins and the project's
-// sprint policy — so the strip describes one instant. Assembled across three
-// reads it could show a sprint board for a policy that had just been turned
-// off, which is a tab that opens on nothing.
+// ONE READ TRANSACTION for the saved rows and the viewer's pins — so the strip
+// describes one instant rather than two reads' worth of them.
 func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	if q.Level == "" {
 		return ViewListing{}, fmt.Errorf("tracker: this view read names no " +
@@ -164,10 +155,7 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		if err != nil {
 			return err
 		}
-		implicit, err := implicitViews(ctx, tx, q.Container)
-		if err != nil {
-			return err
-		}
+		implicit := implicitViews(q.Container)
 		saved, err := savedViews(ctx, tx, q.Container, q.Viewer, pinned)
 		if err != nil {
 			return err
@@ -213,9 +201,8 @@ func viewScope(container Container) statelog.ScopeSet {
 	}}.Normalised()
 }
 
-// implicitViews is the six every container has, plus the two a sprinting
-// project adds.
-func implicitViews(ctx context.Context, tx *sql.Tx, container Container) ([]ViewRow, error) {
+// implicitViews is the six every container has.
+func implicitViews(container Container) []ViewRow {
 	rows := []ViewRow{
 		{Key: ViewKeyList, Name: "List", Type: ViewList, Container: container, Builtin: true},
 		{Key: ViewKeyBoard, Name: "Board", Type: ViewBoard, Container: container, Builtin: true},
@@ -251,33 +238,7 @@ func implicitViews(ctx context.Context, tx *sql.Tx, container Container) ([]View
 			Container: container, Builtin: true,
 			Params: map[string]string{"removed": "true", "show_closed": "true"}},
 	}
-	if container.Kind != ContainerProject || container.ID == "" {
-		return rows, nil
-	}
-	// THE TWO A SPRINT POLICY ADDS, and only where there is one: a company
-	// that does not run sprints never meets a tab that opens on nothing.
-	project, held, err := readProject(ctx, tx, container.ID)
-	if err != nil || !held || project.Sprints == nil {
-		return rows, err
-	}
-	return append(rows,
-		ViewRow{Key: ViewKeySprint, Name: "Sprint", Type: ViewBoard,
-			Container: container, Builtin: true,
-			Params: map[string]string{"sprint": "active"}},
-		ViewRow{Key: ViewKeyBacklog, Name: "Backlog", Type: ViewList,
-			Container: container, Builtin: true,
-			// THE BACKLOG IS UNFINISHED WORK IN NO SPRINT, ordered by
-			// the board's own arrangement. `sprint=none` is an absence
-			// of an OPEN stay rather than of every stay, which is what
-			// keeps a carry-over out of it: a task pulled forward into
-			// the next sprint is in that sprint, not back in the pile
-			// somebody is planning from.
-			Params: map[string]string{
-				"status_group": string(GroupNotStarted) + "," + string(GroupActive),
-				"sprint":       "none",
-				"sort":         "rank",
-			}},
-	), nil
+	return rows
 }
 
 // savedViews reads the container's own views, ordered pinned-for-this-viewer

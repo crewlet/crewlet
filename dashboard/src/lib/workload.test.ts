@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkloadRow } from "~/protocol/index.ts";
 import type { Seat } from "./seats.ts";
-import {
-  OverCapacityAlarm,
-  capacityText,
-  loadOf,
-  loadRows,
-  loadSentence,
-  loadTone,
-} from "./workload.ts";
+import { HeavyQueue, loadFraction, loadOf, loadRows, loadSentence, loadTone } from "./workload.ts";
 
 function row(handle: string, extra: Partial<WorkloadRow> = {}): WorkloadRow {
   return {
@@ -27,86 +20,74 @@ function seat(handle: string): Seat {
   return { handle, name: handle, kind: "agent" } as Seat;
 }
 
-describe("a capacity nobody declared", () => {
-  it("is unknown, not zero", () => {
-    // A policy naming nobody would otherwise put every person in the company
-    // permanently over, which is the failure that makes the screen useless.
-    const load = loadOf(row("ada", { points: 8 }));
-    expect(load.state).toBe("unknown");
-    expect(load.capacity).toBeNull();
-    expect(load.fraction).toBeNull();
-    // NOT A DASH. "Nobody set a capacity" is a sentence a reader can act on;
-    // a punctuation mark is read as "dash" or skipped.
-    expect(capacityText(load)).toBe("not set");
+describe("a seat holding nothing", () => {
+  it("is idle, which is not an open count of zero", () => {
+    // "Nobody has given this seat anything" is a fact about the company
+    // rather than about them, and it is the answer "is anybody free" wants.
+    const load = loadOf(row("ada", { open: 0 }));
+    expect(load.state).toBe("idle");
+    expect(loadSentence(load)).toContain("no open work");
   });
 
-  it("wears no tone, because nothing is known either way", () => {
-    // Colouring it would be a claim about the person rather than about the
-    // company's configuration.
-    expect(loadTone(loadOf(row("ada", { points: 40 })))).toBe("neutral");
+  it("wears no tone, because holding nothing is neither good nor bad", () => {
+    expect(loadTone(loadOf(row("ada", { open: 0 })))).toBe("neutral");
   });
 
-  it("says which of the two unknowns it is", () => {
-    // "Nobody said" and "it cannot be added up" send a reader to two
-    // different places — the first to a sprint policy, the second to two.
-    const mixed = loadOf(row("ada", { points: 8, mixed_measures: true }));
-    expect(mixed.state).toBe("unsummable");
-    expect(capacityText(mixed)).toBe("mixed units");
-    expect(loadSentence(mixed)).toContain("different units");
-    expect(loadSentence(loadOf(row("bo")))).toContain("No sprint policy");
+  it("draws no bar, because a bar is a comparison", () => {
+    // A bar of zero width and a bar at the two-pixel floor are the same two
+    // pixels, so the row's own counts are what say which.
+    expect(loadFraction(loadOf(row("ada", { open: 0 })), 0)).toBeNull();
   });
 });
 
-describe("a capacity somebody declared", () => {
-  it("compares in the measure the capacity is stated in", () => {
-    // A capacity in points against a sum of minutes is two numbers about
-    // different things.
-    const inMinutes = loadOf(
-      row("ada", {
-        points: 99,
-        estimate_min: 300,
-        capacity: 600,
-        capacity_measure: "estimate",
-      }),
-    );
-    expect(inMinutes.held).toBe(300);
-    expect(inMinutes.state).toBe("under");
+describe("a queue nothing in it can move", () => {
+  it("is stuck only when EVERY open item is blocked", () => {
+    // One blocker in a queue is an ordinary queue; a queue where nothing can
+    // move is a person waiting, and the two read identically until it is said.
+    expect(loadOf(row("ada", { open: 4, blocked: 4 })).state).toBe("stuck");
+    expect(loadOf(row("bo", { open: 4, blocked: 3 })).state).toBe("working");
   });
 
-  it("is over when what they hold exceeds it", () => {
-    const load = loadOf(row("ada", { points: 8, capacity: 5, capacity_measure: "points" }));
-    expect(load.state).toBe("over");
-    expect(load.fraction).toBeCloseTo(1.6);
+  it("is critical rather than caution", () => {
+    // It is the one row on this screen somebody has to act on.
+    expect(loadTone(loadOf(row("ada", { open: 4, blocked: 4 })))).toBe("critical");
+    expect(loadSentence(loadOf(row("ada", { open: 4, blocked: 4 })))).toContain("can move none");
+  });
+});
+
+describe("a queue somebody is working through", () => {
+  it("escalates past the heavy mark rather than at it", () => {
+    const light = loadOf(row("ada", { open: HeavyQueue - 1 }));
+    expect(loadTone(light)).toBe("positive");
+    const heavy = loadOf(row("bo", { open: HeavyQueue }));
+    expect(loadTone(heavy)).toBe("caution");
   });
 
-  it("escalates past the alarm rather than at it", () => {
-    // A quarter over is the overflow a fortnight absorbs. Past that the plan
-    // is wrong rather than tight.
-    const tight = loadOf(row("ada", { points: 5, capacity: 4.5, capacity_measure: "points" }));
-    expect(tight.fraction! < OverCapacityAlarm).toBe(true);
-    expect(loadTone(tight)).toBe("caution");
-    const broken = loadOf(row("bo", { points: 10, capacity: 4, capacity_measure: "points" }));
-    expect(loadTone(broken)).toBe("critical");
-    expect(loadTone(loadOf(row("cy", { points: 1, capacity: 5 })))).toBe("positive");
+  it("names what is wrong with it, and nothing that is not", () => {
+    const load = loadOf(row("ada", { open: 4, blocked: 1, overdue: 2 }));
+    expect(loadSentence(load)).toContain("1 blocked");
+    expect(loadSentence(load)).toContain("2 overdue");
+    expect(loadSentence(loadOf(row("bo", { open: 2 })))).not.toContain("blocked");
+  });
+});
+
+describe("the bar's own scale", () => {
+  it("is the heaviest queue on screen, not an absolute ceiling", () => {
+    // A queue of thirty is heavy in one company and a quiet week in another,
+    // so there is no number that is "full".
+    expect(loadFraction(loadOf(row("ada", { open: 40 })), 40)).toBe(1);
+    expect(loadFraction(loadOf(row("bo", { open: 10 })), 40)).toBeCloseTo(0.25);
   });
 
-  it("does not divide by a capacity of zero", () => {
-    // Somebody declared to have no capacity at all is over by any amount of
-    // work, and a division would answer Infinity — a bar of unbounded width.
-    const load = loadOf(row("ada", { points: 3, capacity: 0, capacity_measure: "points" }));
-    expect(load.state).toBe("over");
-    expect(load.fraction).toBeNull();
-    expect(loadTone(load)).toBe("critical");
+  it("never exceeds the track", () => {
+    expect(loadFraction(loadOf(row("ada", { open: 80 })), 40)).toBe(1);
   });
 
-  it("says when the number covers more than one project", () => {
-    const load = loadOf(
-      row("ada", { points: 2, capacity: 8, capacity_from: 2, capacity_measure: "points" }),
-    );
-    expect(loadSentence(load)).toContain("across 2 projects");
-    expect(loadSentence(loadOf(row("bo", { capacity: 5, capacity_from: 1 })))).not.toContain(
-      "across",
-    );
+  it("is null when nobody holds anything", () => {
+    // A bar is a comparison, and with no queue anywhere there is nothing to
+    // compare against — a bar of some arbitrary length would be a proportion
+    // of a number that does not exist.
+    expect(loadFraction(loadOf(row("ada", { open: 0 })), 0)).toBeNull();
   });
 });
 
@@ -120,14 +101,14 @@ describe("the rows a screen draws", () => {
     );
     expect(rows.map((r) => r.handle)).toEqual(["ada", "bo", "cy"]);
     expect(rows[2]?.open).toBe(0);
-    expect(rows[2]?.state).toBe("unknown");
+    expect(rows[2]?.state).toBe("idle");
   });
 
-  it("never re-sorts by how far over somebody is", () => {
-    // One point over a capacity of two would outrank forty against a
-    // capacity nobody declared, which is not the question.
+  it("never re-sorts by anything of its own", () => {
+    // The engine answers heaviest first; a second ordering here would make
+    // two screens reading one answer disagree about who is at the top.
     const rows = loadRows(
-      [row("ada", { open: 40, points: 40 }), row("bo", { open: 1, points: 3, capacity: 2 })],
+      [row("ada", { open: 40, points: 40 }), row("bo", { open: 1, points: 3 })],
       [],
     );
     expect(rows.map((r) => r.handle)).toEqual(["ada", "bo"]);

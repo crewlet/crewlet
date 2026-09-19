@@ -106,7 +106,7 @@ func TestKeyMappingRoundTrips(t *testing.T) {
 		"plain",
 		"=",
 		".",
-		"rollover:a project:7",
+		"bulk:a project:7",
 	}
 	seen := map[string]string{}
 	for _, r := range resources {
@@ -497,7 +497,7 @@ func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
 		{"worker:scheduler", "worker.scheduler"},
 		// A name carrying the separator is MORE segments, never a class
 		// with a colon in it — the class is the leading one either way.
-		{"rollover:proj:7", "rollover.proj.7"},
+		{"bulk:proj:7", "bulk.proj.7"},
 		// And a name carrying a dot keeps it escaped, because an
 		// unescaped one would add a token the grammar never wrote.
 		{"seat:alice.smith", "seat.alice=2Esmith"},

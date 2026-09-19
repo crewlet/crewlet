@@ -31,35 +31,6 @@ import { indexOrg, seatTone, unitTally, UNIT_TOTAL_HINT, type Unit } from "~/lib
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useRecents } from "~/lib/recents.ts";
-import type { WorkProjectRow } from "~/protocol/index.ts";
-
-/**
- * A project's sprint rows: the one that is running, and the list.
- *
- * A PROJECT THAT RUNS NO SPRINTS gets neither — `sprints` is absent on such a
- * project, which is a different fact from a project that runs them and has
- * none right now, and offering a sprint list for a team that does not sprint
- * is an invitation to a screen that can only ever be empty.
- */
-function sprintRows(p: WorkProjectRow): SidebarRow[] {
-  if (!p.sprints) return [];
-  const rows: SidebarRow[] = [];
-  const active = p.sprints.active;
-  if (active) {
-    rows.push({
-      key: `${p.key}-sprint-${active.number}`,
-      label: active.name || `Sprint ${active.number}`,
-      path: ["work", p.key, "sprints", String(active.number)],
-      tone: "info",
-    });
-  }
-  rows.push({
-    key: `${p.key}-sprints`,
-    label: "All sprints",
-    path: ["work", p.key, "sprints"],
-  });
-  return rows;
-}
 
 /** The fixed rows of a workspace, from the one destinations table. */
 function fixed(workspace: Parameters<typeof destinationsOf>[0]): SidebarRow[] {
@@ -72,11 +43,11 @@ function fixed(workspace: Parameters<typeof destinationsOf>[0]): SidebarRow[] {
 }
 
 /**
- * Work: every project, its sprints, the goals and the saved views.
+ * Work: every project, the goals and the saved views.
  *
- * A PROJECT EXPANDS TO ITS SPRINTS AND NOTHING ELSE. Its board, list,
- * calendar and backlog are tabs of the project — they are views OF the object
- * you are on, and a sidebar row for each is what turns two levels into three.
+ * A PROJECT IS A LEAF. Its board, list and calendar are tabs of the project —
+ * they are views OF the object you are on, and a sidebar row for each is what
+ * turns two levels into three.
  */
 export function useWorkSidebar(): SidebarSection[] {
   const projects = useQuery("work_projects", { limit: 200 }, { pollMs: 120_000 });
@@ -96,7 +67,6 @@ export function useWorkSidebar(): SidebarSection[] {
         p.task_counts?.open == null
           ? undefined
           : { value: p.task_counts.open, of: "open items — the engine's own maintained count" },
-      children: sprintRows(p),
     }));
 
     const goalRows: SidebarRow[] = (goals.data?.goals ?? []).map((g) => ({

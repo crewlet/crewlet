@@ -136,19 +136,6 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 				}, now)
 				return err
 			}},
-		{"work_sprints",
-			func() error {
-				_, err := reader.Sprints(ctx, tracker.SprintQuery{
-					Project: "ENG", Level: stale, MaxLag: time.Second,
-				}, now)
-				return err
-			},
-			func() error {
-				_, err := reader.Sprints(ctx, tracker.SprintQuery{
-					Project: "ENG", Level: stale, MaxLagSeq: 1,
-				}, now)
-				return err
-			}},
 		{"work_activity",
 			func() error {
 				_, err := reader.Activity(ctx, tracker.ActivityQuery{

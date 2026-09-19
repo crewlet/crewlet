@@ -61,7 +61,6 @@ export const CHANGE_FIELDS = [
   "project",
   "type",
   "tags",
-  "sprint",
   "due",
   "start",
   "estimate",

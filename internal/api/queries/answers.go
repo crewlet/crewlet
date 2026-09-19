@@ -400,20 +400,9 @@ func Register(r *Registry, s Sources) {
 		// every task in the company.
 		r.Register("work_projects", s.workProjects)
 		r.Register("work_project", s.workProject)
-		r.Register("work_sprints", s.workSprints)
-		// THE BURNDOWN IS A SERIES, and a series is a different read
-		// from a set of figures: `work_sprints` scores every sprint in
-		// the window at two instants, and this one scores ONE sprint at
-		// every day of its own window. Folding it in would make the
-		// five-sprint report pay for five series nobody asked to draw.
-		r.Register("work_burndown", s.workBurndown)
 		// AND WHO IS CARRYING HOW MUCH, across every project at once.
-		// The two halves of that question live apart and neither is
-		// reachable from the other: what somebody HOLDS is a group-by
-		// over the tasks, and what they CAN hold is a sprint policy —
-		// per project, which is what `work_sprints` answers one of. A
-		// caller that summed them itself paid one round trip per
-		// project and rewrote the three-valued capacity per surface.
+		// A caller that grouped it itself paid one round trip per
+		// project and rewrote the arithmetic per surface.
 		r.Register("work_workload", s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable

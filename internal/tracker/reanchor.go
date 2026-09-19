@@ -31,7 +31,7 @@ import (
 // expectation from a generation that no longer exists.
 var versionedTables = []string{
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
-	"tracker_task_keys", "tracker_projects", "tracker_sprints",
+	"tracker_task_keys", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",
 	"tracker_tags", "tracker_views", "tracker_goals",
 	"tracker_persons", "tracker_rank_orders",

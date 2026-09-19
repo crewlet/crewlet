@@ -60,9 +60,6 @@ func TestEverySnapshotCollectionIsBounded(t *testing.T) {
 		{"goal_members", tracker.MaxGoalMembers, func(n *tracker.Notify) {
 			n.Snapshot.GoalMembers = handlesOf(tracker.MaxGoalMembers + 1)
 		}},
-		{"sprint_assignees", tracker.MaxSprintWakeParties, func(n *tracker.Notify) {
-			n.Snapshot.SprintAssignees = handlesOf(tracker.MaxSprintWakeParties + 1)
-		}},
 		{"mentions", tracker.MaxMentions, func(n *tracker.Notify) {
 			n.Mentions = handlesOf(tracker.MaxMentions + 1)
 		}},
@@ -128,8 +125,6 @@ func trimToCap(n *tracker.Notify, field string, max int) {
 		n.Snapshot.GoalOwners = n.Snapshot.GoalOwners[:max]
 	case "goal_members":
 		n.Snapshot.GoalMembers = n.Snapshot.GoalMembers[:max]
-	case "sprint_assignees":
-		n.Snapshot.SprintAssignees = n.Snapshot.SprintAssignees[:max]
 	case "mentions":
 		n.Mentions = n.Mentions[:max]
 	case "unblocked":

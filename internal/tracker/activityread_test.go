@@ -26,7 +26,7 @@ func (r *roundTrip) activity(q tracker.ActivityQuery) tracker.ActivityAnswer {
 func TestTheActivityFeedCarriesQuietCommits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 	done := tracker.StatusDone
 	// NO NOTIFY: this change tells nobody.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-quiet", "t-1", "ENG",
@@ -132,7 +132,7 @@ func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 	r.activity(tracker.ActivityQuery{
 		Q: "deploy", Project: "ENG", SinceAt: wednesday.AddDate(0, 0, -30),
 	})
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 	r.activity(tracker.ActivityQuery{Q: "deploy", Task: "t-1"})
 
 	// AND A QUERY WITH NO `q` IS NEVER GATED: `kinds`, `actor` and the
@@ -146,7 +146,7 @@ func TestTheActivityCursorPagesByPosition(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for i := range 5 {
-		inSprint(t, r, "t-"+itoa(i), nil)
+		filedTask(t, r, "t-"+itoa(i))
 	}
 
 	first := r.activity(tracker.ActivityQuery{Workspace: true, Limit: 2})
@@ -191,8 +191,8 @@ func TestTheActivityCursorPagesByPosition(t *testing.T) {
 func TestTheActivityFiltersNarrow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
-	inSprint(t, r, "t-2", nil)
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "t-1", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus, nil); err != nil {
@@ -263,7 +263,7 @@ func TestTheActivityFiltersNarrow(t *testing.T) {
 func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "t-1", nil)
+	filedTask(t, r, "t-1")
 
 	// The harness's own writer is a HUMAN; this one is the operator token,
 	// which is what an audit is about.

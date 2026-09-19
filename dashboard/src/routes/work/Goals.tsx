@@ -57,7 +57,7 @@ import {
 // reads FULL AS ACHIEVED, and `meterTone` has the opposite polarity welded in
 // (>= 100% is `danger`), so a finished goal would draw red. Their legend is
 // also all-or-nothing — `hideLabel` hides the value text with the label — so
-// the capacity-style bars elsewhere in this workspace cannot exist at all, and
+// the load bars elsewhere in this workspace cannot exist at all, and
 // their meter keeps `role="meter"` with no scale, announcing "0 of 100" where
 // nobody has said what the limit is. See the report.
 import { Meter } from "~/ui/primitives.tsx";

@@ -90,11 +90,6 @@ const PHRASES: Record<string, { short: string; about: string; why: string }> = {
     about: "owns the goal",
     why: "you own a goal this work counts towards",
   },
-  sprint: {
-    short: "in your sprint",
-    about: "in the sprint",
-    why: "this is in a sprint you are in",
-  },
   watcher: { short: "you watch it", about: "watching", why: "you follow this task" },
   unwatched: {
     short: "you stopped watching",

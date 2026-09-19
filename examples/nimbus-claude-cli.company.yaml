@@ -643,7 +643,6 @@ tracker:
   backend: native
   native:
     timezone: "Europe/Berlin"
-    non_working_weekdays: [saturday, sunday]
 
 knowledge:
   backend: native

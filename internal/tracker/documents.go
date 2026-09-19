@@ -30,22 +30,15 @@ import (
 // documentSelect is the statement that reads one whole-document object.
 //
 // KEYED PER TABLE, mirroring [documentTable], because the key column differs
-// and a sprint's is two columns. A generic statement would mean every table
-// carrying the same key column, which is the polymorphic document table this
-// design deliberately does not have.
+// per table. A generic statement would mean every table carrying the same key
+// column, which is the polymorphic document table this design deliberately
+// does not have.
 func documentSelect(s Subject) (query string, args []any, err error) {
 	table, key, err := documentTable(s)
 	if err != nil {
 		return "", nil, err
 	}
 	switch table {
-	case "tracker_sprints":
-		project, number, err := splitSprintID(key)
-		if err != nil {
-			return "", nil, err
-		}
-		return `SELECT document, version FROM tracker_sprints
-			WHERE project_key = ? AND number = ?`, []any{project, number}, nil
 	case "tracker_projects", "tracker_tagsets", "tracker_catalogues":
 		// THE COLUMN IS THE WRITE'S OWN. Each of these tables keys on
 		// the word its subject means — a project on its `key`, a tag set
@@ -107,11 +100,6 @@ func readDocument[T any](ctx context.Context, tx *sql.Tx, s Subject,
 func readProject(ctx context.Context, tx *sql.Tx, key string) (Project, bool, error) {
 	return readDocument(ctx, tx, ProjectSubject(key),
 		func(p *Project, v uint64) { p.Version = v })
-}
-
-func readSprint(ctx context.Context, tx *sql.Tx, project string, number int) (Sprint, bool, error) {
-	return readDocument(ctx, tx, SprintSubject(project, number),
-		func(s *Sprint, v uint64) { s.Version = v })
 }
 
 func readTagSet(ctx context.Context, tx *sql.Tx, project string) (TagSet, bool, error) {

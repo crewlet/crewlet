@@ -799,7 +799,7 @@ function dedupe(keys: string[]): string[] {
  * Name a handle by what the chart calls it, and say which kind of seat it is.
  *
  * THE TWO THINGS [SeatCell] NEEDS AND A BARE HANDLE CANNOT SUPPLY, so it is
- * wanted by every screen that renders a handle out of an answer — a sprint's
+ * wanted by every screen that renders a handle out of an answer — a goal's
  * assignees, a goal's owners, a saved view's author. It was written twice,
  * once per file, with the two copies already differing in the name of a local
  * variable; the next difference would have been which of them falls back to

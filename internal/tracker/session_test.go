@@ -80,9 +80,9 @@ func TestASecondWriteOnOneSubjectWaitsBeforeItSnapshots(t *testing.T) {
 func TestADependencyOnBothSidesWaitsForItsOwnAuthoredCommit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "mid", nil)
-	inSprint(t, r, "up", nil)
-	inSprint(t, r, "down", nil)
+	filedTask(t, r, "mid")
+	filedTask(t, r, "up")
+	filedTask(t, r, "down")
 
 	if _, err := r.writer.Depend(t.Context(), "op-both", tracker.DependencyChange{
 		Task: "mid", Project: "ENG",

@@ -37,8 +37,8 @@ func blockerIDs(got tracker.TaskRow) []string {
 func TestABoardRowNamesTheTasksItWaitsOn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 
 	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
@@ -74,9 +74,9 @@ func TestABoardRowNamesTheTasksItWaitsOn(t *testing.T) {
 func TestTheBlockedFlagIsTheEdgesItCarries(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
-	inSprint(t, r, "free", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+	filedTask(t, r, "free")
 
 	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
@@ -130,8 +130,8 @@ func TestTheBlockedFlagIsTheEdgesItCarries(t *testing.T) {
 func TestAnEdgeSurvivesItsBlockerLeavingThePage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "dep", nil)
-	inSprint(t, r, "blk", nil)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
 
 	if _, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
@@ -167,7 +167,7 @@ func TestAnEdgeSurvivesItsBlockerLeavingThePage(t *testing.T) {
 func TestEveryContainerOffersATimelineOrderedByWhenWorkStarts(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "one", nil)
+	filedTask(t, r, "one")
 
 	strip := r.strip(
 		tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}, "ada")

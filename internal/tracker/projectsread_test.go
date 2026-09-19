@@ -55,9 +55,9 @@ func seedProject(t *testing.T, r *roundTrip, p tracker.Project) {
 func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	inSprint(t, r, "open-1", nil)
-	inSprint(t, r, "open-2", nil)
-	inSprint(t, r, "shipped", nil)
+	filedTask(t, r, "open-1")
+	filedTask(t, r, "open-2")
+	filedTask(t, r, "shipped")
 
 	done := tracker.StatusDone
 	if _, err := r.writer.UpdateTask(t.Context(), "op-ship", "shipped", "ENG",
@@ -171,12 +171,10 @@ func TestAProjectsUnitIsResolvedAgainstTheChart(t *testing.T) {
 }
 
 // DESCRIBING A PROJECT IS WHAT A SEAT LEARNS ITS VOCABULARY FROM.
-func TestDescribingAProjectCarriesTheVocabularyAndTheSprint(t *testing.T) {
+func TestDescribingAProjectCarriesTheVocabulary(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	seedNamedSprint(t, r, 4, "Kickoff", tracker.SprintActive)
-	four := 4
-	inSprint(t, r, "in", &four)
+	filedTask(t, r, "in")
 
 	detail := r.project(tracker.ProjectDetailQuery{Project: "eng"})
 	if detail.Key != "ENG" {
@@ -200,20 +198,11 @@ func TestDescribingAProjectCarriesTheVocabularyAndTheSprint(t *testing.T) {
 			"statuses exist and not which types would file work that is " +
 			"refused on the next breath")
 	}
-	if detail.Sprints == nil || detail.Sprints.Active == nil {
-		t.Fatalf("the description carries no active sprint, want sprint 4")
-	}
-	if detail.Sprints.Active.Number != 4 || detail.Sprints.Active.Name != "Kickoff" {
-		t.Fatalf("the active sprint is %+v, want 4/Kickoff", detail.Sprints.Active)
-	}
-	// AND THE ACTIVE SPRINT CARRIES ITS FIGURES, because a lead reading
-	// this is asking how the sprint is going, not only which one it is.
-	if detail.Sprints.Active.Figures.Tasks != 1 {
-		t.Fatalf("the active sprint holds %d tasks, want the one filed into it",
-			detail.Sprints.Active.Figures.Tasks)
-	}
-	if len(detail.Recent) != 1 || detail.Recent[0].Number != 4 {
-		t.Fatalf("recent_sprints is %+v, want the one sprint", detail.Recent)
+	// AND THE MAINTAINED COUNTS, because a lead reading this is asking how
+	// much is in the project as well as what its vocabulary is.
+	if detail.Counts.Open != 1 {
+		t.Fatalf("the description counts %d open, want the one filed into it",
+			detail.Counts.Open)
 	}
 }
 

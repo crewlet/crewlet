@@ -42,14 +42,13 @@ const (
 	ReasonChecklist      Reason = "checklist"
 	ReasonCollaborator   Reason = "collaborator"
 	ReasonGoalOwner      Reason = "goal_owner"
-	ReasonSprint         Reason = "sprint"
 	ReasonWatcher        Reason = "watcher"
 	ReasonUnwatched      Reason = "unwatched"
 	ReasonPurged         Reason = "purged"
 	ReasonLeadFallback   Reason = "lead_fallback"
 )
 
-// Reasons are the twenty, IN PRECEDENCE ORDER.
+// Reasons are the nineteen, IN PRECEDENCE ORDER.
 //
 // THE ORDER IS THE RULE: the first reason that names a handle is the one that
 // handle hears under, and every later one for the same handle is dropped. A
@@ -66,7 +65,7 @@ var Reasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonBlocking, ReasonAsked,
 	ReasonAnswered, ReasonAssignee, ReasonUnassigned, ReasonReporter,
 	ReasonThread, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
-	ReasonChecklist, ReasonCollaborator, ReasonGoalOwner, ReasonSprint,
+	ReasonChecklist, ReasonCollaborator, ReasonGoalOwner,
 	ReasonWatcher, ReasonUnwatched, ReasonPurged, ReasonLeadFallback,
 }
 
@@ -145,7 +144,7 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // changes the company deliberately did not announce.
 //
 // `batched` is an argument rather than a field of the notification because it
-// is a property of the CALL that produced the record — a bulk sprint plan is
+// is a property of the CALL that produced the record — a bulk re-tag is
 // thirty facts to absorb rather than thirty asks — and the notification is
 // about one change.
 func Candidates(n *Notify, batched bool) []Candidate {
@@ -243,10 +242,6 @@ func Candidates(n *Notify, batched bool) []Candidate {
 		addAll(n.Snapshot.GoalOwners, ReasonGoalOwner, false)
 		addAll(n.Snapshot.GoalMembers, ReasonGoalOwner, false)
 	}
-	if n.Kind == ChangeSprintStarted || n.Kind == ChangeSprintClosed {
-		addAll(n.Snapshot.SprintAssignees, ReasonSprint, false)
-		add(n.Snapshot.ProjectLead, ReasonSprint, false)
-	}
 	if task {
 		addAll(n.Snapshot.Watchers, ReasonWatcher, false)
 	}
@@ -320,7 +315,7 @@ func (k ChangeKind) TaskCommit() bool {
 	switch k {
 	case ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 		ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
-		ChangeRouted, ChangeMoved, ChangeReparented, ChangeSprint,
+		ChangeRouted, ChangeMoved, ChangeReparented,
 		ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 		ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 		ChangeRestored, ChangePurged:

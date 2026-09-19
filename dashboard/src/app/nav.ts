@@ -94,7 +94,7 @@ export const RAIL: RailRow[] = [
     icon: "check",
     path: ["work"],
     owns: ["work", "goals"],
-    hint: "Projects, sprints, items and goals",
+    hint: "Projects, items and goals",
     chord: "w",
   },
   {
@@ -179,7 +179,6 @@ export function railRow(key: Workspace | ""): RailRow | undefined {
 export const RESERVED_SEGMENTS: string[] = [
   "views",
   "search",
-  "sprints",
   "people",
   "units",
   "turns",

@@ -25,7 +25,7 @@
  *
  * The three kinds are held apart and LABELLED rather than filtered down to
  * one, because "the engine did this" is as much an answer as "a person did":
- * a sprint rollover nobody asked for is the thing an operator opens an audit
+ * a bulk edit nobody asked for is the thing an operator opens an audit
  * to find.
  *
  * # What each source can and cannot be asked
@@ -166,7 +166,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       return { subject: id, path: ["work", id] };
     default:
       // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
-      // tag set, a sprint, an alias. Named by its kind rather than linked,
+      // tag set, an alias. Named by its kind rather than linked,
       // because a link to a screen the product does not have is worse than
       // none: the row still says what was changed.
       return { subject: kind ? `${kind} ${short(id)}` : short(id) };
@@ -376,7 +376,7 @@ export function Audit() {
             {row.actor ? (
               <SeatCell handle={row.actor} name={index.byHandle.get(row.actor)?.name} />
             ) : (
-              // THE ENGINE IS A WRITER. A sprint rollover, a chart apply and a
+              // THE ENGINE IS A WRITER. A chart apply and a
               // repair duty carry no actor at all, and rendering them as a
               // blank would make the five writers with no tool invisible on
               // the one screen that exists to name every writer.

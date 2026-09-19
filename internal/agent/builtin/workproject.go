@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -52,6 +51,17 @@ type ProjectWriter interface {
 		[]string, []string, error)
 }
 
+// LeadsProject reports whether a handle leads the unit that owns a project.
+//
+// A SEAM RATHER THAN A CHART, for the reason [Leads] is one: the answer is a
+// fact about the company's configuration, this package holds none, and a lead
+// relation derived here would be a second opinion about the hierarchy.
+//
+// NIL RESOLVES FALSE, which refuses every action naming what is missing — the
+// safe direction, and the one an operator can diagnose: a surface that wired
+// no lookup loses the verb rather than opening it to everybody.
+type LeadsProject func(ctx context.Context, actor, project string) bool
+
 type writeProject struct {
 	deps  WorkDeps
 	leads LeadsProject
@@ -65,8 +75,8 @@ func (t *writeProject) Description() string {
 	return "Change a project's own settings. `tags` is the one part any seat " +
 		"may add to — declare a label before filing work under it, because " +
 		"create_work_item refuses one this project does not have. Renaming or " +
-		"archiving a tag, declaring project fields, setting the sprint policy " +
-		"and setting the default assignee are the project lead's; archiving " +
+		"archiving a tag, declaring project fields and setting the default " +
+		"assignee are the project lead's; archiving " +
 		"the project itself takes a person. A project's name, purpose and " +
 		"owning unit come from the org chart and are not writable here."
 }
@@ -145,52 +155,6 @@ func (t *writeProject) Parameters() map[string]any {
 					"required": []any{"slug", "name", "type"},
 				},
 			},
-			"sprints": map[string]any{
-				"type": "object",
-				"description": "The sprint policy. Send `enabled: false` to " +
-					"stop sprinting — it does not close a running sprint. " +
-					"The project lead's.",
-				"properties": map[string]any{
-					"enabled": map[string]any{
-						"type":        "boolean",
-						"description": "Default true.",
-					},
-					"length_days":   map[string]any{"type": "integer"},
-					"start_weekday": map[string]any{"type": "integer", "description": "0 is Sunday."},
-					"start_minutes": map[string]any{"type": "integer", "description": "Minutes after midnight."},
-					"ahead":         map[string]any{"type": "integer", "description": "Unstarted sprints kept minted."},
-					"auto_start":    map[string]any{"type": "boolean"},
-					"auto_roll":     map[string]any{"type": "boolean"},
-					"archive_after": map[string]any{"type": "integer", "description": "Days after close; 0 never."},
-					"name_format":   map[string]any{"type": "string"},
-					"measure": map[string]any{
-						"type": "string",
-						"enum": toAny(sprintMeasureNames()),
-					},
-					"capacity": map[string]any{
-						"type": "object",
-						"description": "What each seat can take in a sprint, " +
-							"keyed by handle, in this project's own measure. " +
-							"A seat named here is compared against it; one " +
-							"that is not has NO capacity, which is not a " +
-							"capacity of zero. Sending the object REPLACES " +
-							"the set, so drop a seat by omitting it.",
-						"additionalProperties": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"points":       map[string]any{"type": "number"},
-								"estimate_min": map[string]any{"type": "integer"},
-							},
-						},
-					},
-					"point_scale": map[string]any{
-						"type": "array",
-						"description": "The estimates this project allows, " +
-							"as a list of numbers. Empty means any.",
-						"items": map[string]any{"type": "number"},
-					},
-				},
-			},
 			"default_assignee": map[string]any{
 				"type": "string",
 				"description": "Who unassigned work lands on. Empty means " +
@@ -253,7 +217,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if tagEdit.Empty() && edit.Empty() {
 		return failed("This call changes nothing. Send `tags_add`, " +
-			"`tags_rename`, `tags_archive`, `fields`, `sprints`, " +
+			"`tags_rename`, `tags_archive`, `fields`, " +
 			"`default_assignee` or `archived`."), nil
 	}
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
@@ -337,7 +301,7 @@ func projectTagEdit(args map[string]any) (tracker.TagEdit, string) {
 	return edit, ""
 }
 
-// projectPolicyEdit reads the four policy facets a caller sent.
+// projectPolicyEdit reads the three policy facets a caller sent.
 //
 // PRESENCE DECIDES, never the value: `default_assignee: ""` means triage and
 // omitting it means leave it alone, and a reader that could not tell them apart
@@ -351,13 +315,6 @@ func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
 		}
 		edit.Fields = &fields
 	}
-	if raw, held := args["sprints"]; held {
-		spec, ok := raw.(map[string]any)
-		if !ok {
-			return tracker.ProjectEdit{}, "`sprints` is the sprint policy, as an object."
-		}
-		edit.Sprints = &tracker.SprintPolicyEdit{Policy: sprintPolicyArg(spec)}
-	}
 	if _, held := args["default_assignee"]; held {
 		who := strings.TrimSpace(argString(args, "default_assignee"))
 		edit.DefaultAssignee = &who
@@ -367,119 +324,6 @@ func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
 		edit.Archived = &archived
 	}
 	return edit, ""
-}
-
-// sprintPolicyArg reads a sprint policy, or the deliberate absence of one.
-//
-// IT REFUSES NOTHING, and that is not an omission: every value a caller can
-// get wrong here — a length no sprint can run, a weekday outside the week, a
-// measure a sprint cannot sum — is refused by [tracker] at the WRITE
-// (`checkSprintPolicy`), which is the only place that sees the project the
-// policy is landing on and the only place a refusal can actually stop the
-// change. A second opinion at the edge would be a copy of that table, drifting
-// from it the first time either side moved.
-func sprintPolicyArg(spec map[string]any) *tracker.SprintPolicy {
-	if enabled, held := spec["enabled"]; held {
-		if on, ok := enabled.(bool); ok && !on {
-			// OFF IS A NIL POLICY, which is the state a project that
-			// never declared sprints is already in — so turning it off
-			// and never turning it on are the same row.
-			return nil
-		}
-	}
-	policy := &tracker.SprintPolicy{
-		LengthDays:   argInt(spec, "length_days", 0),
-		StartWeekday: time.Weekday(argInt(spec, "start_weekday", 0)),
-		StartMinutes: argInt(spec, "start_minutes", 0),
-		Ahead:        argInt(spec, "ahead", 0),
-		AutoStart:    argBool(spec, "auto_start"),
-		AutoRoll:     argBool(spec, "auto_roll"),
-		ArchiveAfter: argInt(spec, "archive_after", 0),
-		NameFormat:   strings.TrimSpace(argString(spec, "name_format")),
-		Measure:      tracker.SprintMeasure(strings.TrimSpace(argString(spec, "measure"))),
-		Capacity:     capacityArg(spec["capacity"]),
-		PointScale:   pointScaleArg(spec["point_scale"]),
-	}
-	if policy.LengthDays == 0 {
-		// THE DEFAULT IS APPLIED AT THE EDGE rather than left as a zero
-		// the writer refuses, because a lead who sent a policy without a
-		// length meant the ordinary cadence — and the refusal that zero
-		// would otherwise earn teaches nothing.
-		policy.LengthDays = tracker.DefaultSprintDays
-	}
-	return policy
-}
-
-// capacityArg reads the per-seat capacities a policy declares.
-//
-// THE FIELD HAD NO PRODUCER. `SprintPolicy.Capacity` is validated by
-// [checkSprintPolicy], read by the sprint report and read again by the
-// workload — and nothing in the tree could set it, so the loop that validates
-// it ran over an always-empty map and both readers answered "nobody declared
-// one" in every company. It is the shape `waiting_on` was in before it got a
-// writer: an entire feature over a field only a test could author.
-//
-// A WHOLE-SET REPLACE, not a merge, and the schema says so. A merge cannot
-// express a removal — there is no value meaning "this seat no longer has a
-// capacity", since zero is a real one — so a caller dropping somebody would
-// have no gesture at all.
-//
-// A MALFORMED ENTRY IS SKIPPED rather than refusing the whole edit: the policy
-// carries nine other fields and losing all of them over one bad capacity is a
-// worse answer than landing the rest. What CANNOT be salvaged — a negative
-// number — is refused by [checkSprintPolicy] inside the write, which is the
-// only place that sees the project it is landing on.
-func capacityArg(raw any) map[string]tracker.Capacity {
-	spec, ok := raw.(map[string]any)
-	if !ok || len(spec) == 0 {
-		return nil
-	}
-	out := make(map[string]tracker.Capacity, len(spec))
-	for handle, value := range spec {
-		entry, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		out[strings.TrimSpace(handle)] = tracker.Capacity{
-			Points:      argFloat(entry, "points"),
-			EstimateMin: argInt(entry, "estimate_min", 0),
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// pointScaleArg reads the estimates a project allows.
-//
-// The other half of the same hole: validated, never writable. An empty list
-// and an absent one are the same state — any estimate is allowed — so there is
-// no three-valued question here and nil is the honest answer to both.
-func pointScaleArg(raw any) []float64 {
-	list, ok := raw.([]any)
-	if !ok || len(list) == 0 {
-		return nil
-	}
-	out := make([]float64, 0, len(list))
-	for _, value := range list {
-		if n, ok := value.(float64); ok {
-			out = append(out, n)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// sprintMeasureNames renders the closed set for the tool schema.
-func sprintMeasureNames() []string {
-	out := make([]string, 0, len(tracker.SprintMeasures))
-	for _, m := range tracker.SprintMeasures {
-		out = append(out, string(m))
-	}
-	return out
 }
 
 // toAny widens a string set for a JSON Schema `enum`.

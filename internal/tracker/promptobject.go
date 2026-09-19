@@ -13,24 +13,24 @@ import (
 // Because almost none of the task prompt applies. Its openers all begin "A
 // task…", its header is labelled **Task:**, its context block sends the reader
 // to `get_work_item`, and its handling block is four steps about owning a work
-// item — assignee, status, one substantive comment. A goal has no assignee and
-// a sprint has no status, so a branch inside each of those would be four
-// branches through one paragraph, and every later edit to the task wording
-// would have to be read four ways.
+// item — assignee, status, one substantive comment. A goal has no assignee at
+// all, so a branch inside the task frame would be branches through one
+// paragraph, and every later edit to the task wording would have to be read
+// twice.
 //
 // # Why they exist at all
 //
-// Three of the four routable object kinds are not tasks, and for a long time
+// Two of the three routable object kinds are not tasks, and for a long time
 // the parser simply dropped them — which is why [Writer.WritePriorities] came
 // to argue, in its own doc comment, that a notification "attached to a person
 // record renders no card and reaches nobody". That was TRUE of the code and
-// false of the design: the routing rules for all three already existed in
+// false of the design: the routing rules for both already existed in
 // recipients.go, the reasons were already in the enum and already split
-// Primary from Other, and the snapshot already carried GoalOwners,
-// SprintAssignees and Person. Only the two ends were missing — nobody
-// published, and nothing could render it if they had.
+// Primary from Other, and the snapshot already carried GoalOwners and Person.
+// Only the two ends were missing — nobody published, and nothing could render
+// it if they had.
 //
-// # None of the three sends the reader to `get_work_item`
+// # Neither of the two sends the reader to `get_work_item`
 //
 // A pointer at a task is exactly what these wakes do not have, and inventing
 // one costs the seat a round and a failed tool call to discover. Each names
@@ -43,8 +43,6 @@ func buildObjectPrompt(kind ObjectKind, n notify.Inbound, parties notify.Parties
 	switch kind {
 	case KindGoal:
 		promptGoal(&b, n, parties)
-	case KindSprint:
-		promptSprint(&b, n, parties)
 	case KindPerson:
 		promptPriorities(&b, n, parties)
 	default:
@@ -89,63 +87,6 @@ func promptGoal(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 		" question. If you conclude the target is unreachable, say so on the" +
 		" task where the work actually is, with `" + CommentOnWorkTool +
 		"`, and mention the person who raised it.\n")
-}
-
-// promptSprint: the window this seat plans into opened or closed.
-func promptSprint(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
-	meta := n.Metadata
-	closed := ChangeKind(meta[MetaChangeKind]) == ChangeSprintClosed
-	if closed {
-		b.WriteString("A sprint you had work in closed.")
-	} else {
-		b.WriteString("A sprint you have work in started.")
-	}
-	objectHeader(b, n, parties, "Sprint")
-
-	project := meta[MetaProject]
-	scope := ""
-	if project != "" {
-		scope = ", project: " + project
-	}
-
-	if closed {
-		b.WriteString("\n## What this means" +
-			"\nThe sprint is over. **No task's status changed** — a close is" +
-			" about the sprint, not about the work in it. What was unfinished" +
-			" is still yours; where it went next is in the line above.\n")
-		b.WriteString("\n## Get full context" +
-			"\nRead how it went with `" + SprintReportTool + "`(" +
-			strings.TrimPrefix(scope, ", ") + ") — what was committed, what" +
-			" was added mid-sprint, what landed and what was left.\n")
-		b.WriteString("\n## How to handle this" +
-			"\n1. **Find your own unfinished work** with `" + MyWorkTool +
-			"` and confirm where it landed — the next sprint, the backlog, or" +
-			" cancelled." +
-			"\n2. **If something of yours was cancelled by the close** and" +
-			" should not have been, say so on the task with `" +
-			CommentOnWorkTool + "` rather than silently reopening it." +
-			"\n3. **Do not re-plan the sprint.** Starting, closing and settling" +
-			" a sprint's spillover are the project lead's decisions.\n")
-		if lead := meta[MetaProjectLead]; lead != "" {
-			b.WriteString("\nIf the rollover is still pending, **" + lead +
-				"** settles it with `" + ManageSprintTool +
-				"` — it is their call, not yours.\n")
-		}
-		return
-	}
-
-	b.WriteString("\n## Get full context" +
-		"\nSee what is in it with `" + ListWorkItemsTool + "`(sprint: active" +
-		scope + "), and your own share of it with `" + MyWorkTool + "`.\n")
-	b.WriteString("\n## How to handle this" +
-		"\n1. **Look at what you committed to.** The sprint's window is what" +
-		" every figure in its report is measured over, so work that lands" +
-		" outside it does not count toward it." +
-		"\n2. **If you are over capacity**, say so now rather than at the" +
-		" close — comment on the task you cannot reach with `" +
-		CommentOnWorkTool + "` and name who should pick it up." +
-		"\n3. **Do not add or remove work from the sprint on your own.** What" +
-		" a team took on together is the lead's to change.\n")
 }
 
 // promptPriorities: somebody else wrote this seat's own priority list.
@@ -206,11 +147,11 @@ func promptPriorities(b *strings.Builder, n notify.Inbound, parties notify.Parti
 		" priority looks exactly like a message that was lost.\n")
 }
 
-// objectHeader is the identifying block the goal and sprint frames share.
+// objectHeader is the identifying block the non-task frames share.
 //
-// It deliberately does NOT render a status or an assignee: neither a goal nor
-// a sprint has one, and an empty line under a bold label reads as missing data
-// rather than as data that does not exist.
+// It deliberately does NOT render a status or an assignee: a goal has neither,
+// and an empty line under a bold label reads as missing data rather than as
+// data that does not exist.
 func objectHeader(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 	label string) {
 
@@ -238,10 +179,6 @@ func objectLead(meta map[string]string, actor string) string {
 	switch ChangeKind(meta[MetaChangeKind]) {
 	case ChangeGoalUpdated:
 		return "The goal was updated" + by + "."
-	case ChangeSprintStarted:
-		return "The sprint was started" + by + "."
-	case ChangeSprintClosed:
-		return "The sprint was closed" + by + "."
 	case ChangePrioritised:
 		return "Your priority list was written" + by + "."
 	}

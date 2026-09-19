@@ -6,8 +6,8 @@
  * filter !== "")`. `??` falls through on null only, and the twist writes a
  * boolean — so the first hand collapse was permanent and neither force-open
  * could ever apply again. Both failures are silent and both look like the data
- * is missing rather than hidden: a filter that matches a sprint keeps its
- * project row (a parent matches THROUGH its children) and renders the sprint
+ * is missing rather than hidden: a filter that matches a child keeps its
+ * parent row (a parent matches THROUGH its children) and renders the child
  * nowhere, which is indistinguishable from a search that found nothing; and a
  * navigation into the branch leaves the row marked `current` undrawn, which is
  * exactly what the component's own comment says a tree must never do.
@@ -32,7 +32,7 @@ const SECTIONS: SidebarSection[] = [
           {
             key: "auth",
             label: "Auth rewrite",
-            path: ["work", "projects", "apollo", "sprints", "auth"],
+            path: ["work", "projects", "apollo", "views", "auth"],
           },
         ],
       },
@@ -78,7 +78,7 @@ test("a filter that matches a child opens the branch the reader collapsed", () =
 test("navigating into the branch opens the one the reader collapsed", () => {
   sidebar();
   collapseApollo();
-  location.hash = "#/work/projects/apollo/sprints/auth";
+  location.hash = "#/work/projects/apollo/views/auth";
   fireEvent(window, new Event("crewlet:route"));
   const row = screen.queryByText("Auth rewrite");
   expect(row).not.toBeNull();
@@ -89,7 +89,7 @@ test("the twist still folds a branch the reader is standing in", () => {
   // The forced state is FORGOTTEN, not overridden: a reader who collapses the
   // branch they are inside keeps it collapsed, or the twist would be a control
   // that does nothing on exactly the branch they are looking at.
-  location.hash = "#/work/projects/apollo/sprints/auth";
+  location.hash = "#/work/projects/apollo/views/auth";
   sidebar();
   expect(screen.queryByText("Auth rewrite")).not.toBeNull();
   fireEvent.click(screen.getByLabelText("Collapse Apollo"));

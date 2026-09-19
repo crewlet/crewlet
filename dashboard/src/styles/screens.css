@@ -1066,7 +1066,7 @@
    `Card.Title` call sites in this tree hold a single text expression — which
    is what makes `block` safe here and would not make it safe upstream. The
    ones that can actually run long are the data-driven ones: a unit's name, a
-   checklist's, a sprint's.
+   checklist's, a goal's.
 
    uilet's own rule survives untouched around this: the SUBTITLE still gives
    way first (`flex-shrink: 100`), so this only ever applies once there is no
@@ -1953,8 +1953,8 @@ details > summary.int-summary::-webkit-details-marker {
   column-gap: var(--space-4);
 }
 /* THE GROUPS ARE THE WRAP UNIT. A single wrapping row broke between any two
-   controls, and since what the bar draws varies by shape — type, sprint,
-   group-by and sort each appear on some tabs and not others — the scope
+   controls, and since what the bar draws varies by shape — type, group-by
+   and sort each appear on some tabs and not others — the scope
    control landed at x≈345 on List, x≈1338 on Board and x≈1155 on Calendar.
    Grouped, a break falls between the question and the switches, and the
    switches sit against the count rather than against six conditional
@@ -2545,7 +2545,7 @@ details > summary.int-summary::-webkit-details-marker {
    The description carried `.truncate`, which is right for a cell with a shape —
    a title, a handle, a key — and wrong for this one. A create moves every field
    the applier compares (`internal/tracker`'s `TaskDeltas`: title, status,
-   assignee, priority, project, type, tags, sprint, due, start, estimate, points,
+   assignee, priority, project, type, tags, due, start, estimate, points,
    capped at `MaxDeltas`) and `describeHistory` renders a clause each, so ~250
    characters arrived in a cell about 100 wide and the ellipsis fell inside
    `Status: ` — on a panel with a page of unused height under it.
@@ -3242,15 +3242,9 @@ a.work-cal-chip:hover {
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
-.wl-from {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-}
-
-/* THE TRACK IS LONGER THAN CAPACITY, so over-capacity has somewhere to go.
-   A bar that filled at 100% would draw a person at capacity and a person at
-   three times it identically — which is the one comparison the screen is
-   for. */
+/* THE TRACK IS THE HEAVIEST QUEUE ON SCREEN, so the table reads as a
+   comparison between people rather than against a ceiling nobody set. The
+   heaviest row fills it and every other is a fraction of that. */
 .wl-track {
   position: relative;
   height: 8px;
@@ -3262,10 +3256,9 @@ a.work-cal-chip:hover {
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: 999px;
-  /* A LOAD OF ZERO AGAINST A REAL CAPACITY IS STILL A ROW WITH A BAR, and it
-     is two pixels rather than nothing: somebody declared to take eight points
-     and holding none is a fact worth seeing beside the person holding twelve,
-     and an empty track there would read as the no-capacity case. */
+  /* A SEAT HOLDING NOTHING DRAWS NO BAR AT ALL — see the neutral note below
+     — so this floor only ever applies to a real queue, where one open item
+     against a heaviest of forty is still worth two pixels rather than none. */
   min-width: 2px;
 }
 .wl-bar.is-positive {
@@ -3277,23 +3270,10 @@ a.work-cal-chip:hover {
 .wl-bar.is-critical {
   background: var(--critical);
 }
-/* THERE IS NO NEUTRAL BAR. A row with no declared capacity draws an empty
-   track, because the track IS the comparison and there is nothing to compare
-   against — the em dashes in the two columns beside it are what say so. A
-   hairline here claimed to distinguish "nobody declared a capacity" from
-   "this person holds nothing" and could not: both have no fraction, so both
-   drew the same two pixels. */
-/* WHERE CAPACITY IS, drawn whether or not the bar reaches it, so a reader
-   sees the target as well as the load. */
-.wl-mark {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--text-muted);
-  opacity: 0.55;
-  z-index: 1;
-}
+/* THERE IS NO NEUTRAL BAR. A seat holding nothing draws an empty track,
+   because the track IS the comparison and a bar of zero width and a bar of
+   two pixels are the same two pixels — the row's own counts beside it are
+   what say which. */
 
 /* ---- "Change this with your assistant" ---------------------------------
    Closed by default and quiet when closed: it is the answer to a question a

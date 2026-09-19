@@ -77,23 +77,15 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			if e.native.writer != nil {
 				// THE TRACKER'S OWN JOBS, and they are a different
 				// kind of thing from a sweep: its records are a log
-				// and nothing deletes them here. Four finish work a
+				// and nothing deletes them here. They finish work a
 				// crash left half-done — a re-spread walk, an
-				// abandoned merge — and tell the tasks a close
-				// unblocked; the fifth advances the sprints, whose
-				// start and end are CALENDAR boundaries that arrive
-				// whether or not anybody is looking. Every one is
-				// GATED, so a tick with nothing to do costs one
-				// indexed read.
+				// abandoned merge, a one-sided dependency — and tell
+				// the tasks a close unblocked. Every one is GATED,
+				// so a tick with nothing to do costs one indexed
+				// read.
 				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
 					DB: e.backends.Store, Writer: e.native.writer,
 					NodeID: e.native.nodeID,
-					// THE COMPANY'S ONE ZONE, because a sprint's
-					// window is a weekday and a minute past midnight
-					// — and a boundary computed in UTC for a team in
-					// Berlin starts their sprint at one in the
-					// morning.
-					Zone: e.trackerZone(),
 					// AND THE LEAD MAP, for the one repair whose
 					// commit carries a wake. Read per call against
 					// the epoch current when the job runs, for the
@@ -329,12 +321,6 @@ func (e *Engine) stopMaintenance() {
 	}
 }
 
-// trackerZone is the company's ONE timezone, read per call.
-//
-// PER CALL rather than captured, because a config apply replaces the epoch:
-// captured at wiring time, a company that moved its own zone would go on
-// minting sprints on the old one for the life of the process. UTC where there
-// is no company, which is the only answer a process with no epoch has.
 // inboxRetention is how long this company's inbox rows live.
 //
 // A NODE WITH NO COMPANY STATES NO HORIZON, for the reason
@@ -348,12 +334,4 @@ func (e *Engine) inboxRetention() time.Duration {
 		return config.DefaultInboxRetentionDays * 24 * time.Hour
 	}
 	return c.Config.Tracker.Native.InboxRetention()
-}
-
-func (e *Engine) trackerZone() *time.Location {
-	c := e.Company()
-	if c == nil {
-		return time.UTC
-	}
-	return c.Config.Tracker.Native.Location()
 }
