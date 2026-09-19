@@ -140,7 +140,7 @@ func deliverableLocked(m *consumer) bool {
 
 // takeChunkLocked removes up to max_batch events from the head of the mailbox.
 //
-// Draining everything already waiting into ONE delivery per conversation is the
+// Draining everything already waiting into ONE delivery per partition is the
 // property inbox batching exists for: events that queued while an agent was
 // busy must arrive as one turn, not N.
 func takeChunkLocked(sub *subscription, m *consumer) []*events.Event {
@@ -160,7 +160,7 @@ func (b *Broker) deliverOne(ctx context.Context, sub *subscription, m *consumer,
 }
 
 // deliverBatch partitions a chunk and dispatches one handler call per
-// conversation, acking per partition: a failing partition never blocks or
+// partition, acking per partition: a failing partition never blocks or
 // replays a different one from the same drain.
 func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consumer, chunk []*events.Event) {
 	if len(chunk) == 0 {

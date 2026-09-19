@@ -21,9 +21,10 @@ func eventOf(d delivery) *events.Event { return d.ev }
 // SubscribeBatch attaches with batched, key-partitioned delivery.
 //
 // The cycle: drain what is locally available (plus a linger window),
-// partition by conversation key, dispatch one handler call per partition
-// oldest-conversation-first, and ack per partition. A failing partition
-// never blocks or replays a different one from the same drain.
+// partition by the key [queue.BatchKeyFunc] derives, dispatch one handler
+// call per partition oldest-partition-first, and ack per partition. A
+// failing partition never blocks or replays a different one from the same
+// drain.
 //
 // This is what makes ten comments on one issue cost ONE agent turn instead
 // of ten. It is also why an agent that was busy does not wake to a thundering
@@ -158,7 +159,7 @@ func (a *attachment) toDelivery(msg jetstream.Msg) (delivery, bool) {
 	return delivery{msg: msg, ev: ev}, true
 }
 
-// dispatchBatch partitions a drain and runs one handler per conversation.
+// dispatchBatch partitions a drain and runs one handler per partition.
 func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queue.BatchHandler, key queue.BatchKeyFunc) {
 	parts := queue.OrderForDispatch(queue.PartitionByKey(batch, key, eventOf), eventOf)
 
@@ -188,9 +189,9 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 
 // applyPartition applies one outcome to every message in a partition.
 //
-// Per-partition rather than per-message: the handler saw the conversation as
-// a unit and its verdict covers all of it. Acking some and NAKing others
-// would deliver a partial conversation to the successor.
+// Per-partition rather than per-message: the handler saw the partition as a
+// unit and its verdict covers all of it. Acking some and NAKing others would
+// deliver a partial one to the successor.
 func (a *attachment) applyPartition(ctx context.Context, batchKey string, items []delivery, evs []*events.Event, res queue.Result) {
 	queue.LogBatchResult(a.log, a.key.topic, a.key.group, batchKey, evs, res)
 

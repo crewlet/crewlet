@@ -171,7 +171,7 @@ func Defer(reason string) Result { return Result{Outcome: OutcomeDefer, Reason: 
 // Handler processes one event.
 type Handler func(ctx context.Context, ev *events.Event) Result
 
-// BatchHandler processes one conversation partition of a drained batch.
+// BatchHandler processes one PARTITION of a drained batch.
 type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 
 // ErrNotLive reports that a verb reached a queue that is not live — never
@@ -212,7 +212,19 @@ type AnswerFunc func(ctx context.Context, request []byte) ([]byte, error)
 // Unsubscribe cancels a stream subscription and releases backend resources.
 type Unsubscribe func(ctx context.Context) error
 
-// BatchKeyFunc derives the conversation key an event partitions under.
+// BatchKeyFunc derives the PARTITION KEY an event is handled under: which
+// other events this one is drained, merged and dispatched WITH.
+//
+// NOT the conversation the event belongs to, which it was and which is a
+// different question with a different answer on at least one source. A direct
+// message is one conversation however it is threaded, so its identity is the
+// bare channel — while a reply in a thread on that line still partitions on
+// the thread, because merging it with unrelated top-level pings would hand
+// one digest a reply target that names only one of them. This layer must not
+// know that: internal/queue cannot import internal/notify, so the producer
+// stamps both values and the caller hands the partition one down (see
+// node.partitionKey, over notify.KeyOf). Prose is the only thing tying the
+// two ends together, which is exactly why it has to name the right key.
 type BatchKeyFunc func(ev *events.Event) string
 
 // PublishListener is invoked inline on every publish. Listeners run in the
@@ -253,9 +265,10 @@ type EventQueue interface {
 
 	// SubscribeBatch attaches with batched, key-partitioned delivery:
 	// drain what is locally available (plus a linger window), partition
-	// by key preserving arrival order, dispatch one handler call per
-	// partition oldest-conversation-first, and ack per partition. A
-	// failing partition never blocks or replays a different one.
+	// by the key [BatchKeyFunc] derives preserving arrival order,
+	// dispatch one handler call per partition oldest-partition-first,
+	// and ack per partition. A failing partition never blocks or replays
+	// a different one.
 	//
 	// opts is read live on every cycle, so a config reload changes
 	// linger and batch size with no re-subscription.
@@ -543,7 +556,7 @@ func (o *BatchOptions) EffectiveMaxBatch() int {
 
 // --- partitioning and dispatch ordering -----------------------------------
 
-// Partition is one conversation's slice of a drained batch.
+// Partition is one partition key's slice of a drained batch.
 type Partition[T any] struct {
 	Key   string
 	Items []T
@@ -606,14 +619,14 @@ func eventType(ev *events.Event) string {
 // needs, and is the one place either is decided.
 //
 // Between partitions: oldest constituent event first. Receive order alone
-// starves a quiet conversation behind a hot one under deferral — the quiet
-// conversation's requeued copies re-enter the topic AFTER whatever arrived
-// during the hot conversation's turn, so receive-ordered dispatch picks the
-// hot one on every drain. Timestamps carry the aging signal, so the
-// conversation that has waited longest dispatches first.
+// starves a quiet partition behind a hot one under deferral — the quiet
+// partition's requeued copies re-enter the topic AFTER whatever arrived
+// during the hot one's turn, so receive-ordered dispatch picks the hot one
+// on every drain. Timestamps carry the aging signal, so the partition that
+// has waited longest dispatches first.
 //
 // Within a partition: event timestamp, not delivery order. This is what
-// makes a conversation read correctly regardless of how a broker interleaves
+// makes a partition read correctly regardless of how a broker interleaves
 // redeliveries with fresh arrivals — measured, JetStream returns a
 // redelivered message BEHIND never-delivered ones, where the in-memory twin
 // replays it from the head. Relying
@@ -696,13 +709,12 @@ func LogResult(l *slog.Logger, topic, group string, ev *events.Event, r Result) 
 	}
 }
 
-// LogBatchResult emits the standard line for one conversation partition's
-// outcome.
+// LogBatchResult emits the standard line for one partition's outcome.
 //
-// A distinct event name from LogResult, carrying the conversation key and
-// the partition size, because the two failures are operationally different
-// things: one delivery failing is a bad event, a whole conversation failing
-// is a bad turn. A log consumer must be able to tell them apart without
+// A distinct event name from LogResult, carrying the partition key and the
+// partition size, because the two failures are operationally different
+// things: one delivery failing is a bad event, a whole partition failing is
+// a bad turn. A log consumer must be able to tell them apart without
 // parsing, and every backend must emit the same name for the same situation
 // — which is why this lives in the contract rather than in each backend.
 func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events.Event, r Result) {
