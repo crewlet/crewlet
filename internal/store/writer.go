@@ -29,12 +29,13 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // this was a map here and another in internal/observe, with nothing asserting
 // they agreed — so a dimension added to one and forgotten in the other was
 // written by nobody or read by nobody, and no test anywhere could see it.
-// That is not hypothetical. `notification_source` lived only here, and
-// [RecordFor] has no production caller — observe.Record is the writer — so
-// the tag the Integrations room counts its merges and drops by was never
-// written at all, and every one of those counts read zero on a company whose
-// third-party apps were delivering fine. internal/observe imports this
-// package, so it calls [ExtractTags] rather than keeping a second opinion.
+// That is not hypothetical. `notification_source` lived only here, read only
+// by a mapping function in this package that had no production caller —
+// observe.Record is the writer — so the tag the Integrations room counts its
+// merges and drops by was never written at all, and every one of those counts
+// read zero on a company whose third-party apps were delivering fine. That
+// function is gone; internal/observe imports this package, so it calls
+// [ExtractTags] rather than keeping a second opinion.
 //
 // Reading them from the event's own JSON rather than from typed struct fields
 // is what keeps this list independent of the event catalogue: an event type
