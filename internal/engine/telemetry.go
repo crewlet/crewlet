@@ -171,9 +171,15 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Chain: chain,
 			// The conversation this turn owes an answer to, so work it
 			// detaches carries it: a coding run's row is written from
-			// here, and the resumed turn reports back from the row.
-			// The partition beside it is what that row is MATCHED on
-			// when the person answers.
+			// here, the resumed turn reports back through it, and a
+			// person's answer is MATCHED on it — because a person
+			// answers on the conversation rather than into the batch
+			// their reply lands in.
+			//
+			// The partition rides along so the row can state the batch
+			// the run was launched from: it tells two runs parked on
+			// one direct message apart, and it is all a peer predating
+			// the conversation field has to match on.
 			ConversationKey: t.convKey,
 			PartitionKey:    t.partKey,
 			// The brief and the delivery obligation, carried for the

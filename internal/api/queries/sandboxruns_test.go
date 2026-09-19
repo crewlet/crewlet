@@ -171,15 +171,24 @@ func TestTheBoardIsToldWhetherABoxExistsAndWhetherItIsHeld(t *testing.T) {
 }
 
 // Telling somebody to "reply in the thread" when the run was started by a
-// schedule tick sends them to a thread that does not exist.
+// schedule tick sends them to a thread that does not exist — and such a run
+// stores no conversation at all, which is what the column has to read.
 func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "chat", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			PartitionKey: "chat:D1:1699.1", ConversationKey: "chat:D1",
 			CreatedAt: runBase},
-		sandbox.PendingRun{TurnID: "tick", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
+		// THE PER-EVENT FALLBACK NAMESPACE, which this engine mints at
+		// READ time for the broker's partition function and writes onto
+		// no row — so this row shape is a peer's or a later writer's, and
+		// the column has to refuse it either way: no inbound message can
+		// reproduce a key derived from an event id.
+		sandbox.PendingRun{TurnID: "eventkey", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			PartitionKey: "event:018f-…", ConversationKey: "event:018f-…",
 			CreatedAt: runBase.Add(time.Minute)},
+		// WHAT A SCHEDULE TICK ACTUALLY LEAVES: nothing at all. Its
+		// trigger names neither key, so neither is stamped and neither is
+		// stored.
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
 		// A ROW FROM BEFORE THE SPLIT carries only the partition key, and
@@ -190,12 +199,12 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 		sandbox.PendingRun{TurnID: "presplit", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			PartitionKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
-	for _, id := range []string{"chat", "tick", "none", "presplit"} {
+	for _, id := range []string{"chat", "eventkey", "none", "presplit"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
 	}
-	want := map[string]bool{"chat": true, "tick": false, "none": false, "presplit": true}
+	want := map[string]bool{"chat": true, "eventkey": false, "none": false, "presplit": true}
 	for _, row := range askRuns(t, store) {
 		id := row["turn_id"].(string)
 		if row["answerable_in_chat"] != want[id] {

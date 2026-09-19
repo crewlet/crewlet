@@ -120,10 +120,20 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 // this run.
 //
 // A run started by anything OTHER than an external notification — a schedule
-// tick, a task assignment, an A2A wake — stored a key derived from an event
-// id, which no inbound message can reproduce. Such a run is not answerable
-// through any chat surface, and telling somebody to "reply in the thread"
-// would send them to a thread that does not exist.
+// tick, a task assignment, an A2A wake — stored NOTHING: its trigger names
+// neither key, [notify.ConversationIdentityOfAll] answers "" for a partition
+// like that rather than inventing one, and [notify.Stamp] declines an empty
+// value, so both of the row's conversation columns are empty. Such a run is
+// not answerable through any chat surface, and telling somebody to "reply in
+// the thread" would send them to a thread that does not exist.
+//
+// The per-event `event:` fallback is a different thing in a different place:
+// [notify.KeyOf] mints it at READ time, for the broker's partition function,
+// which has to give an event that names no conversation a partition of its
+// own. It is not written onto a row from here. [notify.Derived] refuses it as
+// well as the empty string, which is what keeps this column honest for a row
+// whose key was minted that way by somebody else — a peer, or a writer this
+// package does not know about.
 //
 // ASKED OF THE CONVERSATION the run reports back to and is answered on, never
 // of the partition beside it. The question a person reading this board has is
