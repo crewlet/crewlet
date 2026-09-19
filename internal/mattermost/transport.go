@@ -445,8 +445,22 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 	// before the newest one. Slack's paged read does, which is why
 	// [notify.Transcript] carries the two fields at all.
 	out := notify.Transcript{Messages: make([]notify.Message, 0, len(posts))}
+	var rootSeen bool
 	for _, post := range posts {
-		if post.Bookkeeping() != "" {
+		// THE ROOT IS KEPT WHATEVER IT SAYS, recognised by its own id
+		// rather than by its position. [notify.ThreadReader] promises the
+		// root FIRST, and dropping it for want of a body hands the
+		// renderer a transcript whose first line is the oldest surviving
+		// REPLY — which every bound then protects and the prompt then
+		// calls the thread's opening.
+		//
+		// It travels with an EMPTY body rather than an invented one: what
+		// to say in its place is the renderer's decision, and this
+		// transport rendering prose would put one backend's wording in
+		// front of a seat and the other's beside it.
+		isRoot := post.ID != "" && post.ID == root
+		bookkeeping := post.Bookkeeping() != ""
+		if bookkeeping && !isRoot {
 			continue
 		}
 		// SCOPED TO THE CHANNEL THE TRIGGER NAMED. The endpoint is
@@ -459,10 +473,14 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		if post.ChannelID != "" && post.ChannelID != channel {
 			continue
 		}
-		body := post.Body()
-		if body == "" {
+		body := ""
+		if !bookkeeping {
+			body = post.Body()
+		}
+		if body == "" && !isRoot {
 			continue
 		}
+		rootSeen = rootSeen || isRoot
 		out.Messages = append(out.Messages, notify.Message{
 			SenderID: post.UserID,
 			// NO NAME. A Mattermost post carries a user id and nothing
@@ -477,6 +495,15 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 			// replies reads them as a colleague's and answers itself.
 			Own: s.seat.UserID != "" && post.UserID == s.seat.UserID,
 		})
+	}
+	if len(out.Messages) > 0 && !rootSeen {
+		// A DELETED ROOT, which is the ordinary way to get here: the
+		// thread endpoint leaves a deleted post out of its answer while
+		// every reply to it stays, so the read comes back with no root at
+		// all. Its slot is kept empty rather than closed up, because
+		// "somebody deleted the opening" and "this thread opens with the
+		// oldest line below" are different threads to a seat.
+		out.Messages = append([]notify.Message{{}}, out.Messages...)
 	}
 	return out, true
 }

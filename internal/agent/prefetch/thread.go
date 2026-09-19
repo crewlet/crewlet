@@ -98,6 +98,24 @@ const UnreadableThreadHint = "(the thread this message is part of could not be "
 	"read from this node — you have only the triggering message, so read the " +
 	"thread with your chat tools before answering anything that depends on it)"
 
+// UnrenderableRootLine stands in for a thread root there is nothing to render.
+//
+// THE ROOT KEEPS ITS SLOT, and this is what sits in it. A root with no
+// readable body is ordinary — an alert bot posts its payload in attachments
+// or blocks and no text at all, a file share carries no comment, a system
+// line is bookkeeping, and on the self-hosted backend a deleted root is not
+// returned at all — and a thread rooted on one of those is exactly the thread
+// people reply in. Dropping it silently promoted the oldest surviving REPLY
+// into the root's place: kept by every bound, rendered first, and described to
+// the model as what the thread is about.
+//
+// So the absence is SAID. A seat told the opening could not be shown knows to
+// go and look at it if it matters; a seat shown a reply labelled as the
+// opening has no way to find out.
+const UnrenderableRootLine = "- _(the first message in this thread could not be " +
+	"shown here — it carries no readable text. Read the thread itself with your " +
+	"chat tools if what it opened with matters.)_"
+
 // threadPreamble frames the block.
 //
 // Three facts, each of which the model gets wrong without being told: the
@@ -186,6 +204,16 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // conversation starting mid-sentence, and the NEWEST, because it is the
 // message that woke the turn.
 //
+// THE ROOT IS THE FIRST MESSAGE, never "the first line that rendered". Which
+// message is the root is [notify.ThreadReader]'s answer, not this renderer's —
+// it holds the thread address and this does not — so the identity is read off
+// the position the seam guarantees and then held explicitly, and a root with
+// nothing renderable keeps its slot as [UnrenderableRootLine]. Filtering
+// first and calling lines[0] the root is what the two bounds below, the
+// preamble and the drop notice all silently did instead, so a root an alert
+// bot posted as attachments alone promoted the oldest surviving reply into
+// its place and described it to the model as what the thread was about.
+//
 // This is the rule [joinBullets] argues for and [ledger.RenderHistory]
 // implements, applied to the one block whose items are somebody else's prose:
 // the shared cuts are both wrong here, because [textcut] counts bytes and its
@@ -193,16 +221,38 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // says outright that it is not for content.
 func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
-	for _, m := range read.Messages {
-		if line := f.renderPost(m, backend); line != "" {
-			lines = append(lines, line)
+	// rootSlot says the read carried a root at all; rootShown says it
+	// rendered as a message rather than as its stand-in. The two are apart
+	// because the message count reports what was HANDED OVER, and a notice
+	// saying the opening is missing is not a message somebody sent.
+	rootSlot, rootShown := len(read.Messages) > 0, false
+	for i, m := range read.Messages {
+		line := f.renderPost(m, backend)
+		if i == 0 {
+			if line == "" {
+				lines = append(lines, UnrenderableRootLine)
+				continue
+			}
+			rootShown = true
+		} else if line == "" {
+			continue
 		}
+		lines = append(lines, line)
 	}
-	if len(lines) == 0 && !read.StoppedShort {
-		// READ, and it had nothing in it. Reported as a read rather than
-		// as a zero, because the same zero from a failed read sends the
-		// seat to the opposite place and an operator after the wrong
-		// fault.
+	posts := len(lines)
+	if rootSlot && !rootShown {
+		posts--
+	}
+	if posts == 0 && !read.StoppedShort {
+		// READ, and nobody had said anything in it. Reported as a read
+		// rather than as a zero, because the same zero from a failed read
+		// sends the seat to the opposite place and an operator after the
+		// wrong fault.
+		//
+		// The root's own notice goes with it: it frames a conversation,
+		// and there is no conversation here to frame — a thread whose one
+		// message is a bookkeeping line has nothing the seat could go and
+		// read that the trigger has not already given it.
 		return threadBlock{text: EmptyThreadHint, read: true}
 	}
 
@@ -211,18 +261,28 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 	// renderer's own would print a number that is true of the slice in
 	// hand and false of the thread, which is worse than no number at all —
 	// a seat reads it as the whole of what it is missing.
+	//
+	// An unrenderable root is NOT in this number: it is reported by the
+	// line standing in for it, and counting it here as well would tell the
+	// seat one message is missing twice.
 	dropped := read.Older
 	if len(lines) > threadPosts {
 		// The ROOT plus the newest threadPosts-1: the oldest reply is the
-		// first thing worth losing, and the root is never in that range.
+		// first thing worth losing, and lines[0] is the root's own slot,
+		// so it is never in that range.
 		dropped += len(lines) - threadPosts
 		lines = append(lines[:1], lines[len(lines)-(threadPosts-1):]...)
+		posts = len(lines)
+		if !rootShown {
+			posts--
+		}
 	}
 	// The byte ceiling then eats from the same end, and stops at two: the
-	// root and the newest both survive however long they are.
+	// root's slot and the newest both survive however long they are.
 	for len(lines) > 2 && len(strings.Join(lines, "\n")) > threadMaxChars {
 		lines = append(lines[:1], lines[2:]...)
 		dropped++
+		posts--
 	}
 
 	var b strings.Builder
@@ -249,7 +309,7 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlo
 		b.WriteString("\n" + line)
 	}
 	return threadBlock{
-		text: b.String(), posts: len(lines),
+		text: b.String(), posts: posts,
 		read: true, stoppedShort: read.StoppedShort,
 	}
 }

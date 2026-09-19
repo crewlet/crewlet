@@ -46,6 +46,24 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 				w.Write([]byte(`{"message":"Invalid or expired session"}`))
 				return true
 			}
+			// A THREAD ROOTED ON A POST WITH NOTHING TO RENDER, served
+			// for one root id so the ordinary thread above stays the
+			// ordinary thread. A system line is one way to get here and
+			// an attachment-only post is the other; both are threads
+			// people then reply in.
+			if strings.Contains(r.URL.Path, "/posts/quiet/") {
+				json.NewEncoder(w).Encode(map[string]any{
+					"order": []string{"quiet", "q1"},
+					"posts": map[string]any{
+						"quiet": map[string]any{"id": "quiet", "channel_id": "C1",
+							"user_id": "U-ana", "type": "system_add_to_channel",
+							"message": "ana added bob", "create_at": 1000},
+						"q1": map[string]any{"id": "q1", "channel_id": "C1",
+							"user_id": "U-ana", "message": "so what broke", "create_at": 2000},
+					},
+				})
+				return true
+			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"order": []string{"root", "p1", "p2", "p3"},
 				"posts": map[string]any{
@@ -469,6 +487,56 @@ func TestASeatsThreadComesBackMarkedWithItsOwnPosts(t *testing.T) {
 		if strings.Contains(m.Text, "another channel entirely") {
 			t.Errorf("a post from another channel reached the thread: %+v", m)
 		}
+	}
+}
+
+// THE ROOT KEEPS ITS PLACE EVEN WITH NOTHING IN IT, and a root the endpoint
+// did not answer with keeps an empty one.
+//
+// [notify.ThreadReader] promises the root FIRST, and the renderer exempts
+// that first message from every bound and frames it as what the thread is
+// about. Dropping a root for want of a body hands over a transcript that
+// starts at the oldest surviving REPLY — which is then kept, rendered first
+// and described to the seat as the opening. A deleted root is the ordinary
+// way to get there here: this endpoint leaves the post out and answers with
+// every reply to it.
+func TestAThreadRootWithNothingToRenderStillComesBackFirst(t *testing.T) {
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// A system post as the root: kept, and empty, so the renderer says so
+	// rather than promoting the reply under it.
+	got, ok := tr.ReadThread(t.Context(), "swe", "C1", "quiet")
+	if !ok {
+		t.Fatal("a thread rooted on a system post could not be read")
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("the thread came back as %+v", got)
+	}
+	if got.Messages[0].Text != "" || got.Messages[0].SenderID != "U-ana" {
+		t.Errorf("the root came back as %+v, want its slot with no body", got.Messages[0])
+	}
+	if got.Messages[1].Text != "so what broke" {
+		t.Errorf("the reply came back as %+v", got.Messages[1])
+	}
+
+	// A ROOT THE ANSWER DOES NOT CARRY AT ALL — a deleted opening — still
+	// gets its slot, because "somebody deleted the first message" and
+	// "this thread opens with the line below" are different threads.
+	deleted, ok := tr.ReadThread(t.Context(), "swe", "C1", "gone")
+	if !ok {
+		t.Fatal("a thread whose root was deleted could not be read")
+	}
+	if len(deleted.Messages) != 3 || deleted.Messages[0] != (notify.Message{}) {
+		t.Fatalf("a thread with no root came back as %+v", deleted)
+	}
+	if deleted.Messages[1].Text != "staging redirects in a loop" {
+		t.Errorf("the oldest reply moved: %+v", deleted.Messages[1])
 	}
 }
 

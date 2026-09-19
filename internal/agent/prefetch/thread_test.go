@@ -334,6 +334,72 @@ func TestMessagesWithNoTextAreNotRendered(t *testing.T) {
 	}
 }
 
+// A ROOT THAT RENDERS TO NOTHING IS SAID, NEVER REPLACED BY A REPLY.
+//
+// The renderer keeps the first message whatever every bound drops, and the
+// preamble tells the model that line is what the thread is about. When the
+// root carries nothing renderable — an alert bot's attachment-only post, a
+// deleted opening the self-hosted backend leaves out — filtering first and
+// keeping "line 0" promotes the oldest surviving REPLY into that slot, and
+// the seat is then told a mid-thread answer is the question.
+func TestAnUnrenderableRootIsSaidRatherThanReplaced(t *testing.T) {
+	t.Parallel()
+	source := &threads{messages: []notify.Message{
+		// The root: present, and with nothing to render.
+		{SenderID: "B-alerts"},
+		said("U2", "is this the billing job or the payments one"),
+		said("U3", "billing"),
+	}}
+	blocks := fetch(t, prefetch.Sources{Threads: source}, threadRequest(t))
+
+	lines := strings.Split(blocks.ThreadContext, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("the block rendered as:\n%s", blocks.ThreadContext)
+	}
+	// The root's own slot, in the root's own place — not the oldest reply.
+	if lines[1] != prefetch.UnrenderableRootLine {
+		t.Fatalf("the line under the preamble is %q, want the root's stand-in",
+			lines[1])
+	}
+	// AND THE COUNT IS OF MESSAGES, not of lines: the stand-in says a
+	// message is missing, so counting it would report the seat as having
+	// been handed the very thing the line says it was not.
+	if blocks.ThreadContextPosts != 2 {
+		t.Fatalf("posts = %d, want the two replies that rendered",
+			blocks.ThreadContextPosts)
+	}
+	// AND IT IS NOT ALSO IN THE DROP NOTICE. The stand-in reports the root
+	// once; a drop count that included it would tell the seat a second
+	// message is missing that never existed.
+	if strings.Contains(blocks.ThreadContext, "not shown") {
+		t.Fatalf("a whole thread claimed messages were dropped:\n%s", blocks.ThreadContext)
+	}
+	if !blocks.ThreadContextRead {
+		t.Error("a thread that was read reported itself unread")
+	}
+
+	// AND THE BOUNDS KEEP THE SLOT rather than trimming it away with the
+	// oldest replies: the whole point of exempting the root is that the
+	// block says what the thread is about, and a stand-in that the item
+	// cap deleted would leave the newest replies reading as the opening.
+	long := &threads{messages: []notify.Message{{SenderID: "B-alerts"}}}
+	for i := 1; i < 80; i++ {
+		long.messages = append(long.messages, said("U2", "reply "+strconv.Itoa(i)))
+	}
+	capped := fetch(t, prefetch.Sources{Threads: long}, threadRequest(t))
+	cappedLines := strings.Split(capped.ThreadContext, "\n")
+	if cappedLines[1] != prefetch.UnrenderableRootLine {
+		t.Fatalf("the item cap dropped the root's slot:\n%s", capped.ThreadContext)
+	}
+	if capped.ThreadContextPosts != 29 {
+		t.Fatalf("posts = %d, want the cap less the root's stand-in",
+			capped.ThreadContextPosts)
+	}
+	if !strings.Contains(capped.ThreadContext, "50 earlier message(s)") {
+		t.Fatalf("the drop was not reported:\n%s", capped.ThreadContext)
+	}
+}
+
 // A TURN WHOSE ONLY CONTEXT IS THE THREAD HAS CONTEXT.
 //
 // [prefetch.Blocks.Empty] enumerates the blocks by hand and is called only by

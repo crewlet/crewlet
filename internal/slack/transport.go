@@ -375,14 +375,31 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		Older:        read.Older,
 		StoppedShort: read.StoppedShort,
 	}
+	var rootSeen bool
 	for _, reply := range read.Messages {
-		if reply.Skip() != "" {
+		// THE ROOT IS KEPT WHATEVER IT SAYS, and it is recognised by its
+		// own ts rather than by its position: [notify.ThreadReader]
+		// promises the root FIRST, and dropping it for want of a body
+		// hands the renderer a transcript whose first line is the oldest
+		// surviving REPLY — which every bound then protects and the
+		// prompt then calls the thread's opening. An alert bot posting
+		// its payload in attachments or blocks alone carries no `text`
+		// and no `files`, so a thread rooted on one is not an edge case,
+		// it is the shape of an alert channel.
+		//
+		// It travels with an EMPTY body rather than an invented one: what
+		// to say in its place is the renderer's decision, and this
+		// transport rendering prose would put one backend's wording in
+		// front of a seat and the other's beside it.
+		isRoot := reply.TS != "" && reply.TS == root
+		body := ""
+		if reply.Skip() == "" {
+			body = reply.Body()
+		}
+		if body == "" && !isRoot {
 			continue
 		}
-		body := reply.Body()
-		if body == "" {
-			continue
-		}
+		rootSeen = rootSeen || isRoot
 		out.Messages = append(out.Messages, notify.Message{
 			// THE SAME FALLBACK CHAIN [Sender] applies, split
 			// across the two fields: a human and a bot USER carry
@@ -400,6 +417,14 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 			// replies back to it as a colleague's.
 			Own: s.seat.Owns(reply.User, reply.AppID),
 		})
+	}
+	if len(out.Messages) > 0 && !rootSeen {
+		// A READ THAT REACHED REPLIES BUT NOT THE POST THEY HANG OFF.
+		// conversations.replies answers with the parent first, so this is
+		// the workspace behaving unexpectedly rather than a known shape —
+		// and the honest transcript is one whose first entry is still the
+		// root, empty, rather than one that silently starts at a reply.
+		out.Messages = append([]notify.Message{{}}, out.Messages...)
 	}
 	return out, true
 }

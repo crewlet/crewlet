@@ -395,6 +395,48 @@ func TestASeatsThreadComesBackMarkedWithItsOwnReplies(t *testing.T) {
 	}
 }
 
+// THE ROOT KEEPS ITS PLACE EVEN WITH NOTHING IN IT.
+//
+// [notify.ThreadReader] promises the root FIRST, and the renderer exempts
+// that first message from every bound and frames it as what the thread is
+// about. Dropping a root for want of a body hands over a transcript that
+// starts at the oldest surviving REPLY — kept by every bound, rendered first,
+// and described to the seat as the opening. An alert app posting its payload
+// in blocks or attachments carries no `text` and no `files`, so a thread
+// rooted on one is the shape of an alert channel rather than an edge case.
+func TestAThreadRootWithNoReadableTextStillComesBackFirst(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `"}`
+	ws.replies["conversations.replies"] = `{"ok":true,"messages":[
+		{"ts":"1.1","subtype":"bot_message","bot_id":"B0ALERT","username":"alertbot"},
+		{"ts":"1.2","user":"` + human + `","text":"is this the billing job"},
+		{"ts":"1.3","subtype":"channel_join","user":"` + human + `","text":"ana joined"},
+		{"ts":"1.4","user":"` + colleague + `","text":"billing"}]}`
+
+	tr := transport(t, ws, nil)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := tr.ReadThread(context.Background(), "swe", "C0ENG", "1.1")
+	if !ok {
+		t.Fatal("a thread rooted on an attachment-only post could not be read")
+	}
+	// Three: the root's own slot and the two replies. The join line is
+	// still gone — the exemption is the ROOT's, not every message with
+	// nothing in it.
+	if len(got.Messages) != 3 {
+		t.Fatalf("the thread came back as %+v", got)
+	}
+	if got.Messages[0].Text != "" || got.Messages[0].SenderID != "B0ALERT" {
+		t.Errorf("the root came back as %+v, want its slot with no body", got.Messages[0])
+	}
+	if got.Messages[1].Text != "is this the billing job" ||
+		got.Messages[2].Text != "billing" {
+		t.Errorf("the replies came back as %+v", got.Messages[1:])
+	}
+}
+
 // A SEAT'S CLIENT IS REACHED BY HANDLE, and a seat whose token was refused has
 // none to reach — so a thread read for it reports not-found rather than
 // dereferencing a nil client.
