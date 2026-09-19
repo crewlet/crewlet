@@ -544,11 +544,22 @@ const emptyArgsBytes = len(`{}`)
 
 // toolDefBytes is the compact JSON size of a tool-definition array.
 //
-// COMPACT, and the local wire shape rather than [llm.ToolDef] itself: what is
-// wanted is the number both HTTP vendors put on the wire, which is this object
-// per tool, and marshalling the Go type would measure its Go field names
-// instead. The empty description and the empty schema are dropped for the same
-// reason — neither vendor sends one.
+// COMPACT, and ONE CANONICAL SHAPE rather than any vendor's own: this object
+// per tool, whoever serves the phase. Marshalling [llm.ToolDef] itself would
+// measure its Go field names, and measuring each backend's real array would
+// make "is the prompt getting smaller" unanswerable the moment a fallback
+// chain moved a seat between providers — which is the question this figure
+// exists for.
+//
+// WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolChars] where a
+// reader of the row will find it: every backend sends MORE than this. OpenAI
+// wraps each entry as {"type":"function","function":{…}}, Anthropic spells
+// the schema `input_schema` and puts a cache breakpoint on the last entry,
+// both write an absent schema out as {"type":"object","properties":{}} where
+// the omitempty below drops it, and the cli-agent text backend renders the
+// same definitions indented inside a fenced catalogue. An empty DESCRIPTION
+// is the one thing genuinely dropped on both — neither vendor sends a field
+// for it.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	if len(defs) == 0 {
 		return 0, nil
@@ -576,7 +587,8 @@ func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	return len(encoded), nil
 }
 
-// toolDefWire is one tool as a vendor's tool array carries it.
+// toolDefWire is the canonical entry a tool array is measured as. Deliberately
+// not any one vendor's: see [toolDefBytes].
 type toolDefWire struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`

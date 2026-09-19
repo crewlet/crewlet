@@ -202,12 +202,25 @@ type PromptSize struct {
 	MessageBytes int `json:"message_chars"`
 
 	// ToolBytes is the COMPACT JSON size of the tool-definition array
-	// offered with the prompt — the shape both HTTP vendors put on the
-	// wire, so the figure is comparable across providers. The `cli-agent`
-	// text backend renders those same definitions INDENTED, inside a fenced
-	// catalogue and followed by a response contract, so on that backend the
-	// real figure is larger than this one; a number whose rendering is not
-	// recorded gets compared against a different number.
+	// offered with the prompt, in ONE CANONICAL SHAPE — `{name,
+	// description, parameters}` per tool — chosen so a single number means
+	// the same thing whichever provider served the phase, and so a seat
+	// whose fallback chain moved it between vendors is comparable with
+	// itself.
+	//
+	// SO IT IS A FLOOR, and no backend sends exactly it. The OpenAI one
+	// wraps every entry as `{"type":"function","function":{…}}`, about
+	// thirty bytes a tool. The Anthropic one spells the schema
+	// `input_schema` where this says `parameters` and hangs a
+	// `cache_control` breakpoint on the last entry. Both write an absent
+	// schema out as `{"type":"object","properties":{}}` where this drops
+	// it, so an argument-less tool is undercounted on either. And the
+	// `cli-agent` text backend renders those same definitions INDENTED,
+	// inside a fenced catalogue and followed by a response contract, which
+	// is larger again. The same property ApproximateTokens' ratio has, for
+	// the same reason: a figure that changed shape with the provider could
+	// not be compared across a chain or across builds, and comparison is
+	// what this row exists for.
 	//
 	// ROUND ONE'S ARRAY. The tool loop re-reads the surface at the top of
 	// every round precisely so a mid-phase activate_tool is offered on the
@@ -238,10 +251,28 @@ func (e PromptSize) AgentID() string { return e.Agent }
 // act on from the feed alone, by trimming what a seat is granted; and because
 // a bare "prompt ~N tokens" is what made this meter read as authoritative for
 // as long as it was blind to the array.
+//
+// ONLY WHEN THE ROW CARRIES IT. ToolChars and ToolCount are newer than this
+// event type, so a `prompt.size` published by a peer that predates them — an
+// ordinary state during a rolling upgrade — carries neither key and decodes
+// to zero. Rendered unconditionally that row reads "(0 tool definitions, 0
+// chars)" for a phase that certainly had some, which is a claim about that
+// build's prompt rather than an absence of data.
+//
+// WHICH ABSENCE IS THE SAFE HALF: a zero cannot be told from an unset key
+// here, so the two cases that produce one share an answer, and the honest
+// direction is to say nothing. A phase that genuinely offered no tools then
+// loses a clause reporting nothing, and an older peer's row reads exactly as
+// it did on the build that wrote it. The reverse — asserting a zero — is the
+// only one of the two that can be false, and every phase this row is
+// published for carries at least its own submission tool, so the tool-less
+// case is hypothetical while the older peer is not.
 func (e PromptSize) SummaryFor(actor string) string {
-	return lead(subject(actor, e.Phase),
-		fmt.Sprintf("prompt ~%d tokens (%d tool definitions, %d chars)",
-			e.ApproximateTokens, e.ToolCount, e.ToolBytes))
+	line := fmt.Sprintf("prompt ~%d tokens", e.ApproximateTokens)
+	if e.ToolCount > 0 || e.ToolBytes > 0 {
+		line += fmt.Sprintf(" (%d tool definitions, %d chars)", e.ToolCount, e.ToolBytes)
+	}
+	return lead(subject(actor, e.Phase), line)
 }
 
 // TurnGuardBreach fires whenever a runtime-invariant guard trips during a turn,
