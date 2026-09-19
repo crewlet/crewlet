@@ -2453,8 +2453,9 @@ for as a snapshot), not which box it is. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule tick, a task assignment, an A2A wake — because the
 resume path matches an inbound message's conversation identity against
-the one the run was parked with, and those runs stored a value no chat
-message can reproduce. Telling somebody to "reply in the thread" would
+the one the run was parked with, and those runs stored **no conversation
+at all**: their trigger names neither key, so neither is stamped and
+neither reaches the row. Telling somebody to "reply in the thread" would
 send them to a thread that does not exist.
 
 `execute_state` — the serialised Execute-loop conversation — is
