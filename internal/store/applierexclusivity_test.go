@@ -130,6 +130,43 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		}
 	}
 
+	// THE COMPUTED-TABLE MATCHER, which is the half that was missing.
+	for _, positive := range []string{
+		`UPDATE %s SET version = ?`,
+		"DELETE FROM " + unresolved + " WHERE id = ?",
+		"INSERT INTO " + unresolved + " (a) VALUES (?)",
+	} {
+		if !writesComputedTable(positive) {
+			t.Errorf("control: %q writes a table this walk cannot resolve and "+
+				"the matcher did not flag it", positive)
+		}
+	}
+	for _, negative := range []string{
+		`UPDATE tracker_tasks SET rank = ?`,
+		"SELECT * FROM " + unresolved,
+		`a sentence that merely says %s somewhere`,
+	} {
+		if writesComputedTable(negative) {
+			t.Errorf("control: %q is not a write to a computed table and the "+
+				"matcher flagged it", negative)
+		}
+	}
+
+	// AND THE RENDERER, on the two shapes that evaded the literal walk.
+	for _, c := range []struct{ src, want string }{
+		{`"UPDATE " + tbl + " SET x = ?"`, "UPDATE " + unresolved + " SET x = ?"},
+		{`"DELETE FROM tracker_tasks"`, "DELETE FROM tracker_tasks"},
+		{`fmt.Sprintf("UPDATE %s SET v = ?", t)`, "UPDATE %s SET v = ?"},
+	} {
+		got, ok := composedString(mustParse(t, c.src), map[string]string{})
+		if !ok || got != c.want {
+			t.Errorf("control: composedString(%s) = %q, %v; want %q", c.src, got, ok, c.want)
+		}
+	}
+	if got, ok := composedString(mustParse(t, `"a" + b`), map[string]string{"b": "table"}); !ok || got != "atable" {
+		t.Errorf("control: a constant did not fold: got %q, %v", got, ok)
+	}
+
 	root := moduleRoot(t)
 	var found []site
 	files := 0
@@ -137,6 +174,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
 			files++
 			rel := shortPos(root, fset.Position(file.Pos()).Filename)
+			consts := stringConsts(file)
 			ast.Inspect(file, func(n ast.Node) bool {
 				if why, ok := replicatedWriteAt(n); ok {
 					found = append(found, site{
@@ -144,21 +182,27 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 					})
 					return true
 				}
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
+				text, ok := composedString(n, consts)
+				if !ok {
 					return true
 				}
-				text, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					return true
-				}
-				if writesTable(text, replicated) {
+				switch {
+				case writesTable(text, replicated):
 					found = append(found, site{
-						File: rel, Line: fset.Position(lit.Pos()).Line,
+						File: rel, Line: fset.Position(n.Pos()).Line,
 						Why: "DML on " + strings.Join(strings.Fields(text), " "),
 					})
+				case writesComputedTable(text):
+					found = append(found, site{
+						File: rel, Line: fset.Position(n.Pos()).Line,
+						Why: "DML whose table is COMPUTED: " + strings.Join(strings.Fields(text), " "),
+					})
 				}
-				return true
+				// A composed string's own operands are literals this walk
+				// would otherwise report a second time, at a worse
+				// position. Rendering the whole expression IS the report.
+				_, isLit := n.(*ast.BasicLit)
+				return isLit
 			})
 		})
 	}
@@ -201,6 +245,11 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 
 	// AND THE OTHER DIRECTION.
 	for _, a := range allowedReplicatedWriter {
+		if !a.Kind.Valid() {
+			t.Errorf("%s is allowed with kind %q — an entry says which of the "+
+				"three things it is, so a reviewer can tell the mechanism from "+
+				"the writes this rule actually tolerates", a.Prefix, a.Kind)
+		}
 		if !used[a.Prefix] {
 			t.Errorf("%s is allowed to write the replicated estate and does "+
 				"not — the reason on file is %q. An allowance for a write "+
@@ -224,17 +273,44 @@ type site struct {
 // Keyed on the FILE rather than the line, so an edit above a write does not
 // have to be reflected here — the same choice internal/clientsource argues for
 // in keying on the declaration rather than the path, applied one level down.
+// allowanceKind is what an entry claims about itself.
+type allowanceKind string
+
+const (
+	// mechanism: this file IS a state log's applier, or the framework and
+	// infrastructure the appliers run on. A write here is how the rule
+	// works rather than an exception to it.
+	mechanism allowanceKind = "mechanism"
+
+	// exception: a genuine write to the replicated estate that is not a
+	// record, because no record could own what it touches. Read all three
+	// before adding a fourth.
+	exception allowanceKind = "exception"
+
+	// notReplicated: the walk flagged a statement whose table it could not
+	// resolve, and that table is not in the replicated estate at all. The
+	// claim is made in the register rather than inferred from silence,
+	// because a computed table name is exactly what a reader cannot check.
+	notReplicated allowanceKind = "not_replicated"
+)
+
+// Valid reports whether k is one of the three. The zero value is not.
+func (k allowanceKind) Valid() bool {
+	return k == mechanism || k == exception || k == notReplicated
+}
+
 type allowance struct {
 	// Prefix is the repository-relative file, or directory, it covers.
 	Prefix string
 
-	// Applier marks the mechanism rather than an exception to it: this file
-	// IS a state log's applier, or the framework and infrastructure the
-	// appliers run on. The split is what keeps the list readable — the
-	// three entries below that are NOT appliers are the three writes this
-	// rule actually tolerates, and a reviewer should be able to see that at
-	// a glance rather than by reading seventeen reasons.
-	Applier bool
+	// Kind says which of three things this allowance is, so a reviewer can
+	// tell them apart at a glance rather than by reading seventeen reasons.
+	//
+	// It was a bool — applier or not — and a third case arrived the moment
+	// the walk learned to read a computed table name: a statement this gate
+	// flags that is not a replicated write at all. A bool would have filed
+	// that under one of the two meanings it does not have.
+	Kind allowanceKind
 
 	// Why must say what makes this write legitimate in terms of the RULE
 	// rather than of the code: which class the rows are, or why no record
@@ -257,17 +333,17 @@ var allowedReplicatedWriter = []allowance{
 	// the estate's handle without writing a row through it.
 	// -----------------------------------------------------------------
 	{
-		Prefix: "internal/statelog/", Applier: true,
+		Prefix: "internal/statelog/", Kind: mechanism,
 		Why: "THE FRAMEWORK: the apply transaction itself, the snapshot " +
 			"install and the reanchor. A write here is the mechanism.",
 	},
 	{
-		Prefix: "internal/store/", Applier: true,
+		Prefix: "internal/store/", Kind: mechanism,
 		Why: "The estate's OWNER — it opens the file, runs the migrations " +
 			"and serves the handle. A write here is the schema, not a row.",
 	},
 	{
-		Prefix: "internal/engine/reanchor.go", Applier: true,
+		Prefix: "internal/engine/reanchor.go", Kind: mechanism,
 		Why: "The wiring that hands the replicated handle to the framework " +
 			"for a log reanchor: the deps it builds and the version reset it " +
 			"drives. Every write it reaches is internal/statelog's or " +
@@ -276,48 +352,59 @@ var allowedReplicatedWriter = []allowance{
 			"elsewhere in internal/engine still fails.",
 	},
 	{
-		Prefix: "internal/engine/statelog.go", Applier: true,
+		Prefix: "internal/engine/statelog.go", Kind: mechanism,
 		Why: "Holds the replicated handle to run the framework's own loops — " +
 			"the checkpoint reads, the snapshotter, the adoption. It passes " +
 			"the handle on; it writes no row of its own.",
 	},
 	{
-		Prefix: "internal/engine/retention", Applier: true,
+		Prefix: "internal/engine/retention", Kind: mechanism,
 		Why: "The retention report and the capacity check take the handle to " +
 			"size the FILE and to read the eviction rows. Both read.",
 	},
 	{
-		Prefix: "internal/backup/backup.go", Applier: true,
+		Prefix: "internal/backup/backup.go", Kind: mechanism,
 		Why: "Takes the handle to copy the FILE — VACUUM INTO and the " +
 			"manifest — never to write a row.",
 	},
 	{
-		Prefix: "cmd/crewlet/ops.go", Applier: true,
+		Prefix: "cmd/crewlet/ops.go", Kind: mechanism,
 		Why: "Picks one of the two handles to inspect for an operator " +
 			"command. It reads.",
 	},
 	{
-		Prefix: "internal/tracker/apply", Applier: true,
+		Prefix: "internal/tracker/apply", Kind: mechanism,
 		Why: "The tracker domain's applier, across the files it is split " +
 			"over: the record, the task, the objects, the history and the " +
 			"closure walk.",
 	},
 	{
-		Prefix: "internal/tracker/fieldvalues.go", Applier: true,
+		Prefix: "internal/tracker/fieldvalues.go", Kind: mechanism,
 		Why: "Applier.explodeFieldValues and the two row writers it calls. " +
 			"It is applier code in a file the apply* prefix does not cover, " +
 			"which is why it is named rather than inferred from the name.",
 	},
 	{
-		Prefix: "internal/pages/apply", Applier: true,
+		Prefix: "internal/pages/apply", Kind: mechanism,
 		Why: "The knowledge base's applier — the container half and the " +
 			"page half.",
 	},
 	{
-		Prefix: "internal/search/apply", Applier: true,
+		Prefix: "internal/search/apply", Kind: mechanism,
 		Why: "The embedding domain's applier. The vectors are compacted and " +
 			"claim no identity, but they are still written only from a " +
 			"committed record.",
+	},
+
+	{
+		Prefix: "internal/learning/memsync/codec.go", Kind: notReplicated,
+		Why: "Builds its INSERT from the carried row's own table name, so the " +
+			"walk cannot resolve which table it writes and reports a computed " +
+			"one. The registry that name comes from is a closed list of SEVEN " +
+			"node-estate tables — agent_diary, episodes, counterparty_profiles, " +
+			"synthesized_skills and its versions, agent_onboarding_markers, " +
+			"conversation_sessions — every one placed in nodeEstatePlacements " +
+			"one file over. It never names a replicated table.",
 	},
 
 	// -----------------------------------------------------------------
@@ -325,7 +412,7 @@ var allowedReplicatedWriter = []allowance{
 	// record could own what it touches. Read these before adding a fourth.
 	// -----------------------------------------------------------------
 	{
-		Prefix: "internal/tracker/reanchor.go",
+		Prefix: "internal/tracker/reanchor.go", Kind: exception,
 		Why: "ResetVersions puts every object row's version at a new " +
 			"generation's floor after a reanchor. It cannot be a record: the " +
 			"stream it would be published to is the one being replaced. " +
@@ -333,14 +420,14 @@ var allowedReplicatedWriter = []allowance{
 			"floor, so it converges rather than diverges.",
 	},
 	{
-		Prefix: "internal/tracker/duty.go",
+		Prefix: "internal/tracker/duty.go", Kind: exception,
 		Why: "clearProbe clears `rank_duplicate_pending`, a column written " +
 			"by every node's own applier from its own probe and by no " +
 			"record — so a record clearing it would be a record about a " +
 			"column no record owns.",
 	},
 	{
-		Prefix: "internal/tracker/inboxsweep.go",
+		Prefix: "internal/tracker/inboxsweep.go", Kind: exception,
 		Why: "purgeInbox range-deletes `tracker_notifications`, which is " +
 			"statelog.Divergent: it travels inside a snapshot but is not in " +
 			"the identity claim, because what it holds depends on the " +
@@ -435,6 +522,118 @@ func calleeName(fun ast.Expr) (string, bool) {
 	return "", false
 }
 
+// unresolved stands for a part of a composed string this walk cannot read: a
+// variable operand, or a verb in a format string.
+//
+// A RUNE NO SQL CARRIES, so a statement that genuinely contains it cannot be
+// confused for one this walk resolved, and [writesComputedTable] can match on
+// it without a second parse.
+const unresolved = "\u2370"
+
+// composedString renders a string-valued expression, as far as it can.
+//
+// # Why a literal alone was not enough
+//
+// The first version of this walk read *ast.BasicLit and nothing else, which
+// left two evasions a contributor reaches by accident rather than by trying: a
+// statement built by concatenation names no table in any literal, and one
+// built by fmt.Sprintf hides the table behind a verb. Both shapes are already
+// in this tree, and a probe written in a package with no allowance passed the
+// gate on the first of them — an interface handle over the estate, a table
+// name assembled from two constants, and a clean run.
+//
+// So the renderer folds what it can and marks what it cannot. A part it
+// resolves contributes its text; a part it does not contributes [unresolved],
+// which [writesComputedTable] reports as a write whose table this walk cannot
+// certify. That is the honest verdict rather than a pass: a statement whose
+// table is computed is exactly the one a READER cannot check either.
+//
+// Sprintf's FORMAT STRING is the first argument and is rendered with its verbs
+// in place. The arguments are deliberately not resolved: a walk that tried
+// would be guessing at the one point where guessing is what this gate exists
+// to prevent.
+func composedString(n ast.Node, consts map[string]string) (string, bool) {
+	switch v := n.(type) {
+	case *ast.BasicLit:
+		if v.Kind != token.STRING {
+			return "", false
+		}
+		text, err := strconv.Unquote(v.Value)
+		if err != nil {
+			return "", false
+		}
+		return text, true
+	case *ast.Ident:
+		text, ok := consts[v.Name]
+		return text, ok
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		left, lok := composedString(v.X, consts)
+		if !lok {
+			left = unresolved
+		}
+		right, rok := composedString(v.Y, consts)
+		if !rok {
+			right = unresolved
+		}
+		if !lok && !rok {
+			return "", false
+		}
+		return left + right, true
+	case *ast.CallExpr:
+		name, ok := calleeName(v.Fun)
+		if !ok || name != "Sprintf" || len(v.Args) == 0 {
+			return "", false
+		}
+		return composedString(v.Args[0], consts)
+	}
+	return "", false
+}
+
+// stringConsts is the file's own top-level string constants, folded.
+//
+// FILE SCOPE ONLY, and that is a stated limit rather than an oversight: a
+// constant from another package would need the type checker, and a table name
+// this walk cannot resolve is reported as a computed write anyway — the same
+// outcome by a different route, and the safe one.
+//
+// TWO PASSES, so a constant defined in terms of an earlier one folds whichever
+// order the file declares them in.
+func stringConsts(file *ast.File) map[string]string {
+	out := map[string]string{}
+	for range 2 {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				val, ok := spec.(*ast.ValueSpec)
+				if !ok || len(val.Names) != len(val.Values) {
+					continue
+				}
+				for i, name := range val.Names {
+					text, ok := composedString(val.Values[i], out)
+					if ok && !strings.Contains(text, unresolved) {
+						out[name.Name] = text
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// computedDML matches a write whose table this walk could not resolve.
+var computedDML = regexp.MustCompile(
+	`(?is)\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:` +
+		unresolved + `|%[a-zA-Z])`)
+
+// writesComputedTable reports a write whose table name is not in the source.
+func writesComputedTable(text string) bool { return computedDML.MatchString(text) }
+
 // dml introduces a table a statement WRITES. SELECT is deliberately absent.
 var dml = regexp.MustCompile(`(?is)\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([a-z_][a-z0-9_]*)`)
 
@@ -471,4 +670,14 @@ func reachesReplicatedWrite(t *testing.T, src string) bool {
 		return true
 	})
 	return flagged
+}
+
+// mustParse is one expression for a control above.
+func mustParse(t *testing.T, src string) ast.Expr {
+	t.Helper()
+	expr, err := parser.ParseExpr(src)
+	if err != nil {
+		t.Fatalf("control %q does not parse: %v", src, err)
+	}
+	return expr
 }
