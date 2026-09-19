@@ -57,12 +57,40 @@ p {
   margin: 0;
 }
 
+/* A LINK IS A COLOUR, AND ITS HOVER IS A STEP WITHIN THE TEXT RUNGS — never a
+   rule struck under the words.
+
+   `@crewlethq/tokens/css/base` underlines `a:hover`, and this file used to
+   repeat it. Both were wrong for this product rather than in general: almost
+   nothing here is a link INSIDE A SENTENCE. A breadcrumb, a seat in a grid
+   cell, a caption-sized `turn 28e93bc3 →`, a whole row that happens to be an
+   anchor — every one of them is a piece of chrome, and a line struck under a
+   timestamp, a summary and a type at once decorates three fragments that are
+   not a phrase. It had already been suppressed one class at a time in fifteen
+   rules across four sheets, each undoing the same inherited declaration, which
+   is the shape a default takes when it is wrong: the exceptions outnumber it.
+
+   So the frame's own hover vocabulary carries it instead. `.rail-row`,
+   `.side-link`, `.rail-engine` and `.crumb-link` already answer a pointer by
+   moving to `--text`, and a link does the same: in dark the accent ink
+   (#8b9ff5) brightens toward near-white, in light the indigo (#3e50b8) darkens
+   toward near-black, so in BOTH themes hovering makes a link MORE prominent
+   rather than merely different. Both ends are measured text rungs, which is
+   what rules this out: the accent family publishes exactly one text step, and
+   `--accent`, `--accent-hover` and `--accent-active` are fills that
+   `styles/rungs.test.ts` refuses as a colour.
+
+   WHERE AN UNDERLINE IS THE ONLY HONEST MARK IT IS PERMANENT, not a hover: a
+   link inside running prose is distinguished from the text around it by colour
+   alone otherwise, which is WCAG 1.4.1. `.prose.md a` (rendered Markdown) and
+   `.int-form-note a` (the sentence under a setup form) carry it at rest, and
+   they are the only two registers in this tree that are genuinely a phrase. */
 a {
   color: var(--accent-ink);
   text-decoration: none;
 }
 a:hover {
-  text-decoration: underline;
+  color: var(--text);
 }
 
 button,
@@ -273,7 +301,7 @@ button.histogram-bar {
   white-space: nowrap;
 }
 .t-link:hover {
-  text-decoration: underline;
+  color: var(--text);
 }
 /* THE one micro-label register. It is declared once and never overridden;
    the system this replaces declared it once and then overrode it in six

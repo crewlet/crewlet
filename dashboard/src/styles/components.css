@@ -142,16 +142,9 @@ a.feed-row,
 a.org-node,
 a.seat-chip {
   color: inherit;
-  text-decoration: none;
 }
 a.seat-chip:hover {
   color: var(--accent-ink);
-}
-a.seat-card:hover,
-a.list-row:hover,
-a.feed-row:hover,
-a.org-node:hover {
-  text-decoration: none;
 }
 
 /* ---- Table --------------------------------------------------------------
@@ -384,6 +377,84 @@ a.org-node:hover {
 
 .tabpanel:focus {
   outline: none;
+}
+
+/* ---- The dropdown, composed ---------------------------------------------
+   Three rules about uilet's Select, and every one of them is about the same
+   moment: an option longer than the trigger that opened the list. None of them
+   restates the package — each supplies the half a portalled panel needs and
+   the component, which measures its list against the CONTROL, cannot know.
+
+   Reproduced on `My work`'s seat picker, whose trigger sits at the package's
+   132px floor because it is sized to the value showing ("Jane Founder") and
+   the options are seat names up to "Agent Systems Engineer". Measured: the
+   panel was 130px, every long label broke onto a second line inside a 28px
+   row, and the overflow drew straight over the option beneath it. Six of the
+   nine rows were unreadable, and it is the SAME picture on Audit, Goals,
+   Pages, Model and the tracker's seven filters. */
+
+/* A ROW IS NEVER SHRUNK BELOW ITS OWN CONTENT, which is what put one option's
+   second line over the next option's first.
+
+   `.crewlet-listbox` is a column flex container with `overflow-y: auto`, so
+   its rows are flex items; `.crewlet-listbox__option` carries an explicit
+   `min-height` (28px at `sm`), which REPLACES the automatic minimum that would
+   otherwise have held a flex item at its content size. A list taller than the
+   panel therefore shrinks every row to exactly 28px rather than scrolling
+   first, and a row whose content is 39px tall overflows it by eleven pixels
+   onto its neighbour. `flex: none` is what a row in a scroller wants: the
+   scroller is what absorbs the excess, one row deep. */
+.crewlet-listbox__option {
+  flex: none;
+}
+
+/* ONE LINE PER OPTION, which is what the ellipsis the package already declares
+   was always for: `.crewlet-select__option-label` sets `overflow: hidden` and
+   `text-overflow: ellipsis`, and neither does anything to text that is allowed
+   to wrap. `.crewlet-listbox__hint` beside it states the rule the label missed
+   — "never wrapped: a hint that broke across two lines turned every row in the
+   list a different height" — so this is the package's own conclusion applied
+   to the one element in the family that did not get it. */
+.crewlet-select__option-label {
+  white-space: nowrap;
+}
+
+/* THE PANEL SIZES TO ITS OPTIONS, not to the value that happens to be showing.
+   The component places the list with the TRIGGER'S measured width, which is
+   right for a form field and wrong for a toolbar picker: `width="auto"` sizes
+   that trigger to its current answer and caps it deliberately, so the panel
+   inherited a bound that was only ever about not pushing a filter bar around —
+   and a popup, which is out of flow, can push nothing. On `My work` the
+   trigger sat at the 132px floor because the reader's own name is short, and
+   every seat with a longer one was unreadable in the list that offered it.
+
+   `min-width` beats an inline `width`, so this only ever GROWS the panel, and
+   only when an option needs it: a full-width field's list still matches its
+   field unless an option is wider, which is exactly the case where growing is
+   the answer.
+
+   TWO CAPS, AND THE TIGHTER ONE WINS. `--select-menu-w-max` is the package's
+   own ceiling for a picker, restated in tokens.css and held against the
+   installed stylesheet by `styles/tokens.test.ts` — a panel has no business
+   being wider than the control it belongs to is ever allowed to stand. The
+   viewport term is the floor under that on a phone. Both are needed and
+   neither replaces the other.
+
+   WHAT THIS DOES NOT FIX, stated rather than left to be discovered: the
+   component clamps the panel's PLACEMENT with the trigger's width, not the
+   panel's, so a panel that grew is clamped as though it had not. A picker
+   whose right edge sits within (panel − trigger) of the viewport's right edge
+   therefore hangs over it — at most 88px, the distance between the package's
+   own floor and its own cap. Nothing in this tree is laid out that way: every
+   `.toolbar` is a left-anchored flex row and every picker in one is ahead of
+   its `.spacer`. It cannot be fixed from a stylesheet — the panel is
+   `position: fixed` with `left` written inline, so no CSS term can know how
+   much room is left to its right — and the fix belongs upstream, in the
+   `placePopup` call that already measures the panel's own HEIGHT and could
+   measure its width in the same line. */
+.crewlet-select__menu {
+  min-width: max-content;
+  max-width: min(var(--select-menu-w-max), calc(100vw - 2 * var(--space-4)));
 }
 
 /* ---- Meter --------------------------------------------------------------

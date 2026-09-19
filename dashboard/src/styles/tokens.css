@@ -98,6 +98,23 @@
      of navigation bought. */
   --measure: 76ch;
 
+  /* HOW WIDE A DROPDOWN PANEL MAY GROW, and it is the package's number rather
+     than one of ours: `@crewlethq/ui`'s Select declares
+     `--crewlet-select-auto-max-width: 220px` as the widest a picker may ever
+     stand, and a list belonging to that control has no business being wider
+     than the control is. It is restated here rather than read because the
+     panel is PORTALLED to the document body, so the property declared on
+     `.crewlet-select` never reaches it and `var(--crewlet-select-auto-max-width,
+     220px)` would silently be the fallback every time — a value that looks
+     like it tracks the package and does not. `styles/tokens.test.ts` reads the
+     installed stylesheet and fails when the two disagree, which is the same
+     shape `uilet.css`'s aliases are already kept honest with.
+
+     It is a layout constant rather than a design token, which is why it is
+     here and not in uilet.css: it names a bound this application composes, in
+     the same sense `--rail-w` and `--peek-w` do. */
+  --select-menu-w-max: 220px;
+
   /* ---- Colour ------------------------------------------------------------
      THE RAMPS THEMSELVES ARE NOT HERE. The neutral steps, the accent's
      fill/ink split, the four status families and the three phase hues are

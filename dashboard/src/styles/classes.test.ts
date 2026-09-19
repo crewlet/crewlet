@@ -548,6 +548,21 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-listbox__option",
+    why: "uilet's shared listbox register writes it, and Select's panel is one. styles/components.css gives it `flex: none`, which the package cannot leave to the automatic minimum: the row carries an explicit `min-height`, so in a column flex scroller taller than the panel every row shrinks to exactly that height instead of the list scrolling, and a two-line row overflowed eleven pixels onto its neighbour. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-select__option-label",
+    why: "uilet's Select writes it for an option's first line. styles/components.css adds `white-space: nowrap`, which completes the `overflow: hidden` and `text-overflow: ellipsis` the package already declares on it — neither does anything to text allowed to wrap, and `.crewlet-listbox__hint` beside it states the same rule for itself. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-select__menu",
+    why: "uilet's Select writes it for the portalled panel. styles/components.css lets it grow to its OPTIONS rather than to the trigger's measured width, which is the bound the component places it with — right for a form field and wrong for a `width=\"auto\"` picker, whose trigger is sized to the answer it happens to be showing. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-tabs--pill",
     why: "uilet's Tabs writes it for its default variant. styles/screens.css bounds it at its container and makes it scroll, which the package already does for its underline row and not for this one: `.crewlet-tabs` is `display: inline-flex` and the pill variant is `width: fit-content`, and neither caps — a flex row of nowrap labels has a min-content width equal to the sum of them. Measured on the tracker at 390px, the view switcher stood 497px wide and took the document to 642, so the reader dragged the whole page to reach a tab past the edge. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
