@@ -394,9 +394,10 @@ func (t *Transport) Handles() []string {
 // agent: every call carries that seat's own token, so the instance
 // attributes it to the agent rather than to one company-wide account.
 // Nothing here creates a post — an agent speaks through the Mattermost MCP
-// server, on this same token — so what this client does is read (the
-// reconnect backfill, and the thread a turn is handed) and raise the seat's
-// typing indicator.
+// server, on this same token — so what this client does is read: the
+// reconnect backfill, and the thread a turn is handed. It can also raise the
+// seat's typing indicator, which nothing running asks it to; see
+// [Transport.SetStatus].
 func (t *Transport) Client(handle string) (*Client, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -517,6 +518,15 @@ func (t *Transport) DMChannelPrefix() string { return "" }
 //
 // The status text is ignored, and that is what SupportsStatusText declares:
 // there is nothing here to render it with.
+//
+// NOTHING IN PRODUCTION REACHES IT. The only way in is notify.Statuses.Begin,
+// which has no caller outside tests — on either chat backend — so no agent has
+// ever raised an indicator on a running company. Said here, at the
+// declaration, because the absence is invisible from this side: the method is
+// complete and tested, and every doc comment that cited the indicator as
+// something a seat's client DOES was describing wiring rather than behaviour.
+// What is missing is the call at a turn's own start, which is a product
+// decision rather than a gap to close on the way past.
 func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ string) bool {
 	t.mu.Lock()
 	s, ok := t.seats[handle]
