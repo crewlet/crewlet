@@ -118,9 +118,9 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		// matched on, and the conversation the resume reports back to.
 		// Different here on purpose — equal ones would let a path that
 		// read the wrong field pass every case below.
-		CodingAgent: "claude-code", ConversationKey: "chat:D1:root-1",
-		ConversationIdentity: "chat:D1",
-		TraceID:              "tr-1", SpanID: "sp-1", CreatedAt: r.now,
+		CodingAgent: "claude-code", PartitionKey: "chat:D1:root-1",
+		ConversationKey: "chat:D1",
+		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 	}
 	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)

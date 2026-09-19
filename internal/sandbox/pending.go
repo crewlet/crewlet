@@ -311,7 +311,7 @@ type PendingRun struct {
 	// [turn.Reply].
 	Reply string `json:"reply,omitempty"`
 
-	// ConversationKey is the inbox PARTITION key the run was launched
+	// PartitionKey is the inbox PARTITION key the run was launched
 	// under: the batch its kick-off trigger arrived in.
 	//
 	// NOT WHAT AN ANSWER IS MATCHED ON, which it was, and the engine's own
@@ -335,21 +335,36 @@ type PendingRun struct {
 	// build matches every row — including the ones written here — on it by
 	// equality, so dropping it would strand a run whose answer lands on the
 	// other half of a mixed fleet.
-	ConversationKey string `json:"conversation_key"`
+	//
+	// THE GO NAME MOVED WITH THE CONCEPT; THE WIRE STRING DID NOT. This
+	// field was ConversationKey and its column is still "conversation_key",
+	// because the value is what two builds exchange through one
+	// coordination record while the name is only what this build calls it:
+	// a peer that predates the split writes and matches on that column, and
+	// a parked row outlives any upgrade window by design, since it is
+	// waiting for a person. Same trade [notify.PartitionField] makes for
+	// the event payload's copy of it.
+	PartitionKey string `json:"conversation_key"`
 
-	// ConversationIdentity is the durable conversation this run belongs
+	// ConversationKey is the durable conversation this run belongs
 	// to: what the resumed turn's ledger entry is filed under, and — since
 	// a person answers on the conversation rather than into the batch —
-	// what an arriving delivery is matched against.
+	// what admits an arriving delivery as its answer.
 	//
 	// The two were one field, and its doc said so — "where to report back
 	// AND what matches a person's answer". They are different questions
 	// and, for a direct message, different values: the partition is the
-	// batch a delivery arrives in, the identity is the line a person is
+	// batch a delivery arrives in, the conversation is the line a person is
 	// talking on. One value answering both cost one failure each way —
 	// filing the resumed turn under the batch put a DM's coding work in a
 	// ledger row the next turn never looked up, and matching on it lost
 	// the answer outright.
+	//
+	// ITS COLUMN IS conversation_identity, which is the name the split gave
+	// it on the wire and the one a peer already writes; only the Go name
+	// moved, onto the concept it holds and away from the partition beside
+	// it. See [PartitionKey], which made the same trade in the other
+	// direction.
 	//
 	// ADDITIVE on this row, which is what a coordination-KV record needs:
 	// nothing rewrites a parked run, so a run launched by an older build
@@ -357,7 +372,7 @@ type PendingRun struct {
 	// is there — [PendingRun.Conversation] for the report-back and
 	// [ConversationRef.Answers] for the match. Omitted when empty for the
 	// same reason.
-	ConversationIdentity string `json:"conversation_identity,omitempty"`
+	ConversationKey string `json:"conversation_identity,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone.
@@ -627,10 +642,10 @@ type PendingStore interface {
 // parked run outlives any upgrade window by design, because it waits for a
 // person to answer.
 func (r PendingRun) Conversation() string {
-	if r.ConversationIdentity != "" {
-		return r.ConversationIdentity
+	if r.ConversationKey != "" {
+		return r.ConversationKey
 	}
-	return r.ConversationKey
+	return r.PartitionKey
 }
 
 // ConversationRef is where an arriving delivery came from, as a parked run is
@@ -650,11 +665,11 @@ func (r PendingRun) Conversation() string {
 // type exists to end.
 type ConversationRef struct {
 	// Identity is the durable conversation — what notify derives for the
-	// delivery's partition, and what the row's ConversationIdentity holds.
+	// delivery's partition, and what the row's ConversationKey holds.
 	Identity string
 
 	// Partition is the inbox batch the delivery arrived in — what the row's
-	// ConversationKey holds.
+	// PartitionKey holds.
 	Partition string
 }
 
@@ -704,13 +719,13 @@ type ConversationRef struct {
 // otherwise match nothing at all — strictly worse than the equality this
 // replaced, which would still have found it.
 func (c ConversationRef) Answers(run PendingRun) bool {
-	if run.ConversationIdentity != "" {
-		return run.ConversationIdentity == c.Identity || c.sameBatch(run)
+	if run.ConversationKey != "" {
+		return run.ConversationKey == c.Identity || c.sameBatch(run)
 	}
-	if run.ConversationKey == "" {
+	if run.PartitionKey == "" {
 		return false
 	}
-	return run.ConversationKey == c.Identity || run.ConversationKey == c.Partition
+	return run.PartitionKey == c.Identity || run.PartitionKey == c.Partition
 }
 
 // sameBatch reports whether this delivery arrived in the very batch the run
@@ -720,7 +735,7 @@ func (c ConversationRef) Answers(run PendingRun) bool {
 // comparing equal would make every conversation-less delivery the answer to
 // every conversation-less run.
 func (c ConversationRef) sameBatch(run PendingRun) bool {
-	return c.Partition != "" && run.ConversationKey == c.Partition
+	return c.Partition != "" && run.PartitionKey == c.Partition
 }
 
 // Best is the parked run a delivery answers, out of the runs one seat has

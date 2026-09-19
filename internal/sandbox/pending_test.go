@@ -76,10 +76,10 @@ func TestNoConversationAnswersNoParkedRun(t *testing.T) {
 	keyless := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"}
 	dm := sandbox.PendingRun{
 		TurnID: "t2", AgentHandle: "swe",
-		ConversationKey: "chat:D1:root-1", ConversationIdentity: "chat:D1",
+		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
 	}
 	preSplit := sandbox.PendingRun{
-		TurnID: "t3", AgentHandle: "swe", ConversationKey: "chat:D1:root-1",
+		TurnID: "t3", AgentHandle: "swe", PartitionKey: "chat:D1:root-1",
 	}
 	cases := []struct {
 		name string
@@ -124,11 +124,11 @@ func TestAnIdentityThatIsReallyAPartitionIsStillAnswerable(t *testing.T) {
 	t.Parallel()
 	rewritten := sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe",
-		ConversationKey: "chat:D1:root-1", ConversationIdentity: "chat:D1:root-1",
+		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1:root-1",
 	}
 	wellFormed := sandbox.PendingRun{
 		TurnID: "t2", AgentHandle: "swe",
-		ConversationKey: "chat:D1:root-1", ConversationIdentity: "chat:D1",
+		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
 	}
 	// The person's reply on the DM line, in the thread the question was
 	// asked in: the identity is the channel, the partition is the thread.

@@ -34,19 +34,28 @@ type TurnRef struct {
 	AgentHandle string
 	Role        string
 
-	// ConversationKey is the inbox PARTITION key and ConversationIdentity
-	// the durable conversation. BOTH travel, and both are written onto the
-	// row: the second is what matches a person's answer back to this run
-	// and where the resumed turn reports, the first is the batch the
-	// kick-off trigger arrived in — kept because a peer that predates the
-	// identity matches on nothing else. See [PendingRun].
+	// PartitionKey is the inbox batch the kick-off trigger arrived in and
+	// ConversationKey the durable conversation it belongs to. BOTH travel,
+	// and both are written onto the row: the conversation is what matches a
+	// person's answer back to this run and where the resumed turn reports,
+	// the partition tells two runs parked on one direct message apart and
+	// is all a peer predating the conversation field can match on. See
+	// [PendingRun].
+	//
+	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is
+	// where both values come from and the two launch sites copy them across
+	// one after the other. They were ConversationKey and
+	// ConversationIdentity here, holding the partition and the conversation
+	// respectively — so each assignment read as its own opposite and a
+	// swapped pair looked exactly like a correct one. The wire names did
+	// not move with them; see [PendingRun].
 	//
 	// Two fields where there was one, and the miss this guards against is
-	// now available twice: this struct's ConversationKey was empty at its
-	// only construction site for the whole life of the feature, so every
-	// resumed turn recorded nothing at all.
-	ConversationKey      string
-	ConversationIdentity string
+	// now available twice: this struct's partition was empty at its only
+	// construction site for the whole life of the feature, so every resumed
+	// turn recorded nothing at all.
+	PartitionKey    string
+	ConversationKey string
 
 	TraceID string
 	SpanID  string
@@ -137,13 +146,13 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Placement:       string(req.Spec.Placement),
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
-		ConversationKey: req.Turn.ConversationKey,
+		PartitionKey:    req.Turn.PartitionKey,
 		// The conversation an answer is matched on and the resume
 		// reports back to, because a resume days later has neither the
 		// trigger nor this frame.
-		ConversationIdentity: req.Turn.ConversationIdentity,
-		Reply:                req.Turn.Reply,
-		TraceID:              req.Turn.TraceID, SpanID: req.Turn.SpanID,
+		ConversationKey: req.Turn.ConversationKey,
+		Reply:           req.Turn.Reply,
+		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
 		CreatedAt: now(),
 	}, req.Fence); err != nil {
@@ -206,7 +215,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// display, and what a person means by "which conversation is
 		// this run for" is the durable thread rather than the batch the
 		// trigger arrived in.
-		ConversationKey: req.Turn.ConversationIdentity,
+		ConversationKey: req.Turn.ConversationKey,
 		Task:            summarise(req.Brief),
 	}
 	ev := events.New(started, events.TraceContext{

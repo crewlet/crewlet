@@ -101,7 +101,7 @@ func run(turnID string) sandbox.PendingRun {
 		// question was asked in partitions on the thread while the
 		// conversation is the whole DM line. A fixture that made them
 		// equal would let every backend certify the split by accident.
-		ConversationKey: "chat:D1:root-1", ConversationIdentity: "chat:D1",
+		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
 		Reply:   "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
@@ -1085,9 +1085,9 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 		t.Error("a top-level reply on the DM line did not answer the question asked on it")
 	}
 	// And the identity IS carried, so the resume knows where to report.
-	if got.ConversationIdentity != "chat:D1" {
+	if got.ConversationKey != "chat:D1" {
 		t.Errorf("the run reports back to %q, want the DM line it was launched from",
-			got.ConversationIdentity)
+			got.ConversationKey)
 	}
 	if got.Conversation() != "chat:D1" {
 		t.Errorf("Conversation() = %q", got.Conversation())
@@ -1099,7 +1099,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 // waits for a person, so this row shape outlives any upgrade window.
 func testARowWithNoIdentityReportsBackToItsPartition(t *testing.T, s sandbox.PendingStore) {
 	old := run("t1")
-	old.ConversationIdentity = ""
+	old.ConversationKey = ""
 	mustLaunched(t, s, old)
 	got, found, err := s.Get(t.Context(), "t1")
 	if err != nil || !found {
@@ -1125,7 +1125,7 @@ func testARunParkedOnATopLevelDMIsAnsweredInItsThread(t *testing.T, s sandbox.Pe
 	top := run("t1")
 	// What a top-level DM turn writes: the partition IS the bare channel,
 	// and so is the conversation.
-	top.ConversationKey, top.ConversationIdentity = "chat:D1", "chat:D1"
+	top.PartitionKey, top.ConversationKey = "chat:D1", "chat:D1"
 	mustLaunched(t, s, top)
 	park(t, s, "t1")
 
@@ -1158,8 +1158,8 @@ func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.P
 	first, second := run("t1"), run("t2")
 	// The same DM line, two threads on it — and the one asked EARLIER is
 	// the one the reply belongs to, so recency alone gets this wrong.
-	first.ConversationKey = "chat:D1:root-1"
-	second.ConversationKey = "chat:D1:root-2"
+	first.PartitionKey = "chat:D1:root-1"
+	second.PartitionKey = "chat:D1:root-2"
 	second.CreatedAt = base.Add(time.Minute)
 	mustLaunched(t, s, first)
 	mustLaunched(t, s, second)
@@ -1222,7 +1222,7 @@ func testAnAnswerOnAnotherConversationMatchesNothing(t *testing.T, s sandbox.Pen
 func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
 	// Parked from a DM thread by a build that had no identity to write.
 	threaded := run("t1")
-	threaded.ConversationIdentity = ""
+	threaded.ConversationKey = ""
 	mustLaunched(t, s, threaded)
 	park(t, s, "t1")
 	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
@@ -1233,7 +1233,7 @@ func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
 
 	// And one parked from a top-level DM, whose one value is the channel.
 	toplevel := run("t2")
-	toplevel.ConversationKey, toplevel.ConversationIdentity = "chat:D9", ""
+	toplevel.PartitionKey, toplevel.ConversationKey = "chat:D9", ""
 	toplevel.CreatedAt = base.Add(time.Minute)
 	mustLaunched(t, s, toplevel)
 	park(t, s, "t2")
@@ -1262,7 +1262,7 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	// reproduce, so every reply on every surface would otherwise be its
 	// answer.
 	keyless := run("t2")
-	keyless.ConversationKey, keyless.ConversationIdentity = "", ""
+	keyless.PartitionKey, keyless.ConversationKey = "", ""
 	keyless.CreatedAt = base.Add(time.Minute)
 	mustLaunched(t, s, keyless)
 	park(t, s, "t2")

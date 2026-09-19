@@ -175,10 +175,10 @@ func TestTheBoardIsToldWhetherABoxExistsAndWhetherItIsHeld(t *testing.T) {
 func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "chat", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "chat:D1:1699.1", ConversationIdentity: "chat:D1",
+			PartitionKey: "chat:D1:1699.1", ConversationKey: "chat:D1",
 			CreatedAt: runBase},
 		sandbox.PendingRun{TurnID: "tick", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "event:018f-…", ConversationIdentity: "event:018f-…",
+			PartitionKey: "event:018f-…", ConversationKey: "event:018f-…",
 			CreatedAt: runBase.Add(time.Minute)},
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
@@ -188,7 +188,7 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 		// older build is reported unanswerable while a person is in fact
 		// waiting in that thread.
 		sandbox.PendingRun{TurnID: "presplit", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
+			PartitionKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
 	for _, id := range []string{"chat", "tick", "none", "presplit"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
