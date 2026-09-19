@@ -797,51 +797,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 
-	agentID := ""
-	if id, ok := company.Org.AgentIDFor(seat); ok {
-		agentID = id.String()
-	}
-	// THE TRACE THE RUN BELONGS TO, which nothing set before.
-	//
-	// TurnRef has carried TraceID and SpanID since the OTLP receiver was
-	// written, and this — its only construction site — left both empty. So
-	// PendingRun.TraceID was always "", RunEnv returned nil for every launch
-	// (it refuses to mint a token scoped to an empty trace, which is the one
-	// property that scoping has), and no coding run has ever exported
-	// telemetry through an endpoint the engine goes to some length to offer.
-	// The same emptiness broke the resume: describeResume built the resumed
-	// turn's events from Run.TraceID, so every resumed turn was filed under
-	// no trace at all.
-	//
-	// Taken from the ACTIVE span, which at this point is the run_sandbox
-	// tool call, so the box's spans nest under the call that started them.
-	runTrace := tracing.TraceOf(ctx)
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
-		Turn: sandbox.TurnRef{
-			TurnID: t.RunID, WorkKey: t.WorkKey,
-			AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
-			Depth: t.Depth, Chain: t.Chain,
-			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
-			// THE CONVERSATION THE WORK CAME FROM, which nothing set
-			// either. The row has carried this field since it was
-			// written, and with it empty a resumed turn had no way to
-			// say where its answer belonged: it left no conversation
-			// entry at all, so the next turn on that thread re-read
-			// history that stopped at the moment the run detached and
-			// planned as though the coding work had never happened.
-			//
-			// BOTH HALVES, because the row asks two questions of them:
-			// the identity is where the resume reports and what a
-			// person's answer is matched against, the partition is the
-			// batch this run was launched from — which is all a peer
-			// predating the identity has to match on.
-			PartitionKey:    t.PartitionKey,
-			ConversationKey: t.ConversationKey,
-			// The brief and the delivery obligation, so the resumed turn
-			// has both when the trigger is long gone. Neither can be
-			// recovered from the row any other way.
-			Reply: t.Reply,
-		},
+		Turn:       sandboxTurnRef(ctx, t, seat.Name),
 		Brief:      brief,
 		Task:       t.Task,
 		Setup:      setup,
@@ -850,6 +807,66 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		MCPServers: servers,
 		ReuseBox:   reuse,
 	})
+}
+
+// sandboxTurnRef is what a detached run's durable row records about the turn
+// that launched it.
+//
+// ONE BUILDER FOR BOTH LAUNCH PATHS — the run_sandbox tool and a cli-agent
+// executor handed its whole turn — because it is one row, the same facts and
+// the same reasons: the resume happens in another process, days later, and can
+// recover none of this from a trigger that is long gone. Written out twice it
+// drifted inside a single commit: one copy put the partition in both
+// conversation fields, which compiles, because both are strings.
+//
+// EVERY FACT OFF THE TURN'S OWN EPOCH, never the engine's current company. An
+// apply landing mid-turn is the next epoch, and a company renamed there
+// derives a DIFFERENT agent id for the same seat — so a row taking its id from
+// the live company named an agent none of that turn's other events did, and
+// its announcements split the seat in two on every surface that groups by id.
+// One path already took the id from the turn and said why; the other did not,
+// which is the whole hazard of writing the rule twice.
+//
+// The ROLE NAME is the caller's, because each already holds the seat it
+// resolved and the turn's copy is the same pointer — nothing is gained by
+// deriving it a second time here.
+//
+// The TRACE comes from the ACTIVE span, so the box's spans nest under the call
+// that started them rather than appearing as unrelated work minutes later.
+// TurnRef carried these two since the OTLP receiver was written and the
+// run_sandbox path left both empty: PendingRun.TraceID was always "", RunEnv
+// minted no telemetry token for any launch (it refuses to scope one to an
+// empty trace, which is the one property that scoping has), and describeResume
+// filed every resumed turn under no trace at all.
+func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.TurnRef {
+	runTrace := tracing.TraceOf(ctx)
+	return sandbox.TurnRef{
+		// The id is derived from the turn's PINNED organization, like every
+		// other fact about the seat here. The engine's current company is
+		// the next epoch once an apply lands mid-turn, and a renamed
+		// company derives a different id for the same seat.
+		TurnID: t.RunID, WorkKey: t.WorkKey,
+		AgentID: t.AgentID(), AgentHandle: t.Handle(), Role: role,
+		Depth: t.Depth, Chain: t.Chain,
+		TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
+		// BOTH CONVERSATION VALUES, field for field with [turnctx.Turn] so
+		// a swapped pair reads as one. The row has carried a conversation
+		// since it was written and nothing set it: with it empty a resumed
+		// turn had no way to say where its answer belonged, so it left no
+		// conversation entry at all and the next turn on that thread read
+		// history that stopped when the run detached.
+		//
+		// The conversation is where the resume reports and what admits a
+		// person's answer; the partition states the batch this run was
+		// launched from, which tells two runs parked on one direct message
+		// apart and is all a peer predating the conversation can match on.
+		PartitionKey:    t.PartitionKey,
+		ConversationKey: t.ConversationKey,
+		// The delivery obligation, so the resumed turn knows whether
+		// anybody is waiting: it sees neither its trigger nor this frame,
+		// and the row is the only place this can reach it from.
+		Reply: t.Reply,
+	}
 }
 
 // sandboxHeadroom refuses a launch below turn_engine.sandbox_min_budget_tokens.
