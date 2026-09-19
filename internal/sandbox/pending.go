@@ -716,16 +716,29 @@ type ConversationRef struct {
 // third peer direction and the one neither field's doc covers: a wake
 // published by a peer that predates it carries only the partition, so
 // [notify.ConversationIdentityOf] falls back to that value and this ref
-// arrives with its two fields holding the same string. Both clauses then
-// collapse onto the partition — equality against a pre-split row, and against
-// a row this build wrote, a match only when the delivery arrived in the very
-// batch the run was launched from. So such a delivery degrades to exactly the
-// match the build that published it would have made: never wider, and never
-// narrower. It cannot do better, because that build derived no identity for
-// anyone to read; and the fallback is what stops it doing worse, since
-// reading the absence as "no conversation" would refuse every one of those
-// answers and leave the box waiting out its pause TTL with the reply sitting
-// in the seat's inbox.
+// arrives with both fields holding the one string that peer derived.
+//
+// IT IS NEVER NARROWER than the match that peer would have made, and that is
+// the fallback earning its place: against a pre-split row both clauses
+// compare that string to the row's one value, which is the old equality
+// exactly, so reading the absence as "no conversation" instead would refuse
+// every one of those answers and leave the box waiting out its pause TTL with
+// the reply sitting in the seat's inbox.
+//
+// IT IS SOMETIMES WIDER, and where it widens it repairs. A peer that predates
+// the split derives the bare channel for a TOP-LEVEL direct message — that is
+// the partition rule both builds share — and the bare channel is precisely
+// what this build calls the identity of that line. So such a delivery answers
+// a run this build parked from a thread on it, which its own publisher could
+// never have matched. What it cannot repair is that peer's DM THREAD REPLY:
+// it stamped the thread and derived no identity for anyone to read, so this
+// build reads the thread as the identity and only a run parked in that same
+// thread matches. That is the pre-split behaviour, and it is unreachable from
+// this end however the reader is written.
+//
+// It never widens ACROSS conversations either way: every clause compares
+// against a value that peer derived from the same channel, so a reply on a
+// different line still fails all of them.
 //
 // AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
 // tick or an A2A wake stored no conversation, and a wake that could not name
