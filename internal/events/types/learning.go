@@ -265,14 +265,35 @@ type PrefetchSummary struct {
 	RelevantKnowledgeSelectionCount int  `json:"relevant_knowledge_selection_count"`
 	ThreadContextHit                bool `json:"thread_context_hit"`
 	ThreadContextBytes              int  `json:"thread_context_bytes"`
-	// ThreadContextPosts distinguishes the two hit=true paths for the chat
-	// thread the turn was woken in, the way the knowledge count does for
-	// its search: a non-zero count means the thread was read and handed to
-	// the seat, while zero with hit=true means it could not be read from
-	// this node and the block told the seat to go and read it instead. Zero
-	// with hit=false is the ordinary case — the trigger was not a thread
-	// reply, so there was no thread.
+	// ThreadContextPosts is how many messages of the chat thread the turn
+	// was woken in were handed to the seat. It answers HOW MUCH, and
+	// nothing else: a zero is produced by a thread that could not be read
+	// AND by one that was read and had nothing in it, which is what
+	// ThreadContextRead is for.
 	ThreadContextPosts int `json:"thread_context_posts"`
+	// ThreadContextRead says a chat backend ANSWERED the read.
+	//
+	// THE THIRD STATE, and the one the count alone got wrong. Both of the
+	// block's zero-message paths render non-empty prose — "there is nothing
+	// earlier" and "it could not be read from this node" — so hit and bytes
+	// cannot separate them either, and the count was read as "unreadable"
+	// for every successfully-read empty thread in the company. An explicit
+	// field rather than a sentinel count, because a sentinel is a magic
+	// value every reader of this event has to know.
+	//
+	// false with hit=false is the ordinary case: the trigger was not a
+	// thread reply, so there was no thread and nothing read one.
+	ThreadContextRead bool `json:"thread_context_read"`
+	// ThreadContextStoppedShort says the backend could not reach the end of
+	// the thread, so what the seat was handed stops short of the NEWEST
+	// messages — the one that woke the turn included.
+	//
+	// Its own field for the same reason: the count reads the same on a
+	// complete thread and on a truncated one, and this is precisely the
+	// turn an operator is looking at when a seat answers something nobody
+	// asked it. Only a PAGED backend can set it; see
+	// internal/notify.Transcript.
+	ThreadContextStoppedShort bool `json:"thread_context_stopped_short"`
 	// TriggerRequiresRecon says the trigger was a bare pointer, so the
 	// personal-memory, relevant-knowledge and episode-recall prefetches skipped
 	// their aux-LLM call entirely: their hit and byte counts reflect the GATE,

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -317,11 +318,13 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		case summary.RelevantKnowledgeSelectionCount != 0:
 			t.Error("pages were reported with no knowledge backend")
 		// A WEBHOOK NAMES NO THREAD, so the seventh block reports nothing
-		// at all rather than a thread it could not read — the two are what
-		// tell "this seat was handed the conversation" from "it was told to
-		// go and find it".
+		// at all — not a thread it could not read, and not a read that
+		// found nothing. Those three are what tell "this seat was handed
+		// the conversation" from "it was told to go and find it" from
+		// "there was no conversation".
 		case summary.ThreadContextHit || summary.ThreadContextBytes != 0 ||
-			summary.ThreadContextPosts != 0:
+			summary.ThreadContextPosts != 0 || summary.ThreadContextRead ||
+			summary.ThreadContextStoppedShort:
 			t.Errorf("a non-chat trigger reported a thread: %+v", summary)
 		// READ OFF THE TRIGGER, not off a model: this pointer webhook is
 		// what gates three of the seven searches, and without the flag its
@@ -339,11 +342,13 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 
 // AND A CHAT THREAD REPORTS WHAT IT WAS HANDED.
 //
-// Hit, bytes and the message count are three different facts and the third is
-// not derivable from the first two: a thread that could not be read renders a
-// non-empty hint, so hit=true with zero messages is a seat that was told to go
-// and look. Without the count, a seat answering a thread it evidently had not
-// seen is indistinguishable from one whose thread was genuinely empty.
+// Hit, bytes, the message count and whether a backend ANSWERED are four
+// different facts, and no three of them imply the fourth: both of the block's
+// zero-message paths render a non-empty hint, so hit and bytes look identical
+// on a thread that was read and empty and on one that could not be read at
+// all. Reported as a count alone, the first was published to the dashboard as
+// the second — a healthy node claiming it could not reach its own chat
+// surface.
 func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -390,6 +395,67 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 		if summary.ThreadContextPosts != 0 {
 			t.Errorf("a node with no chat reader reported %d messages",
 				summary.ThreadContextPosts)
+		}
+		if summary.ThreadContextRead {
+			t.Errorf("a node with no chat reader reported the thread as read: %+v",
+				summary)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prefetch summary was published")
+	}
+}
+
+// AND A THREAD THAT WAS READ REACHES THE EVENT AS ONE.
+//
+// The block's own answer and the event's fields are two structs copied across
+// by hand, with nothing holding them together: a field left out here is a
+// block reporting correctly into a summary that does not carry it, and every
+// path above reads false — a healthy read published as a node that could not
+// reach its chat surface, and a thread truncated at the newest end published
+// as a whole one. Exercised against the mapping directly, because a node's
+// chat readers are its running transports and a fake cannot be one.
+func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	got := make(chan types.PrefetchSummary, 1)
+	if err := q.Subscribe(t.Context(), topics.Event("prefetch_summary"), "probe",
+		func(_ context.Context, ev *events.Event) queue.Result {
+			if p, ok := events.DataAs[*types.PrefetchSummary](ev); ok && p != nil {
+				got <- *p
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	e := &Engine{backends: &Backends{Queue: q}}
+	seat := &org.Role{Name: "Tech Lead", DeclaredHandle: "lead"}
+	e.publishPrefetchSummary(t.Context(), seat, "agent-1", "work-3",
+		prefetch.Request{}, prefetch.Blocks{
+			ThreadContext:             "- **Ana Ruiz (ana)**: staging redirects in a loop",
+			ThreadContextPosts:        12,
+			ThreadContextRead:         true,
+			ThreadContextStoppedShort: true,
+		})
+
+	select {
+	case summary := <-got:
+		if !summary.ThreadContextHit || summary.ThreadContextBytes == 0 {
+			t.Errorf("a rendered thread reported no block: %+v", summary)
+		}
+		if summary.ThreadContextPosts != 12 {
+			t.Errorf("the message count arrived as %d", summary.ThreadContextPosts)
+		}
+		if !summary.ThreadContextRead {
+			t.Error("a thread that was read arrived as one that could not be")
+		}
+		if !summary.ThreadContextStoppedShort {
+			t.Error("a read that stopped short arrived as a complete one")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no prefetch summary was published")

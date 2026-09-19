@@ -351,23 +351,12 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
   const gated = p.trigger_requires_recon === true;
   const thin = gated ? "the trigger was a bare pointer — this filter never ran" : "";
   const picks = Number(p.relevant_knowledge_selection_count ?? 0);
-  const posts = Number(p.thread_context_posts ?? 0);
   return [
     // NOT GATED, and that is the point of it: this block is what makes a thin
     // trigger thick. `trigger_requires_recon` says the trigger BODY is a
     // pointer, which is still true of a "+1" whose thread the engine handed
     // over — so the flag stays set and this block still ran.
-    block(
-      "The thread so far",
-      p,
-      "thread_context",
-      "",
-      p.thread_context_hit === true && posts === 0
-        ? "the thread could not be read from that node"
-        : posts > 0
-          ? `${posts} message${posts === 1 ? "" : "s"} handed over`
-          : "",
-    ),
+    block("The thread so far", p, "thread_context", "", threadNote(p)),
     block("Personal memory", p, "personal_memory", thin),
     block("Similar prior work", p, "episode_recall", thin),
     block(
@@ -385,6 +374,32 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
     block("Synthesized skills", p, "synthesized_skills", ""),
     block("First-turn onboarding", p, "onboarding_hint", ""),
   ];
+}
+
+/**
+ * What the thread block actually did, in one phrase.
+ *
+ * THREE STATES BEHIND ONE HIT. Both of the block's zero-message paths render
+ * non-empty prose into the prompt — "there is nothing earlier" and "it could
+ * not be read from this node" — so hit and bytes look identical on a thread
+ * that was read and empty and on one no backend answered for. This read the
+ * first as the second until the engine started reporting `thread_context_read`
+ * beside the count, and told an operator that a healthy node could not reach
+ * its own chat surface.
+ *
+ * `thread_context_stopped_short` is the fourth: a thread too long to read to
+ * its end is handed over missing the NEWEST messages, the one that woke the
+ * turn included, and its message count reads exactly like a whole thread's.
+ */
+function threadNote(p: Record<string, unknown>): string {
+  if (p.thread_context_hit !== true) return "";
+  if (p.thread_context_read !== true) return "the thread could not be read from that node";
+  const posts = Number(p.thread_context_posts ?? 0);
+  if (posts === 0) return "read, and there was nothing earlier";
+  const handed = `${posts} message${posts === 1 ? "" : "s"} handed over`;
+  return p.thread_context_stopped_short === true
+    ? `${handed}, but not the newest — the thread was too long to read`
+    : handed;
 }
 
 function block(

@@ -172,20 +172,47 @@ describe("the prefetch", () => {
     // A block the list omits simply never renders, and nothing anywhere goes
     // red — this list is hand-written with no gate behind it, so the seventh
     // block needs its own case or it can vanish from the screen silently.
-    const blocks = prefetchBlocks(prefetch({ thread_context_hit: true, thread_context_posts: 12 }));
+    const blocks = prefetchBlocks(
+      prefetch({ thread_context_hit: true, thread_context_read: true, thread_context_posts: 12 }),
+    );
     const thread = blocks.find((b) => b.label === "The thread so far")!;
     expect(thread.hit).toBe(true);
     expect(thread.note).toBe("12 messages handed over");
   });
 
-  test("a thread that could not be read reads differently from an absent one", () => {
-    // hit=true with zero messages is the block telling the seat to go and read
-    // the thread itself, which is nothing like a trigger that had no thread.
-    const unreadable = prefetchBlocks(prefetch({ thread_context_hit: true }));
-    expect(unreadable.find((b) => b.label === "The thread so far")!.note).toBe(
-      "the thread could not be read from that node",
+  test("the three zero-message thread states read as three different things", () => {
+    // Both of the block's zero-message paths render non-empty prose into the
+    // prompt, so hit and bytes look identical on a thread that was READ and
+    // empty and on one no backend answered for. Reading the first as the
+    // second tells an operator that a healthy node cannot reach its own chat
+    // surface — which is why the engine reports whether it was read at all.
+    const note = (over: Record<string, unknown>) =>
+      prefetchBlocks(prefetch(over)).find((b) => b.label === "The thread so far")!.note;
+
+    expect(note({ thread_context_hit: true })).toBe("the thread could not be read from that node");
+    expect(note({ thread_context_hit: true, thread_context_read: true })).toBe(
+      "read, and there was nothing earlier",
     );
-    expect(prefetchBlocks(prefetch()).find((b) => b.label === "The thread so far")!.note).toBe("");
+    // And a trigger with no thread at all claims nothing about one.
+    expect(note({})).toBe("");
+  });
+
+  test("a thread too long to read says the newest messages are missing", () => {
+    // The count reads the same on a truncated thread as on a whole one, and
+    // the messages that are missing are the NEWEST — the one that woke the
+    // turn included. A seat answering a message it never saw is exactly the
+    // turn this screen is opened to explain.
+    const blocks = prefetchBlocks(
+      prefetch({
+        thread_context_hit: true,
+        thread_context_read: true,
+        thread_context_posts: 30,
+        thread_context_stopped_short: true,
+      }),
+    );
+    expect(blocks.find((b) => b.label === "The thread so far")!.note).toBe(
+      "30 messages handed over, but not the newest — the thread was too long to read",
+    );
   });
 
   test("the thread block is never gated", () => {

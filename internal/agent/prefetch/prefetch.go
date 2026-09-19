@@ -104,11 +104,36 @@ type Blocks struct {
 	// ThreadContextPosts is how many messages went into that block.
 	//
 	// Carried out for the reason [Blocks.RelevantKnowledgeHits] is: the
-	// block alone cannot say. A thread that could not be read renders
-	// [UnreadableThreadHint], which is non-empty prose, and telemetry
-	// needs the two apart — a seat answering a thread it evidently had not
-	// seen is exactly the case an operator is looking at.
+	// block alone cannot say. It answers HOW MUCH was handed over, and
+	// nothing else — which of the block's states produced a zero is
+	// [Blocks.ThreadContextRead].
 	ThreadContextPosts int
+
+	// ThreadContextRead says a backend ANSWERED — that the thread was
+	// read, however little it turned out to hold.
+	//
+	// THREE STATES, NOT TWO. A thread read and found empty renders
+	// [EmptyThreadHint]; a thread that could not be read renders
+	// [UnreadableThreadHint]; both are non-empty prose and both report
+	// zero messages, so a count alone reported the first as the second and
+	// told an operator that a healthy node could not reach its own chat
+	// surface. A sentinel count would be the same mistake with a magic
+	// value in it: every reader would have to know which number meant
+	// which.
+	//
+	// False for a trigger with no thread at all, which renders no block:
+	// there was nothing to read, so nothing read it.
+	ThreadContextRead bool
+
+	// ThreadContextStoppedShort says the backend could not reach the end of
+	// the thread, so the block stops short of the NEWEST messages — the one
+	// that woke the turn included.
+	//
+	// Its own fact for the reason [Blocks.ThreadContextRead] is: the count
+	// says thirty messages either way, and a read that stopped short is
+	// exactly the turn an operator is looking at when a seat answers
+	// something nobody asked it. See [notify.Transcript.StoppedShort].
+	ThreadContextStoppedShort bool
 }
 
 // Empty reports that nothing was surfaced at all.
@@ -328,11 +353,14 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
 	})
 	run(&blocks.OnboardingHint, func() string { return f.onboardingHint(ctx, r) })
-	// Its own goroutine too, and for the same reason: it reports a message
-	// count alongside its prose.
+	// Its own goroutine too, and for the same reason twice over: it reports
+	// a message count AND two facts the prose cannot carry.
 	wg.Go(func() {
-		defer recoverCounted(&blocks.ThreadContext, &blocks.ThreadContextPosts)
-		blocks.ThreadContext, blocks.ThreadContextPosts = f.threadContext(ctx, r)
+		defer recoverThread(&blocks)
+		block := f.threadContext(ctx, r)
+		blocks.ThreadContext, blocks.ThreadContextPosts = block.text, block.posts
+		blocks.ThreadContextRead = block.read
+		blocks.ThreadContextStoppedShort = block.stoppedShort
 	})
 	wg.Wait()
 	return blocks
@@ -354,7 +382,7 @@ func recoverInto(into *string) {
 }
 
 // recoverCounted is [recoverInto] for a block that reports a count beside its
-// prose — the knowledge search's pages, the thread's messages.
+// prose — the knowledge search's pages.
 //
 // The COUNT is cleared with the prose, so a panicked render can never report
 // what it did not surface.
@@ -362,6 +390,21 @@ func recoverCounted(into *string, count *int) {
 	if r := recover(); r != nil {
 		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
 		*into, *count = "", 0
+	}
+}
+
+// recoverThread is [recoverCounted] for the thread block, which reports three
+// facts beside its prose.
+//
+// ALL OF THEM GO WITH IT. A render that panicked half way surfaced nothing,
+// so it read no thread, stopped short of nothing and handed over no messages
+// — and a leftover true on any of those is a claim about a block that does
+// not exist.
+func recoverThread(b *Blocks) {
+	if r := recover(); r != nil {
+		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
+		b.ThreadContext, b.ThreadContextPosts = "", 0
+		b.ThreadContextRead, b.ThreadContextStoppedShort = false, false
 	}
 }
 

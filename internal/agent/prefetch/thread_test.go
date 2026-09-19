@@ -82,6 +82,17 @@ func TestAnUnreadableThreadIsNotAnEmptyOne(t *testing.T) {
 	if prefetch.EmptyThreadHint == prefetch.UnreadableThreadHint {
 		t.Fatal("the two hints are the same sentence")
 	}
+
+	// AND THE DIFFERENCE IS CARRIED OUT, not left in the prose. Both hints
+	// are non-empty and both report zero messages, so everything downstream
+	// — the summary event, the dashboard, an operator — sees one pair of
+	// numbers for two opposite states unless a field says which.
+	if unreadable.ThreadContextRead {
+		t.Error("a refused read reported the thread as read")
+	}
+	if !empty.ThreadContextRead {
+		t.Error("a thread that was read and had nothing in it reports as unreadable")
+	}
 }
 
 // NO READER AT ALL IS AN UNREADABLE THREAD, not an absent one.
@@ -113,6 +124,12 @@ func TestATriggerWithNoThreadRendersNoBlock(t *testing.T) {
 	}
 	if len(source.asked) != 0 {
 		t.Errorf("a non-thread trigger read a thread anyway: %v", source.asked)
+	}
+	// AND IT IS THE THIRD STATE, not either of the other two: nothing was
+	// read, so reporting a read here would put a chat fact on every webhook
+	// and scheduled turn in the company.
+	if blocks.ThreadContextRead || blocks.ThreadContextPosts != 0 {
+		t.Errorf("a non-thread trigger reported a thread: %+v", blocks)
 	}
 }
 
@@ -351,6 +368,9 @@ func TestAPanickingThreadReaderCostsOnlyItsOwnBlock(t *testing.T) {
 	if blocks.ThreadContextPosts != 0 {
 		t.Fatalf("the panicking reader reported %d messages", blocks.ThreadContextPosts)
 	}
+	if blocks.ThreadContextRead || blocks.ThreadContextStoppedShort {
+		t.Fatalf("the panicking reader reported a read: %+v", blocks)
+	}
 	if !strings.Contains(blocks.SynthesizedSkills, "ship-a-fix") {
 		t.Fatalf("a sibling block was lost: %q", blocks.SynthesizedSkills)
 	}
@@ -409,6 +429,21 @@ func TestAReadThatStoppedShortNeverClaimsTheNewestIsHere(t *testing.T) {
 	}
 	if strings.Contains(whole.ThreadContext, "IT STOPS SHORT") {
 		t.Fatalf("a complete thread claims it stopped short:\n%s", whole.ThreadContext)
+	}
+
+	// AND IT IS REPORTED, not only said in the prompt: the message count
+	// reads the same on a truncated thread as on a whole one, so without
+	// this field a seat answering a message it never saw is invisible to
+	// the operator looking for exactly that turn.
+	truncated := fetch(t, prefetch.Sources{Threads: &threads{
+		messages:     []notify.Message{said("U1", "the root question")},
+		stoppedShort: true,
+	}}, threadRequest(t))
+	if !truncated.ThreadContextStoppedShort || !truncated.ThreadContextRead {
+		t.Errorf("a truncated read reported %+v", truncated)
+	}
+	if whole.ThreadContextStoppedShort {
+		t.Error("a complete thread reported itself truncated")
 	}
 }
 

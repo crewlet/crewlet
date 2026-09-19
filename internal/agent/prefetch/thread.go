@@ -131,29 +131,48 @@ const threadStoppedShortPreamble = "Part of the chat thread this turn was " +
 	"**you** are your own earlier replies — do not answer them or repeat " +
 	"what they already said."
 
-// threadContext renders the block, and reports how many messages went into
-// it.
+// threadBlock is what the block resolved to.
 //
-// The COUNT is not derivable from the prose: both hints are non-empty, so
-// without it telemetry cannot tell a thread that was handed over from one
-// that could not be read — which is the whole question an operator asks when
-// a seat answers a thread it evidently had not seen.
-func (f *Fetcher) threadContext(ctx context.Context, r Request) (string, int) {
+// FOUR FACTS, because the prose carries none of them legibly. Every path here
+// renders non-empty text — two of them a hint rather than a thread — so a
+// reader outside this package cannot tell "handed the conversation" from
+// "told to go and find it" from "there was nothing to find" by looking at it,
+// and a count alone collapses the last two into the first's opposite.
+type threadBlock struct {
+	// text is what lands in the prompt.
+	text string
+	// posts is how many messages were rendered.
+	posts int
+	// read says a backend answered, whatever it had to say.
+	read bool
+	// stoppedShort says the answer stops short of the thread's newest
+	// message. See [notify.Transcript.StoppedShort].
+	stoppedShort bool
+}
+
+// threadContext renders the block.
+//
+// The three states a caller has to keep apart are decided HERE, where the
+// difference is still visible, rather than inferred later from a number: a
+// trigger with no thread renders nothing, a read that failed renders the
+// unreadable hint, and a read that succeeded renders the thread or the empty
+// hint — and only the last two read anything at all.
+func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 	if r.Thread.Root == "" {
 		// Not a chat thread trigger at all: a top-level message, a
 		// webhook, a scheduled fire. No block, not a hint — there is no
-		// thread to be missing.
-		return "", 0
+		// thread to be missing, and nothing read one.
+		return threadBlock{}
 	}
 	if f.src.Threads == nil {
-		return UnreadableThreadHint, 0
+		return threadBlock{text: UnreadableThreadHint}
 	}
 	// ITS OWN DEADLINE, layered under the turn's: see [ThreadTimeout].
 	read, cancel := context.WithTimeout(ctx, ThreadTimeout)
 	defer cancel()
 	transcript, ok := f.src.Threads.ReadThread(read, r.Seat.Handle(), r.Thread)
 	if !ok {
-		return UnreadableThreadHint, 0
+		return threadBlock{text: UnreadableThreadHint}
 	}
 	return f.renderThread(transcript, r.Thread.Backend)
 }
@@ -172,7 +191,7 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) (string, int) {
 // the shared cuts are both wrong here, because [textcut] counts bytes and its
 // own doc says content a turn reasons over is passed whole, and ledger.Elide
 // says outright that it is not for content.
-func (f *Fetcher) renderThread(read notify.Transcript, backend string) (string, int) {
+func (f *Fetcher) renderThread(read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
 	for _, m := range read.Messages {
 		if line := f.renderPost(m, backend); line != "" {
@@ -180,7 +199,11 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) (string, 
 		}
 	}
 	if len(lines) == 0 && !read.StoppedShort {
-		return EmptyThreadHint, 0
+		// READ, and it had nothing in it. Reported as a read rather than
+		// as a zero, because the same zero from a failed read sends the
+		// seat to the opposite place and an operator after the wrong
+		// fault.
+		return threadBlock{text: EmptyThreadHint, read: true}
 	}
 
 	// THE BACKEND'S OWN DROPS COUNT TOO. A paged read holds a window and
@@ -225,7 +248,10 @@ func (f *Fetcher) renderThread(read notify.Transcript, backend string) (string, 
 	for _, line := range lines[1:] {
 		b.WriteString("\n" + line)
 	}
-	return b.String(), len(lines)
+	return threadBlock{
+		text: b.String(), posts: len(lines),
+		read: true, stoppedShort: read.StoppedShort,
+	}
 }
 
 // renderPost renders one message as a bullet.

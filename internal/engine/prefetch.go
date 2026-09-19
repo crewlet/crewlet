@@ -154,12 +154,15 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		RelevantKnowledgeSelectionCount: b.RelevantKnowledgeHits,
 		ThreadContextHit:                b.ThreadContext != "",
 		ThreadContextBytes:              len(b.ThreadContext),
-		// The count the block cannot carry either: a thread that could
-		// not be read renders a hint, so hit=true with zero messages is
-		// "this seat was told to go and read it" rather than "it was
-		// handed the conversation".
-		ThreadContextPosts:   b.ThreadContextPosts,
-		TriggerRequiresRecon: r.RequiresRecon,
+		ThreadContextPosts:              b.ThreadContextPosts,
+		// THE TWO FACTS THE PROSE CANNOT CARRY. Both of the block's
+		// zero-message paths render a non-empty hint, so hit, bytes and
+		// the count together still cannot say whether a backend answered
+		// — and a thread read to a bound stops short of the message that
+		// woke the turn while reporting the same count as a whole one.
+		ThreadContextRead:         b.ThreadContextRead,
+		ThreadContextStoppedShort: b.ThreadContextStoppedShort,
+		TriggerRequiresRecon:      r.RequiresRecon,
 	}, tracing.TraceOf(ctx))
 	if ev == nil {
 		return
