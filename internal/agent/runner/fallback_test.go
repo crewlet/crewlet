@@ -226,6 +226,15 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 	// provider's 205,000, and this row is what "is the prompt getting
 	// smaller" is answered from.
 	tools := toolArrayBytes(t, sent.Tools)
+	// The fixture has to have SENT tools, or the two assertions below hold
+	// nothing: every term on both sides of them is then zero, and a surface
+	// built wrong or a fake that dropped the array would read as a meter
+	// that measured it exactly. Same rule the resumed case applies to its
+	// own terms.
+	if len(sent.Tools) == 0 || tools == 0 {
+		t.Fatalf("the provider was handed %d tool definitions at %d chars; a term at "+
+			"zero is a term this case is not holding", len(sent.Tools), tools)
+	}
 	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
 		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
 			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
@@ -396,6 +405,13 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 			m.SystemBytes, m.UserBytes)
 	}
 	tools := toolArrayBytes(t, sent.Tools)
+	// The tool array is a term of this case exactly as the three above are,
+	// and it is held to the same bar: at zero the comparison below is 0 == 0
+	// and says nothing about what a resumed phase re-offers.
+	if len(sent.Tools) == 0 || tools == 0 {
+		t.Fatalf("the resumed phase was handed %d tool definitions at %d chars; a term "+
+			"at zero is a term this case is not holding", len(sent.Tools), tools)
+	}
 	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
 		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
 			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
