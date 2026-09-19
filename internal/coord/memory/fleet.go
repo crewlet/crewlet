@@ -777,6 +777,25 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 	return entry.reason, true, nil
 }
 
+// FollowIfAbsent records a follow only where none exists, reporting whether
+// this call created it.
+//
+// ONE MUTEX ACROSS THE CHECK AND THE WRITE, which is what the KV backend buys
+// with Create — see [coord.Follows.FollowIfAbsent] for what depends on it.
+func (f *Fleet) FollowIfAbsent(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error) {
+	if backend == "" || handle == "" || thread == "" {
+		return false, errors.New("coord/memory: a follow needs a backend, a handle and a thread")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := followKey(backend, handle, channel, thread)
+	if _, held := f.follows[key]; held {
+		return false, nil
+	}
+	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
+	return true, nil
+}
+
 // Unfollow drops a follow, reporting whether one was there.
 func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
 	if backend == "" || handle == "" || thread == "" {

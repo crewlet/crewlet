@@ -2264,6 +2264,116 @@ var followCases = []fleetCase{{
 		}
 	},
 }, {
+	// CREATE-ONLY, because the one-time handoff runs while chat is live.
+	//
+	// The rows it carries are OLDER than anything the fleet may already
+	// hold, so a plain write would downgrade a fresh mention's reason to a
+	// stale one and resurrect a follow somebody dropped after the move
+	// began. It is also what makes two nodes handing off at once correct
+	// with nothing agreed between them.
+	name: "a create-only follow does not overwrite one the fleet already has",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.follow("slack", "agent-swe", "C1", "t-abs", "app_mention")
+
+		created, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "t-abs",
+			"collective", at.Add(-time.Hour))
+		if err != nil {
+			h.t.Fatalf("FollowIfAbsent: %v", err)
+		}
+		if created {
+			h.t.Error("reported it created a follow the fleet already held")
+		}
+		if reason, ok := h.following("slack", "agent-swe", "C1", "t-abs"); !ok || reason != "app_mention" {
+			h.t.Errorf("after a create-only write: following=%v reason=%q, want the "+
+				"fleet's own record untouched", ok, reason)
+		}
+	},
+}, {
+	name: "a create-only follow records one that is absent, and says it did",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		created, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "t-new", "mention", at)
+		if err != nil {
+			h.t.Fatalf("FollowIfAbsent: %v", err)
+		}
+		if !created {
+			h.t.Fatal("reported it created nothing for a thread nobody followed")
+		}
+		if reason, ok := h.following("slack", "agent-swe", "C1", "t-new"); !ok || reason != "mention" {
+			h.t.Errorf("the created follow reads back as following=%v reason=%q", ok, reason)
+		}
+		// AND IT IS NOT A PUT: a second call reports it created nothing.
+		if again, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "t-new",
+			"mention", at); err != nil || again {
+			h.t.Errorf("the second create-only write reported created=%v err=%v", again, err)
+		}
+	},
+}, {
+	// AN INCOMPLETE IDENTITY IS REFUSED HERE TOO, on [Follows.Follow]'s
+	// reasoning: a record under a key missing a segment is one no read can
+	// ever find, and the handoff must not turn a malformed local row into
+	// one.
+	// EXACTLY ONE CREATE WINS, and this is the case the handoff's
+	// concurrency argument rests on.
+	//
+	// Two nodes booting at once hold their own local tables with overlapping
+	// keys, and internal/notify/followsync relies on the backend to arbitrate
+	// with nothing agreed between them — no lock, no lease, no ordering. That
+	// claim is load-bearing in three package docs and was certified only
+	// against an in-process fake until this case existed.
+	name: "exactly one of many concurrent create-only follows wins",
+	fn: func(h *fleetHarness) {
+		const callers = 8
+		at := h.now()
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		made := make([]bool, callers)
+		failed := make([]error, callers)
+		for i := range callers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				made[i], failed[i] = h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe",
+					"C1", "t-boot", "mention", at)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		winners := 0
+		for i, err := range failed {
+			if err != nil {
+				h.t.Fatalf("concurrent FollowIfAbsent %d: %v", i, err)
+			}
+			if made[i] {
+				winners++
+			}
+		}
+		if winners != 1 {
+			h.t.Errorf("%d of %d concurrent create-only writes reported they "+
+				"created the follow, want exactly 1 — two nodes handing off at "+
+				"once would each count a record only one of them wrote", winners, callers)
+		}
+		if _, ok := h.following("slack", "agent-swe", "C1", "t-boot"); !ok {
+			h.t.Error("none of the concurrent creates left a follow behind")
+		}
+	},
+}, {
+	name: "a create-only follow refuses an incomplete identity",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.FollowIfAbsent(h.ctx, "", "agent-swe", "C1", "t-1", "mention", h.now()); err == nil {
+			h.t.Error("a create-only follow with no backend was accepted")
+		}
+		if _, err := h.f.FollowIfAbsent(h.ctx, "slack", "", "C1", "t-1", "mention", h.now()); err == nil {
+			h.t.Error("a create-only follow with no handle was accepted")
+		}
+		if _, err := h.f.FollowIfAbsent(h.ctx, "slack", "agent-swe", "C1", "", "mention", h.now()); err == nil {
+			h.t.Error("a create-only follow with no thread was accepted")
+		}
+	},
+}, {
 	name: "unfollow removes exactly one follow and reports it",
 	fn: func(h *fleetHarness) {
 		h.follow("slack", "agent-swe", "C1", "t-1", "mention")
@@ -2293,6 +2403,70 @@ var followCases = []fleetCase{{
 		}
 		if gone {
 			h.t.Error("Unfollow reported it removed a follow that was never there")
+		}
+	},
+}, {
+	// EXACTLY ONE UNFOLLOW REMOVED IT, AND ONLY THAT ONE MAY SAY SO.
+	//
+	// `true` has to mean "this CALL removed it", never "this call's READ saw
+	// one" — and sequential calls cannot tell the two apart, because both
+	// backends short-circuit on the read. Concurrently they come apart, which
+	// is what makes this the case the divergence was found with.
+	//
+	// [internal/coord/memory.Fleet.Unfollow] holds one mutex across its lookup
+	// and its delete, so exactly one caller can ever report true there. The KV
+	// backend has no such mutex and reaches the same answer by binding its
+	// delete to the revision it read, re-reading when it loses. Before that,
+	// every one of these eight reported it had removed the follow: every read
+	// found a record, and every delete no-oped on a key the winner had already
+	// taken.
+	name: "concurrent unfollows leave exactly one caller reporting it removed the follow",
+	fn: func(h *fleetHarness) {
+		h.follow("slack", "agent-swe", "C1", "hot", "mention")
+		var wg sync.WaitGroup
+		removed := make(chan bool, 8)
+		for range 8 {
+			wg.Go(func() {
+				gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "hot")
+				if err != nil {
+					h.t.Errorf("Unfollow: %v", err)
+					return
+				}
+				removed <- gone
+			})
+		}
+		wg.Wait()
+		close(removed)
+		winners := 0
+		for gone := range removed {
+			if gone {
+				winners++
+			}
+		}
+		if winners != 1 {
+			h.t.Fatalf("%d of 8 concurrent unfollows reported they removed the follow, want exactly 1", winners)
+		}
+		if _, ok := h.following("slack", "agent-swe", "C1", "hot"); ok {
+			h.t.Fatal("the follow survived every unfollow")
+		}
+	},
+}, {
+	name: "a second unfollow reports that it removed nothing",
+	fn: func(h *fleetHarness) {
+		h.follow("slack", "agent-swe", "C1", "t-twice", "mention")
+		if gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "t-twice"); err != nil {
+			h.t.Fatalf("Unfollow: %v", err)
+		} else if !gone {
+			h.t.Fatal("the first unfollow reported nothing was there")
+		}
+		gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "t-twice")
+		if err != nil {
+			h.t.Fatalf("second Unfollow: %v", err)
+		}
+		if gone {
+			h.t.Error("the second unfollow reported it removed a follow that was " +
+				"already gone — a report about what the READ saw rather than " +
+				"about what the delete did")
 		}
 	},
 }, {

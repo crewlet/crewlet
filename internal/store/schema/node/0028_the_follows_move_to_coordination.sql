@@ -34,9 +34,40 @@
 -- this table goes with it, exactly as 0010's four did — the broker expires
 -- the records, so a sweep would have nothing to delete.
 --
--- Existing rows are DROPPED rather than migrated. A follow is re-established
--- by the next mention through the ordinary path, which is the same cost as
--- the ninety-day horizon expiring one, and copying them would mean this
--- migration reaching a store it has no client for.
+-- # The table STAYS, and this is the part that is easy to get wrong
+--
+-- Existing rows are HANDED OFF rather than dropped, by
+-- internal/notify/followsync at the next start, in the shape
+-- internal/fleetsecrets already carries `secret_values` onto the fleet in.
+-- A migration cannot do it — a .sql file has no KV client — but that
+-- establishes only that the copy happens elsewhere, never that it may be
+-- skipped.
+--
+-- Dropping here would destroy every ACTIVE subscription, which is not what
+-- the ninety-day horizon does and must not be mistaken for it. That horizon
+-- expires a follow after ninety days of INACTIVITY, so the population it
+-- takes is threads nobody has touched in a quarter and the documented cost —
+-- at most one missed non-mention reply — is true of them. A drop at upgrade
+-- takes the opposite population, ordered by recency, the busiest threads
+-- first. For a live thread the cost is every subsequent reply until a fresh
+-- mention, and it is SELF-LOCKING: the reply that would prompt the seat to
+-- post into the thread is the one it no longer receives. For a follow whose
+-- reason is `explicit` there is no mention coming at all, so those are gone
+-- for good.
+--
+-- Nor may a LATER migration drop it. Migrations apply in one pass in filename
+-- order at Open, before any Go code runs, so a database upgrading from a
+-- pre-0028 build straight to one carrying both this file and a later drop
+-- would apply both and leave the handoff an empty table. With no releases to
+-- separate them, that can never be scheduled safely — so the table survives,
+-- its steady state is empty, and internal/store/placement_test.go carries the
+-- entry that says why.
+--
+-- Both INDEXES go, because both served readers that have left: the thread
+-- index served the hot-path lookup, which is coordination's now, and the
+-- updated_at index served the retention sweep, which the bucket's own age
+-- replaced. The handoff is a full scan and a delete by identity, and needs
+-- neither.
 
-DROP TABLE IF EXISTS chat_thread_follows;
+DROP INDEX IF EXISTS chat_thread_follows_thread_idx;
+DROP INDEX IF EXISTS chat_thread_follows_updated_at_idx;

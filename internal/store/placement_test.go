@@ -50,7 +50,7 @@ import (
 // table added without one fails and an entry for a table that no longer exists
 // fails too. A new table's author writes the sentence, and a reviewer reads it
 // in the diff next to the migration. That is the whole mechanism, and it is the
-// one thing the four migrations above did not have.
+// one thing the five migrations above did not have.
 //
 // Nothing here binds the REPLICATED estate, which has its own gate one file
 // over: [TestOnlyTheApplierWritesTheReplicatedEstate].
@@ -90,7 +90,7 @@ func TestEveryNodeTableSaysWhoHasToAgreeOnIt(t *testing.T) {
 			"\tThis file is owned exclusively by one process, so a fact the "+
 			"COMPANY has to agree on cannot live here: every node would read "+
 			"its own copy and draw a fleet of one. That mistake has been made "+
-			"five times and repaired in four migrations — read "+
+			"nine times and repaired in five migrations — read "+
 			"internal/store/schema/node/0010 before answering. If the answer "+
 			"is genuinely 'this node alone', add it to nodeEstatePlacements "+
 			"with the reason; if it is 'the whole company', it belongs in "+
@@ -241,8 +241,23 @@ var nodeEstatePlacements = []placement{
 	// `chat_thread_follows` was in this group and did not belong: two
 	// nodes holding different follows is not a legitimate difference, it
 	// is the bug. It is in coordination now — see ADR-0003 and node
-	// migration 0028.
+	// migration 0028 — and the table that remains is the handoff source
+	// rather than a member of this group.
 	// -----------------------------------------------------------------
+	{
+		Table: "chat_thread_follows",
+		Why: "NOT a fact this node decides — the follows are coordination's, " +
+			"and migration 0028 is why. What is left here is the one-time " +
+			"HANDOFF SOURCE: rows written before the move are carried onto " +
+			"the fleet's bucket at the next start by " +
+			"internal/notify/followsync, exactly as internal/fleetsecrets " +
+			"carries secret_values. Nothing reads it at runtime and nothing " +
+			"writes it, so its steady state is empty. It is not dropped " +
+			"because a migration runs before any Go code on every boot — so " +
+			"a drop here, or in any later numbered file a database could " +
+			"apply in the same pass, would leave the handoff an empty table " +
+			"and silently destroy every ACTIVE thread subscription.",
+	},
 	{
 		Table: "stream_identity",
 		Why: "What this node last saw of each stream's identity, which is how " +
@@ -288,7 +303,7 @@ var nodeEstatePlacements = []placement{
 // # The node estate only, and that is deliberate
 //
 // The page enumerates this estate table by table because a reader is looking
-// for one of sixteen named things. It describes the REPLICATED estate by
+// for one of seventeen named things. It describes the REPLICATED estate by
 // family — "the tracker's own tables", "the knowledge base's" — because sixty
 // rows would be a schema dump rather than a map, and because a table there is
 // reached through a domain rather than named by an operator. Demanding every

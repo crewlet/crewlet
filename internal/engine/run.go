@@ -643,6 +643,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
 
+	// AND THE FOLLOWS, on the same reasoning and in the same window: before
+	// the epoch below builds the chat transports, so nothing is matching an
+	// inbound message against the bucket while it is being filled. See
+	// [Engine.migrateFollows].
+	e.migrateFollows(ctx)
+
 	// A NIL COMPANY IS THE UNCONFIGURED NODE, not a caller's mistake.
 	//
 	// The store is authoritative at runtime and a fleet's first revision
