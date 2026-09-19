@@ -311,11 +311,23 @@ type citation struct {
 	Line int
 }
 
-// citations walks the tree for ADR-NNNN references outside adr/ itself.
+// citations walks the tree for ADR-NNNN references.
 //
 // Go sources and markdown only: those are the two places a decision is cited
 // in a sentence somebody reads. A reference in a generated file or a committed
 // bundle would be noise, and static/ is skipped for that reason.
+//
+// THE RECORDS THEMSELVES ARE WALKED TOO, which they were not at first. A record
+// cites its neighbours — "which is ADR-0003", "see ADR-0002" — and those are
+// the citations most likely to survive a renumbering, because they are the
+// ones written by somebody who was holding both records in mind at the time
+// and is not around for the edit that moves one. A record's own id is declared
+// by its own file, so walking adr/ costs no false positives.
+//
+// The template is the exception and is skipped by NAME here rather than by
+// number, because what has to be skipped is the FILE: it carries the zero id
+// throughout as the shape of a record, and zero is the one number [adr.Load]
+// never declares.
 func citations(t *testing.T, root string) []citation {
 	t.Helper()
 	var out []citation
@@ -325,7 +337,7 @@ func citations(t *testing.T, root string) []citation {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "dist", "static", adr.Dir:
+			case ".git", "node_modules", "dist", "static":
 				return filepath.SkipDir
 			}
 			return nil
@@ -334,6 +346,9 @@ func citations(t *testing.T, root string) []citation {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
+		if rel == filepath.Join(adr.Dir, "0000-template.md") {
+			return nil
+		}
 		for i, line := range strings.Split(read(t, path), "\n") {
 			for _, m := range adr.Reference.FindAllString(line, -1) {
 				out = append(out, citation{ID: m, File: rel, Line: i + 1})
