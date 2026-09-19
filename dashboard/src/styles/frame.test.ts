@@ -327,10 +327,12 @@ describe("the frame's layout", () => {
 
   // A FIXED-COLUMN FIGURE BLOCK IS REACHABLE.
   //
-  // The turn page's prompt weights are three `.num-col` figures at 7rem under
-  // their own headings, beside a phase tag: past the 332px a phone leaves
-  // inside the card, so the tokens column was cut off — and lining the three
-  // up under their headings is the entire reason `.num-col` exists.
+  // The turn page's prompt weights are five `.num-col` figures at 7rem under
+  // their own headings, beside a phase tag: far past the 332px a phone leaves
+  // inside the card, so the tokens column was cut off — and lining the five up
+  // under their headings is the entire reason `.num-col` exists. (It was
+  // already cut off at three, before the tool-definition array and a resumed
+  // phase's own conversation each earned a column.)
   //
   // SIDEWAYS HERE, where a grid gets a card. The shapes take opposite answers
   // for a reason: a grid's flexible tracks resolve to zero the moment its wrap

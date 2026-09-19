@@ -202,11 +202,11 @@ export function tellStory(events: readonly EventRecord[]): Story {
 export interface PromptWeight {
   phase: string;
   iteration: number;
-  /** The engine's own approximation, off `prompt.size`. */
+  /** The engine's own approximation, over every character term below. */
   approximateTokens: number;
   /**
    * BYTES, which is what the engine measures — `len()` of a Go string — read
-   * off the wire keys `system_chars` / `user_chars`.
+   * off the wire keys `system_chars` / `user_chars` and the three beside them.
    *
    * THE NAMES DISAGREE ON PURPOSE. The measurement has always been bytes and
    * the keys have always said chars, and the panel used to print "24 KB"
@@ -218,6 +218,14 @@ export interface PromptWeight {
    */
   systemBytes: number;
   userBytes: number;
+  /**
+   * The conversation a RESUMED phase re-entered — zero for a phase that
+   * opened one of its own, which is nearly all of them.
+   */
+  messageBytes: number;
+  /** The tool-definition array, as compact JSON: usually the largest term. */
+  toolBytes: number;
+  toolCount: number;
   /**
    * How many times this phase key was measured in this turn — 1 for every
    * phase of a turn that ran once. See [promptWeights].
@@ -235,9 +243,16 @@ export interface PromptWeight {
  * about, and it is addressed like every other phase event precisely so the
  * size a TURN paid is readable on that turn. It was banded into `given` here
  * and then read by nobody: the Turn screen took one event out of that band
- * (`prefetch_summary`) and dropped the rest, so six small integers per phase
- * reached the browser and went nowhere. The only way to the number was the
- * raw payload of a row in the residual list.
+ * (`prefetch_summary`) and dropped the rest, so a whole row of integers per
+ * phase reached the browser and went nowhere. The only way to the number was
+ * the raw payload of a row in the residual list.
+ *
+ * `?? 0` ON EVERY TERM, which is load-bearing in one direction only: a node
+ * running an older engine publishes a row without the tool and message keys,
+ * and the columns for them read 0 rather than NaN. It is also how a key that
+ * never arrives — a misspelled tag, a term the engine stopped measuring —
+ * renders as a permanent zero instead of raising, which is why the tests
+ * behind these fields assert a value only the engine could have produced.
  *
  * ONE ROW PER PHASE KEY, because `turn_id|phase|iteration` IS the phase key —
  * the same identity `agent_phase_started` and `agent_phase_completed` share,
@@ -282,6 +297,9 @@ export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
       // key, and `??` does not fall through on 0.
       systemBytes: Number(p.system_chars ?? 0),
       userBytes: Number(p.user_chars ?? 0),
+      messageBytes: Number(p.message_chars ?? 0),
+      toolBytes: Number(p.tool_chars ?? 0),
+      toolCount: Number(p.tool_count ?? 0),
       runs: 1,
       minTokens: tokens,
       maxTokens: tokens,

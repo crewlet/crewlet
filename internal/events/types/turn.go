@@ -97,9 +97,17 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // A SEPARATE ROW rather than a derivation, and that is the whole reason it
 // exists: AgentPhaseCompleted carries both prompts verbatim, so the size is
 // technically already stored — and reading it back means hauling every phase's
-// whole prompt and response across the driver to measure it in Go, which is
+// whole prompt and response across the driver to count them in Go, which is
 // exactly the cost schema/0015 promoted the spend columns out of the payload
-// to avoid. Six small integers per phase answer the question at a scan.
+// to avoid. The measured integers — the text a phase opens with, the tool
+// definitions offered alongside it, how many there were, and one approximation
+// over the lot — answer the question at a scan.
+//
+// WHAT IT DOES NOT MEASURE, because a meter read as more than it is, is worse
+// than no meter. This row is one phase's OPENING frame: not the whole phase's
+// billed input, which on round N also carries every prior round's tool results,
+// and not every phase in the engine — a delegated worker and the round-cap
+// judge publish none of these at all.
 //
 // BYTES, NOT CHARACTERS, UNDER KEYS THAT SAY CHARS — and the split between
 // those two halves is the whole of it. The measurement is len() of a Go
@@ -142,15 +150,59 @@ type PromptSize struct {
 	TurnID   string `json:"turn_id"`
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
-	WorkKey           string `json:"work_key,omitempty"`
-	Iteration         int    `json:"iteration"`
-	Phase             Phase  `json:"phase"`
-	ApproximateTokens int    `json:"approximate_tokens"`
+	WorkKey   string `json:"work_key,omitempty"`
+	Iteration int    `json:"iteration"`
+	Phase     Phase  `json:"phase"`
+
+	// ApproximateTokens covers every term below it — the system and user
+	// text, a resumed phase's seeded conversation, and the tool-definition
+	// array — over one chars-per-token ratio. The byte counts ride along so
+	// a reader comparing builds can apply their own.
+	ApproximateTokens int `json:"approximate_tokens"`
+
+	// SystemBytes and UserBytes are the two messages a phase OPENS a
+	// conversation with. Both are zero on a resumed phase, which prepends
+	// neither: what it sends is MessageBytes.
+	//
 	// A BYTE COUNT under a key that says chars. The Go name is what is
 	// honest; the key is frozen by ADR-0006 — see the note above, and grep
-	// for either spelling to land on it.
+	// for either spelling to land on it. The three counts below carry the
+	// same split for the same reason.
 	SystemBytes int `json:"system_chars"`
 	UserBytes   int `json:"user_chars"`
+
+	// MessageBytes is the text of the conversation a RESUMED phase
+	// re-enters — its original system and user messages, the assistant
+	// rounds since, and the tool results they collected — and zero for a
+	// phase that opens one of its own. A detached coding run stops the
+	// executor mid-loop and the loop is re-entered later, so its prompt is
+	// a message list rather than a pair of strings; measuring only the pair
+	// reported every resumed executor as a phase with no prompt at all.
+	//
+	// TEXT, in the same unit as the two above: an assistant round's own
+	// tool-call arguments are structured rather than text and are outside
+	// it, being a fraction of a seed dominated by the system prompt and by
+	// the tool results.
+	MessageBytes int `json:"message_chars"`
+
+	// ToolBytes is the COMPACT JSON size of the tool-definition array
+	// offered with the prompt — the shape both HTTP vendors put on the
+	// wire, so the figure is comparable across providers. The `cli-agent`
+	// text backend renders those same definitions INDENTED, inside a fenced
+	// catalogue and followed by a response contract, so on that backend the
+	// real figure is larger than this one; a number whose rendering is not
+	// recorded gets compared against a different number.
+	//
+	// ROUND ONE'S ARRAY. The tool loop re-reads the surface at the top of
+	// every round precisely so a mid-phase activate_tool is offered on the
+	// next call, so a phase that promotes three MCP tools sends more than
+	// this says.
+	ToolBytes int `json:"tool_chars"`
+
+	// ToolCount is how many definitions those bytes are, because a
+	// forty-tool surface and a four-tool one at the same byte count are
+	// different problems.
+	ToolCount int `json:"tool_count"`
 }
 
 // EventType is the "prompt.size" wire type.
@@ -162,12 +214,18 @@ func (e PromptSize) Role() string { return e.RoleName }
 // AgentID is the instance the measurement belongs to.
 func (e PromptSize) AgentID() string { return e.Agent }
 
-// SummaryFor reports the approximate token count and leaves the system/user
-// split on the payload — the split is for someone comparing builds, not for a
-// feed.
+// SummaryFor reports the approximate token count and the tool term, and leaves
+// the character splits on the payload — the split is for someone comparing
+// builds, not for a feed.
+//
+// The tool term is on the line because it is the one component an operator can
+// act on from the feed alone, by trimming what a seat is granted; and because
+// a bare "prompt ~N tokens" is what made this meter read as authoritative for
+// as long as it was blind to the array.
 func (e PromptSize) SummaryFor(actor string) string {
 	return lead(subject(actor, e.Phase),
-		fmt.Sprintf("prompt ~%d tokens", e.ApproximateTokens))
+		fmt.Sprintf("prompt ~%d tokens (%d tool definitions, %d chars)",
+			e.ApproximateTokens, e.ToolCount, e.ToolBytes))
 }
 
 // TurnGuardBreach fires whenever a runtime-invariant guard trips during a turn,

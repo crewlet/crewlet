@@ -239,7 +239,10 @@ the seat said — which is how a seat repeats a reply it cannot see it already
 gave. Two config knobs (`injected_max_entries`, `injected_max_chars`) used to
 be documented here; neither was ever threaded to a caller, so both validated,
 defaulted and described a truncation that did not happen. The `prompt.size`
-telemetry event records the delta fleet-wide.
+telemetry event is where the delta shows up fleet-wide — read its
+`user_chars`, which is where this block lands, rather than its approximation:
+that figure also carries the tool-definition array, which is usually larger
+than the ledger and moves for reasons of its own.
 
 Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
 an `activate_tool` round and the read itself, on every turn of the

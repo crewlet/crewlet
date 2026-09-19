@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -307,7 +309,9 @@ func (e emitter) on() bool { return e.pub != nil }
 // phase is working, so the live view can show what the agent was asked while
 // it is still answering. Consumers read RoundNum+1 as "rounds so far", which
 // is why the sentinel is -1 and not 0 — a 0 would claim a round had finished.
-func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, system, user string) {
+func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
+	system, user string, seed []llm.Message, surface *tools.Surface,
+) {
 	if !e.on() {
 		return
 	}
@@ -337,7 +341,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 		RoundNum: openingRound,
 	}, e.traceFor(ctx)))
 
-	e.promptSize(ctx, ph, iteration, system, user)
+	e.promptSize(ctx, ph, iteration, system, user, seed, surface)
 }
 
 // openingRound is the RoundNum of the update published before a phase's first
@@ -347,21 +351,55 @@ const openingRound = -1
 // promptSize measures the prompt a phase is about to send.
 //
 // Published from [emitter.started] because that is the one frame holding the
-// FINAL system and user text — after every section builder, every prefetch and
-// every ledger have had their say. Anywhere earlier measures a draft.
+// FINAL prompt — after every section builder, every prefetch and every ledger
+// have had their say. Anywhere earlier measures a draft.
+//
+// THE SURFACE IS TAKEN, NOT ITS DEFINITIONS, and rendered inside the [emitter.on]
+// guard above: [tools.Surface.ToolDefs] clones every active tool's schema, and
+// a runner with no publisher — every sub-agent, and every test driving one
+// directly — would otherwise pay that render to build an event nobody
+// receives. The call is safe from here: ToolDefs takes the surface's lock only
+// to clone the active name list and has released it before it looks a tool up,
+// and neither caller of started holds that lock.
+//
+// AGENT MODE COUNTS THE ARRAY TOO, although the launcher's Brief is the system
+// and user text alone. Those definitions reach the coding CLI over the MCP
+// bridge and that CLI's own model is billed for every one of them, so leaving
+// them out would report the engine's cheapest-looking phase as its slimmest.
 //
 // The token figure is approximate by construction and says so in its field
 // name: a real count needs the vendor's own tokenizer, which differs per model
-// and would make this event a provider call. The two size fields ride along so
+// and would make this event a provider call. The size fields ride along so
 // anyone comparing builds can apply their own ratio rather than inheriting
 // this one.
 //
 // MEASURED IN BYTES, which is what len() of a Go string is and what the Go
 // fields are named for. The WIRE KEYS still say chars and deliberately do not
 // move — see [types.PromptSize], which carries the whole reason.
-func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, system, user string) {
+func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
+	system, user string, seed []llm.Message, surface *tools.Surface,
+) {
 	if !e.on() {
 		return
+	}
+	// Every phase in this package builds its surface before it opens, so a
+	// nil one is not a state the engine reaches — but this runs on the
+	// turn's own goroutine, where a nil dereference takes the seat down
+	// rather than the measurement, and a telemetry frame is the last place
+	// worth discovering that from.
+	var defs []llm.ToolDef
+	if surface != nil {
+		defs = surface.ToolDefs()
+	}
+	m, err := measurePrompt(system, user, seed, defs)
+	if err != nil {
+		// The row still goes out. A tool_chars of 0 beside a non-zero
+		// tool_count is the visible form of this, and it is worth more
+		// than a phase with no measurement at all — the schema that
+		// could not be encoded here is one the provider call after it is
+		// about to reject for the same reason.
+		log.WarnContext(ctx, "prompt_size_tool_measure_failed", "phase", ph,
+			"turn_id", e.turn.RunID, "error", err)
 	}
 	e.publish(ctx, events.New(types.PromptSize{
 		Agent:             e.turn.AgentID,
@@ -370,9 +408,12 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, 
 		WorkKey:           e.turn.WorkKey,
 		Iteration:         iteration,
 		Phase:             types.Phase(ph),
-		ApproximateTokens: (len(system) + len(user)) / bytesPerToken,
-		SystemBytes:       len(system),
-		UserBytes:         len(user),
+		ApproximateTokens: m.approximateTokens(),
+		SystemBytes:       m.system,
+		UserBytes:         m.user,
+		MessageBytes:      m.messages,
+		ToolBytes:         m.tools,
+		ToolCount:         m.toolCount,
 	}, e.traceFor(ctx)))
 }
 
@@ -384,6 +425,92 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, 
 // across builds rather than to bill anybody — the real count is on the
 // completed phase, from the provider.
 const bytesPerToken = 4
+
+// promptMeasure is one prompt's size, by component.
+type promptMeasure struct {
+	system    int
+	user      int
+	messages  int
+	tools     int
+	toolCount int
+}
+
+// approximateTokens is the whole prompt over one ratio.
+func (m promptMeasure) approximateTokens() int {
+	return (m.system + m.user + m.messages + m.tools) / bytesPerToken
+}
+
+// measurePrompt sizes what a phase is about to send.
+//
+// PURE OVER VALUES, in the shape internal/textindex and internal/search use
+// for the same reason: arithmetic that can only be exercised through a live
+// runner is arithmetic nobody re-measures.
+//
+// A SEEDED phase and a fresh one are measured as the loop sends them, which is
+// exclusively one or the other: a resumed loop re-enters its saved messages
+// and the system and user strings are ignored (see [phaseRun]), so counting
+// them here would report bytes no provider receives — and counting only them
+// is what reported every resumed executor at 0/0.
+func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) (promptMeasure, error) {
+	m := promptMeasure{toolCount: len(defs)}
+	if seed == nil {
+		m.system, m.user = len(system), len(user)
+	} else {
+		for _, msg := range seed {
+			m.messages += len(msg.Content)
+		}
+	}
+	// Not named `tools`: this file imports the package of that name, and a
+	// local that shadows it is a compile error waiting for the next line
+	// added here.
+	size, err := toolDefBytes(defs)
+	if err != nil {
+		return m, err
+	}
+	m.tools = size
+	return m, nil
+}
+
+// toolDefBytes is the compact JSON size of a tool-definition array.
+//
+// COMPACT, and the local wire shape rather than [llm.ToolDef] itself: what is
+// wanted is the number both HTTP vendors put on the wire, which is this object
+// per tool, and marshalling the Go type would measure its Go field names
+// instead. The empty description and the empty schema are dropped for the same
+// reason — neither vendor sends one.
+func toolDefBytes(defs []llm.ToolDef) (int, error) {
+	if len(defs) == 0 {
+		return 0, nil
+	}
+	wire := make([]toolDefWire, 0, len(defs))
+	for _, d := range defs {
+		wire = append(wire, toolDefWire{
+			Name: d.Name, Description: d.Description, Parameters: d.Parameters,
+		})
+	}
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		// NAME THE TOOL a person has to fix, which the array's own error
+		// cannot: json reports the offending Go type and there are as
+		// many of those as there are schemas on the surface. One pass per
+		// tool on a path that is already failing.
+		for _, d := range defs {
+			if _, each := json.Marshal(d.Parameters); each != nil {
+				return 0, fmt.Errorf("measuring the tool definitions: the parameters "+
+					"of tool %q cannot be encoded as JSON: %w", d.Name, each)
+			}
+		}
+		return 0, fmt.Errorf("measuring the tool definitions: %w", err)
+	}
+	return len(encoded), nil
+}
+
+// toolDefWire is one tool as a vendor's tool array carries it.
+type toolDefWire struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
 
 // fallback records one hand-off inside a phase's provider chain.
 //

@@ -346,6 +346,51 @@ func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 	}
 }
 
+// AN AGENT-MODE PROMPT IS MEASURED WITH ITS TOOL ARRAY, although the Brief
+// does not contain it.
+//
+// The launcher is handed the system and user text as one Brief and the surface
+// separately: the definitions reach the coding CLI over the MCP bridge, not in
+// the prompt. The CLI's own model is billed for every one of them all the
+// same, so a meter that counted only the Brief would report the engine's most
+// tool-heavy runtime as its slimmest — and the argument for leaving them out
+// ("they are not in the prompt") is exactly the one a reader will make when
+// deleting the term, which is why the case is here.
+func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	launcher := &recordingLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{agentRun: launcher, pub: pub})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	got := pub.sizes()
+	if len(got) != 1 {
+		t.Fatalf("published %d prompt.size events for one agent-mode launch, want 1", len(got))
+	}
+	m := got[0]
+	defs := launcher.req.Surface.ToolDefs()
+	if len(defs) == 0 {
+		t.Fatal("the launcher was handed no tools, so this case cannot tell a fix from a bug")
+	}
+	if m.ToolCount != len(defs) || m.ToolBytes != toolArrayBytes(t, defs) {
+		t.Errorf("measured %d tools at %d chars, the run was advertised %d at %d",
+			m.ToolCount, m.ToolBytes, len(defs), toolArrayBytes(t, defs))
+	}
+	// And the Brief itself, which is the system and user text joined.
+	if m.SystemBytes == 0 || m.UserBytes == 0 {
+		t.Errorf("measured %d/%d system/user chars for a launch whose Brief is both",
+			m.SystemBytes, m.UserBytes)
+	}
+	if m.MessageBytes != 0 {
+		t.Errorf("message_chars = %d on a launch that opens a phase rather than resuming one",
+			m.MessageBytes)
+	}
+}
+
 // AN AGENT-MODE RUN'S EVENT SAYS WHAT IT DID, and which box it did it in.
 //
 // The resume used to hand the record builder a zero result while holding the

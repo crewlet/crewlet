@@ -2,12 +2,14 @@ package runner_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -212,8 +214,119 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("measured %d/%d bytes, provider received %d/%d",
 			m.SystemBytes, m.UserBytes, system, user)
 	}
-	if m.ApproximateTokens == 0 {
-		t.Error("approximate_tokens = 0 for a prompt with a system message in it")
+	// A fresh phase opens the conversation, so there is nothing seeded to
+	// measure. Zero here is the fact that separates it from a resume.
+	if m.MessageBytes != 0 {
+		t.Errorf("message_chars = %d on a phase that opened its own conversation, want 0",
+			m.MessageBytes)
+	}
+	// AND THE TOOL ARRAY, which both HTTP vendors bill as input and the
+	// cli-agent text backend renders into the prompt literally. The meter
+	// was blind to it: a measured turn reported ~6,900 tokens against the
+	// provider's 205,000, and this row is what "is the prompt getting
+	// smaller" is answered from.
+	tools := toolArrayBytes(t, sent.Tools)
+	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
+		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
+			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
+	}
+	// EQUALITY, NOT "NOT ZERO". Every executor surface carries submit_work,
+	// so the tool term alone makes the sum non-zero — a `!= 0` assertion
+	// here would pass with the system and user terms deleted, which is
+	// worse than having no assertion at all.
+	if want := (system + user + tools) / 4; m.ApproximateTokens != want {
+		t.Errorf("approximate_tokens = %d, want %d over what the provider received",
+			m.ApproximateTokens, want)
+	}
+}
+
+// toolArrayBytes is the compact JSON the engine measures a tool array as,
+// rebuilt from what the provider was handed.
+//
+// Restated here rather than reaching for the engine's own unexported helper:
+// this suite is the one thing holding that helper's answer to what the
+// provider actually received, and a test that calls the function it is
+// checking agrees with itself whatever either of them does.
+func toolArrayBytes(t *testing.T, defs []llm.ToolDef) int {
+	t.Helper()
+	type wire struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description,omitempty"`
+		Parameters  map[string]any `json:"parameters,omitempty"`
+	}
+	if len(defs) == 0 {
+		return 0
+	}
+	out := make([]wire, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, wire{Name: d.Name, Description: d.Description, Parameters: d.Parameters})
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("the fixture's tool array is not JSON: %v", err)
+	}
+	return len(encoded)
+}
+
+// A RESUMED PHASE MEASURES THE CONVERSATION IT RE-ENTERS.
+//
+// A detached coding run stops the executor mid-loop with its tool call
+// unanswered, and the resume re-enters that same loop from the saved messages
+// — so `system` and `user` are ignored and were the only thing this meter
+// looked at. Every resumed executor published 0/0, on the one phase that
+// carries the most: a whole pre-suspend conversation plus the array. Counting
+// only the tool term would have made it worse, reading as a phase offered
+// every tool and asked nothing.
+func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		submitCall(t, runner.SubmitWorkTool,
+			`{"outcome":"blocked","summary":"the run reported a failing build",`+
+				`"evidence":"the box could not compile it"}`),
+	}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		pub: pub,
+		resume: &runner.Resume{
+			State:  suspendedAfterTwoRounds(),
+			Answer: "the run succeeded, the merge request is open",
+		},
+	})
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	got := pub.sizes()
+	if len(got) != 1 {
+		t.Fatalf("published %d prompt.size events for one resumed phase, want 1", len(got))
+	}
+	m := got[0]
+	sent := prov.requestsFor("execute")[0]
+	var messages int
+	for _, msg := range sent.Messages {
+		messages += len(msg.Content)
+	}
+	if messages == 0 {
+		t.Fatal("the fixture sent no message text, so this case cannot tell a fix from a bug")
+	}
+	if m.MessageBytes != messages {
+		t.Errorf("message_chars = %d, the provider received %d characters of conversation",
+			m.MessageBytes, messages)
+	}
+	// The two a resume does NOT prepend. Reporting them would report bytes
+	// nothing sent, which is the mirror of the bug above.
+	if m.SystemBytes != 0 || m.UserBytes != 0 {
+		t.Errorf("measured %d/%d system/user chars on a resumed phase, which prepends neither",
+			m.SystemBytes, m.UserBytes)
+	}
+	tools := toolArrayBytes(t, sent.Tools)
+	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
+		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
+			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
+	}
+	if want := (messages + tools) / 4; m.ApproximateTokens != want {
+		t.Errorf("approximate_tokens = %d, want %d over what the provider received",
+			m.ApproximateTokens, want)
 	}
 }
 

@@ -787,7 +787,13 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// Published BEFORE the first provider call, so a seat that is thinking
 	// says which phase it is thinking in. The completed event is the durable
 	// record and may be minutes away.
-	emit.started(ctx, ph, iteration, system, user)
+	//
+	// THE SEED AND THE SURFACE TRAVEL WITH THE TEXT because the prompt is
+	// all three: a resumed loop opens with the saved messages instead of
+	// the strings, and every round of either carries the tool-definition
+	// array, which both HTTP vendors bill as input and the cli-agent text
+	// backend writes into the prompt literally.
+	emit.started(ctx, ph, iteration, system, user, in.seed, surface)
 
 	messages := in.seed
 	if messages == nil {

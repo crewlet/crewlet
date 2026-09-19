@@ -16,6 +16,7 @@ import {
   promptWeights,
   tellStory,
 } from "./turnstory.ts";
+import type { PromptWeight } from "./turnstory.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
 function event(type: string, over: Partial<EventRecord> = {}): EventRecord {
@@ -251,6 +252,9 @@ describe("what each phase's prompt weighed", () => {
         approximate_tokens: tokens,
         system_chars: 24_000,
         user_chars: 2_800,
+        message_chars: 0,
+        tool_chars: 3_800,
+        tool_count: 11,
         ...over,
       },
     });
@@ -361,6 +365,50 @@ describe("what each phase's prompt weighed", () => {
     // And the token count still arrives, which is exactly what makes the
     // zero read as a fact rather than as a row that failed to load.
     expect(row!.approximateTokens).toBe(6807);
+  });
+
+  test("every term the engine measured reaches the row", () => {
+    // The tool-definition array is the term this event was blind to, and the
+    // dominant one: a measured turn reported ~6,900 tokens here against the
+    // provider's 205,000. Asserting a NON-ZERO value is the point — the parse
+    // coerces with `?? 0`, so a key that never arrives renders a permanent
+    // zero that a "renders 0" assertion could never catch.
+    const [w] = promptWeights([size("execute", 2, 7_400)]) as [PromptWeight];
+    expect(w.phase).toBe("execute");
+    expect(w.iteration).toBe(2);
+    expect(w.approximateTokens).toBe(7_400);
+    expect(w.systemBytes).toBe(24_000);
+    expect(w.userBytes).toBe(2_800);
+    expect(w.toolBytes).toBe(3_800);
+    expect(w.toolCount).toBe(11);
+  });
+
+  test("a resumed phase's conversation is carried, not folded into the user term", () => {
+    // A detached coding run re-enters its saved messages, so the engine sends
+    // no system or user text at all and reports the seed instead. Folding it
+    // into `userBytes` would make one column mean two different things
+    // depending on whether the phase was resumed.
+    const [w] = promptWeights([
+      size("execute", 1, 12_950, { system_chars: 0, user_chars: 0, message_chars: 48_000 }),
+    ]) as [PromptWeight];
+    expect(w.messageBytes).toBe(48_000);
+    expect(w.systemBytes).toBe(0);
+    expect(w.userBytes).toBe(0);
+  });
+
+  test("an older engine's row reads as zero rather than NaN", () => {
+    // A rolling upgrade puts a node that never measured the tool array on the
+    // same stream. Its rows must render — `NaN B` in a column is worse than a
+    // zero, because it reads as a broken screen rather than a quiet term.
+    const [w] = promptWeights([
+      event("prompt.size", {
+        payload: { phase: "review", iteration: 1, approximate_tokens: 900, system_chars: 3_600 },
+      }),
+    ]) as [PromptWeight];
+    expect(w.toolBytes).toBe(0);
+    expect(w.toolCount).toBe(0);
+    expect(w.messageBytes).toBe(0);
+    expect(Number.isNaN(w.toolBytes)).toBe(false);
   });
 });
 

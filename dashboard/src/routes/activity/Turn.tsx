@@ -950,7 +950,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * What each phase's prompt came to, off the engine's own measurement.
  *
  * `prompt.size` exists so prompt-slimming progress is measurable rather than
- * argued about, and six small integers per phase have been reaching this
+ * argued about, and a whole row of integers per phase had been reaching this
  * browser and rendering nowhere: the screen read one event out of the `given`
  * band and dropped the rest, so the only route to the number was the raw
  * payload of a row in the residual list. It belongs here, beside the blocks
@@ -958,11 +958,25 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * pair is what says whether a heavy prompt is heavy because of what was
  * prefetched or in spite of it.
  *
+ * EVERY TERM OF THE APPROXIMATION GETS A COLUMN, so the total is a figure the
+ * row can be checked against rather than one to be taken on trust. Tools is
+ * usually the largest of them and was the one the engine did not measure at
+ * all: a turn reporting ~6,900 tokens here had been billed 205,000. Messages
+ * is zero on every phase that opens its own conversation and is what a RESUMED
+ * one — a detached coding run collected later — sends instead of a system and
+ * user pair, so leaving it out would leave that row's approximation with no
+ * visible source.
+ *
+ * The tool COUNT is the hover rather than a column of its own: forty
+ * definitions and four at the same byte count are different problems, but the
+ * number is only ever read after the bytes have raised the question.
+ *
  * PER PHASE AND PER ROUND, never summed. A prompt is re-sent on every round of
  * the tool loop, so a total here would be neither the turn's input bill (which
  * is what the token tiles above already report) nor any single thing that was
  * ever sent. What the number answers is "how big is the frame this phase
- * reasons in", and that is a per-phase question.
+ * reasons in", and that is a per-phase question. It is also ROUND ONE's tool
+ * array: a phase that promotes an MCP tool mid-way sends more than its row says.
  *
  * AND ONE ROW PER PHASE KEY, which is the same rule one step further:
  * [promptWeights] collapses a phase key measured more than once — a turn
@@ -979,6 +993,8 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
           <span className="t-label spacer">Prompt sent</span>
           <span className="t-label num-col">System</span>
           <span className="t-label num-col">User</span>
+          <span className="t-label num-col">Messages</span>
+          <span className="t-label num-col">Tools</span>
           <span className="t-label num-col">Approx. tokens</span>
         </div>
         {rows.map((w) => (
@@ -1004,6 +1020,18 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             </span>
             <span className="mono t-num t-caption num-col" title="bytes in the user message">
               {fmtBytes(w.userBytes)}
+            </span>
+            <span
+              className="mono t-num t-caption num-col"
+              title="bytes of conversation a resumed phase re-entered"
+            >
+              {fmtBytes(w.messageBytes)}
+            </span>
+            <span
+              className="mono t-num t-caption num-col"
+              title={`${fmtCount(w.toolCount)} tool definitions, as compact JSON`}
+            >
+              {fmtBytes(w.toolBytes)}
             </span>
             <span className="mono t-num t-caption num-col" title="the engine's own approximation">
               {fmtCount(w.approximateTokens)}
