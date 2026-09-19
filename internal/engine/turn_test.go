@@ -1255,8 +1255,12 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.Count != 2 || rec.AgentHandle != "ceo" {
 		t.Errorf("record = %+v", rec)
 	}
-	if rec.ConversationKey != "slack:C1/T1" {
-		t.Errorf("conversation = %q", rec.ConversationKey)
+	// THE PARTITION, on the field that says so. The record's subject is the
+	// batch that merged, and it rode `conversation_key` until that made the
+	// promoted tag of that name mean the identity on every other event and
+	// the batch on this one.
+	if rec.PartitionKey != "slack:C1/T1" {
+		t.Errorf("partition = %q", rec.PartitionKey)
 	}
 	// THE VENDOR, not the producer of the wake. internal/notify stamps the
 	// envelope "notify.slack"; every other notification event carries the
@@ -1272,9 +1276,6 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.FirstAt != clock.UTC().Format(time.RFC3339) ||
 		rec.LastAt != clock.Add(2*time.Minute).UTC().Format(time.RFC3339) {
 		t.Errorf("span = %s..%s", rec.FirstAt, rec.LastAt)
-	}
-	if rec.NotificationSource != "slack" {
-		t.Errorf("source = %q, want the third-party app rather than the engine", rec.NotificationSource)
 	}
 }
 

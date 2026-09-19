@@ -1124,10 +1124,12 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string
 		}
 	}
 	ev := events.New(types.NotificationsCoalesced{
-		// THE PARTITION KEY under the wire field's older name, because
-		// what merged is a partition: this event exists to say "N
-		// deliveries became one turn", and the batch is the subject.
-		AgentHandle: handle, ConversationKey: partition,
+		// THE PARTITION KEY, under a field that says so: what merged is a
+		// partition, and this event exists to say "N deliveries became one
+		// turn". It rode the `conversation_key` field once, which made the
+		// promoted tag of that name mean the identity on every other event
+		// and the batch on this one.
+		AgentHandle: handle, PartitionKey: partition,
 		// THE VENDOR NAMES THE INTEGRATION. A merge is always one
 		// conversation's worth of external notifications and a conversation
 		// belongs to one third-party app, so the constituents cannot disagree and

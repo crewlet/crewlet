@@ -76,7 +76,32 @@ var tagKeys = map[string]string{
 	// alone and never on the phase records that carry the model's
 	// reasoning, so without this no query can ask history for one thread's
 	// turns.
+	//
+	// ONE MEANING ACROSS EVERY EVENT TYPE, which is a property of the wire
+	// field rather than of this line: the tag is the conversation IDENTITY
+	// because every payload that spells a field `conversation_key` holds
+	// the identity. The coalescing record used to promote its inbox
+	// PARTITION through it and now names that `partition_key` below, so a
+	// filter on this tag cannot mean the thread a seat is talking on for
+	// one row and the batch a wake arrived in for the next — two values
+	// that differ exactly where it matters, since a direct message's
+	// identity is the bare channel and its partition can be a thread
+	// inside it. A tag whose meaning depends on the row is worse than an
+	// absent one: the query still answers.
 	"conversation_key": "conversation_key",
+	// WHICH INBOX PARTITION a coalescing record merged.
+	//
+	// ITS OWN TAG rather than nothing, because the partition is the
+	// subject of the only event that carries it — "N deliveries became one
+	// turn" is a fact about a batch — and an operator watching how hard
+	// batching is kicking in asks it per line: which thread, which DM,
+	// which issue is arriving faster than its seat can answer. A listing
+	// deliberately never selects the payload column, so without a tag that
+	// question is unaskable of history and the panel is left with a count
+	// per third-party app. Its own tag rather than the conversation's for
+	// the reason stated there: on a direct message the two differ, and one
+	// tag meaning either is a dimension that answers neither question.
+	"partition_key": "partition_key",
 	// A2A participants, for cross-referencing a channel's traffic.
 	"requester": "requester",
 	"target":    "target",

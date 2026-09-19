@@ -202,8 +202,39 @@ func (e TurnTriggerSkipped) Summary() string {
 // inbox batching kicks in — a busy agent draining a thread's backlog as one
 // turn, or a linger window absorbing a webhook burst.
 type NotificationsCoalesced struct {
-	AgentHandle        string `json:"agent_handle"`
-	ConversationKey    string `json:"conversation_key"`
+	AgentHandle string `json:"agent_handle"`
+
+	// PartitionKey is the inbox PARTITION that merged — the batch, not the
+	// conversation it belongs to. What this event says is "N deliveries
+	// became one turn", and the batch is the subject of that sentence.
+	//
+	// THE NAME MOVED AND SO DID THE WIRE STRING, which is the opposite of
+	// the trade notify.PartitionField makes for the notification payload
+	// and is why this one is free. There the value is what two builds
+	// partition each other's wakes by, so renaming it would leave every
+	// cross-build wake unkeyed. Here nothing decodes this event to decide
+	// anything: it is published to the event topic, never into a seat's
+	// inbox, so notify.KeyOf never reads it, and its one reader is the tag
+	// promotion in internal/store.
+	//
+	// It was `conversation_key`, and that field is the conversation
+	// IDENTITY on every other event that spells it — the two sandbox
+	// events, both turn completions and the phase record. One promoted tag
+	// therefore meant the identity or the partition depending on which row
+	// a filter happened to match, on a pair of values that differ exactly
+	// where it matters: a direct message's identity is the bare channel and
+	// its partition can be a thread inside it.
+	//
+	// A PEER PREDATING THE RENAME keeps tagging its own rows
+	// `conversation_key`, and that discontinuity is the safe half. A store
+	// row is written by a publish listener inline on the PUBLISHING node,
+	// so no build ever promotes another build's event and no row can be
+	// tagged by a rule its payload was not written for. What a new build
+	// reads on an old event is an ABSENT partition_key — a dimension that
+	// starts at a point in the timeline, exactly as notification_source
+	// did — rather than a conversation tag naming a thread that never
+	// existed, which is the one outcome nothing downstream could detect.
+	PartitionKey       string `json:"partition_key"`
 	NotificationSource string `json:"notification_source"`
 	// Count is the number of constituent notifications; FirstAt and LastAt
 	// bound the span they arrived in (ISO 8601).
@@ -226,11 +257,11 @@ func (e NotificationsCoalesced) IntegrationSender() string { return "" }
 // not something the integration reported.
 func (e NotificationsCoalesced) IntegrationEventType() string { return "" }
 
-// Summary names the conversation key, which is what the coalescing keyed on —
+// Summary names the partition key, which is what the coalescing keyed on —
 // without it two merges for the same seat are indistinguishable.
 func (e NotificationsCoalesced) Summary() string {
 	return fmt.Sprintf("%d notifications coalesced for %s (%s)",
-		e.Count, e.AgentHandle, e.ConversationKey)
+		e.Count, e.AgentHandle, e.PartitionKey)
 }
 
 // NotificationSkipped records a notification dropped, with the reason.

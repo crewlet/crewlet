@@ -115,3 +115,52 @@ func TestARecordNamesTheTurnItBelongsTo(t *testing.T) {
 			"back out of here (tags: %v)", rec.Tags["turn_id"], rec.Tags)
 	}
 }
+
+// ONE TAG, ONE IDENTITY — pinned across two event types built from ONE
+// trigger, on the one shape where the two keys differ.
+//
+// A direct message is one conversation however it is threaded, so a reply in
+// a thread on that line has the bare channel as its identity and the thread as
+// its inbox partition. Every event a turn publishes carries the identity in
+// `conversation_key`; the coalescing record carries the partition, and carried
+// it in that same field until this split. A filter on the tag then meant the
+// thread a seat is talking on for one row and the batch a wake arrived in for
+// the next, with nothing on either row to say which.
+func TestTheConversationTagNeverHoldsAPartition(t *testing.T) {
+	t.Parallel()
+	const (
+		identity  = "chat:D1"
+		partition = "chat:D1:root-1"
+	)
+	turnRec, ok := observe.Record(events.New(types.AgentTurnCompleted{
+		Agent: "a-1", RoleName: "SWE", ConversationKey: identity,
+	}, events.TraceContext{}))
+	if !ok {
+		t.Fatal("a turn completion is not persisted")
+	}
+	mergeRec, ok := observe.Record(events.New(types.NotificationsCoalesced{
+		AgentHandle: "swe", NotificationSource: "slack", Count: 2,
+		PartitionKey: partition,
+	}, events.TraceContext{}))
+	if !ok {
+		t.Fatal("a coalescing record is not persisted")
+	}
+
+	if turnRec.Tags["conversation_key"] != identity {
+		t.Errorf("the turn's conversation_key tag = %q, want the identity %q",
+			turnRec.Tags["conversation_key"], identity)
+	}
+	if got, present := mergeRec.Tags["conversation_key"]; present {
+		t.Errorf("the merge tagged conversation_key = %q; the tag would then "+
+			"name a thread for one row and a batch for the next", got)
+	}
+	if mergeRec.Tags["partition_key"] != partition {
+		t.Errorf("the merge's partition_key tag = %q, want the batch %q — "+
+			"its own tag, so the partition stays askable of history",
+			mergeRec.Tags["partition_key"], partition)
+	}
+	if got, present := turnRec.Tags["partition_key"]; present {
+		t.Errorf("the turn tagged partition_key = %q; only a coalescing "+
+			"record has a batch to name", got)
+	}
+}

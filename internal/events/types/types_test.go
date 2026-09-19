@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -814,6 +815,44 @@ func TestASummaryLeadIsUpperCasedByRuneNotByte(t *testing.T) {
 		}
 		if !utf8.ValidString(got) {
 			t.Errorf("lead(\"\", %q) produced invalid UTF-8", tc.in)
+		}
+	}
+}
+
+// A PROMOTED TAG MEANS ONE THING, AND THE CATALOGUE IS WHERE THAT IS HELD.
+//
+// internal/store promotes the flat wire field `conversation_key` out of every
+// event into one column of the event log, and the value a query gets back has
+// to mean the same thing whichever row it matched. It did not: every event a
+// turn publishes puts the conversation IDENTITY there, while the coalescing
+// record put the inbox PARTITION there — two values that differ exactly where
+// it matters, since a direct message's identity is the bare channel and its
+// partition can be a thread inside it. So a filter on that tag silently mixed
+// the thread a seat is talking on with the batch a wake arrived in.
+//
+// The rule this holds is the naming one, because that is the half a reviewer
+// can check: a field spelled `conversation_key` on the wire is the
+// conversation and is called ConversationKey, and a field holding a partition
+// is called PartitionKey and spells itself `partition_key`. A new event
+// stamping its batch into the shared tag now has to rename a field to do it.
+func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
+	t.Parallel()
+	for _, payload := range catalogue() {
+		typ := reflect.TypeOf(payload)
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			wire, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			switch {
+			case wire == "conversation_key" && field.Name != "ConversationKey":
+				t.Errorf("%s.%s is `conversation_key` on the wire: that tag is "+
+					"the conversation identity on every event, so a field "+
+					"holding anything else must not be promoted through it",
+					typ.Name(), field.Name)
+			case field.Name == "PartitionKey" && wire != "partition_key":
+				t.Errorf("%s.PartitionKey is `%s` on the wire, want partition_key: "+
+					"the partition has its own tag so the conversation's keeps "+
+					"one meaning", typ.Name(), wire)
+			}
 		}
 	}
 }
