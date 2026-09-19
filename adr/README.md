@@ -26,17 +26,29 @@ account, and the reason is visible in the tree: **every rule here that has a
 gate has never been re-litigated, and every rule held by prose alone has
 decayed.**
 
-| Rule | Held by | What happened |
+The table below is the evidence, **as it stood when this directory was
+created**. It is deliberately a historical record rather than a live one — two
+of its rows acquired a gate in the same change that wrote it, and a table
+edited to keep up would lose the only thing it is for, which is that the two
+columns correlate.
+
+| Rule | Held by, then | What had happened |
 |---|---|---|
 | No statement names both estates | a static walk | never broken |
 | One store driver in the binary | a test | never broken |
 | One outbound HTTP transport | a static walk | never broken |
 | One writer of a live stream's config | a static walk | never broken |
 | A skip is not a pass | `internal/skipgate` | never broken since |
-| Fleet-agreement state belongs in coordination | prose | seven tables, four repair migrations |
-| The replicated estate is written only by an applier | prose | three bypasses, none reviewed as one |
-| The Makefile matches `ci.yml` | prose | unchecked, and nothing would notice |
 | Every commit is signed off | a script | 61 of 361 commits missed it before the script |
+| Fleet-agreement state belongs in coordination | prose | seven tables, four repair migrations — and an eighth found while writing this |
+| The replicated estate is written only by an applier | prose | three bypasses, none reviewed as one |
+| Every node-local table is swept on every node | prose, at the field that implements it | six of seven sweeps took the wrong default, including the audit log's |
+| The Makefile matches `ci.yml` | prose | unchecked, and nothing would notice |
+
+Every rule in the top half was still true. Every rule in the bottom half had
+decayed, and the last of them is the sharpest: the rule was written out in full
+at the definition of the very field that carries it, and six of the seven call
+sites ignored it anyway. Reading is not enforcement.
 
 So the load-bearing field of a record here is **`Enforced-by:`**, and the
 record is the preface to the gate rather than a substitute for it. An ADR
