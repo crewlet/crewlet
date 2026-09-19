@@ -125,14 +125,14 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 // through any chat surface, and telling somebody to "reply in the thread"
 // would send them to a thread that does not exist.
 //
-// ASKED OF THE CONVERSATION the run reports back to, not the partition key it
-// is matched on. The question a person reading this board has is "is there a
-// thread I can answer in", which is a property of the durable conversation;
-// the partition is an inbox-grouping artefact with no surface anybody could
-// reply to. The two are derivable or not TOGETHER on every source — a chat
-// event naming a channel yields both, one naming none yields neither — so
-// this is a statement about which question the column answers rather than a
-// change of verdict.
+// ASKED OF THE CONVERSATION the run reports back to and is answered on, never
+// of the partition beside it. The question a person reading this board has is
+// "is there a thread I can answer in", which is a property of the durable
+// conversation; the partition is an inbox-grouping artefact with no surface
+// anybody could reply to. The two are derivable or not TOGETHER on every
+// source — a chat event naming a channel yields both, one naming none yields
+// neither — so the verdict is the same either way; what this states is that
+// the column answers the same question the resume path does.
 //
 // [notify.Derived] answers exactly that, and this had its own copy of the
 // prefix to answer it with — so a rename of the fallback's namespace would

@@ -118,13 +118,15 @@ type Turn struct {
 	// PartitionKey is the inbox partition the trigger arrived in, which is
 	// the identity above or a finer cut of it.
 	//
-	// It travels for the same reason and no other: a detached run is
-	// matched back to a person's answer by exact equality against this
-	// value, and the launch is the only frame that can put it on the row.
-	// Carried as a second field rather than collapsed into one, because
-	// the two differ for exactly the surface a clarification is most often
-	// asked on — a direct message — and one value answering both questions
-	// is the defect this pair was split out of.
+	// It travels for the same reason and no other: a detached run's row
+	// states the batch it was launched from beside the conversation it is
+	// answered on, and the launch is the only frame that can put either on
+	// the row. Carried as a second field rather than collapsed into one,
+	// because the two differ for exactly the surface a clarification is
+	// most often asked on — a direct message — and one value answering
+	// both questions is the defect this pair was split out of: filed under
+	// the batch, a DM's coding work landed in a ledger row the next turn
+	// never read, and matched on it the person's answer reached nobody.
 	PartitionKey string
 
 	// Task is the ask this turn is working on, and Reply says who is

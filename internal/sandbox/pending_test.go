@@ -59,3 +59,46 @@ func TestAPreSplitRunStillAnswersForItsUnitOfWork(t *testing.T) {
 		}
 	}
 }
+
+// NOTHING EMPTY EVER ANSWERS ANYTHING, and that is a rule of the value rather
+// than of the store that reads it.
+//
+// A run launched by a schedule tick or an A2A wake carries no conversation,
+// and a wake that could not name one carries none either — so two absences
+// comparing equal would make every such delivery the answer to every such run,
+// and the first thing a person said to a seat would splice into somebody
+// else's coding job. [sandbox.CoordStore.FindAwaitingByConversation] refuses an
+// empty reference before it reads the bucket at all, which is why this case
+// cannot be reached through the store and is asserted here instead: the rule
+// has to hold for the next caller too.
+func TestNoConversationAnswersNoParkedRun(t *testing.T) {
+	t.Parallel()
+	keyless := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"}
+	dm := sandbox.PendingRun{
+		TurnID: "t2", AgentHandle: "swe",
+		ConversationKey: "chat:D1:root-1", ConversationIdentity: "chat:D1",
+	}
+	preSplit := sandbox.PendingRun{
+		TurnID: "t3", AgentHandle: "swe", ConversationKey: "chat:D1:root-1",
+	}
+	cases := []struct {
+		name string
+		conv sandbox.ConversationRef
+		run  sandbox.PendingRun
+	}{
+		{"a delivery naming no conversation, a run parked with none",
+			sandbox.ConversationRef{}, keyless},
+		{"a delivery naming no conversation, a run parked on a DM",
+			sandbox.ConversationRef{}, dm},
+		{"a delivery naming no conversation, a row from before the split",
+			sandbox.ConversationRef{}, preSplit},
+		{"a reply on a DM line, a run parked with no conversation",
+			sandbox.ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"},
+			keyless},
+	}
+	for _, tc := range cases {
+		if tc.conv.Answers(tc.run) {
+			t.Errorf("%s: matched", tc.name)
+		}
+	}
+}

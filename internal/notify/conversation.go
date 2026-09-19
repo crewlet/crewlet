@@ -25,14 +25,15 @@ import (
 // do not all ask the same thing:
 //
 //   - THE PARTITION KEY — "which other events is this one handled WITH?" The
-//     broker partitions a seat's inbox by it (internal/node), the coalescer
-//     merges a partition into one trigger, and a parked sandbox run matches
-//     a person's answer back to the question that asked it by exact equality
-//     against the value its row was written with.
+//     broker partitions a seat's inbox by it (internal/node) and the
+//     coalescer merges a partition into one trigger.
 //   - THE CONVERSATION IDENTITY — "which ongoing conversation is this event
 //     part of?" The conversation ledger keys on it, the turn telemetry
 //     carries it into the event store's conversation_key tag and the
-//     episodes column, and the API's answerable-in-chat predicate reads it.
+//     episodes column, the API's answerable-in-chat predicate reads it, and
+//     a parked sandbox run matches a person's answer back to the question
+//     that asked it on it — because a person answers on the conversation,
+//     which for a direct message is not the batch their reply lands in.
 //
 // They were ONE value, and the one case where the two questions have
 // different answers is what that cost: a direct message's top-level burst

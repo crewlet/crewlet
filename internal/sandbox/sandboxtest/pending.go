@@ -68,8 +68,11 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"ExecuteStateRoundTrips", testExecuteStateRoundTrips},
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
+		{"ARunParkedOnATopLevelDMIsAnsweredInItsThread", testARunParkedOnATopLevelDMIsAnsweredInItsThread},
+		{"AnAnswerOnAnotherConversationMatchesNothing", testAnAnswerOnAnotherConversationMatchesNothing},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
 		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
+		{"APreSplitRowIsStillAnswerable", testAPreSplitRowIsStillAnswerable},
 		{"ListingsAreStable", testListingsAreStable},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -101,6 +104,13 @@ func run(turnID string) sandbox.PendingRun {
 		Reply:   "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
+}
+
+// answerOnTheDM is the reply to the question [run] parked on: the same DM
+// line, in the same thread. BOTH VALUES, because a store is free to read
+// either and a fixture that stated one would let it read that one alone.
+var answerOnTheDM = sandbox.ConversationRef{
+	Identity: "chat:D1", Partition: "chat:D1:root-1",
 }
 
 // mustBeginLaunch opens a launch and leaves the run where a launch leaves it:
@@ -420,7 +430,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	if seat, err := s.ListActiveForSeat(ctx, "swe"); err != nil || len(seat) != 0 {
 		t.Errorf("the seat's busy read still sees a finished run: %+v, %v", seat, err)
 	}
-	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", "chat:D1:root-1"); err != nil || found {
+	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", answerOnTheDM); err != nil || found {
 		t.Errorf("an answer matched the question of a finished run: found %v, %v", found, err)
 	}
 	if _, won, err := s.ClaimForResume(ctx, "t1", tail); err != nil || won {
@@ -1051,23 +1061,27 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", "chat:D1:root-1")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
 	if err != nil || !ok {
 		t.Fatalf("find: ok=%v err=%v", ok, err)
 	}
 	if got.TurnID != "t2" {
 		t.Errorf("matched %s, want the most recently parked question", got.TurnID)
 	}
-	// And a different seat's thread is not this seat's.
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", "chat:D1:root-1"); ok {
+	// And a different seat's conversation is not this seat's.
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", answerOnTheDM); ok {
 		t.Error("another seat's answer matched this seat's run")
 	}
-	// THE MATCH IS ON THE PARTITION KEY, NEVER THE CONVERSATION BESIDE IT.
-	// Both are on the row and only one is compared: handing this reader the
-	// coarser value would let any message on the DM line resume a run parked
-	// on one particular question in it.
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", "chat:D1"); ok {
-		t.Error("a run was matched on its conversation identity rather than its partition key")
+	// THE MATCH IS ON THE CONVERSATION, NOT ON THE BATCH BESIDE IT: a direct
+	// message is one conversation however it is threaded, so a TOP-LEVEL
+	// reply on the same DM line answers a question asked in a thread on it.
+	// Compared on the partition this would miss, which is the same miss that
+	// strands a question asked the other way round — see
+	// testARunParkedOnATopLevelDMIsAnsweredInItsThread.
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1",
+	}); !ok {
+		t.Error("a top-level reply on the DM line did not answer the question asked on it")
 	}
 	// And the identity IS carried, so the resume knows where to report.
 	if got.ConversationIdentity != "chat:D1" {
@@ -1096,6 +1110,86 @@ func testARowWithNoIdentityReportsBackToItsPartition(t *testing.T, s sandbox.Pen
 	}
 }
 
+// THE ENGINE'S OWN PROMPT SENDS THE ANSWER WHERE THE PARTITION CANNOT REACH.
+//
+// A run launched from a TOP-LEVEL direct message parks under the bare DM
+// channel, because that is the partition a top-level burst coalesces on — and
+// the chat prompt then tells the seat to reply AS A THREAD, so the person's
+// answer arrives keyed on that thread. Compared on the partition the two
+// strings never meet: the clarification the box is parked waiting for is
+// silently never delivered, and the run sits until its pause TTL reaps it.
+// Compared on the conversation it arrives, because a direct message is ONE
+// conversation however it is threaded.
+func testARunParkedOnATopLevelDMIsAnsweredInItsThread(t *testing.T, s sandbox.PendingStore) {
+	top := run("t1")
+	// What a top-level DM turn writes: the partition IS the bare channel,
+	// and so is the conversation.
+	top.ConversationKey, top.ConversationIdentity = "chat:D1", "chat:D1"
+	mustLaunched(t, s, top)
+	park(t, s, "t1")
+
+	// The person's reply, in the thread the seat was told to open.
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1:root-1",
+	})
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !ok || got.TurnID != "t1" {
+		t.Fatalf("the threaded reply matched %q (ok=%v); the answer to a question "+
+			"asked from a top-level DM never reaches the run that asked it",
+			got.TurnID, ok)
+	}
+}
+
+// A run is answered by ITS conversation and no other. Matching on the seat
+// alone would hand an unrelated message to whichever run happened to be
+// waiting — and that run would treat it as the answer to its question.
+func testAnAnswerOnAnotherConversationMatchesNothing(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D2", Partition: "chat:D2:root-9",
+	}); ok {
+		t.Error("a message on another conversation answered this run's question")
+	}
+}
+
+// A PRE-SPLIT ROW IS STILL ANSWERABLE, in both readings of the one value it
+// carries — and it has to be: nothing rewrites a parked run, one waits for a
+// person, so this row shape outlives any upgrade window.
+//
+// Its value is the PARTITION its build derived, so comparing the arriving
+// partition against it reproduces that build's own match exactly. It is
+// compared against the identity as well, which is not a second spelling of
+// the same rule: such a row parked from a top-level DM holds the bare
+// channel, which is precisely what this build calls the identity, so reading
+// it that way is what repairs the rows the defect already stranded.
+func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
+	// Parked from a DM thread by a build that had no identity to write.
+	threaded := run("t1")
+	threaded.ConversationIdentity = ""
+	mustLaunched(t, s, threaded)
+	park(t, s, "t1")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	if err != nil || !ok || got.TurnID != "t1" {
+		t.Fatalf("find = %q ok=%v err=%v; a row parked before the split stopped "+
+			"being answerable at all", got.TurnID, ok, err)
+	}
+
+	// And one parked from a top-level DM, whose one value is the channel.
+	toplevel := run("t2")
+	toplevel.ConversationKey, toplevel.ConversationIdentity = "chat:D9", ""
+	toplevel.CreatedAt = base.Add(time.Minute)
+	mustLaunched(t, s, toplevel)
+	park(t, s, "t2")
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D9", Partition: "chat:D9:root-2",
+	}); !ok {
+		t.Error("a pre-split row parked from a top-level DM is still unanswerable")
+	}
+}
+
 func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.PendingStore) {
 	// Matching by seat alone would hand an unrelated message to whichever
 	// run happened to be waiting — and that run would treat it as the
@@ -1105,8 +1199,25 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 		sandbox.Clarification{Question: "?"}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", ""); ok {
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe",
+		sandbox.ConversationRef{}); ok {
 		t.Error("a message with no conversation matched a parked run")
+	}
+	// AND NEITHER DOES A RUN WITH NONE, which is what a schedule tick or an
+	// A2A wake launches: it stored no conversation any message could ever
+	// reproduce, so every reply on every surface would otherwise be its
+	// answer.
+	keyless := run("t2")
+	keyless.ConversationKey, keyless.ConversationIdentity = "", ""
+	keyless.CreatedAt = base.Add(time.Minute)
+	mustLaunched(t, s, keyless)
+	park(t, s, "t2")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if ok && got.TurnID == "t2" {
+		t.Error("a run launched with no conversation was answered by a chat message")
 	}
 }
 

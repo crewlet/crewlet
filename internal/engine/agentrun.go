@@ -261,9 +261,10 @@ func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
 		AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
 		Role: l.seat.Name,
 		// BOTH CONVERSATION VALUES, for the reason the run_sandbox launch
-		// carries both: this row is the one a person's answer is matched
-		// against (the partition) and the one the resumed turn reports
-		// back through (the identity).
+		// carries both: the identity is what a person's answer is matched
+		// against and what the resumed turn reports back through, and the
+		// partition states the batch this run was launched from, which is
+		// the only thing a peer predating the identity can match on.
 		ConversationKey:      l.turn.PartitionKey,
 		ConversationIdentity: l.turn.ConversationKey,
 		Reply:                l.turn.Reply,

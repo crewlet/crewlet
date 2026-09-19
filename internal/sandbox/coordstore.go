@@ -380,26 +380,27 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 
 // FindAwaitingByConversation finds the parked run a reply belongs to.
 //
-// MATCHED ON THE PARTITION KEY — [PendingRun.ConversationKey] — by exact
-// string equality against rows already written, never on the identity beside
-// it: the caller derives its half from the arriving delivery, so the two
-// halves have to be the same question, and only one of them is a value rows
-// in this store already hold.
-func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, partition string) (PendingRun, bool, error) {
-	if partition == "" {
-		// An empty key must never match, or every parked run answers
-		// every wake that could not name a conversation.
+// MATCHED ON THE CONVERSATION, by [ConversationRef.Answers] — which is where
+// the rule lives, together with what it does with a row written before the
+// conversation identity existed. Nothing about the match is decided here: a
+// store that answered it its own way would be a second opinion about which
+// question a person just replied to.
+func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error) {
+	if conv.Identity == "" && conv.Partition == "" {
+		// A delivery that names no conversation must never match, or
+		// every parked run answers every wake that could not name one.
 		return PendingRun{}, false, nil
 	}
 	got, err := s.list(ctx, func(r PendingRun) bool {
-		return r.AgentHandle == handle && r.ConversationKey == partition &&
+		return r.AgentHandle == handle && conv.Answers(r) &&
 			slices.Contains(Awaiting, r.Status)
 	})
 	if err != nil || len(got) == 0 {
 		return PendingRun{}, false, err
 	}
 	// Newest first: a seat can have parked more than one question on one
-	// thread, and the answer belongs to what the person was just asked.
+	// conversation, and the answer belongs to what the person was just
+	// asked.
 	return got[len(got)-1], true, nil
 }
 

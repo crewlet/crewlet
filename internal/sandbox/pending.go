@@ -312,29 +312,46 @@ type PendingRun struct {
 	Reply string `json:"reply,omitempty"`
 
 	// ConversationKey is the inbox PARTITION key the run was launched
-	// under: what matches a person's answer back to this run.
+	// under: the batch its kick-off trigger arrived in.
 	//
-	// The match is exact string equality against rows already written (see
-	// [CoordStore.FindAwaitingByConversation]), and the engine derives the
-	// same value for an arriving delivery, so the two halves of the match
-	// must be the same question. It is the positional one — "the next
-	// inbound in this batch is the answer".
+	// NOT WHAT AN ANSWER IS MATCHED ON, which it was, and the engine's own
+	// prompt is why it could not stay so. A run launched from a TOP-LEVEL
+	// direct message parks under the bare DM channel, because a top-level
+	// burst coalesces on the channel — and the chat prompt then tells the
+	// seat to reply AS A THREAD, so the person's answer arrives keyed on
+	// that thread. Under equality the two strings never met: the
+	// clarification a box is parked waiting for was never delivered and
+	// the run sat until its pause TTL reaped it.
+	//
+	// STILL WRITTEN, for two peer reasons rather than for this build's own
+	// match. It is the only conversation value a row from before the split
+	// carries, so it is what such a row degrades to matching on; and a
+	// node still running that build matches every row — including the ones
+	// written here — on it by equality, so dropping it would strand a run
+	// whose answer lands on the other half of a mixed fleet. See
+	// [ConversationRef.Answers], which is what matches a delivery now.
 	ConversationKey string `json:"conversation_key"`
 
-	// ConversationIdentity is the durable conversation to REPORT BACK to:
-	// what the resumed turn's ledger entry is filed under.
+	// ConversationIdentity is the durable conversation this run belongs
+	// to: what the resumed turn's ledger entry is filed under, and — since
+	// a person answers on the conversation rather than into the batch —
+	// what an arriving delivery is matched against.
 	//
 	// The two were one field, and its doc said so — "where to report back
 	// AND what matches a person's answer". They are different questions
-	// and, for a direct message, different values: the match wants the
-	// batch a reply arrives in, the report-back wants the thread a person
-	// reads. Filing the resumed turn under the match value put a DM's
-	// coding work in a ledger row the next turn never looked up.
+	// and, for a direct message, different values: the partition is the
+	// batch a delivery arrives in, the identity is the line a person is
+	// talking on. One value answering both cost one failure each way —
+	// filing the resumed turn under the batch put a DM's coding work in a
+	// ledger row the next turn never looked up, and matching on it lost
+	// the answer outright.
 	//
 	// ADDITIVE on this row, which is what a coordination-KV record needs:
 	// nothing rewrites a parked run, so a run launched by an older build
-	// decodes with this empty and [PendingRun.Conversation] falls back to
-	// the field that is there. Omitted when empty for the same reason.
+	// decodes with this empty and BOTH readers fall back to the field that
+	// is there — [PendingRun.Conversation] for the report-back and
+	// [ConversationRef.Answers] for the match. Omitted when empty for the
+	// same reason.
 	ConversationIdentity string `json:"conversation_identity,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
@@ -583,9 +600,13 @@ type PendingStore interface {
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
 	// FindAwaitingByConversation matches a person's answer back to the run
-	// that asked, on the run's PARTITION key — [PendingRun.ConversationKey]
-	// — rather than on the conversation it reports back to.
-	FindAwaitingByConversation(ctx context.Context, handle, partition string) (PendingRun, bool, error)
+	// that asked, on the CONVERSATION the question was asked in.
+	//
+	// The rule is [ConversationRef.Answers] and lives there rather than in
+	// an implementation, because it is a statement about two VALUES that
+	// every store has to make the same way — including what it does with a
+	// row written before the conversation identity existed.
+	FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error)
 }
 
 // Conversation is the durable conversation this run reports back to.
@@ -603,6 +624,70 @@ func (r PendingRun) Conversation() string {
 		return r.ConversationIdentity
 	}
 	return r.ConversationKey
+}
+
+// ConversationRef is where an arriving delivery came from, as a parked run is
+// matched against it: the durable conversation it belongs to, and the inbox
+// partition it arrived in.
+//
+// TWO VALUES BECAUSE THE ROWS ARE OF TWO AGES, not because the match has two
+// answers. Everything this build parks is matched on the identity; the
+// partition travels for the rows written before an identity existed, which
+// hold nothing else to match on. A struct rather than two arguments because
+// both are strings and a swapped pair fails silently — as a run nobody can
+// answer, which is the defect this type exists to end.
+type ConversationRef struct {
+	// Identity is the durable conversation — what notify derives for the
+	// delivery's partition, and what the row's ConversationIdentity holds.
+	Identity string
+
+	// Partition is the inbox batch the delivery arrived in — what the row's
+	// ConversationKey holds.
+	Partition string
+}
+
+// Answers reports whether this delivery is the reply that parked run is
+// waiting for.
+//
+// ON THE IDENTITY, because that is where a person answers. The engine's own
+// chat prompt tells a seat replying to a top-level direct message to reply AS
+// A THREAD, so the answer to a question asked from such a turn arrives in a
+// thread — a FINER partition than the bare channel the run parked under — and
+// under equality on the partition the two never met. A direct message is ONE
+// conversation however it is threaded, which is exactly what the identity
+// says, so matching on it is what makes the answer arrive at all.
+//
+// It widens nothing elsewhere: a partition key is always its identity or a
+// finer cut of it, so on every other source the two coincide and this is the
+// same match it always was. Where it does widen — a DM line carrying more
+// than one parked question — the store answers with the NEWEST parked run,
+// which is the rule two questions in one thread were already resolved by.
+//
+// A ROW WITH NO IDENTITY IS A ROW FROM BEFORE THE SPLIT, and it degrades to
+// today's behaviour rather than to a run nobody can answer: its one value is
+// compared against the PARTITION, which is what the build that wrote it
+// derived and compared. It is compared against the identity too, and that is
+// not a second spelling of one rule — such a row launched from a top-level DM
+// holds the bare channel, which is precisely what this build calls the
+// identity, so reading it that way is what repairs the rows already stranded
+// by the defect. Nothing rewrites a parked run and one waits for a person, so
+// this row shape outlives any upgrade window.
+//
+// AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
+// tick or an A2A wake stored no conversation, and a wake that could not name
+// one carries none — so the one explicit check below is the one place two
+// absences would otherwise compare equal and make every such delivery the
+// answer to every such run. Everywhere else an empty value simply fails the
+// comparison, which is why there is no second guard: a clause that cannot
+// decide anything is a claim, not a check.
+func (c ConversationRef) Answers(run PendingRun) bool {
+	if run.ConversationIdentity != "" {
+		return run.ConversationIdentity == c.Identity
+	}
+	if run.ConversationKey == "" {
+		return false
+	}
+	return run.ConversationKey == c.Identity || run.ConversationKey == c.Partition
 }
 
 // Clarification is what a parked run is waiting for.

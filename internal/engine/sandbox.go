@@ -581,11 +581,12 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 	// than a fresh id, and it dedupes against the same trigger the dispatch
 	// that launched it did.
 	//
-	// AND UNDER THE CONVERSATION IT REPORTS BACK TO, never the partition it
-	// was matched on: for a direct message those are different values, and
-	// filing here under the match value would put the coding work in a row
-	// the seat's next turn on that DM never looks up — the same silence
-	// this frame exists to end.
+	// AND UNDER THE CONVERSATION IT REPORTS BACK TO, which is the
+	// conversation its answer was matched on and never the partition beside
+	// it: for a direct message those are different values, and filing here
+	// under the batch would put the coding work in a row the seat's next
+	// turn on that DM never looks up — the same silence this frame exists
+	// to end.
 	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.Conversation(),
 		in.Run.TurnID, in.Run.UnitOfWork(), resumeTask(in), res, e.dispatch.now())
 }
@@ -830,8 +831,10 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			// planned as though the coding work had never happened.
 			//
 			// BOTH HALVES, because the row asks two questions of them:
-			// the identity is where the resume reports, the partition
-			// is what a person's answer is matched against.
+			// the identity is where the resume reports and what a
+			// person's answer is matched against, the partition is the
+			// batch this run was launched from — which is all a peer
+			// predating the identity has to match on.
 			ConversationKey:      t.PartitionKey,
 			ConversationIdentity: t.ConversationKey,
 			// The brief and the delivery obligation, so the resumed turn

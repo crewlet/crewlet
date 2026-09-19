@@ -20,11 +20,12 @@ import (
 //   - Addressed says whether somebody is waiting on this seat for an answer,
 //     which the turn engine's delivery check reads.
 //   - PartitionKey says which other events this one is handled WITH: the
-//     broker's inbox partition, the coalescer's merge unit, and the value a
-//     parked coding run matches a person's answer against.
+//     broker's inbox partition and the coalescer's merge unit.
 //   - ConversationIdentity says which ongoing conversation it is part of: the
 //     conversation ledger's key, the turn telemetry's conversation_key tag,
-//     and the episodes column.
+//     the episodes column, and the value a parked coding run matches a
+//     person's answer against — they answer on the conversation, not into
+//     the batch.
 //   - WakesActor says whether an event reaches the party who caused it.
 //   - DigestBody is the supersede rule when several of them merge.
 //
@@ -83,10 +84,12 @@ type Prompt interface {
 	// Empty means this source cannot derive one for this event, and the
 	// event is then never merged with anything.
 	//
-	// Three readers, and all three are positional rather than historical:
-	// the broker partitions a seat's inbox by it, the coalescer merges a
-	// partition into one trigger, and a parked coding run matches the next
-	// inbound on the same key as the answer to its question.
+	// Two readers, and both are positional rather than historical: the
+	// broker partitions a seat's inbox by it and the coalescer merges a
+	// partition into one trigger. A parked coding run was a third until
+	// its match moved onto the identity — a person answers on the
+	// conversation, and the engine's own prompt routinely puts their reply
+	// in a finer partition than the question was asked from.
 	PartitionKey(metadata map[string]string, subject string) string
 
 	// ConversationIdentity is the SOURCE-LOCAL identity of the ongoing

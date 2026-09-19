@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -1347,10 +1348,10 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 			AdmitsTriggers: true, AwaitingSandbox: true}
 	}
 	var asked []string
-	d.Answer = func(_ context.Context, handle, conversation, answer string,
-		trigger *events.Event,
+	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
+		answer string, trigger *events.Event,
 	) (bool, error) {
-		asked = append(asked, handle+"/"+conversation)
+		asked = append(asked, handle+"/"+conv.Identity)
 		if answer == "" || trigger == nil {
 			t.Error("the answer text and its trigger did not reach the coordinator")
 		}
@@ -1376,11 +1377,17 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 // recoverable, and acking a message nothing handled is not.
 func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 	t.Parallel()
-	for name, answer := range map[string]func(context.Context, string, string, string, *events.Event) (bool, error){
-		"not this run's answer": func(context.Context, string, string, string, *events.Event) (bool, error) {
+	type answerer func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event) (bool, error)
+	for name, answer := range map[string]answerer{
+		"not this run's answer": func(context.Context, string, sandbox.ConversationRef,
+			string, *events.Event,
+		) (bool, error) {
 			return false, nil
 		},
-		"an unreadable store": func(context.Context, string, string, string, *events.Event) (bool, error) {
+		"an unreadable store": func(context.Context, string, sandbox.ConversationRef,
+			string, *events.Event,
+		) (bool, error) {
 			return false, errors.New("the coordination store is unreachable")
 		},
 		"no coordinator": nil,
@@ -1420,7 +1427,9 @@ func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 			AdmitsTriggers: true, AwaitingSandbox: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (bool, error) {
 		called = true
 		return true, nil
 	}
@@ -1445,7 +1454,9 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: false, AdmitsTriggers: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (bool, error) {
 		called = true
 		return true, nil
 	}
@@ -1846,26 +1857,39 @@ func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
 	}
 }
 
-// THE TWO QUESTIONS REACH THE TWO READERS, asserted on the one trigger shape
-// where they differ: a reply in the thread a direct message started.
+// A RUN PARKED FROM A TOP-LEVEL DM IS ANSWERED BY THE PERSON'S THREADED REPLY,
+// and the dispatcher's half of that is which conversation it offers the
+// coordinator for such a reply: the WHOLE DM LINE, because that is the value
+// the row was parked under.
 //
-// The parked coding run's answer match is offered the PARTITION key, because
-// it compares by exact equality against what the row was written with, while
-// the ledger read and the session write take the IDENTITY. A collapse back to
-// one value fails one of these two whichever value survives.
-func TestTheAnswerMatchTakesThePartitionAndTheLedgerTheIdentity(t *testing.T) {
+// The engine's own prompt is what makes the two differ. A top-level direct
+// message partitions on the bare channel, so a run launched from that turn
+// parks under the channel — and [notify.ChatPrompt] then tells the seat to
+// reply AS A THREAD, so the person's answer arrives partitioned on the thread
+// it opened. While this offered the partition, the coordinator compared two
+// strings that could never be equal: the clarification was silently never
+// delivered and the box waited out its pause TTL.
+//
+// THE PARTITION STILL TRAVELS, and only for the rows parked before an identity
+// was ever written — see [sandbox.ConversationRef.Answers]. The ledger read
+// and the session write take the identity as they already did, which is the
+// second half asserted here: one trigger, and every reader of its conversation
+// answering the same thing.
+func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	var offered string
+	var offered sandbox.ConversationRef
 	parked := &recorder{}
 	dp := dispatcher(t, parked)
 	dp.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, AwaitingSandbox: true}
 	}
-	dp.Answer = func(_ context.Context, _, partition, _ string, _ *events.Event) (bool, error) {
-		offered = partition
+	dp.Answer = func(_ context.Context, _ string, conv sandbox.ConversationRef,
+		_ string, _ *events.Event,
+	) (bool, error) {
+		offered = conv
 		return true, nil
 	}
 	if got := dp.Dispatch(ctx, "swe", []*events.Event{
@@ -1873,9 +1897,15 @@ func TestTheAnswerMatchTakesThePartitionAndTheLedgerTheIdentity(t *testing.T) {
 	}); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("outcome = %v", got.Outcome)
 	}
-	if offered != "chat:D1:root-1" {
-		t.Errorf("the parked run was offered %q, want the partition its row was written with",
-			offered)
+	if offered.Identity != "chat:D1" {
+		t.Errorf("the parked run was offered the conversation %q, want the DM line — "+
+			"a run launched from a top-level DM is parked under it and can be "+
+			"answered by nothing else", offered.Identity)
+	}
+	if offered.Partition != "chat:D1:root-1" {
+		t.Errorf("the partition did not travel beside it (%q), so a row parked "+
+			"before the identity existed carries nothing this can match",
+			offered.Partition)
 	}
 
 	// THE SAME TRIGGER through an ordinary dispatch: the ledger keys on the

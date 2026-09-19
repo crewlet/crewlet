@@ -519,7 +519,7 @@ func TestAnAbandonedAnswerResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 	}
 	rig.resumer.err = fmt.Errorf("%w: panic: nil map", ErrResumeAbandoned)
 
-	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil)
 	if err != nil || !handled {
 		t.Fatalf("TryResumeFromAnswer = (%v, %v), want the answer handled", handled, err)
 	}
@@ -545,7 +545,7 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 	rig.resumer.err = errors.New("no seat here")
 
 	handled, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", "chat:D1:root-1", "use main", nil)
+		t.Context(), "swe", answerOnTheDM, "use main", nil)
 	if err == nil {
 		t.Fatal("a failed resume reported success")
 	}
@@ -1071,7 +1071,7 @@ type staleFind struct {
 	snapshot PendingRun
 }
 
-func (s staleFind) FindAwaitingByConversation(context.Context, string, string) (PendingRun, bool, error) {
+func (s staleFind) FindAwaitingByConversation(context.Context, string, ConversationRef) (PendingRun, bool, error) {
 	return s.snapshot, true, nil
 }
 
@@ -1096,7 +1096,7 @@ func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil)
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -1479,7 +1479,7 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 	rig.park("t1")
 	rig.resumer.failWith(errors.New("the model provider did not answer"))
 
-	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil)
 	if err == nil || !handled {
 		t.Fatalf("TryResumeFromAnswer = %v, %v, want the answer handled and sent back", handled, err)
 	}
@@ -1491,7 +1491,7 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 	}
 
 	rig.resumer.failWith(nil)
-	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil); err != nil {
+	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil); err != nil {
 		t.Fatalf("the answer's retry: %v", err)
 	}
 	rig.finished("t1")
@@ -1772,6 +1772,14 @@ func TestAFailedChargeDoesNotAbortTheResume(t *testing.T) {
 // the clarification round trip
 // ---------------------------------------------------------------------
 
+// answerOnTheDM is the person's reply to the question this rig's run parked
+// on: the same DM line, in the thread the run's own trigger arrived in.
+//
+// THE TWO VALUES DIFFER, because the rig's row is a direct message's — so a
+// case that hands this to the coordinator is exercising a real pair rather
+// than one string written twice.
+var answerOnTheDM = ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"}
+
 func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
@@ -1785,7 +1793,7 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	}
 
 	handled, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", "chat:D1:root-1", "use main", nil)
+		t.Context(), "swe", answerOnTheDM, "use main", nil)
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -1807,6 +1815,47 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	}
 }
 
+// AND THE ANSWER NEED NOT ARRIVE IN THE BATCH THE QUESTION WAS ASKED IN.
+//
+// The engine's own chat prompt tells a seat to reply to a top-level direct
+// message AS A THREAD, so the two halves of a DM's clarification routinely sit
+// in different partitions: the question parked under one, the person's answer
+// arriving in another. Matched on the partition this resume never fires at
+// all — the box waits out its pause TTL while the answer sits in the seat's
+// inbox — and a DM is one conversation however it is threaded, which is what
+// the match runs on now.
+func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	// Parked from a thread on the DM line: conversation chat:D1, partition
+	// chat:D1:root-1.
+	rig.launch("t1")
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		DeliveredRefs: []string{"wip/t1"},
+	})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	// A TOP-LEVEL reply on the same DM line: same conversation, different
+	// batch — which is exactly the shape the row's own partition cannot
+	// match.
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		ConversationRef{Identity: "chat:D1", Partition: "chat:D1"}, "use main", nil)
+	if err != nil {
+		t.Fatalf("TryResumeFromAnswer: %v", err)
+	}
+	if !handled {
+		t.Fatal("an answer arriving outside the question's own partition reached " +
+			"nobody: the parked run waits for a reply it can never be given")
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || calls[0].Run.TurnID != "t1" {
+		t.Fatalf("resumed %+v, want the one run that asked", calls)
+	}
+}
+
 // A run whose box was reclaimed must not be told to continue in a working tree
 // that is gone — git is the durable state and the brief has to say so.
 func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
@@ -1825,7 +1874,7 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	rig.tick()
 
 	if _, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", "chat:D1:root-1", "use main", nil); err != nil {
+		t.Context(), "swe", answerOnTheDM, "use main", nil); err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
 	calls := rig.resumer.calls()
@@ -1954,7 +2003,7 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:D1:root-1", "hello", nil)
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "hello", nil)
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -1967,7 +2016,7 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 // overriding only what the test exercises.
 type brokenStore struct{ PendingStore }
 
-func (brokenStore) FindAwaitingByConversation(context.Context, string, string) (PendingRun, bool, error) {
+func (brokenStore) FindAwaitingByConversation(context.Context, string, ConversationRef) (PendingRun, bool, error) {
 	return PendingRun{}, false, fmt.Errorf("store unreachable")
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -71,8 +72,13 @@ type Dispatcher struct {
 	// the person who answered is never told anything happened.
 	//
 	// Nil is a node with no coordinator, where a park is the whole answer.
-	Answer func(ctx context.Context, handle, conversation, answer string,
-		trigger *events.Event) (bool, error)
+	//
+	// It takes the delivery's WHOLE conversation reference rather than one
+	// key: the match turns on the identity, and the partition travels for
+	// the rows parked before an identity was written. See
+	// [sandbox.ConversationRef.Answers].
+	Answer func(ctx context.Context, handle string, conv sandbox.ConversationRef,
+		answer string, trigger *events.Event) (bool, error)
 
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
@@ -657,24 +663,34 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // would have been — which is recoverable, where acking a message nothing
 // handled is not.
 //
-// THE PARTITION KEY is the disambiguation, and it has to be: the coordinator
-// matches by exact string equality against the value written on the parked
-// row at kick-off, so the question and the answer must be derived the same
-// way. It is also the honest reading of the rule — "the next inbound on the
-// question's conversation IS the answer" is positional, about what arrives
-// next in one inbox, which is what a partition is.
+// THE CONVERSATION IDENTITY is the disambiguation, and the partition travels
+// beside it for the rows parked before an identity existed. The rule — "the
+// next inbound on the question's conversation IS the answer" — is positional
+// within a CONVERSATION rather than within a batch, and the engine's own chat
+// prompt is what forces the distinction: a run launched from a top-level
+// direct message parks under the bare DM channel, while [notify.ChatPrompt]
+// tells the seat to reply as a thread, so the person's answer arrives in a
+// partition the row never named. Offered the partition, the coordinator
+// compared two strings that could not meet and the box waited out its pause
+// TTL with the answer sitting in this very inbox.
+//
+// BOTH VALUES GO, because only the store knows which age of row it is
+// matching. See [sandbox.ConversationRef.Answers].
 func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) bool {
 	if d.Answer == nil {
 		return false
 	}
-	partition := partitionKeyOf(evs)
-	if partition == "" {
+	conv := sandbox.ConversationRef{
+		Identity:  conversationIdentityOf(evs),
+		Partition: partitionKeyOf(evs),
+	}
+	if conv.Identity == "" && conv.Partition == "" {
 		return false
 	}
-	handled, err := d.Answer(ctx, handle, partition, DescribeTrigger(evs), first(evs))
+	handled, err := d.Answer(ctx, handle, conv, DescribeTrigger(evs), first(evs))
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
-			"agent_handle", handle, "partition_key", partition, "error", err)
+			"agent_handle", handle, "conversation", conv.Identity, "error", err)
 		return false
 	}
 	return handled
@@ -907,10 +923,14 @@ func (d *Dispatcher) now() time.Time {
 // events, and partitionKeyOf takes the inbox partition key.
 //
 // TWO FUNCTIONS BECAUSE THERE ARE TWO QUESTIONS, and the dispatcher asks both
-// on every turn: the ledger, the telemetry and the episodes want the identity,
-// while the coalescing record and a parked run's answer match want the
-// partition. One value answering both is what filed a seat's own prior turn on
-// a direct message under a key its next turn never looked up.
+// on every turn: the ledger, the telemetry, the episodes and a parked run's
+// answer match want the identity, while the coalescing record wants the
+// partition — it records that N events MERGED, which is what the partition
+// decides. The answer match takes both, and only because a row parked by a
+// build that predates the identity holds nothing else to match on. One value
+// answering every question is what filed a seat's own prior turn on a direct
+// message under a key its next turn never looked up, and what lost every
+// clarification a seat was told to ask for in a thread.
 //
 // The FIRST event that names one wins, for both. A partition is one
 // conversation by construction — the broker's key function guarantees the

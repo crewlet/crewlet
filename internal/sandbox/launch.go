@@ -36,8 +36,10 @@ type TurnRef struct {
 
 	// ConversationKey is the inbox PARTITION key and ConversationIdentity
 	// the durable conversation. BOTH travel, and both are written onto the
-	// row: the first is what matches a person's answer back to this run,
-	// the second is where the resumed turn reports. See [PendingRun].
+	// row: the second is what matches a person's answer back to this run
+	// and where the resumed turn reports, the first is the batch the
+	// kick-off trigger arrived in — kept because a peer that predates the
+	// identity matches on nothing else. See [PendingRun].
 	//
 	// Two fields where there was one, and the miss this guards against is
 	// now available twice: this struct's ConversationKey was empty at its
@@ -136,8 +138,9 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
 		ConversationKey: req.Turn.ConversationKey,
-		// The report-back address beside the match value, because a
-		// resume days later has neither the trigger nor this frame.
+		// The conversation an answer is matched on and the resume
+		// reports back to, because a resume days later has neither the
+		// trigger nor this frame.
 		ConversationIdentity: req.Turn.ConversationIdentity,
 		Reply:                req.Turn.Reply,
 		TraceID:              req.Turn.TraceID, SpanID: req.Turn.SpanID,

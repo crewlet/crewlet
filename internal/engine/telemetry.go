@@ -53,10 +53,12 @@ type turnTelemetry struct {
 	trigger types.Trigger
 
 	// convKey is the CONVERSATION IDENTITY — what every event this turn
-	// publishes is tagged with, and what the episode row is filed under —
-	// while partKey is the inbox PARTITION the trigger arrived in, carried
-	// only so a detached coding run's row gets the value its answer will be
-	// matched against.
+	// publishes is tagged with, what the episode row is filed under, and
+	// what matches a person's answer back to a detached run — while
+	// partKey is the inbox PARTITION the trigger arrived in, carried only
+	// so a detached coding run's row can also state the batch it was
+	// launched from, which is all a peer predating the identity can match
+	// on.
 	convKey   string
 	partKey   string
 	startedAt time.Time
@@ -432,8 +434,9 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		workKey: in.Run.UnitOfWork(),
 		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
 		// turn's events are tagged with the conversation it reports back
-		// to, while a run that suspends AGAIN has to be re-matched on the
-		// partition it was parked under.
+		// to and is answered on, while the partition it was launched from
+		// is carried forward so a run that suspends AGAIN writes the same
+		// pair a first launch would.
 		convKey:   in.Run.Conversation(),
 		partKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
