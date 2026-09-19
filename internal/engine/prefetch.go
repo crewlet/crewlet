@@ -24,14 +24,21 @@ import (
 
 // prefetcher builds the fetcher for the current node.
 //
-// Per CALL rather than held, because two of its sources move: the knowledge
-// searcher is rebuilt whenever the tracker is reconciled, and a node with no
-// store has none of the rest. Building it is assembling six interface values
-// — cheaper than the mutex a cached one would need.
+// Per CALL rather than held, because most of its sources move: the knowledge
+// searcher is rebuilt whenever the tracker is reconciled, the party registry
+// is rebuilt on every apply, the chat readers follow whichever transports are
+// running, and a node with no store has none of the rest. Building it is
+// assembling a handful of interface values — cheaper than the mutex a cached
+// one would need.
 func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
 		Models:    company.Models,
+		// The chat surfaces' READ half, which is how a seat woken in a
+		// thread is handed the thread. Empty on a node running no chat
+		// transport, which renders the unreadable hint rather than
+		// silently nothing — see prefetch.UnreadableThreadHint.
+		Threads: e.ChatThreads(),
 		// SummarizeEpisodes gates ONLY the episode summary. Wiring this
 		// switch by passing a nil provider pool silently disables the
 		// memory and knowledge filters too — an operator turning off a
@@ -45,6 +52,12 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 		src.Counterparties = learning.NewCounterparties(db)
 		src.Skills = learning.NewSkills(db)
 		src.Onboarding = learning.NewOnboarding(db)
+	}
+	// A nil *Registry would satisfy the interface and then be dereferenced,
+	// so the seam is left unset rather than filled with one — which renders
+	// every sender as the raw platform id, legible but not recognisable.
+	if reg := e.Registry(); reg != nil {
+		src.Parties = reg
 	}
 	// Nil where a company configured no embeddings, which degrades the
 	// similarity half of the memory pool to recency alone and episode
@@ -91,6 +104,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// thing that knows whether its third-party app's body is the context or a
 		// reference to it.
 		RequiresRecon: requiresRecon(req.Ask()),
+		// THE TRIGGER'S OWN THREAD, resolved by the notification layer
+		// that stamped it rather than re-derived here: the working
+		// indicator, the reply target and this block must never disagree
+		// about which thread a turn is in.
+		Thread: threadOf(req.Ask()),
 	}
 	blocks := e.prefetcher(company).Fetch(ctx, r)
 	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks)
@@ -134,7 +152,14 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		// renders the hint, so hit=true with count=0 is "it ran and
 		// found nothing" rather than "it surfaced pages".
 		RelevantKnowledgeSelectionCount: b.RelevantKnowledgeHits,
-		TriggerRequiresRecon:            r.RequiresRecon,
+		ThreadContextHit:                b.ThreadContext != "",
+		ThreadContextBytes:              len(b.ThreadContext),
+		// The count the block cannot carry either: a thread that could
+		// not be read renders a hint, so hit=true with zero messages is
+		// "this seat was told to go and read it" rather than "it was
+		// handed the conversation".
+		ThreadContextPosts:   b.ThreadContextPosts,
+		TriggerRequiresRecon: r.RequiresRecon,
 	}, tracing.TraceOf(ctx))
 	if ev == nil {
 		return
@@ -156,6 +181,28 @@ func requiresRecon(evs []*events.Event) bool {
 		}
 	}
 	return false
+}
+
+// threadOf resolves the chat thread a turn was woken in, or the zero value.
+//
+// FIRST WINS, over the FLAT metadata of each notification rather than over
+// the constituents. A coalesced event's flat fields mirror its latest
+// constituent, and a chat partition is thread-grained wherever a thread
+// exists — a direct conversation partitions on the bare channel, but only for
+// messages with no thread at all — so a coalesced burst can never straddle
+// two threads and the flat copy is the whole answer. Reading the constituents
+// would offer a choice between several identical values, which is a choice
+// somebody eventually makes differently.
+//
+// A trigger that is not a chat message contributes nothing: [notify.ThreadOf]
+// keys on the `transport` stamp only a chat parser writes.
+func threadOf(evs []*events.Event) notify.Thread {
+	for _, n := range notificationsIn(evs) {
+		if t, ok := notify.ThreadOf(n.Metadata); ok {
+			return t
+		}
+	}
+	return notify.Thread{}
 }
 
 // notificationsIn reads the notifications out of a turn's trigger envelopes.

@@ -274,8 +274,14 @@ func TestEveryStoreFailureCostsOnlyItsOwnBlock(t *testing.T) {
 		Counterparties: counterparties{err: failing},
 		Skills:         skills{err: failing},
 		Onboarding:     onboarding{err: failing},
-		Models:         models{provider: &aux{answers: []string{"[0]"}}},
-		Embed:          embeds,
+		// A CHAT SURFACE THAT REFUSES is the same class of failure, and
+		// on a trigger with no thread it must render nothing at all
+		// rather than a hint: a seat woken by a webhook told its thread
+		// could not be read goes looking for a thread that never
+		// existed.
+		Threads: &threads{refuse: true},
+		Models:  models{provider: &aux{answers: []string{"[0]"}}},
+		Embed:   embeds,
 	}, request(t))
 	if !blocks.Empty() {
 		t.Fatalf("blocks = %+v, want all empty", blocks)

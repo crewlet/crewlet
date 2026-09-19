@@ -200,7 +200,13 @@ Two things that do **not** work, and cost an afternoon each:
 Mattermost **MCP tool** server is a separate `mcp_servers` entry
 (`shared: false`). Per agent, the same `${VAR}` names the token in both
 places — one credential, three readers (websocket, REST, MCP), no secret
-duplicated:
+duplicated. The REST reader makes two kinds of call on that token, both reads:
+the backfill a seat runs over a websocket reconnect gap, and
+`GET /api/v4/posts/{root}/thread` at the start of a turn woken in a thread, so
+the agent is handed the conversation instead of being told to go and fetch it
+(see [the thread block](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)).
+Both read as that bot account, so a channel it is not in simply answers an
+error and the turn runs without the block.
 
 ```yaml
 integrations:

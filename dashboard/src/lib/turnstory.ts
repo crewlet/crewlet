@@ -317,9 +317,9 @@ export interface PrefetchBlock {
 }
 
 /**
- * The six context blocks an executor's prompt is built from.
+ * The seven context blocks an executor's prompt is built from.
  *
- * The event's own one-line summary collapses this to "2/6 hits", which is the
+ * The event's own one-line summary collapses this to "2/7 hits", which is the
  * right shape for a feed and the wrong one for the screen about this turn:
  * every block degrades to empty on failure by design, so an unreachable store,
  * an unconfigured auxiliary model and a filter that selected nothing all
@@ -333,7 +333,23 @@ export function prefetchBlocks(event: EventRecord | undefined): PrefetchBlock[] 
   const gated = p.trigger_requires_recon === true;
   const thin = gated ? "the trigger was a bare pointer — this filter never ran" : "";
   const picks = Number(p.relevant_knowledge_selection_count ?? 0);
+  const posts = Number(p.thread_context_posts ?? 0);
   return [
+    // NOT GATED, and that is the point of it: this block is what makes a thin
+    // trigger thick. `trigger_requires_recon` says the trigger BODY is a
+    // pointer, which is still true of a "+1" whose thread the engine handed
+    // over — so the flag stays set and this block still ran.
+    block(
+      "The thread so far",
+      p,
+      "thread_context",
+      "",
+      p.thread_context_hit === true && posts === 0
+        ? "the thread could not be read from that node"
+        : posts > 0
+          ? `${posts} message${posts === 1 ? "" : "s"} handed over`
+          : "",
+    ),
     block("Personal memory", p, "personal_memory", thin),
     block("Similar prior work", p, "episode_recall", thin),
     block(

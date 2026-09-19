@@ -227,6 +227,7 @@ func TestExecutorPromptDropsEmptySections(t *testing.T) {
 func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	t.Parallel()
 	in := ExecutorInput{
+		ThreadContext:       "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:      "- prefers short replies",
 		SynthesizedSkills:   "- how to triage a sev-1",
 		RelevantKnowledge:   "- **Incident Response Runbook**: Steps for a sev-1.",
@@ -234,22 +235,32 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		CounterpartyProfile: "Subject: U0TESTUSER1",
 	}
 	p := BuildExecutor(engineer(), in)
-	// Ordered so the agent reads memory, then what it learned, then the
-	// team's docs, then prior work, then who it is talking to.
+	// Ordered so the agent reads the conversation it was woken in, then
+	// memory, then what it learned, then the team's docs, then prior work,
+	// then who it is talking to. The thread leads because it is the
+	// trigger's own context rather than something retrieved about it.
 	//
 	// Anchored on the section break rather than the bare heading:
 	// ExecutorHeader itself mentions `## Relevant knowledge` in prose, and
 	// matching that would have this assertion pass on a prompt that renders
 	// no block at all.
 	order(t, p,
+		"\n## The thread so far\n",
 		"\n## Personal memory\n",
 		"\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n",
 		"\n## Similar prior work\n",
 		"\n## Known counterparty\n",
 	)
+	// AND IT IS NOT CALLED `## Thread context`, which is what the chat
+	// prompt titles the section it writes into the notification BODY — and
+	// that lands in the USER message of this same conversation. Two sections
+	// under one heading saying different things is a model reading whichever
+	// it saw last.
+	excludes(t, p, "## Thread context")
 	// Each block is dropped whole when empty — no stub headings.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}),
+		"\n## The thread so far\n",
 		"\n## Personal memory\n", "\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n", "\n## Similar prior work\n", "\n## Known counterparty\n")
 }

@@ -65,6 +65,7 @@ func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{text("working")}}
 	r := withContext(t, prov, prefetch.Blocks{
+		ThreadContext:       "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:      "- always use semantic commits",
 		RelevantKnowledge:   "- **Staging runbook**: how the proxy is wired",
 		EpisodeRecall:       "- fixed a redirect loop before",
@@ -77,6 +78,7 @@ func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 
 	system := systemOf(t, prov, "execute")
 	for _, want := range []string{
+		"## The thread so far", "staging redirects in a loop",
 		"## Personal memory", "always use semantic commits",
 		"## Relevant knowledge", "Staging runbook",
 		"## Similar prior work", "fixed a redirect loop before",
@@ -127,11 +129,46 @@ func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	}
 	system := systemOf(t, prov, "execute")
 	for _, heading := range []string{
+		"## The thread so far",
 		"## Personal memory", "## Relevant knowledge", "## Similar prior work",
 		"## Known counterparty", "## Synthesized skills", "## First-turn onboarding",
 	} {
 		if strings.Contains(system, heading) {
 			t.Fatalf("an empty block rendered %q", heading)
+		}
+	}
+}
+
+// AND IT REACHES THE AGENT-MODE BRIEF TOO.
+//
+// executorPrompt is ONE builder for both runtimes — a native pass sends the
+// system and user messages separately, an agent-mode run concatenates them
+// into the single prompt a coding CLI takes — so a block that reached one and
+// not the other would be a seat with context on the engine's own loop and none
+// on the subscription's. There is nothing in the agent-mode path that could
+// drop it today, which is exactly why the claim needs a test: the two paths
+// drift on whichever half nobody re-reads.
+func TestThePrefetchReachesTheAgentModeBriefToo(t *testing.T) {
+	t.Parallel()
+	launcher := &recordingLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{agentRun: launcher, context: prefetch.Blocks{
+			ThreadContext:  "- **Ana Ruiz (ana)**: staging redirects in a loop",
+			PersonalMemory: "- always use semantic commits",
+		}})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if launcher.runs != 1 {
+		t.Fatalf("launched %d runs", launcher.runs)
+	}
+	for _, want := range []string{
+		"## The thread so far", "staging redirects in a loop",
+		"## Personal memory", "always use semantic commits",
+	} {
+		if !strings.Contains(launcher.req.Brief, want) {
+			t.Errorf("the agent-mode brief is missing %q", want)
 		}
 	}
 }

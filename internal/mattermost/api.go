@@ -1,6 +1,7 @@
 package mattermost
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -54,6 +55,22 @@ type Post struct {
 	FileIDs   []string       `json:"file_ids,omitempty"`
 	Props     map[string]any `json:"props,omitempty"`
 }
+
+// Bookkeeping is why this post must not be shown to a seat, or "".
+//
+// The typed half of [SkipReason]: one rule, two decoded shapes. A system
+// join line and a deleted post are about the channel rather than about
+// anything anybody said, so neither wakes a seat and neither belongs in a
+// thread rendered for one.
+func (p Post) Bookkeeping() string { return skipReason(p.Type, p.DeleteAt != 0) }
+
+// Body is this post's user-visible content.
+//
+// The typed half of [Text], on the same terms: a file shared with no comment
+// has an empty message and real content, and a post that renders as a blank
+// line in a thread and as "(shared 1 file)" in a notification is two
+// spellings of one post.
+func (p Post) Body() string { return postText(p.Message, len(p.FileIDs)) }
 
 // Channel is a room or a private conversation.
 type Channel struct {
@@ -115,11 +132,15 @@ type postList struct {
 	Posts map[string]Post `json:"posts"`
 }
 
-// ordered returns the posts oldest-first.
+// ordered returns the posts oldest-first, by the server's own ordering.
 //
 // Mattermost's `order` is NEWEST FIRST, and [Client.PostsSince] wants a
 // conversation in the order it happened — a backfill replayed newest-first
 // would hand a seat the answer before the question.
+//
+// That claim is about the CHANNEL endpoint and is tested for it alone, which
+// is why [postList.chronological] exists rather than this being reused for
+// the thread read.
 func (l postList) ordered() []Post {
 	out := make([]Post, 0, len(l.Order))
 	for i := len(l.Order) - 1; i >= 0; i-- {
@@ -127,6 +148,34 @@ func (l postList) ordered() []Post {
 			out = append(out, p)
 		}
 	}
+	return out
+}
+
+// chronological returns the posts oldest-first, by their own timestamps.
+//
+// DELIBERATELY NOT [postList.ordered]. That one walks `order` BACKWARDS
+// because the CHANNEL endpoint answers newest-first, and nothing establishes
+// that `/posts/{id}/thread` answers the same way — a different endpoint is a
+// different claim, and reusing the reversal on it would silently invert the
+// conversation and hand a seat the answer before the question, which is the
+// exact failure the helper exists to prevent. Sorting on `create_at` is right
+// whatever either endpoint returns.
+//
+// The POST ID breaks the tie, so two posts written in the same millisecond
+// render in a stable order rather than in a map-iteration one, which would
+// differ between two nodes rendering the same thread.
+//
+// It walks the POSTS rather than `order`: every post in a thread response
+// belongs to that thread, so there is no ordering to honour and nothing to
+// skip.
+func (l postList) chronological() []Post {
+	out := make([]Post, 0, len(l.Posts))
+	for _, p := range l.Posts {
+		out = append(out, p)
+	}
+	slices.SortFunc(out, func(a, b Post) int {
+		return cmp.Or(cmp.Compare(a.CreateAt, b.CreateAt), cmp.Compare(a.ID, b.ID))
+	})
 	return out
 }
 
@@ -152,6 +201,37 @@ func (c *Client) PostsSince(ctx context.Context, channelID string, since time.Ti
 		return nil, err
 	}
 	return out.ordered(), nil
+}
+
+// Thread reads one thread whole, oldest first.
+//
+// THE SECOND READ this per-seat client was written for, and the first that
+// serves a turn rather than a reconnect: the engine hands a seat the thread
+// it was woken in rather than telling it to go and fetch one, which on a
+// company whose chat tools come from an MCP server costs three rounds before
+// the agent has read a word.
+//
+// NO PAGE SIZE. The endpoint's paging is anchored on a post the caller has to
+// name and walks from there, so a bare `perPage` truncates from the OLDEST
+// end — which for a seat woken by the newest message is the least useful
+// slice of a long thread. The whole thread comes back instead and the
+// renderer keeps the root and the newest, which is the slice that was wanted.
+// What bounds this call is the caller's own deadline and the decoder's
+// response limit, not a page number that would cut the wrong end.
+//
+// skipFetchThreads drops the per-post thread membership Mattermost otherwise
+// attaches to every post in the response: it answers "who follows this
+// thread", which this caller does not ask.
+func (c *Client) Thread(ctx context.Context, rootID string) ([]Post, error) {
+	if rootID == "" {
+		return nil, fmt.Errorf("mattermost: a thread read needs a root post id")
+	}
+	path := "/posts/" + url.PathEscape(rootID) + "/thread?skipFetchThreads=true"
+	var out postList
+	if _, err := c.request(ctx, http.MethodGet, path, nil, &out, false); err != nil {
+		return nil, err
+	}
+	return out.chronological(), nil
 }
 
 // Channels lists the channels a user belongs to on a team.

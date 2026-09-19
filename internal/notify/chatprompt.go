@@ -77,10 +77,28 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 
 // RequiresRecon implements [Prompt]: a thread reply is a POINTER.
 //
-// The prompt tells the agent to read the thread before responding, because
-// the triggering message is usually thin — "yes", "+1", "what about the
-// other one" — and the thread is the context. A top-level message or a
-// direct message carries its own body and needs no such trip.
+// The triggering message is usually thin — "yes", "+1", "what about the other
+// one" — and the thread is the context. A top-level message or a direct
+// message carries its own body and is no such pointer.
+//
+// IT STAYS TRUE NOW THAT THE ENGINE HANDS THE THREAD OVER at turn start (see
+// internal/agent/prefetch's thread block), and the two reasons are worth
+// having written down because the opposite reads as the obvious tidy-up.
+//
+// First, this flag describes the trigger BODY, which the thread block does
+// not change. What it gates are the three prefetches that judge relevance
+// against the trigger TEXT — the memory filter, the knowledge query, the
+// episode vector search — and "+1" is exactly as useless a query with the
+// thread in the system prompt as it was without it. Flipping the flag would
+// turn two auxiliary LLM calls back on for every chat thread reply in the
+// company, to search on a string that has not improved.
+//
+// Second, the flag is not only read here. It is stamped at parse time, merged
+// across a coalesced trigger, STORED on every event as
+// types.InboundInteraction.RequiresRecon and reported on prefetch_summary,
+// where the dashboard reads it to say "gated" rather than "broken". Changing
+// what it means for chat would silently rewrite what every past turn in the
+// store claims about itself.
 func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata["thread_ts"] != "" }
 
 // Addressed implements [Prompt] through the same rule the working-status
@@ -322,15 +340,29 @@ func (p ChatPrompt) triage(marker string) string {
 }
 
 // threadBlock is the thread-reply guidance, identical on every backend.
+//
+// IT NO LONGER SENDS THE AGENT TO GO AND READ THE THREAD. That instruction
+// cost three rounds on a company whose chat tools come from a per-role MCP
+// server (list the server's tools, activate one, then call it, with the schema
+// arriving on the next message), and an agent that skipped it answered eleven
+// words of trigger text having no idea what the thread was about. The thread
+// is now in the system prompt, under `## The thread so far` — a DIFFERENT
+// heading from this section's, because this one lands in the user message and
+// two sections with one name saying different things is a model reading
+// whichever it saw last.
+//
+// Everything else here stays: recognising the seat's own replies and not
+// repeating a take it already gave are properties of the CONVERSATION rather
+// than of where the thread came from, and they are what stop a seat answering
+// itself.
 func threadBlock(self string) string {
 	reference := self
 	if reference == "" {
 		reference = "your own account"
 	}
 	return "\n## Thread context" +
-		"\nThis is a thread reply. Read the thread with your chat tools" +
-		" before responding; focus on the triggering message and treat the" +
-		" rest as background." +
+		"\nThis is a thread reply. Focus on the triggering message and" +
+		" treat the rest of the thread as background." +
 		"\n" +
 		"\n**Self-check before replying.** Messages from " + reference +
 		" in this thread are YOUR previous replies." +

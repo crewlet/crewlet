@@ -363,6 +363,7 @@ func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
 		AvailableTools: snapshot.Names(),
 
+		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,
 		RelevantKnowledge:   r.cfg.Context.RelevantKnowledge,
 		EpisodeRecall:       r.cfg.Context.EpisodeRecall,

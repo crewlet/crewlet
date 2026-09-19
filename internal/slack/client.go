@@ -313,3 +313,115 @@ func (c *Client) SetStatus(ctx context.Context, channel, thread, status string) 
 		"channel_id": channel, "thread_ts": thread, "status": status,
 	}, nil)
 }
+
+// repliesPageLimit is how many messages one conversations.replies call asks
+// for.
+//
+// 200 is Slack's own recommended ceiling for the conversations family, and it
+// is what makes the ordinary turn cost exactly ONE request: a thread people
+// actually hold a conversation in is tens of messages, not hundreds.
+const repliesPageLimit = 200
+
+// repliesMaxPages bounds the walk.
+//
+// conversations.replies pages from the OLDEST end and its cursors are opaque,
+// so there is no way to ask for the newest N — the only honest way to reach
+// the end of a long thread is to walk it. Five pages is ~1000 messages, which
+// no real thread reaches, and it bounds the pathological one at five requests
+// inside the caller's own deadline: the method is Tier 3 (~50 requests a
+// minute) and each agent has its own app, so the budget is nowhere near.
+//
+// Beyond the cap the walk stops and reports what it read; the block that
+// renders it keeps the newest of those and says how many it dropped, so the
+// count under-reports rather than the content being silently wrong.
+const repliesMaxPages = 5
+
+// Reply is one message in a thread, as conversations.replies returns it.
+//
+// The SAME message shape the Events API delivers, which is why the content
+// and bookkeeping rules are shared with the parser's rather than restated:
+// see [messageText] and [skipReason].
+type Reply struct {
+	Subtype  string `json:"subtype"`
+	Hidden   bool   `json:"hidden"`
+	User     string `json:"user"`
+	Username string `json:"username"`
+	BotID    string `json:"bot_id"`
+	AppID    string `json:"app_id"`
+	Text     string `json:"text"`
+	TS       string `json:"ts"`
+	Files    []struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	} `json:"files"`
+}
+
+// Skip is why this message is channel bookkeeping rather than something
+// somebody said, or "". The typed half of [SkipReason].
+func (r Reply) Skip() string { return skipReason(r.Hidden, r.Subtype) }
+
+// Body is this message's user-visible content. The typed half of [Text].
+func (r Reply) Body() string {
+	names := make([]string, 0, len(r.Files))
+	for _, f := range r.Files {
+		names = append(names, firstOf(f.Name, f.Title, "unnamed file"))
+	}
+	return messageText(r.Text, names)
+}
+
+// Replies reads a thread, oldest first, starting at its parent.
+//
+// THROUGH callQuery, NEVER call: Slack reads a JSON body for some methods and
+// silently ignores it for the rest, answering `{"ok":true}` with nothing —
+// so a thread read posted as JSON returns an empty thread from a call that
+// reported working, which the block above it renders as "this thread has
+// nothing in it". See [callQuery] for where that was measured.
+//
+// The parameter is `ts`, not `thread_ts`: the argument is the PARENT
+// message's timestamp, and Slack answers `thread_not_found` for a name it
+// does not take.
+//
+// Slack repeats the parent on every page, so the walk dedupes on the message
+// timestamp — otherwise a paged thread renders its own first message once per
+// page.
+func (c *Client) Replies(ctx context.Context, channel, thread string) ([]Reply, error) {
+	if channel == "" || thread == "" {
+		return nil, fmt.Errorf("slack: conversations.replies needs a channel and a thread ts")
+	}
+	var (
+		out    []Reply
+		seen   = map[string]bool{}
+		cursor string
+	)
+	for range repliesMaxPages {
+		params := url.Values{
+			"channel": {channel}, "ts": {thread},
+			"limit": {strconv.Itoa(repliesPageLimit)},
+		}
+		if cursor != "" {
+			params.Set("cursor", cursor)
+		}
+		var page struct {
+			Messages []Reply `json:"messages"`
+			HasMore  bool    `json:"has_more"`
+			Meta     struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := callQuery(ctx, c.http, "conversations.replies", c.token, params, &page); err != nil {
+			return nil, err
+		}
+		for _, msg := range page.Messages {
+			if msg.TS != "" && seen[msg.TS] {
+				continue
+			}
+			seen[msg.TS] = true
+			out = append(out, msg)
+		}
+		cursor = page.Meta.NextCursor
+		if !page.HasMore || cursor == "" {
+			break
+		}
+	}
+	return out, nil
+}

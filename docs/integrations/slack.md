@@ -57,7 +57,7 @@ bot token, which is the reason the handover is a list rather than a sentence.
 
 ## Configure in YAML
 
-`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token` and `signing_secret`, both required together), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
+`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token` and `signing_secret`, both required together), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. The transport both writes and reads on that token: it raises the working indicator, and at the start of a turn woken in a thread it calls `conversations.replies` so the agent is handed the conversation rather than told to go and fetch it (see [the thread block](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)). That needs no new scope — the `*:history` scopes the manifest already requests cover it — and it reads as that app, so a channel the bot is not in answers `not_in_channel` and the turn runs without the block. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
 
 ```yaml
 integrations:
@@ -201,7 +201,7 @@ The single source of truth is `internal/slack` (`BotScopes` / `BotEvents`); the 
 | Scope | Used by |
 |-------|---------|
 | `app_mentions:read` | `app_mention` events (thread-follow trigger) |
-| `channels:history`, `channels:read` | public channels — thread routing + MCP `conversations_history` / `conversations_replies` / `channels_list` |
+| `channels:history`, `channels:read` | public channels — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies` / `channels_list` |
 | `chat:write` | the working indicator (`assistant.threads.setStatus`) + MCP `conversations_add_message` |
 | `files:read` | shared-file notifications |
 | `groups:history`, `groups:read` | private channels — **required**, see the note below |

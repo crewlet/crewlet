@@ -1,6 +1,6 @@
 // Package prefetch renders the context blocks an executor's prompt is built
 // with: what this seat remembers, what its company has written down, what it
-// has done before, and who it is talking to.
+// has done before, who it is talking to, and the chat thread it was woken in.
 package prefetch
 
 import (
@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -94,13 +95,28 @@ type Blocks struct {
 	// OnboardingHint renders only for a seat that has not completed
 	// onboarding for its current org chain.
 	OnboardingHint string
+
+	// ThreadContext is the chat thread this turn was woken in, as it stood
+	// at turn start. Empty for every trigger that is not a chat thread
+	// reply — there is then no thread to be missing.
+	ThreadContext string
+
+	// ThreadContextPosts is how many messages went into that block.
+	//
+	// Carried out for the reason [Blocks.RelevantKnowledgeHits] is: the
+	// block alone cannot say. A thread that could not be read renders
+	// [UnreadableThreadHint], which is non-empty prose, and telemetry
+	// needs the two apart — a seat answering a thread it evidently had not
+	// seen is exactly the case an operator is looking at.
+	ThreadContextPosts int
 }
 
 // Empty reports that nothing was surfaced at all.
 func (b Blocks) Empty() bool {
 	return b.PersonalMemory == "" && b.RelevantKnowledge == "" &&
 		b.EpisodeRecall == "" && b.CounterpartyProfile == "" &&
-		b.SynthesizedSkills == "" && b.OnboardingHint == ""
+		b.SynthesizedSkills == "" && b.OnboardingHint == "" &&
+		b.ThreadContext == ""
 }
 
 // Request is one turn's worth of context to prefetch against.
@@ -134,6 +150,16 @@ type Request struct {
 
 	// TurnID identifies the turn, for the auxiliary calls' telemetry.
 	TurnID string
+
+	// Thread is the chat thread this turn was woken in, when it was woken
+	// in one. The zero value is the ordinary case — a webhook, a scheduled
+	// fire, a top-level chat message — and renders no thread block at all.
+	//
+	// RESOLVED ONCE, by the caller, off the trigger's own metadata. A
+	// second derivation here would be a second answer to a question the
+	// notification layer already answers, free to disagree with the
+	// working indicator and the reply target about which thread this is.
+	Thread notify.Thread
 }
 
 // Models resolves the model a seat's auxiliary work runs on.
@@ -179,6 +205,27 @@ type Onboarding interface {
 	Onboarded(ctx context.Context, agentID, chainHash string) (bool, error)
 }
 
+// Threads reads back the chat thread a turn was woken in.
+//
+// Satisfied by *notify.ThreadReaders, whose fan-out is what keeps a company
+// running two chat surfaces from reading one backend's thread into the
+// other's turn. Best effort like everything here: false means nothing could
+// be read, and the block says so in a different sentence from an empty
+// thread.
+type Threads interface {
+	ReadThread(ctx context.Context, handle string, t notify.Thread) ([]notify.Message, bool)
+}
+
+// Parties resolves a chat sender to a colleague in the org.
+//
+// ONE METHOD, because that is all the thread renderer asks — the interface
+// [notify] declares for a prompt builder carries a second one for the
+// first-party sources, whose actor IS a handle, and nothing here has a handle
+// to look up. Satisfied by *notify.Registry.
+type Parties interface {
+	ByExternalID(transport, externalID string) (notify.Party, bool)
+}
+
 // Sources are the stores the blocks are rendered from.
 //
 // EVERY ONE IS OPTIONAL. A nil source renders an empty block, which is what
@@ -191,6 +238,19 @@ type Sources struct {
 	Counterparties Counterparties
 	Skills         Skills
 	Onboarding     Onboarding
+
+	// Threads reads the chat thread a turn was woken in. Nil renders the
+	// UNREADABLE hint rather than an empty block for a trigger that names
+	// a thread, because a node with no chat transport — one in maintenance
+	// mode, one whose instance was down at boot — is exactly the case a
+	// seat must be told about rather than left to assume the thread was
+	// empty.
+	Threads Threads
+
+	// Parties names a thread's senders. Nil renders every sender as the
+	// raw platform id the backend sent, which is legible but not
+	// recognisable.
+	Parties Parties
 
 	// Models answers the auxiliary calls: the memory relevance filter,
 	// the knowledge query, the episode summary. Nil turns all three off,
@@ -231,8 +291,10 @@ func New(src Sources) *Fetcher { return &Fetcher{src: src, now: time.Now} }
 //
 // IN PARALLEL because they are independent and each is a round trip: run in
 // sequence, a turn's start would cost the sum of an embedding call, three
-// auxiliary completions and two database reads before the executor sees
-// anything. Wall clock here is the slowest one, not the total.
+// auxiliary completions, two database reads and a chat API call before the
+// executor sees anything. Wall clock here is the slowest one, not the total —
+// which is why the chat read carries a deadline of its own rather than the
+// auxiliary calls', see [ThreadTimeout].
 //
 // It never returns an error. Each block reports its own failure into the
 // log and renders empty — see the package comment.
@@ -254,7 +316,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	// Its own goroutine, like the skills block, because it reports a count
 	// alongside its prose.
 	wg.Go(func() {
-		defer recoverKnowledge(&blocks.RelevantKnowledge, &blocks.RelevantKnowledgeHits)
+		defer recoverCounted(&blocks.RelevantKnowledge, &blocks.RelevantKnowledgeHits)
 		blocks.RelevantKnowledge, blocks.RelevantKnowledgeHits = f.relevantKnowledge(ctx, r)
 	})
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
@@ -266,6 +328,12 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
 	})
 	run(&blocks.OnboardingHint, func() string { return f.onboardingHint(ctx, r) })
+	// Its own goroutine too, and for the same reason: it reports a message
+	// count alongside its prose.
+	wg.Go(func() {
+		defer recoverCounted(&blocks.ThreadContext, &blocks.ThreadContextPosts)
+		blocks.ThreadContext, blocks.ThreadContextPosts = f.threadContext(ctx, r)
+	})
 	wg.Wait()
 	return blocks
 }
@@ -285,14 +353,15 @@ func recoverInto(into *string) {
 	}
 }
 
-// recoverKnowledge is [recoverInto] for the knowledge block.
+// recoverCounted is [recoverInto] for a block that reports a count beside its
+// prose — the knowledge search's pages, the thread's messages.
 //
 // The COUNT is cleared with the prose, so a panicked render can never report
-// pages it did not surface.
-func recoverKnowledge(into *string, hits *int) {
+// what it did not surface.
+func recoverCounted(into *string, count *int) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r)
-		*into, *hits = "", 0
+		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
+		*into, *count = "", 0
 	}
 }
 

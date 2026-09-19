@@ -107,9 +107,24 @@ func TestAThreadReplyGetsTheThreadBlock(t *testing.T) {
 	if !strings.Contains(got, "Messages from `@agent-swe` in this thread are YOUR previous replies") {
 		t.Fatalf("the self-check does not name the agent:\n%s", got)
 	}
+	// IT NO LONGER SENDS THE AGENT TO GO AND READ THE THREAD. On a company
+	// whose chat tools come from a per-role MCP server that instruction cost
+	// three rounds before a word was read, and an agent that skipped it
+	// answered eleven words of trigger text with no idea what the thread was
+	// about. The thread is now in the SYSTEM prompt, under its own heading.
+	if strings.Contains(got, "Read the thread with your chat tools") {
+		t.Fatalf("the prompt still tells the agent to go and fetch the thread:\n%s", got)
+	}
 	if !strings.Contains(got, "**Thread:** root-1 (existing thread)") {
 		t.Fatalf("the thread pointer is wrong:\n%s", got)
 	}
+	// THE RECON FLAG STAYS TRUE, and the engine handing the thread over does
+	// not change it. It describes the trigger BODY, and "+1" is exactly as
+	// useless a search query with the thread in the system prompt as it was
+	// without — so flipping it would turn two auxiliary LLM calls back on for
+	// every chat thread reply in the company. It is also stored on every past
+	// event and read by the dashboard, so its meaning cannot be changed
+	// retroactively.
 	if !chatPrompt.RequiresRecon(reply) {
 		t.Fatal("a thread reply does not ask for recon")
 	}

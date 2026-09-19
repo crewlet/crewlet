@@ -177,6 +177,23 @@ func (t *Transport) Apps() map[string]string {
 	return out
 }
 
+// Client exposes a seat's authenticated app client, keyed by handle.
+//
+// ONE PER SEAT and never shared: a Slack app has one bot user and one token,
+// so every call here is made AS that agent and the workspace attributes it to
+// them. Exported for the same reason the self-hosted backend's is — the two
+// transports must not disagree about whether a seat's client is reachable,
+// and this one was reachable only through the unexported status path.
+//
+// A seat whose token was refused at boot is not here at all; see
+// [Transport.Start] for why it is dropped rather than run half-configured.
+func (t *Transport) Client(handle string) (*Client, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s, ok := t.seats[handle]
+	return s.client, ok
+}
+
 // lookup implements [Seats].
 func (t *Transport) lookup(handle string) (Seat, bool) {
 	t.mu.Lock()
@@ -311,6 +328,68 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 	for _, seat := range seats {
 		t.register(seat)
 	}
+}
+
+// ThreadBackend implements [notify.ThreadReader].
+func (t *Transport) ThreadBackend() string { return Backend }
+
+// ReadThread implements [notify.ThreadReader].
+//
+// It reads as the SEAT, on that app's own bot token and its own history
+// scopes, so the block matches what this agent can actually see: a channel
+// the app is not in answers `not_in_channel` and the turn gets the unreadable
+// hint rather than somebody else's conversation.
+//
+// A seat this node has no client for reports false rather than dereferencing
+// one. A token refused at boot leaves the seat out of the map deliberately,
+// and a maintenance-mode node runs no chat transport at all — both ordinary,
+// and both must render "the thread could not be read" rather than panicking a
+// turn.
+func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) ([]notify.Message, bool) {
+	t.mu.Lock()
+	s, ok := t.seats[handle]
+	t.mu.Unlock()
+	if !ok || s.client == nil {
+		return nil, false
+	}
+	replies, err := s.client.Replies(ctx, channel, root)
+	if err != nil {
+		// DEBUG, like the indicator's: a refusal here costs the block and
+		// nothing else, the turn runs on the unreadable hint, and a
+		// workspace missing a history scope would otherwise log a warning
+		// on every chat turn of every seat.
+		log.DebugContext(ctx, "slack_thread_unreadable", "handle", handle,
+			"channel", channel, "thread", root, "error", err.Error())
+		return nil, false
+	}
+	out := make([]notify.Message, 0, len(replies))
+	for _, reply := range replies {
+		if reply.Skip() != "" {
+			continue
+		}
+		body := reply.Body()
+		if body == "" {
+			continue
+		}
+		out = append(out, notify.Message{
+			// THE SAME FALLBACK CHAIN [Sender] applies, split
+			// across the two fields: a human and a bot USER carry
+			// `user`, while a legacy bot_message — an incoming
+			// webhook, a workflow bot — carries `username` and
+			// `bot_id` instead. Either way the sender is never
+			// blank, and an unattributed line in a thread reads as
+			// the previous speaker continuing.
+			SenderID:   firstOf(reply.User, reply.BotID),
+			SenderName: reply.Username,
+			Text:       body,
+			// BOTH IDS. A bot_message echo of this seat's own post
+			// carries the app id and no user id at all, so a check
+			// on the user id alone would present the agent's own
+			// replies back to it as a colleague's.
+			Own: s.seat.Owns(reply.User, reply.AppID),
+		})
+	}
+	return out, true
 }
 
 // StatusBackend implements [notify.StatusPoster].

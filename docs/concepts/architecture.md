@@ -448,11 +448,11 @@ plan in one conversation and act in another; the actor lost everything the
 planner had read, and the planner had to name its tools in advance against a
 catalogue it was never shown. The executor decides and acts in one place, so it
 carries the whole picture — identity, policies, the team roster, and the
-**turn-start prefetch**. That prefetch is six blocks rendered concurrently
-*before the turn starts*: personal memory, relevant knowledge, similar prior
-work, known counterparty, synthesized skills, first-turn onboarding. The
-reviewer's question is narrower and its prompt is smaller: is this round's work
-right, given the record. A frontier model can do the work while a cheap one
+**turn-start prefetch**. That prefetch is seven blocks rendered concurrently
+*before the turn starts*: the chat thread the turn was woken in, personal
+memory, relevant knowledge, similar prior work, known counterparty, synthesized
+skills, first-turn onboarding. The reviewer's question is narrower and its
+prompt is smaller: is this round's work right, given the record. A frontier model can do the work while a cheap one
 reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would

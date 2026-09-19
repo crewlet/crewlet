@@ -761,7 +761,7 @@ func TestAPanicWhileRequeuingADegradedTailKeepsNoClaimOnIt(t *testing.T) {
 
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 	// Publishes the first copy, then dies — the shape [Engine.park]'s own
 	// loop has, one Publish per event.
 	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
@@ -801,7 +801,7 @@ func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 
 	if got := d.Dispatch(ctx, "ceo", []*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("outcome = %v, want an ACK", got.Outcome)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -183,6 +184,10 @@ type buildOpts struct {
 	// can put arbitrary text into — so a case about how the prompt is
 	// MEASURED can make it carry multi-byte runes.
 	task string
+
+	// context is the turn's frozen prefetch, for the cases about what
+	// reaches a prompt rather than what a phase decides.
+	context prefetch.Blocks
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -254,6 +259,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Registry:  reg,
 		Models:    models,
 		Caps:      runner.Caps{ExecutorRounds: 6},
+		Context:   opts.context,
 		Task:      task,
 		Reply:     waiting,
 		AgentRun:  opts.agentRun,

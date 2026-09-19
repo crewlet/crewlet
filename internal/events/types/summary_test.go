@@ -100,11 +100,30 @@ func TestSummaries(t *testing.T) {
 	}, {
 		name:    "a prefetch summary counts its blocks",
 		payload: PrefetchSummary{RoleName: "Dev", CounterpartyHit: true, PersonalMemoryHit: true},
-		want:    "Dev prefetch: 2/6 hits",
+		want:    "Dev prefetch: 2/7 hits",
+	}, {
+		// THE DENOMINATOR IS THE NUMBER OF BLOCKS, and it was a literal
+		// beside a hand-written list with nothing holding the two
+		// together. A count that goes on saying six after a seventh block
+		// lands reads to an operator as a turn that hit everything — or,
+		// on a turn that hit all seven, as "7/6".
+		name: "every block hit counts, and the denominator follows",
+		payload: PrefetchSummary{RoleName: "Dev",
+			CounterpartyHit: true, SynthesizedSkillsHit: true, EpisodeRecallHit: true,
+			OnboardingHintHit: true, PersonalMemoryHit: true, RelevantKnowledgeHit: true,
+			ThreadContextHit: true},
+		want: "Dev prefetch: 7/7 hits",
 	}, {
 		name:    "a gated prefetch says it was gated",
 		payload: PrefetchSummary{RoleName: "Dev", TriggerRequiresRecon: true},
-		want:    "Dev prefetch: 0/6 hits (thin trigger — filters gated)",
+		want:    "Dev prefetch: 0/7 hits (thin trigger — filters gated)",
+	}, {
+		// THE THREAD BLOCK IS NOT GATED: it is what makes a thin trigger
+		// thick, so a turn whose filters were all skipped still counts it.
+		name: "a gated turn still counts the thread it was handed",
+		payload: PrefetchSummary{RoleName: "Dev",
+			TriggerRequiresRecon: true, ThreadContextHit: true},
+		want: "Dev prefetch: 1/7 hits (thin trigger — filters gated)",
 	}, {
 		name:    "a no-op persist decision",
 		payload: PersistDeciderCompleted{RoleName: "Dev", Classification: PersistNOOP},

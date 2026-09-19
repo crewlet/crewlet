@@ -45,6 +45,8 @@ skips all three aux-LLM prefetches on exactly those turns — the ones that
 continue an existing conversation. The session block is deterministic (no
 embedding, no aux LLM), so it renders there regardless.
 
+**It is not the same thing as [the thread block](agent-runtime.md#the-thread-a-turn-was-woken-in), and neither replaces the other.** `## The thread so far` is what *everyone* said on the chat surface, read back live from the vendor. A conversation session is what *this seat* said and did, across turns, recorded by the engine — the plan, the tool calls, the reply and the reviewer's verdict, none of which is visible in a chat thread. A seat reading only the thread cannot tell which of its own replies it has already reasoned through; a seat reading only the ledger does not know what the other five people in the thread have said since. Chat is also only one surface: a Jira comment, a GitHub review and a scheduled fire all have a conversation session and no thread to read.
+
 **Not a second, invisible memory.** The [`cli-agent` workspace](subscription-llm-backends.md)
 deletes a coding CLI's own sessions before and after every call, precisely so
 that one task's context cannot leak into the next through a channel nobody can

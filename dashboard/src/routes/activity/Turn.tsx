@@ -845,7 +845,7 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
 }
 
 /**
- * What went INTO the prompt, from both directions: the six context blocks the
+ * What went INTO the prompt, from both directions: the seven context blocks the
  * executor's prompt was assembled from, and what each phase's prompt then came
  * to. Two halves of one question — whether a heavy prompt is heavy because of
  * what was prefetched or in spite of it — and either alone leaves it open.

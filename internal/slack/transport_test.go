@@ -30,18 +30,22 @@ type workspace struct {
 	// one that never hit it.
 	refuseOnce map[string]string
 	replies    map[string]string
+	// paged serves one canned answer per call to a method, in order, and
+	// falls through to replies once it runs out. A cursor walk is the one
+	// shape a single canned body cannot express.
+	paged map[string][]string
 }
 
 // queryMethods are the Slack methods that read their parameters from the
 // query string and ignore a JSON body, answering ok with nothing when one is
 // posted instead. See [callQuery].
-var queryMethods = map[string]bool{"bots.info": true}
+var queryMethods = map[string]bool{"bots.info": true, "conversations.replies": true}
 
 func newWorkspace(t *testing.T) *workspace {
 	t.Helper()
 	w := &workspace{
 		refuse: map[string]string{}, refuseOnce: map[string]string{},
-		replies: map[string]string{},
+		replies: map[string]string{}, paged: map[string][]string{},
 	}
 	w.Server = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		method := strings.TrimPrefix(req.URL.Path, "/api/")
@@ -79,6 +83,10 @@ func newWorkspace(t *testing.T) *workspace {
 			delete(w.refuseOnce, method)
 		}
 		reply, canned := w.replies[method]
+		if pages := w.paged[method]; len(pages) > 0 {
+			reply, canned = pages[0], true
+			w.paged[method] = pages[1:]
+		}
 		w.mu.Unlock()
 
 		rw.Header().Set("Content-Type", "application/json")
@@ -321,5 +329,106 @@ func TestASeatWhoseAppIsUnknownStillRuns(t *testing.T) {
 	}
 	if got := tr.Apps(); len(got) != 0 {
 		t.Errorf("Apps() = %v, want no claim about an app nothing could name", got)
+	}
+}
+
+// THE THREAD IS READ AS THE SEAT, on that app's own bot token, and the seat's
+// own replies come back MARKED — by EITHER id, because a bot_message echo of
+// its own post carries the app id and no user id at all.
+func TestASeatsThreadComesBackMarkedWithItsOwnReplies(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `","bot_id":"B0SWE"}`
+	ws.replies["bots.info"] = `{"ok":true,"bot":{"app_id":"` + botApp + `"}}`
+	ws.replies["conversations.replies"] = `{"ok":true,"messages":[
+		{"ts":"1.1","user":"` + human + `","text":"staging redirects in a loop"},
+		{"ts":"1.2","user":"` + botUser + `","text":"on it"},
+		{"ts":"1.3","subtype":"bot_message","app_id":"` + botApp + `","username":"agent-swe","text":"fixed in 4.2.4"},
+		{"ts":"1.4","subtype":"channel_join","user":"` + human + `","text":"ana joined"},
+		{"ts":"1.5","user":"` + colleague + `","text":"nice"}]}`
+
+	tr := transport(t, ws, nil)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var _ notify.ThreadReader = tr
+	if tr.ThreadBackend() != slack.Backend {
+		t.Fatalf("ThreadBackend = %q", tr.ThreadBackend())
+	}
+
+	got, ok := tr.ReadThread(context.Background(), "swe", "C0ENG", "1.1")
+	if !ok {
+		t.Fatal("a running seat could not read its own thread")
+	}
+	// The join line is gone: it wakes nobody, so it belongs in a thread
+	// rendered for a seat no more than it belongs in a notification.
+	if len(got) != 4 {
+		t.Fatalf("the thread came back as %+v", got)
+	}
+	for i, want := range []struct {
+		text string
+		own  bool
+	}{
+		{"staging redirects in a loop", false},
+		{"on it", true},
+		// THE APP ID ALONE. Marked by the bot user id only, this one
+		// would read as a colleague's — and the agent would answer its
+		// own reply.
+		{"fixed in 4.2.4", true},
+		{"nice", false},
+	} {
+		if got[i].Text != want.text || got[i].Own != want.own {
+			t.Errorf("message %d came back as %+v, want %+v", i, got[i], want)
+		}
+	}
+	// The username a legacy bot message carries is kept, so a sender the
+	// registry cannot resolve still renders as a name.
+	if got[2].SenderName != "agent-swe" {
+		t.Errorf("the bot message lost its username: %+v", got[2])
+	}
+}
+
+// A SEAT'S CLIENT IS REACHABLE BY HANDLE, and a seat whose token was refused
+// has none to reach — so a thread read for it reports not-found rather than
+// dereferencing a nil client.
+func TestARefusedSeatHasNoClientAndNoThread(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `"}`
+
+	tr := transport(t, ws, func(o *slack.TransportOptions) {
+		o.Config.Seats = append(o.Config.Seats, slack.SeatConfig{Handle: "pm", Token: ""})
+	})
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tr.Client("swe"); !ok {
+		t.Fatal("a running seat has no reachable client")
+	}
+	if client, ok := tr.Client("pm"); ok || client != nil {
+		t.Fatalf("a seat with no usable token has a client: %v", client)
+	}
+	if _, ok := tr.ReadThread(context.Background(), "pm", "C0ENG", "1.1"); ok {
+		t.Fatal("a thread was read for a seat with no client")
+	}
+	if _, ok := tr.ReadThread(context.Background(), "nobody", "C0ENG", "1.1"); ok {
+		t.Fatal("a thread was read for a seat this node does not run")
+	}
+}
+
+// A WORKSPACE THAT REFUSES THE READ — a missing history scope, a channel the
+// app is not in — is reported as unreadable, never as an empty thread.
+func TestARefusedWorkspaceReadIsNotAnEmptyThread(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `"}`
+	ws.refuse["conversations.replies"] = "missing_scope"
+
+	tr := transport(t, ws, nil)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := tr.ReadThread(context.Background(), "swe", "C0ENG", "1.1"); ok {
+		t.Fatalf("a refused read reported success: %+v", got)
 	}
 }
