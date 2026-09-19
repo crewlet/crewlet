@@ -442,20 +442,52 @@ function wokeBy(view: TurnView): string {
 }
 
 /**
+ * The LEAD SENTENCE of a piece of prose, which is the most a title may take.
+ *
+ * A heading is a name, and a name is one clause long. What arrives here is not
+ * a name: `plan_summary` is the reviewer's own account of the turn, written by
+ * a model against the engine's call ledger, and a model asked to account for
+ * four tool calls routinely writes four sentences. Measured on a real turn,
+ * the header read "Founder posted a test message in Mattermost. Since the task
+ * was delivered directly, I need to reply in the thread rather than staying
+ * silent. Activating mattermost_post_message to reply to founder's test
+ * message Replying to founder's test message to confirm Mattermost
+ * integration works" — 280 characters set at `--fs-xl` semibold, three lines
+ * deep, pushing the facts under it off a laptop's first screen. The turns
+ * list, the peek rail and the feed card head with the same string.
+ *
+ * THE REST IS NOT DROPPED. [TurnBrief] prints the whole summary whenever this
+ * took less than all of it, so the lead is an entry point rather than a cut.
+ *
+ * A BOUNDARY IS A STOP FOLLOWED BY A SPACE, which is what keeps `1m 52s`,
+ * `v1.2` and `mattermost_post_message` whole — a bare `.` split every one of
+ * them. Prose with no boundary at all is returned as it stands: a summary that
+ * is one long sentence is still one sentence, and the two-line clamp on
+ * `.object-title` is what bounds that case, because a cut mid-clause reads as
+ * a broken string rather than as a short title.
+ */
+export function lead(prose: string): string {
+  const at = /[.?!]\s/.exec(prose);
+  return at ? prose.slice(0, at.index + 1) : prose;
+}
+
+/**
  * What to call one turn.
  *
  * A TURN HAS NO NAME, so the title is the nearest thing it has to one: the
- * plan summary the executor or the reviewer wrote about what this turn was
- * for. That is also what the turns list puts in its "What it did" column —
- * `Turn.Summary` at the store IS `plan_summary` — so a reader who opened a
- * rail from a row is headed by the sentence they clicked on.
+ * LEAD of the plan summary the executor or the reviewer wrote about what this
+ * turn was for. That is also what the turns list puts in its "What it did"
+ * column — `Turn.Summary` at the store IS `plan_summary` — so a reader who
+ * opened a rail from a row is headed by the sentence they clicked on.
  *
  * It falls back to what WOKE the turn, because a turn that has not finished
- * has no plan summary yet and "Turn" over a turn is the eyebrow twice. The
- * panel below drops whichever sentence the title took — see [TurnBrief].
+ * has no plan summary yet and "Turn" over a turn is the eyebrow twice. That
+ * fallback is led too: a vendor summariser's sentence is no more bounded than
+ * a model's. The panel below drops whichever sentence the title took, and
+ * prints what the lead left behind — see [TurnBrief].
  */
 export function turnTitle(view: TurnView): string {
-  return str(view.rec.learning, "plan_summary") || wokeBy(view) || "Turn";
+  return lead(str(view.rec.learning, "plan_summary") || wokeBy(view)) || "Turn";
 }
 
 /**
@@ -578,21 +610,32 @@ function turnStatus(view: TurnView): ReactNode {
  * way to learn it was to read the raw `trigger` object out of the JSON dump at
  * the bottom of the page.
  *
- * WHAT IT SET OUT TO DO IS THE TITLE NOW. `plan_summary` used to be the second
- * half of this panel, under "It set out to"; it is the nearest thing a turn
- * has to a name, so it heads the page, the rail and the row in the turns list,
- * and repeating it directly under that header was one sentence twice in the
- * space of two lines. The same guard covers the fallback: where a turn has no
- * plan summary the title takes THIS sentence, and the prose here is dropped
- * rather than printed again — while the source and the way out to the trigger
- * stay, because they are the half a title cannot carry.
+ * WHAT IT SET OUT TO DO IS THE TITLE'S LEAD, AND THE REST IS HERE.
+ * `plan_summary` used to be the second half of this panel, under "It set out
+ * to"; it is the nearest thing a turn has to a name, so it heads the page, the
+ * rail and the row in the turns list, and repeating it whole directly under
+ * that header was one sentence twice in the space of two lines. That is still
+ * true of the sentence the title TOOK — and not of the ones it did not, which
+ * had nowhere else on this screen to be. So the summary comes back the moment
+ * `lead` left something behind, and stays away when it did not.
+ *
+ * The same guard covers the trigger: where a turn has no plan summary the
+ * title takes THIS sentence, and the prose here is dropped rather than printed
+ * again — while the source and the way out to the trigger stay, because they
+ * are the half a title cannot carry.
  */
 function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
   const trigger = view.trigger;
   const woke = wokeBy(view);
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
   const repeated = woke !== "" && woke === omit;
-  if (!woke || (repeated && !trigger?.integration && !triggerId)) return null;
+  // What the title could not take. Compared against the WHOLE summary rather
+  // than recomputing the lead, so the two can never disagree about where the
+  // sentence ended.
+  const summary = str(view.rec.learning, "plan_summary");
+  const rest = summary !== "" && summary !== omit ? summary : "";
+  if (!woke && !rest) return null;
+  if (!rest && repeated && !trigger?.integration && !triggerId) return null;
   return (
     <Card>
       <div className="col gap-1">
@@ -622,7 +665,13 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
             prose sat in a narrow band with the rest of the panel empty
             beside it — the shape for a metadata list, and these are
             sentences. */}
-        {!repeated && <p className="t-body measure">{woke}</p>}
+        {!repeated && woke !== "" && <p className="t-body measure">{woke}</p>}
+        {rest !== "" && (
+          <>
+            <span className="t-label">It set out to</span>
+            <p className="t-body measure">{rest}</p>
+          </>
+        )}
       </div>
     </Card>
   );

@@ -134,7 +134,21 @@ export function ObjectHeader({
         {identifier && <span className="mono object-id">{identifier}</span>}
       </div>
       <div className="row">
-        <h1 className="object-title">{title}</h1>
+        {/* TWO LINES, AND THAT IS THE CEILING. Every other object in the
+            product heads itself with a NAME — a seat, a work key, a node id, a
+            page title — and a turn has none, so `routes/activity/Turn.tsx`
+            heads it with the lead sentence of the reviewer's own prose.
+            `lead` bounds the ordinary case; this bounds the one it
+            deliberately does not, a summary written as a single unpunctuated
+            clause, which no sentence rule can shorten and which set three
+            lines of `--fs-xl` semibold above the facts, pushing them off a
+            laptop's first screen.
+
+            `.clamp` rather than `.truncate`: one line cuts most real titles,
+            which run a little over, and two hold them and catch only the
+            paragraph. Two is the clamp's own default, so nothing here sets a
+            count. */}
+        <h1 className="object-title clamp">{title}</h1>
         {status}
         <span className="spacer" />
         {actions && <div className="row gap-1 wrap">{actions}</div>}
