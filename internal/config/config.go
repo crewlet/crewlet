@@ -17,7 +17,7 @@
 // The split is not cosmetic. Tier A is the root of trust: it holds the
 // address of the secret store and the keys that decrypt it, so it can never
 // read a value out of that store (see [Resolver] and the use of
-// [EnvOnly] on the Tier A load path). Tier B is the opposite — its secrets
+// [EnvOnly] on the Tier A load path). That is ADR-0011. Tier B is the opposite — its secrets
 // are ${VAR} POINTERS, stored verbatim, resolved only at the moment a
 // provider or transport is constructed, so a revision exported from the
 // store or shown in the dashboard carries no credential.

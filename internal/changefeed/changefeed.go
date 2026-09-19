@@ -4,9 +4,11 @@
 //
 // A wake is derived from a DURABLE, NEVER-COMPACTED record by something that
 // outlives the writer — never published by the writer's own goroutine as a
-// courtesy. The engine has both failure modes already: the Mattermost socket
-// path swallows a failed publish, and the webhook path is safe only because
-// the vendor retries. A native write has no vendor to retry it, so the
+// courtesy. That sentence is ADR-0012.
+//
+// The engine has both failure modes already: the Mattermost socket path
+// swallows a failed publish, and the webhook path is safe only because the
+// vendor retries. A native write has no vendor to retry it, so the
 // durable record is the retry: the record is committed, and a fleet-wide
 // consumer over it is what eventually reaches a seat. A node that dies
 // between the write and the publish costs a redelivery, not a lost wake.

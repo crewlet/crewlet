@@ -110,3 +110,9 @@ six false statements by the time anybody checked.
 | [0008](0008-a-shared-rule-gets-one-implementation.md) | A rule more than one package needs gets exactly one implementation | `TestNoClientSitsOnTheProcessGlobalPool` and its siblings |
 | [0009](0009-one-activation-pointer-applied-per-node.md) | Which revision is current is fleet-wide; applying it is per node | nothing — declared |
 | [0010](0010-tracing-is-configured-by-the-standard-otel-environment.md) | Tracing is configured by the standard OTel environment, not by Tier A | nothing — declared |
+| [0011](0011-tier-a-is-the-root-of-trust.md) | Tier A resolves from the environment and nothing else | `TestTierAIsNeverResolvedFromTheSecretStore` |
+| [0012](0012-a-wake-is-derived-not-published.md) | A wake is derived from a durable record, never published by the writer | `TestAnUnreachableClaimStorePublishesAnyway` |
+| [0013](0013-a-seats-identity-is-derived.md) | A seat's identity is derived, never looked up | `TestDeriveAgentIDIsStable` |
+| [0014](0014-a-compacted-changelog-is-the-fourth-answer.md) | A compacted changelog is the fourth answer to "who has to agree on it?" | `TestASeatsMemoryCrossesToANodeThatHasNeverRunIt` |
+| [0015](0015-an-alarm-borrows-its-threshold.md) | An alarm fires at a threshold another decision already made | `TestTheBackupAlarmFiresAtTheAgeThePolicyNames` |
+| [0016](0016-a-protocol-bump-refuses-where-an-envelope-round-trips.md) | A coordination protocol bump refuses where an event envelope round-trips | nothing — declared |

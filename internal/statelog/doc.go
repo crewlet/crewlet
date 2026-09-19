@@ -165,4 +165,15 @@
 // The deferral probe, the per-tick floor check and the per-write fence are
 // therefore LOAD-BEARING rather than defensive. None may be optimised away as
 // a rare case.
+//
+// # The alarm table borrows every threshold it fires at
+//
+// It is in this package rather than beside any one subsystem because an alarm
+// is the framework's answer to "is this node doing its job", and everything
+// above it asks the same question. The rule is ADR-0015 and alarms.go is where
+// it is carried out: an alarm never invents a number, it fires at the one some
+// OTHER decision already made — the grace that sheds a node, the grace that
+// moves its seats, the budget a caller was promised — and ONE evaluation feeds
+// every surface, so a gauge, a log line and a screen cannot disagree about
+// whether something is wrong.
 package statelog

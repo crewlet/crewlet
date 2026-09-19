@@ -8,7 +8,8 @@
 //
 // # Seat identity is DERIVED, never looked up
 //
-// An agent seat's runtime id is a UUIDv5 over (org name, handle), so every
+// That is ADR-0013, and the paragraph below is why rather than a restatement
+// of it. An agent seat's runtime id is a UUIDv5 over (org name, handle), so every
 // node computes the same id for the same seat with no database and no
 // running instance. That is what lets a node route an event to a seat it is
 // not itself running — which matters because each engine event topic has one

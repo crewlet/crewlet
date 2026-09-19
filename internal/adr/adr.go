@@ -92,6 +92,17 @@ var Unenforced = []Exemption{
 			"delivery mechanism the decision rejected.",
 	},
 	{
+		ID: "ADR-0016",
+		Why: "The rule is about WHEN a constant is raised, not about any shape " +
+			"in the source: ProtocolVersion is one integer, every comparison " +
+			"against it is already covered by internal/coord's suite, and what " +
+			"a gate would have to judge is whether a change to the MEANING of " +
+			"holding a lease came with a bump — which is a reading of the rest " +
+			"of the diff. The nearest static formulation, that the constant " +
+			"moves whenever a lease payload's fields change, asserts the " +
+			"opposite of the decision: a field is explicitly not a bump.",
+	},
+	{
 		ID: "ADR-0010",
 		Why: "The engine's exporter and the sandbox forwarder agree because " +
 			"they read the same standard environment variables directly, " +

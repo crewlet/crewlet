@@ -4,6 +4,7 @@ package statelog
 // subsystem because an alarm is the framework's answer to "is this node doing
 // its job", and every subsystem above it asks the same question.
 //
+
 // The package's own doc is in doc.go and is NOT restated here. It was, and
 // `go doc` concatenates every package comment in file order — so this file's
 // copy, sorting first, told a reader that the ordered stream is "the
