@@ -684,11 +684,23 @@ type ConversationRef struct {
 // conversation however it is threaded, which is exactly what the identity
 // says, so matching on it is what makes the answer arrive at all.
 //
+// THE WIDENING IS THE REPAIR, and the biggest part of it is the case read
+// from the other end: a run parked from a THREAD on a direct message holds
+// the bare channel as its identity, so a TOP-LEVEL reply on that line now
+// answers it where before only a reply in that same thread could. A DM is one
+// line, and a person answering the question they were asked on it does not
+// owe the engine a thread — so both directions of the miss close together,
+// and stating only the headline one hides the half that changes which
+// deliveries reach a parked run at all.
+//
 // It widens nothing elsewhere: a partition key is always its identity or a
 // finer cut of it, so on every other source the two coincide and this is the
-// same match it always was. Where it does widen — a DM line carrying more
-// than one parked question — admitting is not choosing: [ConversationRef.Best]
-// picks between what this admits, on the partition first and recency second.
+// same match it always was.
+//
+// WIDER ALSO MEANS SEVERAL ROWS CAN BE ADMITTED — every run parked on one DM
+// line is, so a line carrying more than one parked question admits them all
+// — and admitting is not choosing: [ConversationRef.Best] picks between what
+// this admits, on the partition first and recency second.
 //
 // A ROW WITH NO IDENTITY IS A ROW FROM BEFORE THE SPLIT, and it degrades to
 // today's behaviour rather than to a run nobody can answer: its one value is
@@ -699,6 +711,21 @@ type ConversationRef struct {
 // identity, so reading it that way is what repairs the rows already stranded
 // by the defect. Nothing rewrites a parked run and one waits for a person, so
 // this row shape outlives any upgrade window.
+//
+// A DELIVERY WITH NO IDENTITY IS AN EVENT FROM BEFORE THE SPLIT, which is the
+// third peer direction and the one neither field's doc covers: a wake
+// published by a peer that predates it carries only the partition, so
+// [notify.ConversationIdentityOf] falls back to that value and this ref
+// arrives with its two fields holding the same string. Both clauses then
+// collapse onto the partition — equality against a pre-split row, and against
+// a row this build wrote, a match only when the delivery arrived in the very
+// batch the run was launched from. So such a delivery degrades to exactly the
+// match the build that published it would have made: never wider, and never
+// narrower. It cannot do better, because that build derived no identity for
+// anyone to read; and the fallback is what stops it doing worse, since
+// reading the absence as "no conversation" would refuse every one of those
+// answers and leave the box waiting out its pause TTL with the reply sitting
+// in the seat's inbox.
 //
 // AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
 // tick or an A2A wake stored no conversation, and a wake that could not name

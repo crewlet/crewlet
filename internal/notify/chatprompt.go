@@ -176,11 +176,25 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 // the conversation, and the partition is already thread-grained, so the two
 // coincide and the invariant holds trivially.
 //
-// THE ANCHOR IS THE SAME ONE [ConversationOf] resolves for the working
-// indicator and the same ts [ChatPrompt.Build] prints as "reply as a thread".
-// Three derivations of one anchor that agree only by inspection is how the
-// spinner a person is watching, the thread the reply lands in and the ledger
-// the seat reads would come to name three different threads.
+// WHERE AN ANCHOR IS USED AT ALL — the non-direct branch, which is
+// [ChatPrompt.PartitionKey] — IT IS THE SAME ONE: thread_ts falling back to
+// the message's own ts, which is what [ConversationOf] resolves for the
+// working indicator and what [ChatPrompt.Build] prints as the thread to
+// "reply as a thread" in. Three derivations of one anchor that agree only by
+// inspection is how the spinner a person is watching, the thread the reply
+// lands in and the ledger the seat reads come to name three different
+// threads.
+//
+// THE DIRECT BRANCH USES NO ANCHOR, deliberately, and that is not a fourth
+// derivation drifting from the other three — it is the answer to a different
+// question. The indicator and the reply target are about ONE MESSAGE: which
+// thread to raise a spinner in, which thread to post into. Both are still the
+// anchor on a direct message, and still that one. The identity is about the
+// LINE the message is on, and on a direct message the line is the channel. So
+// here the three must NOT agree: an identity carrying the anchor would give
+// one top-level DM partition as many identities as it has constituents, and
+// would file the seat's own history under a thread its next turn never looks
+// up — which is the failure this branch exists to remove.
 func (p ChatPrompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	channel := metadata["channel"]
 	if channel == "" {

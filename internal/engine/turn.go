@@ -189,10 +189,24 @@ type Request struct {
 	// The identity, never the inbox partition key beside it: this field is
 	// what reaches the conversation ledger, the turn telemetry that becomes
 	// the event store's conversation_key tag and the episodes column, and
-	// the row a detached coding run reports back through. The partition key
-	// is read straight off the events where the three readers that want it
-	// are (see [partitionKeyOf]), because nothing above the dispatch has a
-	// use for it.
+	// the row a detached coding run reports back through.
+	//
+	// THE PARTITION KEY IS NOT A FIELD HERE. It is read straight off the
+	// events at each of the four places that want it (see [partitionKeyOf])
+	// — the coalescing record, whose whole subject is the batch that
+	// merged; the turn telemetry, which carries it onto a detached run's
+	// row so two runs parked on one direct message can be told apart; the
+	// answer match, which uses it to DISAMBIGUATE between the rows the
+	// identity admitted; and the digest's own stamp, which puts both keys
+	// back on the merged envelope — plus the line logged when a partition
+	// cannot be merged. Nothing above the dispatch has a use for it.
+	//
+	// That list was three readers, and the one that left is the parked
+	// run's answer match: it wanted the partition ALONE and now wants the
+	// identity, because a person answers on the conversation. The engine's
+	// own prompt tells a seat replying to a top-level direct message to
+	// reply as a thread, so their answer arrives in a finer partition than
+	// the question parked under and the two strings never met.
 	ConversationKey string
 
 	// Depth is the delegation depth this turn inherited: zero for a turn a

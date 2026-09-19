@@ -1985,9 +1985,11 @@ func TestAParkedQuestionIsAnnounced(t *testing.T) {
 	if found.Question != "which branch?" || found.Audience != "team" {
 		t.Fatalf("announcement = %+v", found)
 	}
-	// THE ANNOUNCEMENT NAMES THE CONVERSATION, not the partition the answer
-	// will be matched on: this event is read for display, and the durable
-	// thread is what a person means by the run's conversation.
+	// THE ANNOUNCEMENT NAMES THE CONVERSATION — the same value the answer
+	// is matched on, and the same one the resume reports back through.
+	// This event is read for display, and the durable thread is what a
+	// person reading the feed means by the run's conversation; the
+	// partition it was launched from is the row's business, not theirs.
 	if found.ConversationKey != "chat:D1" {
 		t.Fatalf("the announcement names %q, want the conversation the run reports to",
 			found.ConversationKey)

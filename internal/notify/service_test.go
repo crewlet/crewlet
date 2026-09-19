@@ -266,7 +266,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 // The regression this exists for, and why the assertion above was not enough:
 // the key was written ONLY into the notification's Metadata map, which travels
 // inside the typed payload. The inbox partitions on the ENVELOPE's own bag —
-// node.conversationKey and notify.KeyOf both read ev.Payload — so every wake
+// node.partitionKey and notify.KeyOf both read ev.Payload — so every wake
 // fell back to a key of its own event id, every partition was a singleton, and
 // ten comments on one thread woke a seat ten times and ran ten turns instead
 // of the one digest turn the design describes. Both copies are load-bearing:

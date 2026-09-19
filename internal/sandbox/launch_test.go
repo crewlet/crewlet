@@ -14,9 +14,10 @@ func launchReq(turnID string) LaunchRequest {
 	return LaunchRequest{
 		Turn: TurnRef{
 			TurnID: turnID, AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
-			// A DIRECT MESSAGE, where the partition key the answer is
-			// matched on and the conversation the resume reports to are
-			// different values. Equal ones here would let a launch that
+			// A DIRECT MESSAGE, the one shape where the two keys differ:
+			// the conversation an answer is matched on is the bare
+			// channel, while the partition the kick-off arrived in is a
+			// thread inside it. Equal ones here would let a launch that
 			// copied one field onto both look correct.
 			PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
 			Reply:   "tool",

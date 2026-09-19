@@ -114,10 +114,11 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 	}
 	run := PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		// A DIRECT MESSAGE'S TWO VALUES: the partition key an answer is
-		// matched on, and the conversation the resume reports back to.
-		// Different here on purpose — equal ones would let a path that
-		// read the wrong field pass every case below.
+		// A DIRECT MESSAGE'S TWO VALUES: the conversation an answer is
+		// matched on and the resume reports back to, and the partition
+		// the kick-off arrived in. Different here on purpose — equal ones
+		// would let a path that read the wrong field pass every case
+		// below.
 		CodingAgent: "claude-code", PartitionKey: "chat:D1:root-1",
 		ConversationKey: "chat:D1",
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
