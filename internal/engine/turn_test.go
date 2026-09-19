@@ -201,7 +201,7 @@ func TestAGuardStopsTheTurnBeforeItStarts(t *testing.T) {
 		"no engine": {
 			inbox.Conditions{Owned: true}, queue.OutcomeAck, true, true, false},
 		"sandbox": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true},
+			inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true},
 			queue.OutcomeAck, true, false, false},
 		"shedding": {
 			inbox.Conditions{Owned: true, TurnEngineReady: true},
@@ -237,7 +237,7 @@ func TestAParkIsNeverAckedUntilItsRequeueLands(t *testing.T) {
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true}
+		return inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true}
 	}
 	d.Park = func(context.Context, string, []*events.Event) error {
 		return errors.New("broker unreachable")
@@ -272,7 +272,7 @@ func TestNoParkPathNAKsRatherThanDropping(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Park = nil
 	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, AwaitingSandbox: true}
+		return inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true}
 	}
 	if got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")}); got.Outcome != queue.OutcomeNak {
 		t.Errorf("outcome = %v, want a NAK", got.Outcome)
@@ -1345,7 +1345,7 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, AwaitingSandbox: true}
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	var asked []string
 	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
@@ -1368,6 +1368,129 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	}
 	if !slices.Equal(asked, []string{"swe/chat:C1"}) {
 		t.Errorf("the coordinator was asked %v", asked)
+	}
+}
+
+// THE ANSWER ARRIVES AT A SEAT THAT LOOKS IDLE, and has to be claimed before
+// an ordinary turn eats it.
+//
+// The park above is the case where a SECOND run holds the seat. The ordinary
+// one is this: a run parked on a question gives its seat back — the reply
+// arrives on that seat's own inbox and a person can take days — so the answer
+// reaches the dispatcher through the plain proceed path, carrying nothing that
+// says what it answers. Offered only from the park, the match could run only
+// while the seat was HELD, which is the one state a parked run is never in: no
+// clarification answer ever reached the run that asked it, and every box
+// waited out its pause TTL with the reply sitting in the inbox.
+func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		// FREE, with a question open on it — which is what a parked run
+		// actually leaves behind.
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var asked []string
+	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
+		answer string, trigger *events.Event,
+	) (bool, error) {
+		asked = append(asked, handle+"/"+conv.Identity+"/"+conv.Partition)
+		if answer == "" || trigger == nil {
+			t.Error("the answer text and its trigger did not reach the coordinator")
+		}
+		return true, nil
+	}
+
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inDirectThread("notification", "chat:D1", "root-1")})
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack — the delivery was handled", got.Outcome)
+	}
+	if !slices.Equal(asked, []string{"swe/chat:D1/chat:D1:root-1"}) {
+		t.Errorf("the coordinator was asked %v, want the conversation and the "+
+			"batch the reply arrived in", asked)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on the answer as well as the resume it triggered: %d", len(r.reqs))
+	}
+	if len(r.parked) != 0 {
+		t.Errorf("a seat with nothing holding it parked its mail: %v", r.parked)
+	}
+}
+
+// AND FALLS THROUGH TO THE TURN WHEN IT IS NOT THE ANSWER. A seat with a
+// question open is an ordinary working seat: every message on it that no
+// parked run claims is work like any other, and swallowing those would make a
+// forgotten clarification deafen the seat until its pause TTL expired.
+func TestAMessageThatAnswersNothingStillRunsItsTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (bool, error) {
+		return false, nil
+	}
+
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:C1")})
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack for a completed turn", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn engine ran %d times, want the ordinary turn", len(r.reqs))
+	}
+	if len(r.parked) != 0 {
+		t.Errorf("the delivery was parked instead: %v", r.parked)
+	}
+}
+
+// A TRIGGER THE LEDGER HAS ALREADY WORKED IS NOT OFFERED EITHER.
+//
+// The offer on this path sits AFTER the completion read, and that is the
+// ordering under test: a redelivery of a trigger that already produced a turn
+// must not be spliced into somebody's coding run as the answer to its
+// question, which is a second use of one message and the run's whole
+// disambiguation is "the next thing to arrive here".
+func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	worked := inThread("notification", "chat:C1")
+	ctx := context.Background()
+	if err := completions.Record(ctx, "swe",
+		workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	called := false
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (bool, error) {
+		called = true
+		return true, nil
+	}
+
+	if got := d.Dispatch(ctx, "swe", []*events.Event{worked}); got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack", got.Outcome)
+	}
+	if called {
+		t.Error("a trigger this seat had already worked was offered as a clarification answer")
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("the worked trigger ran again (%d turns)", len(r.reqs))
 	}
 }
 
@@ -1396,7 +1519,7 @@ func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 		d := dispatcher(t, r)
 		d.Conditions = func(string) inbox.Conditions {
 			return inbox.Conditions{Owned: true, TurnEngineReady: true,
-				AdmitsTriggers: true, AwaitingSandbox: true}
+				AdmitsTriggers: true, SeatHeldBySandbox: true}
 		}
 		d.Answer = answer
 
@@ -1424,7 +1547,7 @@ func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, AwaitingSandbox: true}
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	called := false
 	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
@@ -1884,7 +2007,7 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 	dp := dispatcher(t, parked)
 	dp.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, AwaitingSandbox: true}
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	dp.Answer = func(_ context.Context, _ string, conv sandbox.ConversationRef,
 		_ string, _ *events.Event,

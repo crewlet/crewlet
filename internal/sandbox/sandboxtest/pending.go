@@ -69,6 +69,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
 		{"ARunParkedOnATopLevelDMIsAnsweredInItsThread", testARunParkedOnATopLevelDMIsAnsweredInItsThread},
+		{"TwoQuestionsOnOneDMAreToldApartByTheirThreads", testTwoQuestionsOnOneDMAreToldApartByTheirThreads},
 		{"AnAnswerOnAnotherConversationMatchesNothing", testAnAnswerOnAnotherConversationMatchesNothing},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
 		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
@@ -1139,6 +1140,59 @@ func testARunParkedOnATopLevelDMIsAnsweredInItsThread(t *testing.T, s sandbox.Pe
 		t.Fatalf("the threaded reply matched %q (ok=%v); the answer to a question "+
 			"asked from a top-level DM never reaches the run that asked it",
 			got.TurnID, ok)
+	}
+}
+
+// TWO QUESTIONS PARKED IN TWO THREADS OF ONE DIRECT MESSAGE ARE TOLD APART BY
+// THE THREAD, not by which was asked last.
+//
+// A direct message is one conversation however it is threaded, which is what
+// makes an answer reach the run that asked at all — and it means every run
+// parked on that channel shares one identity. So a reply in thread root-1 is
+// admitted by both runs, and picking the NEWEST resumes the one waiting in
+// root-2: its question spliced with the answer to somebody else's, and the run
+// that was actually answered still waiting. Both the arriving reference and
+// each row carry the thread; preferring the row whose partition matches is the
+// whole fix, and recency is what decides only between runs that agree on it.
+func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.PendingStore) {
+	first, second := run("t1"), run("t2")
+	// The same DM line, two threads on it — and the one asked EARLIER is
+	// the one the reply belongs to, so recency alone gets this wrong.
+	first.ConversationKey = "chat:D1:root-1"
+	second.ConversationKey = "chat:D1:root-2"
+	second.CreatedAt = base.Add(time.Minute)
+	mustLaunched(t, s, first)
+	mustLaunched(t, s, second)
+	park(t, s, "t1")
+	park(t, s, "t2")
+
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1:root-1",
+	})
+	if err != nil || !ok {
+		t.Fatalf("find: ok=%v err=%v", ok, err)
+	}
+	if got.TurnID != "t1" {
+		t.Errorf("a reply in thread root-1 answered %s, the question parked in "+
+			"root-2: the answer to one question resumed another run", got.TurnID)
+	}
+	// AND THE OTHER THREAD'S REPLY REACHES THE OTHER RUN, so what is under
+	// test is the pairing rather than a preference for the older row.
+	got, ok, err = s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1:root-2",
+	})
+	if err != nil || !ok || got.TurnID != "t2" {
+		t.Errorf("a reply in thread root-2 answered %q (ok=%v err=%v)", got.TurnID, ok, err)
+	}
+	// AND RECENCY IS STILL THE LAST WORD where the thread cannot decide: a
+	// TOP-LEVEL reply on the DM line matches neither thread, and the person
+	// is answering what they were just asked.
+	got, ok, err = s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+		Identity: "chat:D1", Partition: "chat:D1",
+	})
+	if err != nil || !ok || got.TurnID != "t2" {
+		t.Errorf("a top-level reply answered %q (ok=%v err=%v), want the most "+
+			"recently parked question", got.TurnID, ok, err)
 	}
 }
 

@@ -323,13 +323,18 @@ type PendingRun struct {
 	// clarification a box is parked waiting for was never delivered and
 	// the run sat until its pause TTL reaped it.
 	//
-	// STILL WRITTEN, for two peer reasons rather than for this build's own
-	// match. It is the only conversation value a row from before the split
-	// carries, so it is what such a row degrades to matching on; and a
-	// node still running that build matches every row — including the ones
-	// written here — on it by equality, so dropping it would strand a run
-	// whose answer lands on the other half of a mixed fleet. See
-	// [ConversationRef.Answers], which is what matches a delivery now.
+	// NOT WHAT ADMITS AN ANSWER, but still what tells two admitted runs
+	// apart: a direct message's identity is the whole channel, so two runs
+	// parked from two threads of it are admitted by a reply in either, and
+	// this is the only field that says which thread each was asked in. See
+	// [ConversationRef.Best].
+	//
+	// It is also written for two PEER reasons of its own. It is the only
+	// conversation value a row from before the split carries, so it is what
+	// such a row degrades to matching on; and a node still running that
+	// build matches every row — including the ones written here — on it by
+	// equality, so dropping it would strand a run whose answer lands on the
+	// other half of a mixed fleet.
 	ConversationKey string `json:"conversation_key"`
 
 	// ConversationIdentity is the durable conversation this run belongs
@@ -602,10 +607,12 @@ type PendingStore interface {
 	// FindAwaitingByConversation matches a person's answer back to the run
 	// that asked, on the CONVERSATION the question was asked in.
 	//
-	// The rule is [ConversationRef.Answers] and lives there rather than in
-	// an implementation, because it is a statement about two VALUES that
-	// every store has to make the same way — including what it does with a
-	// row written before the conversation identity existed.
+	// The rule is [ConversationRef.Best] and lives there rather than in an
+	// implementation, because it is a statement about two VALUES that every
+	// store has to make the same way — which rows a delivery may answer,
+	// which of them it answers when several may, and what either does with a
+	// row written before the conversation identity existed. A store lists
+	// the seat's parked runs and decides none of it.
 	FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error)
 }
 
@@ -630,12 +637,17 @@ func (r PendingRun) Conversation() string {
 // matched against it: the durable conversation it belongs to, and the inbox
 // partition it arrived in.
 //
-// TWO VALUES BECAUSE THE ROWS ARE OF TWO AGES, not because the match has two
-// answers. Everything this build parks is matched on the identity; the
-// partition travels for the rows written before an identity existed, which
-// hold nothing else to match on. A struct rather than two arguments because
-// both are strings and a swapped pair fails silently — as a run nobody can
-// answer, which is the defect this type exists to end.
+// TWO VALUES, AND EACH DECIDES A DIFFERENT HALF. The identity decides WHICH
+// runs a delivery may answer, because that is where a person answers and it is
+// the only value a row from before the split can be read as. The partition
+// decides WHICH OF THEM it answers when several may: the identity is coarse on
+// purpose — every run parked on one direct message shares it — so without the
+// batch the two halves of a DM's clarification are told apart by nothing but
+// creation time. See [ConversationRef.Best], which is the whole rule.
+//
+// A struct rather than two arguments because both are strings and a swapped
+// pair fails silently — as a run nobody can answer, which is the defect this
+// type exists to end.
 type ConversationRef struct {
 	// Identity is the durable conversation — what notify derives for the
 	// delivery's partition, and what the row's ConversationIdentity holds.
@@ -660,8 +672,8 @@ type ConversationRef struct {
 // It widens nothing elsewhere: a partition key is always its identity or a
 // finer cut of it, so on every other source the two coincide and this is the
 // same match it always was. Where it does widen — a DM line carrying more
-// than one parked question — the store answers with the NEWEST parked run,
-// which is the rule two questions in one thread were already resolved by.
+// than one parked question — admitting is not choosing: [ConversationRef.Best]
+// picks between what this admits, on the partition first and recency second.
 //
 // A ROW WITH NO IDENTITY IS A ROW FROM BEFORE THE SPLIT, and it degrades to
 // today's behaviour rather than to a run nobody can answer: its one value is
@@ -680,14 +692,79 @@ type ConversationRef struct {
 // answer to every such run. Everywhere else an empty value simply fails the
 // comparison, which is why there is no second guard: a clause that cannot
 // decide anything is a claim, not a check.
+//
+// THE IDENTITY BRANCH ALSO ACCEPTS THE PARTITION, which admits nothing new for
+// a well-formed row and rescues one that is not. A row this build wrote from a
+// delivery whose partition refines its identity is matched by the identity
+// already — equal partitions imply equal identities there, so the second
+// clause never decides anything. What it rescues is a row whose stored
+// identity is PARTITION-GRAINED: a pre-split row this build resumed and
+// re-parked carries the value that build derived in a field this one reads as
+// the identity, so a reply in the very thread the question was asked in would
+// otherwise match nothing at all — strictly worse than the equality this
+// replaced, which would still have found it.
 func (c ConversationRef) Answers(run PendingRun) bool {
 	if run.ConversationIdentity != "" {
-		return run.ConversationIdentity == c.Identity
+		return run.ConversationIdentity == c.Identity || c.sameBatch(run)
 	}
 	if run.ConversationKey == "" {
 		return false
 	}
 	return run.ConversationKey == c.Identity || run.ConversationKey == c.Partition
+}
+
+// sameBatch reports whether this delivery arrived in the very batch the run
+// was launched from.
+//
+// The empty check is the one [ConversationRef.Answers] explains: two absences
+// comparing equal would make every conversation-less delivery the answer to
+// every conversation-less run.
+func (c ConversationRef) sameBatch(run PendingRun) bool {
+	return c.Partition != "" && run.ConversationKey == c.Partition
+}
+
+// Best is the parked run a delivery answers, out of the runs one seat has
+// waiting — the whole rule, so that a store hands over its candidates and
+// decides nothing of its own.
+//
+// TWO STAGES, AND THE SECOND IS WHY THIS IS NOT JUST [ConversationRef.Answers]
+// IN A LOOP. The identity ADMITS, because that is where a person answers; the
+// partition DISAMBIGUATES, because the identity is deliberately coarse. In a
+// direct message every run parked on that channel shares one identity, so two
+// runs parked from two threads are both admitted by a reply in either of them,
+// and picking by recency alone resumes whichever asked LAST — the answer to
+// the question in thread A spliced into the run waiting in thread B, with the
+// arriving partition and each row's own partition holding exactly the fact
+// that would have told them apart.
+//
+// RECENCY IS THE LAST WORD, not the first: among candidates that agree on the
+// partition — the ordinary case of two questions asked in one thread — the
+// person is replying to what they were just asked. The turn id breaks a tie
+// between two runs created in the same instant, so the answer is the same on
+// every node and on every read rather than depending on a map's order.
+func (c ConversationRef) Best(parked []PendingRun) (PendingRun, bool) {
+	var best PendingRun
+	found := false
+	for _, run := range parked {
+		if !c.Answers(run) {
+			continue
+		}
+		if !found || c.preferred(run, best) {
+			best, found = run, true
+		}
+	}
+	return best, found
+}
+
+// preferred reports whether a is the better answer of two admitted candidates.
+func (c ConversationRef) preferred(a, b PendingRun) bool {
+	if am, bm := c.sameBatch(a), c.sameBatch(b); am != bm {
+		return am
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	return a.TurnID > b.TurnID
 }
 
 // Clarification is what a parked run is waiting for.

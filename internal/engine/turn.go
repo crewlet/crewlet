@@ -237,6 +237,10 @@ func (r Request) Ask() []*events.Event {
 //   - the completion read comes AFTER every parking branch, so a parked
 //     partition is never marked done, and BEFORE coalescing, so recorded
 //     constituents drop out and only the remainder merges;
+//   - the sandbox ANSWER OFFER comes after that read and before the merge, on
+//     the ordinary path as well as the park — because a run parked on a
+//     question leaves its seat free, so the reply that resumes it arrives
+//     here as an ordinary message and must be claimed before a turn eats it;
 //   - the conversation read comes after that, because it is keyed on a
 //     conversation the surviving events name;
 //   - the completion WRITE comes after the turn, and a turn that failed is
@@ -309,7 +313,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		return d.park(ctx, handle, screening, held)
 	case inbox.ActionPark:
-		if screening.AwaitingSandbox && d.answered(ctx, handle, screening.Events) {
+		if screening.OfferAsSandboxAnswer && d.answered(ctx, handle, screening.Events) {
 			// The delivery WAS the answer, and the resume it triggered has
 			// already run. Acking is what stops it being requeued behind
 			// the question it just answered.
@@ -334,6 +338,26 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	held.events = surviving
 	d.noteSkipped(ctx, handle, screening.Events, surviving)
 	if len(surviving) == 0 {
+		return queue.Ack()
+	}
+
+	// THE ANSWER IS CLAIMED BEFORE ANYTHING ELSE EATS IT.
+	//
+	// A run parked on a question does not hold its seat — that is the whole
+	// design, the answer arrives on the seat's own inbox — so the reply
+	// reaches here, on the ordinary path, looking like any other message.
+	// Guarded by the park alone, this match could only ever run while the
+	// seat was HELD, which is the one state a parked run is never in: every
+	// clarification answer was consumed as an unrelated turn while the box
+	// waited out its pause TTL.
+	//
+	// AFTER THE LEDGER, unlike the park's offer, and that is this path's own
+	// rule rather than an inconsistency: the completion ledger has already
+	// said which of these events were worked, and a trigger that produced a
+	// turn must not also be spliced into somebody's coding run. The park
+	// cannot read the ledger at all — a parked partition is never marked
+	// done — so it offers what it has.
+	if screening.OfferAsSandboxAnswer && d.answered(ctx, handle, surviving) {
 		return queue.Ack()
 	}
 
@@ -656,12 +680,14 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 	}
 }
 
-// answered offers a parked seat's delivery to its waiting coding run.
+// answered offers a delivery to a coding run of this seat that is waiting for
+// somebody to answer its question.
 //
 // FAIL-OPEN, in both senses. A missing seam, a partition with no key at all
-// and a failed lookup all report false, and the delivery is parked as it
-// would have been — which is recoverable, where acking a message nothing
-// handled is not.
+// and a failed lookup all report false, and the delivery goes on to whatever
+// the screening said to do with it — parked behind a held seat, or run as the
+// ordinary turn it looks like — which is recoverable, where acking a message
+// nothing handled is not.
 //
 // THE CONVERSATION IDENTITY is the disambiguation, and the partition travels
 // beside it for the rows parked before an identity existed. The rule — "the

@@ -380,28 +380,27 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 
 // FindAwaitingByConversation finds the parked run a reply belongs to.
 //
-// MATCHED ON THE CONVERSATION, by [ConversationRef.Answers] — which is where
-// the rule lives, together with what it does with a row written before the
-// conversation identity existed. Nothing about the match is decided here: a
-// store that answered it its own way would be a second opinion about which
-// question a person just replied to.
+// MATCHED BY [ConversationRef.Best] — which is where the whole rule lives:
+// which parked runs a delivery may answer, which of them it answers when
+// several may, and what either does with a row written before the conversation
+// identity existed. This store contributes the CANDIDATES and nothing else: a
+// store that decided any of it its own way would be a second opinion about
+// which question a person just replied to, and the two would disagree the
+// first time one of them was changed.
 func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error) {
 	if conv.Identity == "" && conv.Partition == "" {
 		// A delivery that names no conversation must never match, or
 		// every parked run answers every wake that could not name one.
 		return PendingRun{}, false, nil
 	}
-	got, err := s.list(ctx, func(r PendingRun) bool {
-		return r.AgentHandle == handle && conv.Answers(r) &&
-			slices.Contains(Awaiting, r.Status)
+	parked, err := s.list(ctx, func(r PendingRun) bool {
+		return r.AgentHandle == handle && slices.Contains(Awaiting, r.Status)
 	})
-	if err != nil || len(got) == 0 {
+	if err != nil {
 		return PendingRun{}, false, err
 	}
-	// Newest first: a seat can have parked more than one question on one
-	// conversation, and the answer belongs to what the person was just
-	// asked.
-	return got[len(got)-1], true, nil
+	run, found := conv.Best(parked)
+	return run, found, nil
 }
 
 // Finish ends a run by deleting its record. See the contract on

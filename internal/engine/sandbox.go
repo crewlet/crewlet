@@ -1370,17 +1370,21 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	}
 }
 
-// AwaitingSandbox reports whether a seat is parked on a detached coding run.
+// SeatHeldBySandbox reports whether a detached coding run HOLDS a seat, so it
+// starts no new turn until the run settles.
 //
 // Exported for the operator surfaces and for a test: the inbox screening reads
 // it internally through the dispatcher's conditions, but "is this seat busy on
 // code work" is also a question a dashboard asks, and answering it from a
 // second place would eventually answer it differently.
-func (e *Engine) AwaitingSandbox(handle string) bool {
+//
+// It is NOT "does this seat have a run waiting for an answer" — a parked run
+// frees its seat by design. See [sandbox.Coordinator.SeatRuns].
+func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	if e.sandboxCoordinator == nil {
 		return false
 	}
-	return e.sandboxCoordinator.AwaitingSandbox(handle)
+	return e.sandboxCoordinator.SeatHeldBySandbox(handle)
 }
 
 // sandboxLLM resolves the model a coding run works under, and the credential

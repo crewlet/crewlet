@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -155,21 +154,29 @@ type CoordinatorOptions struct {
 
 // Coordinator is the engine's hands on the detached run_sandbox flow.
 //
-// Three transitions, and the ordering of each is what makes the flow safe:
+// Four transitions, and the ordering of each is what makes the flow safe:
 //
-//   - SUSPEND → BUSY. The suspending turn persists its conversation and the
-//     seat is marked busy, so no queued event slips a turn in beside a run
+//   - SUSPEND → HELD. The suspending turn persists its conversation and the
+//     seat is marked held, so no queued event slips a turn in beside a run
 //     that is still going.
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
 //     for the job it reports, the result collected with the box paused for
 //     reuse, tokens post-accounted once per launch however often the tail is
 //     retried, and the suspended loop re-entered with the result spliced in.
-//     The seat stays busy through all of it and is freed only at the last
+//     The seat stays held through all of it and is freed only at the last
 //     moment before the resume, because freeing it earlier lets a queued
 //     event take the slot, the resume fail, and the redelivery find the claim
 //     already flipped, with the suspended conversation permanently lost.
-//   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs busy
-//     and reaps any tail the previous owner abandoned mid-resume.
+//   - PARK → ANSWER. A run that stops to ask a person something gives the
+//     seat BACK — the answer arrives on that seat's own inbox, and a person
+//     can take days — and leaves a question open on it instead. The seat then
+//     works as usual, with one difference: every delivery is offered to
+//     [Coordinator.TryResumeFromAnswer] before anything else consumes it,
+//     because the reply that resumes an hours-old coding run is an ordinary
+//     chat message and nothing about it says so.
+//   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs held,
+//     inherits its open questions, and reaps any tail the previous owner
+//     abandoned mid-resume.
 type Coordinator struct {
 	queue   Publisher
 	pending PendingStore
@@ -179,8 +186,8 @@ type Coordinator struct {
 	ended   func(runID string)
 	now     func() time.Time
 
-	// mu guards busy, the seat-level "is a detached run in flight?" answer
-	// the inbox screening reads on every delivery.
+	// mu guards runs, the two seat-level answers the inbox screening reads
+	// on every delivery.
 	//
 	// In memory rather than a store read per delivery: the seat's owner is
 	// the only node that runs its turns, so its own memory is authoritative
@@ -188,7 +195,42 @@ type Coordinator struct {
 	// seat over. A store read on the hot path of every message would pay a
 	// round trip to answer a question this process already knows.
 	mu   sync.Mutex
-	busy map[string]int
+	runs map[string]seatRuns
+}
+
+// seatRuns is this node's count of one seat's detached runs, by the question
+// each set answers.
+//
+// TWO COUNTS, NOT ONE, and conflating them is what made the answer match
+// unreachable for the whole life of the feature: the screening asked "is the
+// seat held" and acted on the answer as though it meant "is a run waiting for
+// somebody's reply", which are DISJOINT by construction — [Holding] and
+// [Awaiting] share no status, deliberately, because a run parked on a question
+// has to leave the seat free to receive the answer. So the one delivery the
+// match exists for arrived at a seat the screening called free, and was
+// consumed as an ordinary turn while the box waited out its pause TTL.
+//
+// COUNTED rather than boolean, because a resumed Execute can launch a SECOND
+// run before the first is settled: the seat is free only when the last of them
+// is, and one seat can drive a job while another of its runs waits for a
+// person.
+type seatRuns struct {
+	// holding counts the runs in [Holding] — the ones the engine is
+	// driving, during which the seat starts no new turn and its mail is
+	// parked.
+	holding int
+
+	// awaiting counts the runs in [Awaiting] — the ones stopped on a
+	// question. They hold nothing, which is the point, and this is what
+	// tells the screening to offer a delivery to the match before anything
+	// else consumes it.
+	//
+	// ERRING HIGH IS SAFE AND ERRING LOW IS NOT, which is what decides
+	// every transition below that cannot prove a run left the set: one
+	// count too many costs a single store lookup that finds nothing and
+	// falls through to ordinary handling, while one too few is a person's
+	// answer run as an unrelated turn and a box left to expire.
+	awaiting int
 }
 
 // NewCoordinator validates the options and returns the coordinator, or refuses
@@ -217,7 +259,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
 		now:  opts.Now,
-		busy: map[string]int{},
+		runs: map[string]seatRuns{},
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -243,40 +285,90 @@ func (c *Coordinator) mgr() *Manager {
 	return c.manager
 }
 
-// AwaitingSandbox reports whether a seat is parked on a detached coding run.
+// SeatRuns is what this node knows about one seat's detached runs: whether one
+// HOLDS the seat, and whether one is waiting for a person's answer.
 //
-// The engine's inbox screening reads this on every delivery: a job can run for
-// hours, far past any broker ack window, so its seat's mail is PARKED —
-// requeued — rather than consumed and held.
-func (c *Coordinator) AwaitingSandbox(handle string) bool {
+// The engine's inbox screening reads it on every delivery, and reads BOTH
+// values together because they change together. A run that parks on a question
+// stops holding its seat and starts awaiting an answer in the same moment, so
+// a caller that asked the two questions in two calls could land between the
+// halves and be told neither is true — a seat that looks idle with no question
+// open, which is precisely the state in which a person's reply is eaten as an
+// ordinary turn.
+func (c *Coordinator) SeatRuns(handle string) (held, awaitsAnswer bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.busy[handle] > 0
+	runs := c.runs[handle]
+	return runs.holding > 0, runs.awaiting > 0
 }
 
-// markBusy and clearBusy are counted rather than boolean, because a resumed
-// Execute can launch a SECOND run before the first is settled: the seat is
-// free only when the last of them is.
-func (c *Coordinator) markBusy(handle string) {
+// SeatHeldBySandbox reports whether a detached run is HOLDING a seat, so it
+// takes no new turn until the run settles: a job can run for hours, far past
+// any broker ack window, so its seat's mail is PARKED — requeued — rather than
+// consumed and held.
+//
+// NOT "is a run waiting for an answer", which is [Coordinator.SeatRuns]'s
+// second value. This was called AwaitingSandbox, which reads as that other
+// question and was acted on as though it were it; see [seatRuns].
+func (c *Coordinator) SeatHeldBySandbox(handle string) bool {
+	held, _ := c.SeatRuns(handle)
+	return held
+}
+
+// countRun and uncountRun take a run into and out of the set its status
+// belongs to, and moveRun carries one from one set to the other.
+//
+// A STATUS RATHER THAN A NUMBER at every call site, so a caller cannot count a
+// run into one set while the store has it in the other — the two sets are what
+// the screening branches on, and a run counted in the wrong one is either a
+// seat parked on nothing or an open question nothing offers a reply to.
+func (c *Coordinator) countRun(handle, status string)   { c.moveRun(handle, "", status) }
+func (c *Coordinator) uncountRun(handle, status string) { c.moveRun(handle, status, "") }
+
+// moveRun applies one transition under ONE lock, which is what
+// [Coordinator.SeatRuns] needs: a park is a decrement and an increment, and a
+// delivery screened between two separate writes would see a seat with no run
+// of either kind.
+func (c *Coordinator) moveRun(handle, from, to string) {
 	if handle == "" {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.busy[handle]++
+	fromHolding, fromAwaiting := setOf(from)
+	toHolding, toAwaiting := setOf(to)
+	c.adjust(handle, toHolding-fromHolding, toAwaiting-fromAwaiting)
 }
 
-func (c *Coordinator) clearBusy(handle string) {
-	if handle == "" {
-		return
+// setOf says which count a status belongs to. A status that owns no seat-level
+// state — a run that has ended, or the empty string moveRun passes for "no set
+// at all" — belongs to neither.
+func setOf(status string) (holding, awaiting int) {
+	switch {
+	case slices.Contains(Holding, status):
+		return 1, 0
+	case slices.Contains(Awaiting, status):
+		return 0, 1
 	}
+	return 0, 0
+}
+
+// adjust applies the deltas, CLAMPED AT ZERO.
+//
+// A decrement for a run this node never counted is ordinary rather than a bug
+// — a seat taken over mid-run, a start event that never arrived, a settle for
+// a run recovery already reaped — and left negative the count would then
+// swallow the next real increment, which is a seat that runs a turn while a
+// job holds it.
+func (c *Coordinator) adjust(handle string, holding, awaiting int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.busy[handle] <= 1 {
-		delete(c.busy, handle)
+	runs := c.runs[handle]
+	runs.holding = max(runs.holding+holding, 0)
+	runs.awaiting = max(runs.awaiting+awaiting, 0)
+	if runs == (seatRuns{}) {
+		delete(c.runs, handle)
 		return
 	}
-	c.busy[handle]--
+	c.runs[handle] = runs
 }
 
 // OnEvent routes a seat's control-topic delivery.
@@ -293,7 +385,7 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	return nil
 }
 
-// OnStarted marks the seat busy.
+// OnStarted marks the seat held.
 //
 // Idempotent on a redelivery, which is why it consults the store rather than
 // blindly incrementing: at-least-once means this can arrive twice, and a
@@ -302,44 +394,45 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted)
 	if ev.AgentHandle == "" {
 		return nil
 	}
-	c.syncBusy(ctx, ev.AgentHandle)
+	c.syncSeat(ctx, ev.AgentHandle)
 	log.InfoContext(ctx, "sandbox_agent_busy",
 		"agent", ev.AgentHandle, "turn_id", ev.TurnID, "sandbox_id", ev.SandboxID)
 	return nil
 }
 
-// syncBusy sets the seat's busy count from the store's own answer.
+// syncSeat sets both of a seat's counts from the store's own answer.
 //
 // The store is the arbiter rather than an increment, so a redelivered start, a
-// restart, and a seat takeover all converge on the same number instead of
-// drifting apart. A store that cannot be read leaves the count ALONE: the
+// restart, and a seat takeover all converge on the same numbers instead of
+// drifting apart. A store that cannot be read leaves them ALONE: the
 // alternatives are parking a free seat forever or freeing a busy one into
 // overlapping turns, and keeping what we already believed is the only answer
 // that makes neither mistake on its own.
-func (c *Coordinator) syncBusy(ctx context.Context, handle string) {
+//
+// BOTH FROM ONE LISTING. A run parked on a question does NOT hold the seat —
+// a person can take days to answer, and the seat has to be able to receive
+// that answer, which arrives on its inbox — so each row lands in exactly one
+// of the two counts. Recounting them from two listings would let a run that
+// moved between the reads be counted in both or in neither.
+func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 	runs, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
 		return
 	}
-	n := 0
+	var counts seatRuns
 	for _, run := range runs {
-		// A run parked on a question does NOT hold the seat: a person can
-		// take days to answer, and the seat has to be able to receive that
-		// answer — which arrives on its inbox. [Holding] is the set that
-		// does, and it is a named list rather than a disjunction here
-		// because the same question is asked in three places.
-		if slices.Contains(Holding, run.Status) {
-			n++
-		}
+		holding, awaiting := setOf(run.Status)
+		counts.holding += holding
+		counts.awaiting += awaiting
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if n == 0 {
-		delete(c.busy, handle)
+	if counts == (seatRuns{}) {
+		delete(c.runs, handle)
 		return
 	}
-	c.busy[handle] = n
+	c.runs[handle] = counts
 }
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
@@ -517,7 +610,14 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		c.unclaim(ctx, run, true)
 		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
 	}
-	c.clearBusy(run.AgentHandle)
+	// FREED AND OPENED AS ONE MOVE, not two: a person can take days, the
+	// answer arrives on the seat's own inbox, and between two separate
+	// writes the seat would read as idle with nothing open — the state in
+	// which that answer is run as an unrelated turn.
+	//
+	// The claim took the row through [StatusResumed], so it is the holding
+	// side it leaves.
+	c.moveRun(run.AgentHandle, StatusResumed, StatusAwaiting)
 
 	if run.PauseTTLSeconds == 0 {
 		c.teardown(ctx, run)
@@ -570,9 +670,10 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	}
 	log.InfoContext(ctx, "sandbox_clarification_answered",
 		"turn_id", claimed.TurnID, "conversation", conv.Identity)
-	// The seat goes busy again for the duration of the resume: the parked
-	// run freed it, and re-entering the Execute loop is work like any other.
-	c.markBusy(claimed.AgentHandle)
+	// The claim CLOSED THE QUESTION and took the seat: the parked run freed
+	// it, and re-entering the Execute loop is work like any other. One move,
+	// so no delivery sees the seat between the two halves.
+	c.moveRun(claimed.AgentHandle, StatusAwaiting, StatusResumed)
 	// NO OUTCOME: this resume collects no run. The box is still parked and
 	// its cost is charged where it is collected, so reporting one here would
 	// bill the same run twice.
@@ -608,8 +709,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		return nil
 	}
 	// Freed only NOW, immediately before the resume, so no queued event can
-	// take the slot first.
-	c.clearBusy(run.AgentHandle)
+	// take the slot first. The claim holds the row in [StatusResumed]
+	// whichever set it was claimed from, so that is the count to give back.
+	c.uncountRun(run.AgentHandle, StatusResumed)
 
 	// STRAIGHT TO THE RESUMER, which [NewCoordinator] refuses to be built
 	// without: "this node cannot resume this run" is the resumer's own
@@ -647,7 +749,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			if settle, ok := c.current(ctx, run); ok {
 				c.finish(ctx, settle, fenceOf(run))
 			}
-			c.syncBusy(ctx, run.AgentHandle)
+			c.syncSeat(ctx, run.AgentHandle)
 			return nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -688,7 +790,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// recount here that seat stayed parked on a run that no longer exists
 	// until the seat changed hands. The store now has no record of this run,
 	// so the recount keeps only the seat's other live runs.
-	c.syncBusy(ctx, run.AgentHandle)
+	c.syncSeat(ctx, run.AgentHandle)
 	return nil
 }
 
@@ -728,13 +830,15 @@ func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, 
 // left as it stands, and what holds the seat is then the store's answer rather
 // than this claim's.
 //
-// THE SEAT FOLLOWS THE STATUS THE RUN GOES BACK TO. counted is whether the
-// busy count still includes this run, which it does until the resume frees
-// the seat, and only a park, whose claim is always out of running, hands one
-// back before that. A run back in running holds the seat again; one back
-// waiting on a person does not, and marking the seat busy for it parked every
-// later delivery on a run no poll completes, with nothing left to take the
-// mark back once its answer's retry had settled it.
+// THE RUN IS COUNTED BACK INTO THE SET ITS REVERTED STATUS BELONGS TO, which
+// is not always the seat. counted is whether this node's count still includes
+// this run, which it does until the resume gives the seat back, and only a
+// park, whose claim is always out of running, hands one back before that. A
+// run back in running holds the seat again; one back waiting on a person does
+// not — it is an OPEN QUESTION instead. Re-marking the seat held for it
+// parked every later delivery on a run no poll completes, the person's own
+// answer included; counting it into neither set is the opposite mistake, and
+// leaves that answer to be run as an unrelated turn (see [seatRuns]).
 //
 // A CONTEXT OF ITS OWN, like [Coordinator.teardown], because this is a
 // rollback and the failure it undoes is often the cancellation itself: a drain
@@ -753,15 +857,15 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool)
 	case err != nil:
 		log.ErrorContext(ctx, "sandbox_claim_revert_failed",
 			"turn_id", run.TurnID, "revert_to", to, "error", err.Error())
-		c.syncBusy(ctx, run.AgentHandle)
+		c.syncSeat(ctx, run.AgentHandle)
 	case !released:
 		log.WarnContext(ctx, "sandbox_claim_moved_on",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"detail", "the run no longer holds this claim, so nothing was handed back: "+
 				"the resumed turn launched another job, or the seat's next owner reaped it")
-		c.syncBusy(ctx, run.AgentHandle)
-	case !counted && slices.Contains(Holding, to):
-		c.markBusy(run.AgentHandle)
+		c.syncSeat(ctx, run.AgentHandle)
+	case !counted:
+		c.countRun(run.AgentHandle, to)
 	}
 }
 
@@ -795,7 +899,10 @@ func claimedFrom(run PendingRun) string {
 // and a second announcement would name a reason the run did not end for.
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
 	ended := c.finish(ctx, run, fenceOf(run))
-	c.clearBusy(run.AgentHandle)
+	// Out of whichever set the record was in: this path settles a claimed
+	// run ([StatusResumed]) and a launch that never suspended
+	// ([StatusLaunching]) alike, and a status names its own set.
+	c.uncountRun(run.AgentHandle, run.Status)
 	if ended {
 		c.announceFailure(ctx, run, reason, detail)
 	}
@@ -971,8 +1078,10 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // its peers own, and a node that claims a seat LATER — a takeover, not a boot
 // — would never recover it at all.
 //
-// Running jobs re-mark this seat busy; the waiter then drives them to
-// completion. Clarification and reseed runs are left for their answer.
+// Running jobs re-mark this seat held; the waiter then drives them to
+// completion. Clarification and reseed runs are left for their answer — the
+// run untouched, but COUNTED, because the seat's new owner is the one that
+// will be handed that answer and has to recognise it as one.
 //
 // A RESUMED row means the engine that owned this seat died between claiming a
 // completion and settling it. Nothing will ever pick it up — the at-most-once
@@ -996,7 +1105,7 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	if len(active) == 0 {
 		return nil
 	}
-	recovered, abandoned := 0, 0
+	recovered, parked, abandoned := 0, 0, 0
 	for _, run := range active {
 		switch run.Status {
 		case StatusLaunching, StatusResumed:
@@ -1022,13 +1131,22 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 				log.WarnContext(ctx, "sandbox_ownership_claim_failed",
 					"turn_id", run.TurnID, "error", err.Error())
 			}
-			c.markBusy(run.AgentHandle)
+			c.countRun(run.AgentHandle, run.Status)
 			recovered++
+		case StatusAwaiting, StatusReseed:
+			// NOTHING IS DONE TO THE RUN — its answer is what moves it —
+			// but the new owner has to know the question is open, or the
+			// answer arrives at a seat this node believes has nothing
+			// waiting and is run as an unrelated turn. The old owner's
+			// count went with the old owner; this is where the new one
+			// gets it.
+			c.countRun(run.AgentHandle, run.Status)
+			parked++
 		}
 	}
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", recovered,
-		"abandoned", abandoned, "active", len(active))
+		"parked", parked, "abandoned", abandoned, "active", len(active))
 	return nil
 }
 
@@ -1114,15 +1232,8 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 func (c *Coordinator) ReleaseSeat(handle string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.busy, handle)
+	delete(c.runs, handle)
 	log.Debug("sandbox_seat_released", "seat", handle)
-}
-
-// Busy is the seats this node believes hold a run, for the operator surface.
-func (c *Coordinator) Busy() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return slices.Sorted(maps.Keys(c.busy))
 }
 
 func fenceOf(run PendingRun) Fence {

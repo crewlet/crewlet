@@ -165,7 +165,7 @@ func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat was busy before the start event arrived")
 	}
 	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
@@ -173,11 +173,13 @@ func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
 	}
-	if !rig.coordinator.AwaitingSandbox("swe") {
+	if !rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat is not parked on its detached run")
 	}
-	if got := rig.coordinator.Busy(); len(got) != 1 || got[0] != "swe" {
-		t.Fatalf("Busy = %v, want [swe]", got)
+	// AND NO QUESTION IS OPEN ON IT. The two answers are disjoint by
+	// construction, and a running job is the half that holds.
+	if _, awaits := rig.coordinator.SeatRuns("swe"); awaits {
+		t.Fatal("a running job counted as a run waiting for somebody's answer")
 	}
 }
 
@@ -197,7 +199,7 @@ func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked after its only run settled")
 	}
 }
@@ -207,7 +209,7 @@ func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
 func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
 		DeliveredRefs: []string{"wip/t1"},
@@ -217,7 +219,7 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("a seat waiting on a person's answer cannot receive it while parked")
 	}
 	got := rig.get("t1")
@@ -226,6 +228,15 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	}
 	if got.Question != "which branch?" || got.Branch != "wip/t1" {
 		t.Fatalf("the question and its branch were not recorded: %+v", got)
+	}
+	// AND THE QUESTION IS OPEN ON THE SEAT, which is the other half of the
+	// same fact and was answered by nothing. Freeing the seat is what lets
+	// the reply arrive; knowing a question is open is what makes the engine
+	// recognise it as one instead of running it as an unrelated turn.
+	held, awaits := rig.coordinator.SeatRuns("swe")
+	if held || !awaits {
+		t.Fatalf("SeatRuns = held %v / awaiting %v, want a free seat with an "+
+			"open question", held, awaits)
 	}
 }
 
@@ -236,7 +247,7 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{
 		Success: true, Text: "fixed the flake", DeliveredRefs: []string{"pr/42"},
 		InputTokens: 900, OutputTokens: 200,
@@ -274,7 +285,7 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 func TestARedeliveredStartDuringAResumeDoesNotParkTheSeatForGood(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		if err := rig.coordinator.OnStarted(ctx, types.SandboxRunStarted{
 			AgentHandle: r.AgentHandle, TurnID: r.TurnID,
@@ -289,7 +300,7 @@ func TestARedeliveredStartDuringAResumeDoesNotParkTheSeatForGood(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	rig.finished("t1")
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked on a run that settled while its start was redelivered")
 	}
 }
@@ -341,7 +352,7 @@ func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = errors.New("the node lost the seat mid-resume")
 
@@ -354,7 +365,7 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	}
 	// Running again, the run holds its seat again: the resume freed it,
 	// and a turn slipped in now would run beside a job still owed a tail.
-	if !rig.coordinator.AwaitingSandbox("swe") {
+	if !rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat took new turns while its run waited for the retry")
 	}
 
@@ -382,7 +393,7 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -398,7 +409,7 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 	// when the seat changes hands. Left claimed and busy, the seat parked
 	// every message it received for as long as this node kept it, and the
 	// paused box and its record stayed for good.
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked on a run whose resumed turn is over")
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
@@ -457,7 +468,7 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the relaunched job's box %q reclaimed", killed, run.SandboxID)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked on a relaunch nothing will ever resume")
 	}
 }
@@ -494,7 +505,7 @@ func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted: %v", err)
 			}
-			if rig.coordinator.AwaitingSandbox("swe") {
+			if rig.coordinator.SeatHeldBySandbox("swe") {
 				t.Fatal("the seat stayed parked on a run whose turn is over, so it " +
 					"requeues every delivery until the process restarts")
 			}
@@ -523,7 +534,7 @@ func TestAnAbandonedAnswerResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("TryResumeFromAnswer = (%v, %v), want the answer handled", handled, err)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked after its answer's resume was abandoned")
 	}
 	rig.finished("t1")
@@ -604,7 +615,7 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 	if err := rig.pending.SetStatus(t.Context(), "t1", StatusRunning, Fence{}); err != nil {
 		t.Fatalf("SetStatus: %v", err)
 	}
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 
 	payload, ev := rig.completion("t1")
@@ -612,7 +623,7 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	rig.finished("t1")
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked on a run that can never continue")
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
@@ -670,7 +681,7 @@ func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 func TestACompletionInTheLaunchWindowLeavesTheTurnAlone(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true, Text: "done before the turn unwound"})
 
 	payload, ev := rig.completion("t1")
@@ -688,7 +699,7 @@ func TestACompletionInTheLaunchWindowLeavesTheTurnAlone(t *testing.T) {
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("killed %v out from under a turn that is still suspending", killed)
 	}
-	if !rig.coordinator.AwaitingSandbox("swe") {
+	if !rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat was freed while its run was still launching")
 	}
 
@@ -792,7 +803,7 @@ func TestSeatRecoveryReapsALaunchNobodyFinished(t *testing.T) {
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
 		t.Fatalf("killed %v, want the abandoned launch's box reclaimed", killed)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the new owner took the seat parked on a run nothing can finish")
 	}
 }
@@ -817,7 +828,7 @@ func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
 func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
 	rig.runner.CollectErr = errors.New("the box died mid-read")
 
@@ -825,7 +836,7 @@ func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked after a failed collect")
 	}
 	rig.finished("t1")
@@ -844,7 +855,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	coordinator.markBusy("swe")
+	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
 	rig.runner.CollectErr = errors.New("the box died mid-read")
 
@@ -852,7 +863,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if coordinator.AwaitingSandbox("swe") {
+	if coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked on a run that is over")
 	}
 	rig.finished("t1")
@@ -1136,7 +1147,7 @@ func (p *parkFails) MarkAwaiting(ctx context.Context, turnID string, q Clarifica
 func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
@@ -1146,7 +1157,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	coordinator.markBusy("swe")
+	coordinator.countRun("swe", StatusRunning)
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
 		t.Fatal("a question that was never recorded was acked")
@@ -1154,7 +1165,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusRunning {
 		t.Fatalf("status = %q, want the claim handed back for the retry", got.Status)
 	}
-	if !coordinator.AwaitingSandbox("swe") {
+	if !coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat was freed before its question was on the row")
 	}
 
@@ -1164,7 +1175,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Question != "which branch?" {
 		t.Fatalf("row = %s %q, want the retry to park the question", got.Status, got.Question)
 	}
-	if coordinator.AwaitingSandbox("swe") {
+	if coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked once its question was recorded")
 	}
 }
@@ -1308,7 +1319,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 			t.Error("the relaunch started a job the fixture refuses")
 		}
 	}})
-	coordinator.markBusy("swe")
+	coordinator.countRun("swe", StatusRunning)
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
@@ -1318,7 +1329,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 	// of the PREVIOUS job's claim must not bring it back: a release names the
 	// launch it took, and that launch went with the record.
 	rig.finished("t1")
-	if coordinator.AwaitingSandbox("swe") {
+	if coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat was parked on a run nothing will ever complete")
 	}
 	if fired := rig.tick(); fired != 0 {
@@ -1387,7 +1398,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3); err != nil {
 		t.Fatalf("a later recovery: %v", err)
 	}
-	if successor.AwaitingSandbox("swe") {
+	if successor.SeatHeldBySandbox("swe") {
 		t.Fatal("a later owner parked the seat on a run already announced lost")
 	}
 }
@@ -1486,7 +1497,7 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
 		t.Fatalf("status = %q, want the run waiting on its answer again", got.Status)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("a seat whose run went back to waiting on a person was parked")
 	}
 
@@ -1495,7 +1506,7 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 		t.Fatalf("the answer's retry: %v", err)
 	}
 	rig.finished("t1")
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked after its only run settled")
 	}
 }
@@ -1856,6 +1867,42 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 	}
 }
 
+// A RESUME THAT BROKE LEAVES THE QUESTION OPEN, not the seat held.
+//
+// The claim takes a parked run out of the waiting set and gives its seat back
+// to the resume; a resume that fails puts the ROW back where it was —
+// [StatusAwaiting], still waiting for a person — so the counts have to go back
+// there too. Counted onto the seat instead, the run waited for an answer that
+// every delivery from then on was parked behind, for as long as this node kept
+// the seat: the person answered twice and neither reply reached anything.
+func TestAFailedResumeLeavesTheQuestionOpenRatherThanTheSeatHeld(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+	})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	rig.resumer.err = errors.New("the model never answered")
+	if _, err := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", answerOnTheDM, "use main", nil); err == nil {
+		t.Fatal("TryResumeFromAnswer reported a resume that never happened")
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status = %q, want the row back where the claim found it", got.Status)
+	}
+	held, awaits := rig.coordinator.SeatRuns("swe")
+	if held || !awaits {
+		t.Fatalf("SeatRuns = held %v / awaiting %v, want the question open again "+
+			"on a free seat — the person's next answer is the only thing that "+
+			"moves this run", held, awaits)
+	}
+}
+
 // A run whose box was reclaimed must not be told to continue in a working tree
 // that is gone — git is the durable state and the brief has to say so.
 func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
@@ -2032,7 +2079,7 @@ func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
 	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a:1", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
-	if !rig.coordinator.AwaitingSandbox("swe") {
+	if !rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("a running job did not re-park its seat")
 	}
 	if got := rig.get("t1"); got.Owner != "node-a:1" || got.OwnerEpoch != 7 {
@@ -2056,7 +2103,7 @@ func TestClaimingASeatReapsATailTheDeadOwnerAbandoned(t *testing.T) {
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
 		t.Fatalf("killed %v, want the abandoned box reclaimed", killed)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat was parked on a tail nothing will ever finish")
 	}
 }
@@ -2077,8 +2124,16 @@ func TestClaimingASeatLeavesAParkedRunForItsAnswer(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
 		t.Fatalf("status = %q, want it left waiting", got.Status)
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	held, awaits := rig.coordinator.SeatRuns("swe")
+	if held {
 		t.Fatal("a seat waiting on a person cannot receive their answer while parked")
+	}
+	// AND THE NEW OWNER INHERITS THE OPEN QUESTION. The count went with the
+	// node that parked the run; this is the only place the successor can
+	// learn of it, and without it the answer lands on a seat that believes
+	// nothing is waiting and is run as an unrelated turn.
+	if !awaits {
+		t.Fatal("the seat's new owner did not inherit the question the run is waiting on")
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("recovery killed %v out from under a waiting run", killed)
@@ -2090,11 +2145,11 @@ func TestClaimingASeatLeavesAParkedRunForItsAnswer(t *testing.T) {
 func TestReleasingASeatTearsNothingDown(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 
 	rig.coordinator.ReleaseSeat("swe")
 
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("a released seat is still tracked here")
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
@@ -2172,7 +2227,7 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 
 	if err := rig.coordinator.FailRun(t.Context(), "t1",
 		types.SandboxFailureSuspensionUnrecorded, "the conversation could not be written"); err != nil {
@@ -2182,7 +2237,7 @@ func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 		t.Fatalf("killed %v, want the running job's box %q reclaimed", killed, run.SandboxID)
 	}
 	rig.finished("t1")
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat stayed parked on a run that never suspended")
 	}
 	failed := rig.failures()
@@ -2273,7 +2328,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 		BoxRef{SandboxID: otherBox.ID()}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	rig.coordinator.markBusy("swe")
+	rig.coordinator.countRun("swe", StatusRunning)
 
 	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
 		t.Fatalf("RetireSeat: %v", err)
@@ -2302,7 +2357,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 			t.Errorf("announcement %+v, want reason %q for seat swe", f, types.SandboxFailureSeatRemoved)
 		}
 	}
-	if rig.coordinator.AwaitingSandbox("swe") {
+	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the retired seat is still tracked as busy")
 	}
 }
@@ -2450,7 +2505,7 @@ func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 	t.Run("clarification", func(t *testing.T) {
 		rig := newCoordRig(t)
 		rig.launch(preSplit)
-		rig.coordinator.markBusy("swe")
+		rig.coordinator.countRun("swe", StatusRunning)
 		rig.runner.Finish(Result{
 			NeedsInput: true, Question: "which branch?", AskTo: "requester",
 		})

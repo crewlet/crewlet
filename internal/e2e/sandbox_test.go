@@ -408,14 +408,27 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	}
 }
 
-// The clarification park: the agent asks, the seat is freed, and the answer
-// resumes the same turn.
+// The clarification park AND the answer that ends it: the agent asks, the seat
+// is freed, the person replies, and the SAME turn resumes.
+//
+// END TO END BECAUSE NOTHING SHORTER REACHES THE BUG. The answer is an ordinary
+// chat message arriving at a seat with nothing holding it, and every layer in
+// its way has to agree it might be an answer: the coordinator has to say a
+// question is open, the screening has to offer the delivery before a turn
+// consumes it, and the match has to find the row from the conversation the
+// reply arrived on. A test that injected the screening's conditions by hand
+// asserted the last two and assumed the first — which was the one that was
+// false, for the whole life of the feature, so the answer ran as an unrelated
+// turn and the box waited out its pause TTL.
 func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	n := startCoding(t, "ask")
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	n.wake(t, "swe", "the api test is flaking, please fix it")
+	// ON A THREAD, because that is what the answer is matched on: a run
+	// launched from a trigger that named no conversation is answerable by
+	// nothing, which is a different story with its own test.
+	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 
 	waitFor(t, "the run to park on its question", func() bool {
 		for _, run := range n.activeRuns(t) {
@@ -424,7 +437,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 			}
 		}
 		return false
-	})
+	}, n.diagnose)
 	parked := n.runFor(t, sandbox.StatusAwaiting)
 	if parked.Question != "Which branch should I target?" {
 		t.Fatalf("question = %q", parked.Question)
@@ -434,7 +447,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	}
 	// The seat is FREE while it waits: a person can take days, and the
 	// answer arrives on the seat's own inbox.
-	if n.engine.AwaitingSandbox("swe") {
+	if n.engine.SeatHeldBySandbox("swe") {
 		t.Fatal("a seat waiting on a person cannot receive their answer while parked")
 	}
 	// The box is held paused for an exact resume, with its TTL now ticking
@@ -445,6 +458,33 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	if parked.PausedAt.IsZero() {
 		t.Fatal("the row does not record that a snapshot is being held")
 	}
+
+	// THE PERSON ANSWERS, on the conversation they were asked in.
+	n.wakeInConversation(t, "swe", "target main, please", codingConversation)
+
+	waitFor(t, "the answer to resume the suspended turn", func() bool {
+		return slices.Contains(n.model.seen(), "resumed")
+	}, n.diagnose)
+	waitFor(t, "the answered run to settle", func() bool {
+		return len(n.activeRuns(t)) == 0
+	}, n.diagnose)
+
+	// ONE TURN, not two. This is the assertion the whole path turns on: the
+	// answer re-entered the suspended Execute loop rather than opening a
+	// fresh executor round, which is what a seat that treated the reply as
+	// an ordinary message would have done — planning the work again with the
+	// parked run still waiting beside it.
+	if got := countOf(n.model.seen(), "execute"); got != 1 {
+		t.Fatalf("the executor opened %d times; the answer started a new turn "+
+			"instead of resuming the one that asked. phases = %v",
+			got, n.model.seen())
+	}
+	// What the resumed round was handed is the spliced answer and not a
+	// fresh brief, which is what the "resumed" phase itself records: that
+	// branch of the scripted endpoint fires only for a request whose
+	// conversation already carries the run_sandbox reply. That the reply
+	// carries the person's own words is pinned where the text is built, in
+	// internal/sandbox's own suite.
 }
 
 // ---------------------------------------------------------------------
@@ -674,7 +714,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	// Recovery re-marked the seat busy from the row, so its mail is parked
 	// rather than starting a second turn beside the running job.
 	waitFor(t, "the recovered run to park the seat", func() bool {
-		return second.engine.AwaitingSandbox("swe")
+		return second.engine.SeatHeldBySandbox("swe")
 	})
 
 	// The job may finish now: the restart happened while it was running,

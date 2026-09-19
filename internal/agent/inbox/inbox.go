@@ -83,9 +83,25 @@ type Conditions struct {
 	// turn can run until a revision adds one.
 	TurnEngineReady bool
 
-	// AwaitingSandbox is whether the seat is parked on a detached coding
-	// run. Such a job can run for hours, far past any ack window.
-	AwaitingSandbox bool
+	// SeatHeldBySandbox is whether a detached coding run HOLDS the seat, so
+	// it starts no new turn. Such a job can run for hours, far past any ack
+	// window.
+	SeatHeldBySandbox bool
+
+	// SandboxAwaitsAnswer is whether one of the seat's detached runs stopped
+	// to ask a person something and is waiting for the reply.
+	//
+	// THE OPPOSITE OF THE FIELD ABOVE, not a synonym for it: a run parked on
+	// a question gives the seat back precisely so the answer can arrive on
+	// its inbox, so this is true exactly when that one is not — and the
+	// reply, when it comes, is an ordinary message on an ordinary seat with
+	// nothing about it that says what it answers.
+	//
+	// Both were one field called AwaitingSandbox, which named this question
+	// and held that one. The match guarded by it therefore ran only while
+	// the seat was HELD, which is the one state a parked run is never in, so
+	// no answer to a clarification ever reached the run that asked.
+	SandboxAwaitsAnswer bool
 
 	// AdmitsTriggers is the config posture: false when this node cannot
 	// apply an epoch its peers have, so it must not start NEW work under a
@@ -103,15 +119,26 @@ type Screening struct {
 	// requeue).
 	Events []*events.Event
 
-	// AwaitingSandbox marks the ONE park a caller may answer instead of
-	// requeuing: the seat is parked on a detached coding run, and that run
-	// may be waiting on a person's reply that this very delivery carries.
+	// OfferAsSandboxAnswer says this delivery must be offered to the
+	// sandbox's answer match BEFORE the action above is carried out: one of
+	// the seat's detached runs may be waiting on a person's reply that this
+	// very delivery carries.
+	//
+	// ORTHOGONAL TO THE ACTION, which is why it is a flag beside it rather
+	// than an action of its own. Nothing here can tell whether the delivery
+	// IS the answer — that is a store read, and this package reaches no
+	// store — so what a screening states is the pair: offer it, and if the
+	// offer does not claim it, do this. Both actions that CONSUME a delivery
+	// carry it: the park a held seat makes, and the ordinary proceed a free
+	// seat makes while one of its runs waits for a reply. A defer does not,
+	// and does not need to: it consumes nothing and stops the consumer, so
+	// the delivery is still there to be offered when the condition clears.
 	//
 	// Named rather than inferred from Reason, which is prose for a log: a
 	// caller matching on the sentence would break silently the first time
 	// it was reworded, and the failure mode is a clarification answer
 	// requeued for ever behind the question it answers.
-	AwaitingSandbox bool
+	OfferAsSandboxAnswer bool
 
 	// NoteDeferred asks the seat host to record that this consumer stopped,
 	// so the next successful renew resumes it.
@@ -156,7 +183,7 @@ func (s Screening) Result() queue.Result {
 //     requeuing without the pause loops them at whatever rate the broker will
 //     serve. The pause is the caller's to release, when a model arrives.
 //
-//  4. AWAITING SANDBOX. Park. The job outlasts any ack window.
+//  4. SEAT HELD BY A SANDBOX RUN. Park. The job outlasts any ack window.
 //
 //  5. CONFIG POSTURE. Defer. This sits AFTER the sandbox branch deliberately:
 //     a seat mid-sandbox is already parked there, so a clarification answer
@@ -181,6 +208,12 @@ func (s Screening) Result() queue.Result {
 // The completion-ledger read comes after ALL of these — so a parked partition
 // is never marked done — and before coalescing, so recorded constituents drop
 // out and only the remainder merges. See [Route].
+//
+// The sandbox ANSWER OFFER is not a stage, and deliberately: it decides
+// nothing about the delivery's disposition, it only says the disposition is
+// conditional on a store read the caller makes. So it rides as a flag on the
+// two outcomes that consume a delivery — see [Screening.OfferAsSandboxAnswer]
+// — and leaves the order above exactly as it was.
 func Screen(c Conditions, evs []*events.Event) Screening {
 	evs = dedupe(evs)
 	if len(evs) == 0 {
@@ -194,15 +227,22 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 			Action: ActionPauseAndPark, Events: evs,
 			Reason: "no turn engine: the company configures no providers.llm",
 		}
-	case c.AwaitingSandbox:
+	case c.SeatHeldBySandbox:
+		// UNCONDITIONALLY OFFERED, without consulting the second
+		// condition: a seat can hold one run while another of its runs
+		// waits for a person, and this is the park that would otherwise
+		// requeue the reply behind the question it answers.
 		return Screening{
-			Action: ActionPark, Reason: "awaiting a detached sandbox run",
-			AwaitingSandbox: true, Events: evs,
+			Action: ActionPark, Reason: "a detached sandbox run holds the seat",
+			OfferAsSandboxAnswer: true, Events: evs,
 		}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}
 	}
-	return Screening{Action: ActionProceed, Events: evs}
+	return Screening{
+		Action: ActionProceed, Events: evs,
+		OfferAsSandboxAnswer: c.SandboxAwaitsAnswer,
+	}
 }
 
 // dedupe drops repeat ids, preserving first-seen order.

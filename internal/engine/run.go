@@ -470,11 +470,17 @@ type Options struct {
 	// Park and still gets the real screening.
 	Dispatch *Dispatcher
 
-	// AwaitingSandbox reports whether a seat is parked on a detached coding
-	// run, whose job outlasts any broker ack window. Nil answers no, which
-	// is correct for a build with no sandbox provider wired: a seat that
-	// cannot start a detached run is never waiting on one.
-	AwaitingSandbox func(handle string) bool
+	// SandboxRuns reports what a seat's detached runs mean for its inbox:
+	// whether one HOLDS the seat — a job outlasting any broker ack window,
+	// so the seat's mail is parked — and whether one is waiting for a
+	// person's answer, which any delivery might be. Nil answers no to both,
+	// which is correct for a build with no sandbox provider wired: a seat
+	// that cannot start a detached run is never in either state.
+	//
+	// ONE SEAM FOR BOTH, because the two move together: a run that parks on
+	// a question stops holding its seat in the same moment it starts
+	// awaiting an answer, and two seams could be read either side of that.
+	SandboxRuns func(handle string) (held, awaitsAnswer bool)
 
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
 	// takes the production value, which is sized against coding jobs that
@@ -954,11 +960,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d = &Dispatcher{}
 	}
 	if d.Conditions == nil {
-		awaiting := opts.AwaitingSandbox
-		if awaiting == nil && e.sandboxCoordinator != nil {
-			awaiting = e.sandboxCoordinator.AwaitingSandbox
+		runs := opts.SandboxRuns
+		if runs == nil && e.sandboxCoordinator != nil {
+			runs = e.sandboxCoordinator.SeatRuns
 		}
-		d.Conditions = e.conditionsFor(awaiting)
+		d.Conditions = e.conditionsFor(runs)
 	}
 	if d.Ledgered == nil {
 		d.Ledgered = inbox.Ledgered
@@ -1330,10 +1336,18 @@ func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Even
 }
 
 // conditionsFor answers the ownership and posture questions for one seat.
-func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Conditions {
+func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(string) inbox.Conditions {
 	return func(handle string) inbox.Conditions {
 		_, owned := e.node.Host().MayStart(handle)
 		company := e.Company()
+		// ONE CALL FOR BOTH SANDBOX ANSWERS: a park is a seat freed and a
+		// question opened at once, and a reader that took them apart could
+		// see the seat between the halves — free, with nothing waiting —
+		// which is the delivery this whole seam exists to catch.
+		var heldBySandbox, sandboxAwaitsAnswer bool
+		if sandboxRuns != nil {
+			heldBySandbox, sandboxAwaitsAnswer = sandboxRuns(handle)
+		}
 		return inbox.Conditions{
 			// FRESHNESS, not membership: a renew at t proves exclusivity
 			// through t+ttl, and a membership snapshot can be a full TTL
@@ -1344,8 +1358,9 @@ func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Co
 			// with no providers.llm is applied with no model registry,
 			// and every delivery to its seats is held on the inbox until
 			// an apply brings one. See nomodels.go.
-			TurnEngineReady: company != nil && company.Models != nil,
-			AwaitingSandbox: awaiting != nil && awaiting(handle),
+			TurnEngineReady:     company != nil && company.Models != nil,
+			SeatHeldBySandbox:   heldBySandbox,
+			SandboxAwaitsAnswer: sandboxAwaitsAnswer,
 			// The SAME gate the inbound edge and the scheduler read, so
 			// a shedding node refuses at every trigger admission rather
 			// than only at the one that happened to be wired. It was a
