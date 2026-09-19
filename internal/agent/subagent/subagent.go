@@ -324,6 +324,14 @@ type Config struct {
 	// charging entirely, which is the embedded single-node case.
 	Budget toolloop.BudgetMeter
 
+	// Fence is the PARENT's seat fence, handed down unchanged. A worker
+	// runs on the parent's grant, calls a slice of the parent's tools and
+	// spends the parent's budget, so a node that has lost the seat must
+	// stop the worker for the same reason it stops the parent — and it
+	// cannot wait for the parent's own next round, because a whole graph
+	// of workers runs inside ONE of those. Nil is an open fence.
+	Fence func() error
+
 	// ParentRemaining is the parent seat's remaining token allowance, read
 	// once when the phase started. ZERO MEANS UNCAPPED: a seat with no
 	// per-agent budget imposes no fractional cap on its children either,
@@ -714,6 +722,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		Surface:   surface,
 		MaxRounds: task.maxTurns,
 		Budget:    meter,
+		Fence:     cfg.Fence,
 		Progress:  progress,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: res.SystemPrompt},

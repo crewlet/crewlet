@@ -53,10 +53,10 @@ func fixed(at time.Time) func() time.Time { return func() time.Time { return at 
 func TestTheCutoffIsNowLessTheHorizon(t *testing.T) {
 	var r recorder
 	r.rows = 3
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
-			{Name: "rows", Horizon: 2 * time.Hour, Run: r.run},
+			{Name: "rows", Scope: maintenance.Fleet, Horizon: 2 * time.Hour, Run: r.run},
 		},
 	})
 
@@ -84,9 +84,9 @@ func TestTheCutoffIsNowLessTheHorizon(t *testing.T) {
 func TestAJobWithNoHorizonStillRuns(t *testing.T) {
 	var r recorder
 	r.rows = 1
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:  fixed(base),
-		Jobs: []maintenance.Job{{Name: "events", Run: r.run}},
+		Jobs: []maintenance.Job{{Name: "events", Scope: maintenance.Fleet, Run: r.run}},
 	})
 
 	if _, err := w.Tick(t.Context()); err != nil {
@@ -102,11 +102,11 @@ func TestAJobWithNoHorizonStillRuns(t *testing.T) {
 // and the horizon would stop describing the table.
 func TestAHorizonBelowTheTickIsRaisedToIt(t *testing.T) {
 	var r recorder
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:      fixed(base),
 		Interval: time.Hour,
 		Jobs: []maintenance.Job{
-			{Name: "shallow", Horizon: time.Minute, Run: r.run},
+			{Name: "shallow", Scope: maintenance.Fleet, Horizon: time.Minute, Run: r.run},
 		},
 	})
 
@@ -127,13 +127,13 @@ func TestOneFailingJobDoesNotStopTheRest(t *testing.T) {
 	first.rows, third.rows = 2, 5
 	failing := recorder{err: boom}
 	partial := recorder{rows: 3, err: boom}
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
-			{Name: "first", Horizon: time.Hour, Run: first.run},
-			{Name: "second", Horizon: time.Hour, Run: failing.run},
-			{Name: "third", Horizon: time.Hour, Run: third.run},
-			{Name: "partial", Horizon: time.Hour, Run: partial.run},
+			{Name: "first", Scope: maintenance.Fleet, Horizon: time.Hour, Run: first.run},
+			{Name: "second", Scope: maintenance.Fleet, Horizon: time.Hour, Run: failing.run},
+			{Name: "third", Scope: maintenance.Fleet, Horizon: time.Hour, Run: third.run},
+			{Name: "partial", Scope: maintenance.Fleet, Horizon: time.Hour, Run: partial.run},
 		},
 	})
 
@@ -164,9 +164,9 @@ func TestOneFailingJobDoesNotStopTheRest(t *testing.T) {
 func TestANodeWithoutTheDutyDoesNotSweep(t *testing.T) {
 	var r recorder
 	var holds atomic.Bool
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:       fixed(base),
-		Jobs:      []maintenance.Job{{Name: "rows", Horizon: time.Hour, Run: r.run}},
+		Jobs:      []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run}},
 		ClaimDuty: func(context.Context) (bool, error) { return holds.Load(), nil },
 	})
 
@@ -197,9 +197,9 @@ func TestANodeWithoutTheDutyDoesNotSweep(t *testing.T) {
 // full because a range delete over a horizon is not incremental.
 func TestAnUnknownDutySkipsTheTick(t *testing.T) {
 	var r recorder
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:  fixed(base),
-		Jobs: []maintenance.Job{{Name: "rows", Horizon: time.Hour, Run: r.run}},
+		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run}},
 		ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
@@ -218,9 +218,9 @@ func TestAnUnknownDutySkipsTheTick(t *testing.T) {
 // worker stopping, and reporting it lets the loop exit quietly instead of
 // logging a spurious warning on every shutdown.
 func TestACancelledTickReportsCancellation(t *testing.T) {
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:  fixed(base),
-		Jobs: []maintenance.Job{{Name: "rows", Horizon: time.Hour, Run: (&recorder{}).run}},
+		Jobs: []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Horizon: time.Hour, Run: (&recorder{}).run}},
 		ClaimDuty: func(ctx context.Context) (bool, error) {
 			return false, ctx.Err()
 		},
@@ -236,10 +236,10 @@ func TestACancelledTickReportsCancellation(t *testing.T) {
 func TestTheLoopSweepsAndStops(t *testing.T) {
 	var r recorder
 	r.rows = 1
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:      fixed(base),
 		Interval: time.Millisecond,
-		Jobs:     []maintenance.Job{{Name: "rows", Run: r.run}},
+		Jobs:     []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Run: r.run}},
 	})
 
 	w.Start(t.Context())
@@ -272,11 +272,12 @@ func TestStopWaitsForTheTickInFlight(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	var finished atomic.Bool
 	var once sync.Once
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:      fixed(base),
 		Interval: time.Millisecond,
 		Jobs: []maintenance.Job{{
-			Name: "slow",
+			Name:  "slow",
+			Scope: maintenance.Fleet,
 			Run: func(context.Context, time.Time, time.Time) (int64, error) {
 				once.Do(func() {
 					close(entered)
@@ -317,7 +318,7 @@ func TestStopWaitsForTheTickInFlight(t *testing.T) {
 }
 
 func TestAWorkerWithNoJobsIsANoOp(t *testing.T) {
-	w := maintenance.New(maintenance.Options{Now: fixed(base)})
+	w := newWorker(t, maintenance.Options{Now: fixed(base)})
 	if got := w.Jobs(); len(got) != 0 {
 		t.Fatalf("Jobs = %v", got)
 	}
@@ -331,32 +332,94 @@ func TestAWorkerWithNoJobsIsANoOp(t *testing.T) {
 	}
 }
 
-// A job with no name or no function is dropped rather than carried as a
-// half-built entry that panics on the first tick.
-func TestAnIncompleteJobIsDropped(t *testing.T) {
+// A JOB THE WIRING GOT WRONG IS REFUSED, AND THE REFUSAL NAMES ALL OF THEM.
+//
+// It used to be dropped and the worker started without it, which is the
+// silence this whole type exists to remove: the log lists the jobs it kept,
+// the one it did not keep is not mentioned anywhere, and the table that job
+// was for grows for the life of the deployment.
+//
+// The third case is the one that motivated the change. An unset Scope is not
+// a malformed job in any way a compiler or a reviewer can see — it is a
+// perfectly good job that silently became a fleet singleton, and six of the
+// seven local sweeps in this package were exactly that.
+func TestAnIncompleteJobIsRefused(t *testing.T) {
 	var r recorder
-	w := maintenance.New(maintenance.Options{
+	_, err := maintenance.New(maintenance.Options{
 		Now: fixed(base),
 		Jobs: []maintenance.Job{
-			{Name: "", Horizon: time.Hour, Run: r.run},
-			{Name: "nameless", Horizon: time.Hour},
-			{Name: "real", Horizon: time.Hour, Run: r.run},
+			{Name: "", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run},
+			{Name: "nameless", Scope: maintenance.Fleet, Horizon: time.Hour},
+			{Name: "unscoped", Horizon: time.Hour, Run: r.run},
+			{Name: "real", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run},
 		},
 	})
-	if got := w.Jobs(); !slices.Equal(got, []string{"real"}) {
-		t.Fatalf("Jobs = %v, want only the complete one", got)
+	if err == nil {
+		t.Fatal("three malformed jobs were accepted, so a table each one was " +
+			"for is swept by nothing and nothing says so")
 	}
-	if _, err := w.Tick(t.Context()); err != nil {
-		t.Fatalf("tick: %v", err)
+	// EVERY OFFENDER IN ONE MESSAGE. Reporting the first would make fixing
+	// three a loop of three builds.
+	for _, want := range []string{"no Name", "no Run", "Scope is"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "unscoped") {
+		t.Errorf("the refusal does not name the unscoped job: %v", err)
+	}
+	if strings.Contains(err.Error(), "real") {
+		t.Errorf("the refusal names the job that is fine: %v", err)
+	}
+
+	// AND THE CONTROL: the same list minus the offenders is accepted, so
+	// this test fails on a New that refuses everything just as loudly as on
+	// one that refuses nothing.
+	w, err := maintenance.New(maintenance.Options{
+		Now:  fixed(base),
+		Jobs: []maintenance.Job{{Name: "real", Scope: maintenance.Fleet, Horizon: time.Hour, Run: r.run}},
+	})
+	if err != nil {
+		t.Fatalf("a well-formed job was refused: %v", err)
+	}
+	if got := w.Jobs(); !slices.Equal(got, []string{"real"}) {
+		t.Fatalf("Jobs = %v, want the one complete job", got)
+	}
+}
+
+// THE SCOPE DECIDES WHERE A JOB RUNS, and this is the half that was broken.
+// newWorker builds a worker for a test, failing at the call site rather than
+// returning the error: every construction below is meant to succeed, and the
+// one test that is about a refusal calls maintenance.New directly.
+func newWorker(t *testing.T, opts maintenance.Options) *maintenance.Worker {
+	t.Helper()
+	w, err := maintenance.New(opts)
+	if err != nil {
+		t.Fatalf("build the worker: %v", err)
+	}
+	return w
+}
+
+func TestScopeValidHasNoValidZero(t *testing.T) {
+	t.Parallel()
+	for _, s := range []maintenance.Scope{maintenance.Fleet, maintenance.NodeLocal} {
+		if !s.Valid() {
+			t.Errorf("%q is one of the two answers and Valid says otherwise", s)
+		}
+	}
+	for _, s := range []maintenance.Scope{"", "per_node", "PerNode", "node-local"} {
+		if s.Valid() {
+			t.Errorf("%q is not one of the two answers and Valid accepted it", s)
+		}
 	}
 }
 
 func TestStartIsIdempotent(t *testing.T) {
 	var r recorder
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Now:      fixed(base),
 		Interval: time.Millisecond,
-		Jobs:     []maintenance.Job{{Name: "rows", Run: r.run}},
+		Jobs:     []maintenance.Job{{Name: "rows", Scope: maintenance.Fleet, Run: r.run}},
 	})
 	w.Start(t.Context())
 	w.Start(t.Context()) // a second loop would double every delete
@@ -484,14 +547,14 @@ func TestAbsentLedgersContributeNoJobs(t *testing.T) {
 func TestAPerNodeJobRunsWithoutTheDuty(t *testing.T) {
 	t.Parallel()
 	var fleet, mine int
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
 		Jobs: []maintenance.Job{
-			{Name: "shared", Run: func(context.Context, time.Time, time.Time) (int64, error) {
+			{Name: "shared", Scope: maintenance.Fleet, Run: func(context.Context, time.Time, time.Time) (int64, error) {
 				fleet++
 				return 1, nil
 			}},
-			{Name: "mine", PerNode: true,
+			{Name: "mine", Scope: maintenance.NodeLocal,
 				Run: func(context.Context, time.Time, time.Time) (int64, error) {
 					mine++
 					return 1, nil
@@ -521,9 +584,9 @@ func TestAPerNodeJobRunsWithoutTheDuty(t *testing.T) {
 func TestAnUnreadableGateIsReportedRatherThanReadAsNoWork(t *testing.T) {
 	t.Parallel()
 	ran := 0
-	w := maintenance.New(maintenance.Options{
+	w := newWorker(t, maintenance.Options{
 		Jobs: []maintenance.Job{
-			{Name: "gated",
+			{Name: "gated", Scope: maintenance.Fleet,
 				Gate: func(context.Context) (bool, error) {
 					return false, errors.New("the store is unreachable")
 				},
@@ -531,7 +594,7 @@ func TestAnUnreadableGateIsReportedRatherThanReadAsNoWork(t *testing.T) {
 					ran++
 					return 1, nil
 				}},
-			{Name: "quiet",
+			{Name: "quiet", Scope: maintenance.Fleet,
 				Gate: func(context.Context) (bool, error) { return false, nil },
 				Run: func(context.Context, time.Time, time.Time) (int64, error) {
 					t.Error("a job whose gate said there is no work ran anyway")

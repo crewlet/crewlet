@@ -43,7 +43,7 @@ func TestEveryBucketHasALifetimeClass(t *testing.T) {
 	}
 	for _, row := range rows {
 		field := regexp.MustCompile(`&store\.(\w+),`).FindStringSubmatch(row)[1]
-		if !strings.Contains(rationale, entryName(field)) {
+		if !strings.Contains(rationale, field) {
 			t.Errorf("bucket %q has a row in the open table and no entry in the "+
 				"rationale: every bucket's retention is a decision, and one "+
 				"with no entry is one nobody made", field)
@@ -89,16 +89,4 @@ func section(text, start, end string) (string, bool) {
 		return "", false
 	}
 	return text[i : i+j], true
-}
-
-// entryName maps a struct field to the name the rationale uses for it.
-func entryName(field string) string {
-	switch field {
-	case "cooldowns":
-		return "cooldowns"
-	case "kbVectors":
-		return "kbVectors"
-	default:
-		return field
-	}
 }

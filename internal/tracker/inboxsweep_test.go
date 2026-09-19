@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -36,13 +37,13 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("InboxJobs returned %d jobs, want 1", len(jobs))
 	}
-	// PER NODE, because `tracker_notifications` is Divergent: each node
+	// NODE-LOCAL, because `tracker_notifications` is Divergent: each node
 	// holds its own rows, so a fleet singleton would sweep one and let the
 	// table grow for ever on every other — which looks exactly like a
 	// sweep that works to the operator who checks the node it ran on.
-	if !jobs[0].PerNode {
-		t.Fatal("the inbox sweep is a fleet singleton, so it tidies one " +
-			"node's rows and lets every peer's grow for ever")
+	if jobs[0].Scope != maintenance.NodeLocal {
+		t.Fatalf("the inbox sweep has scope %q, so it tidies one node's "+
+			"rows and lets every peer's grow for ever", jobs[0].Scope)
 	}
 	if jobs[0].Horizon != 365*24*time.Hour {
 		t.Fatalf("the job's horizon is %s, want the retention it was given",

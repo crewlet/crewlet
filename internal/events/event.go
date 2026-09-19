@@ -7,7 +7,9 @@
 // per-event fields live in a Payload value registered under the event's type
 // string.
 //
-// Two properties are load-bearing and must survive any change here:
+// Two properties are load-bearing and must survive any change here, and
+// together they are ADR-0006 — a contract between PEERS rather than between a
+// build and a file, which is why neither is optional at any version:
 //
 //   - Additive-only evolution. New fields get defaults; nothing is removed or
 //     repurposed. A fleet mid-upgrade has both versions on the wire.

@@ -75,7 +75,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens seventeen of these in a row and logs nothing between them, so a
+	// opens eighteen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
 	//
@@ -291,7 +291,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why FOURTEEN buckets and not one
+// # Why FIFTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -316,6 +316,11 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	channels   none at all, for a third reason: a bucket age cannot tell an
 //	           OPEN channel from a closed one, so it would reap the
 //	           authorization record of an ask still waiting for its answer
+//	follows    a chat thread's last-activity horizon, ninety days: every
+//	           re-assert rewrites the record, so the bucket's age IS that
+//	           stamp — and a follow that expired while the thread was still
+//	           live costs at most one missed non-mention reply, which the
+//	           next mention re-establishes through the ordinary path
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
@@ -365,6 +370,7 @@ const (
 	configSuffix       = "_config"
 	budgetSuffix       = "_budgets"
 	channelSuffix      = "_channels"
+	followsSuffix      = "_follows"
 	firesSuffix        = "_fires"
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
@@ -402,6 +408,11 @@ type FleetConfig struct {
 	// the same fact as LedgerRetention — the scheduler's catchup ceiling —
 	// and kept a separate knob because they are not one number.
 	FireRetention time.Duration
+
+	// FollowRetention is how long a chat thread-follow survives with no
+	// activity. The bucket's age IS that horizon: every re-assert rewrites
+	// the record, so the age is a true last-activity stamp.
+	FollowRetention time.Duration
 
 	// CooldownMax is the longest credential cooldown, and therefore the
 	// bucket's age: a cooldown is stored as its own end instant, so the
@@ -444,6 +455,7 @@ func (c *FleetConfig) normalize() error {
 	}{
 		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
+		{"FollowRetention", c.FollowRetention},
 		{"CooldownMax", c.CooldownMax},
 		{"StatusFreshness", c.StatusFreshness},
 	}
@@ -476,6 +488,7 @@ type FleetStore struct {
 	config       jetstream.KeyValue
 	budgets      jetstream.KeyValue
 	channels     jetstream.KeyValue
+	follows      jetstream.KeyValue
 	secrets      jetstream.KeyValue
 	fires        jetstream.KeyValue
 	runs         jetstream.KeyValue
@@ -522,7 +535,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, fourteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, fifteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -589,6 +602,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
 		{&store.channels, channelSuffix,
 			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
+		{&store.follows, followsSuffix,
+			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
+			cfg.FollowRetention},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},

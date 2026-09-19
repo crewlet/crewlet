@@ -319,7 +319,7 @@ func (h *mailboxHarness) record(handle string) (coord.MailboxRecord, bool) {
 // tick runs the sweep through a real worker at a pinned instant, so the
 // cutoff is the one the worker derives from the job's own horizon.
 func (h *mailboxHarness) tick(m *maintenance.Mailboxes, at time.Time) (int64, error) {
-	w := maintenance.New(maintenance.Options{Now: fixed(at), Jobs: m.Jobs()})
+	w := newWorker(h.t, maintenance.Options{Now: fixed(at), Jobs: m.Jobs()})
 	swept, err := w.Tick(h.t.Context())
 	return swept["seat_mailboxes"], err
 }

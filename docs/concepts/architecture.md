@@ -497,8 +497,8 @@ answer by the same route?*
 flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
-    DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written only by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>seventeen buckets on the stream's own connection</i>"]
+    DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>eighteen buckets on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -526,16 +526,27 @@ What each of the four holds, in full:
 | **`agent_diary`** · **`episodes`** | Vector-indexed recall |
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
-| `company_config` · `scheduled_runs` · `chat_thread_follows` · `secret_values` | Revisions, cron bookkeeping, thread follows, and the secret store's bootstrap half |
+| `company_config` · `scheduled_runs` · `secret_values` | Revisions, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
 | `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
+| `chat_thread_follows` | EMPTY, and kept for one reason: rows written before the follows moved to coordination are carried onto the fleet at the next start, and a migration cannot do that — a `.sql` file has no KV client, and it runs before any Go code on every boot. Nothing reads or writes it at runtime. See node migration 0028 |
+| `stream_identity` | What this node last saw of each stream's identity, which is how it notices one that was recreated underneath it. A per-node **observation** rather than shared state: two nodes can legitimately have seen different generations, so one agreed value would destroy the comparison it exists to make |
 
 **Every node, identically — the replicated store.**
 
-One file per node, written **only** by a state log's applier: records arrive
-in one order from the log, every node applies the same ones, and the rows plus
-this node's position on the log commit in a single transaction. There is no
-leader and no node whose copy is the real one.
+One file per node, written by a state log's applier: records arrive in one
+order from the log, every node applies the same ones, and the rows plus this
+node's position on the log commit in a single transaction. There is no leader
+and no node whose copy is the real one.
+
+**Three writes in the engine are not records**, and each is a column or a row
+no record could own: the version reset after a log reanchor (the stream a
+record would go to is the one being replaced), the clear of a duplicate-rank
+probe flag each node's own applier sets, and the inbox sweep over rows whose
+class lets two nodes legitimately hold different ones. They are named with
+their reasons in one place, and a fourth fails the build — the rule and its
+exceptions are `adr/0002`, held by
+`internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
 
 | Tables | What they hold |
 |---|---|
@@ -601,8 +612,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are seventeen of them rather than one with prefixes: three in the lease
-store, fourteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are eighteen of them rather than one with prefixes: three in the lease
+store, fifteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

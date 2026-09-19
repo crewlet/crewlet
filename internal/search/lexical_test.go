@@ -882,3 +882,187 @@ func firstDisagreement(got, want map[string]int) string {
 	}
 	return "none"
 }
+
+// A FAILED STEP IS RETRIED OVER ITS OWN WINDOW, NOT SKIPPED PAST.
+//
+// The scan cursor is in-memory state and lives outside the transaction that
+// produces it, so advancing it inside that transaction advanced it for a step
+// that then failed — and every document in that window went unindexed until
+// the walk wrapped, which at ten thousand documents was about seventeen
+// minutes. It is the exact staleness this walk's scan-then-fetch design exists
+// to remove, reintroduced on the error path.
+func TestAFailedIndexStepDoesNotSkipItsWindow(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	for i := range 3 {
+		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Rollback %d", i),
+			"roll back a deploy by release", 1)
+	}
+	src := &failingFetchSource{LexicalSource: search.PageSource{}, failuresLeft: 1}
+	x := search.NewIndexerOver(db, []search.LexicalSource{src})
+
+	if _, err := x.Sweep(t.Context()); err == nil {
+		t.Fatal("the sweep whose fetch failed reported success")
+	}
+	// The SAME window, which is what says the cursor did not move: a second
+	// scan starting after the first one's last id is a scan that has given
+	// up on every document in between.
+	src.scanned = nil
+	if _, err := x.Sweep(t.Context()); err != nil {
+		t.Fatalf("the retry after a failed fetch: %v", err)
+	}
+	if len(src.scanned) == 0 {
+		t.Fatal("the retry scanned nothing at all")
+	}
+	if got := src.scanned[0]; got != "" {
+		t.Fatalf("the retry resumed after %q, so the failed step's window was "+
+			"skipped and those pages stay unfindable until the walk wraps", got)
+	}
+
+	// And the corpus really does become findable, which is the property the
+	// cursor exists to serve rather than a restatement of the assertion.
+	indexAll(t, x)
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "rollback deploy"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 3 {
+		t.Errorf("found %d of 3 pages after a failed step: %v", len(hits), titles(hits))
+	}
+}
+
+// failingFetchSource fails its first N fetches and records where each scan
+// resumed from.
+type failingFetchSource struct {
+	search.LexicalSource
+	failuresLeft int
+	scanned      []string
+}
+
+func (f *failingFetchSource) Versions(ctx context.Context, tx *sql.Tx, after string,
+	limit int) ([]search.DocVersion, error) {
+
+	f.scanned = append(f.scanned, after)
+	return f.LexicalSource.Versions(ctx, tx, after, limit)
+}
+
+func (f *failingFetchSource) Fetch(ctx context.Context, tx *sql.Tx,
+	ids []string) ([]search.Doc, error) {
+
+	if f.failuresLeft > 0 {
+		f.failuresLeft--
+		return nil, errors.New("the replicated estate went away mid-batch")
+	}
+	return f.LexicalSource.Fetch(ctx, tx, ids)
+}
+
+// THE SCANNER IS WHAT KNOWS, and it has to say so before it scans.
+//
+// A node holds the whole corpus from the moment it opens its replicated file;
+// its lexical index over that corpus is its own and is built by its own walk.
+// Between those two moments the node can answer a bucket range with almost
+// nothing and look exactly like a node whose range is almost empty.
+func TestAScanOverAnUnbuiltIndexSaysItCoveredNothing(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	page(t, db, "p.one", "ENG", "Rollback", "roll back a deploy by release", 1)
+	x := search.NewIndexerOver(db, []search.LexicalSource{search.PageSource{}})
+	scanner := search.NodeScanner{Index: x}
+
+	got, err := scanner.Scan(t.Context(), search.FanQuery{Text: "rollback"},
+		search.Everything())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !got.Building {
+		t.Fatal("a scan before the index's first lap reported a covered range, " +
+			"so its near-empty answer merges under complete coverage")
+	}
+	if len(got.Lexical) != 0 {
+		t.Errorf("a slice that says it covered nothing carried %d hits — a range "+
+			"cannot be both scanned and unscanned", len(got.Lexical))
+	}
+
+	indexAll(t, x)
+	got, err = scanner.Scan(t.Context(), search.FanQuery{Text: "rollback"},
+		search.Everything())
+	if err != nil {
+		t.Fatalf("scan after the build: %v", err)
+	}
+	if got.Building {
+		t.Fatal("a built index still reports itself building, which would make " +
+			"every search in the company permanently scoped")
+	}
+	if len(got.Lexical) != 1 {
+		t.Errorf("the built index answered with %d hits", len(got.Lexical))
+	}
+}
+
+// PER SOURCE, so one corpus's lap does not hold the other's answers.
+func TestReadyForNarrowsToTheSourcesAQueryNames(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	page(t, db, "p.one", "ENG", "Rollback", "roll back a deploy by release", 1)
+	x := search.NewIndexerOver(db, []search.LexicalSource{search.PageSource{}})
+
+	if x.ReadyFor(string(search.SourcePage)) {
+		t.Error("a corpus that has not wrapped reported itself built")
+	}
+	// A NAME THIS INDEX DOES NOT COVER IS IGNORED, not refused: the source
+	// filter crosses the broker, and a peer on a build that knows a corpus
+	// this one does not must answer over what it has rather than declare
+	// itself permanently unbuilt.
+	if !x.ReadyFor("a-corpus-this-build-has-never-heard-of") {
+		t.Error("an unknown source name made the index report itself building, " +
+			"which would scope every search a newer peer's query reaches")
+	}
+
+	indexAll(t, x)
+	if !x.ReadyFor(string(search.SourcePage)) {
+		t.Error("the page corpus wrapped and still reports itself building")
+	}
+	if !x.Ready() {
+		t.Error("every source wrapped and Ready() disagrees with ReadyFor()")
+	}
+}
+
+// A SOURCE THAT IGNORES THE CURSOR FAILS THE WALK RATHER THAN SPINNING IN IT.
+//
+// The lap's three exits are "it wrapped", "it found work" and "the context
+// ended". A source answering the same batch for ever reaches none of them, so
+// before this guard the indexer span on one batch: it never indexed again,
+// never marked the source built, and the only symptom was search permanently
+// reporting scoped coverage with nothing in the log to say why. The realistic
+// cause is not a hand-written fake but a collation under which the source's own
+// ORDER BY disagrees with the comparison the cursor is carried through.
+func TestASourceThatNeverAdvancesTheCursorFailsRatherThanHangs(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexerOver(db, []search.LexicalSource{
+		stuckSource{LexicalSource: search.PageSource{}},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := x.Sweep(t.Context())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a source answering the same batch for ever reported a clean sweep")
+		}
+		if !strings.Contains(err.Error(), "not after it") {
+			t.Errorf("err = %v, want it to name what the source did wrong", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the walk never returned, which is the hang this guard exists for")
+	}
+}
+
+// stuckSource answers every scan with the same id, whatever cursor it is given.
+type stuckSource struct{ search.LexicalSource }
+
+func (stuckSource) Versions(context.Context, *sql.Tx, string, int) ([]search.DocVersion, error) {
+	return []search.DocVersion{{ID: "same", Version: 1}}, nil
+}

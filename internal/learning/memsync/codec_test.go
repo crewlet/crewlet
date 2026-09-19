@@ -307,8 +307,21 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 			"and a peer's copy would claim this node had seen it too",
 		"scheduled_runs": "this node's dispatch history; the claim that stops a " +
 			"double fire is the fleet's, in coordination",
-		"chat_thread_follows": "re-asserted by the next mention, so it self-heals " +
-			"faster than replication would carry it",
+		// THE EXEMPTION THAT WAS WRONG ONCE, and is right now for a
+		// different reason. It used to read "re-asserted by the next
+		// mention, so it self-heals faster than replication would carry
+		// it" — an argument about a seat MOVING node, where the question
+		// was a delivery landing on a different node each time. Node
+		// migration 0028 answered that by moving the state to
+		// coordination. What is left in this table is not memory and not
+		// state: it is the handoff's SOURCE, drained at the next boot by
+		// internal/notify/followsync and empty for ever after. Carrying
+		// it on the changelog would replicate rows whose whole purpose
+		// is to stop existing.
+		"chat_thread_follows": "not a seat's memory and no longer this node's " +
+			"state — the follows are coordination's since node migration 0028, " +
+			"and this table survives only as that move's one-time handoff " +
+			"source, drained at boot by internal/notify/followsync",
 	}
 
 	rows, err := db.SQL().QueryContext(t.Context(),

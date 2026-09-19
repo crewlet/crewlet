@@ -129,6 +129,7 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 		ClaimTTL:        ttl,
 		LedgerRetention: ttl,
 		FireRetention:   ttl,
+		FollowRetention: ttl,
 		CooldownMax:     ttl,
 		StatusFreshness: ttl,
 	})

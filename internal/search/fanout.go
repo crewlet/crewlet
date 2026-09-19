@@ -104,6 +104,30 @@ type Slice struct {
 	// while this loses the half that finds what shares no word with the
 	// query, across the range it did scan.
 	SemanticSkipped bool
+
+	// Building says this participant's LEXICAL INDEX has not completed a
+	// lap over the sources this query named, so it did not cover its
+	// range at all and the coordinator must count its buckets MISSING.
+	//
+	// It is not a degradation like the field above, and that is the whole
+	// point of it being separate. Every node holds the whole corpus, but
+	// the lexical index over it is each node's OWN — built by that node's
+	// own walk, in its own database, on its own schedule — so a node that
+	// joined a minute ago holds the corpus and can find nothing in it.
+	// Handed a bucket range, such a node answers almost nothing and the
+	// coordinator, having no way to tell that from a range with nothing
+	// in it, reported COMPLETE coverage over a corpus it had silently
+	// dropped a slice of. That is the one thing this file's whole coverage
+	// arithmetic exists to prevent — "an answer that is quietly short is
+	// indistinguishable from a corpus that is quietly short" — and the
+	// hole was that the sentence was only ever true for a participant that
+	// did not reply.
+	//
+	// The zero value is "ready", which is what a peer on a build that
+	// predates this field sends, and it is the old behaviour: evolution
+	// here is additive and an unknown field is ignored, so a rolling
+	// upgrade degrades a ranking rather than a search.
+	Building bool
 }
 
 // FanQuery is what every participant is asked.
@@ -228,8 +252,13 @@ type Answer struct {
 	BucketsAnswered int
 	BucketsMissing  int
 
-	// Absent names the nodes whose assignments did not come back, so an
+	// Absent names the nodes that did not COVER their assignment, so an
 	// operator has somewhere to look. Sorted, for a stable log line.
+	//
+	// Two ways in, and they read the same to a caller because the corpus
+	// lost the same slice either way: a participant that never replied,
+	// and one that replied saying its lexical index is still building
+	// (see [Slice.Building]).
 	Absent []string
 
 	// SemanticSkipped says at least one answering participant ran without
@@ -437,6 +466,18 @@ func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
 		if _, named := assigned[a.Node]; !named || answered[a.Node] {
 			// Not in the table, or a second answer from one node —
 			// either way a range somebody else also holds.
+			continue
+		}
+		if a.Building {
+			// A REPLY THAT SAYS IT COVERED NOTHING IS NOT AN ANSWER.
+			// Counting it would put this participant's buckets in
+			// BucketsAnswered on the strength of a reply that states
+			// the opposite, which is the silent-short-answer the whole
+			// partition exists to make visible. Its hits are dropped
+			// with it rather than merged beside a missing range: a
+			// range cannot be both scanned and unscanned, and half of
+			// one merged under "complete" is how the coverage number
+			// stops meaning anything.
 			continue
 		}
 		answered[a.Node] = true

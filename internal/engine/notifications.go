@@ -617,17 +617,25 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 	return transport, nil
 }
 
-// followStore is the durable thread-follow state, or nil with no store.
+// followStore is the durable thread-follow state, or nil with no
+// coordination store.
+//
+// THE FLEET'S, not this node's. An inbound chat message is claimed and parsed
+// by ONE node — the notification group is a competing consumer — and the next
+// reply in the same thread by whichever node wins that time. A follow held in
+// this node's own database is therefore a follow the next reply's node cannot
+// see, so a thread reply that is not a mention reached its seat by chance, and
+// less often the more nodes a company ran. See ADR-0003.
 //
 // Nil turns thread routing OFF rather than holding follows in memory: a
 // process-local follow set dies with the process, so every restart would
 // make every seat deaf to every thread it was following — and it would do so
 // silently, which is worse than not having the feature.
 func (e *Engine) followStore() notify.FollowStore {
-	if e.backends.Store == nil {
+	if e.backends.Fleet == nil {
 		return nil
 	}
-	return e.backends.Store.ThreadFollows()
+	return e.backends.Fleet
 }
 
 // notifyValve is the shared per-seat notification cap, or nil with no

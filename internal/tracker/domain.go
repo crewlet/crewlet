@@ -148,9 +148,25 @@ func (Domain) ReadinessInput() bool { return true }
 // byte-identical.
 //
 // TRUE, and it is the claim the whole design rests on: N copies of one SQL
-// state, derived from one ordered log by one deterministic applier. It is
-// checkable — a checksum over the replicated file's own tables — which is
-// what turns "should be identical" into something a fleet reports on.
+// state, derived from one ordered log by one deterministic applier.
+//
+// # It is ASSERTED and not verified, and this is where that is written down
+//
+// A checksum over each node's identity-claimed tables, published and compared,
+// is what would turn "should be identical" into something a fleet reports on.
+// Nothing builds one. This sentence used to say it was checkable in a way that
+// read as though something checked it — the shape
+// [internal/statelog]'s own vocabulary gate exists to catch, since a paragraph
+// describing a mechanism nobody built is an instruction to build it.
+//
+// A checksum written today would also be WRONG, and the reason is worth
+// keeping beside the claim: `tracker_projects.rank_duplicate_pending` is an
+// applier-local hint, set by each node's own applier from its own probe and
+// cleared by that node's next rank move or by the duty — see [duty.clearProbe],
+// which states the same thing from the other end. Two nodes legitimately hold
+// different values for it at one checkpoint. So the claim is really "identical
+// in every column a RECORD owns", and a verification has to exclude the
+// columns no record does before it can mean anything.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // BarrierTables is the empty set, DECLARED.

@@ -164,9 +164,15 @@ func (Domain) ReadinessInput() bool { return true }
 // byte-identical.
 //
 // TRUE. N copies of one SQL state, derived from one ordered log by one
-// deterministic applier — checkable as a checksum over the replicated file's
-// own tables, which is what turns "should be identical" into something a fleet
-// reports on.
+// deterministic applier.
+//
+// ASSERTED AND NOT VERIFIED. A checksum over each node's identity-claimed
+// tables, published and compared, is what would turn "should be identical"
+// into something a fleet reports on, and nothing builds one — see
+// [internal/tracker.Domain.ClaimsIdentity], which carries the argument and the
+// one column that a naive checksum would trip over. Every column this domain
+// writes is owned by a record, so the exclusion that domain needs does not
+// arise here.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // BarrierTables is the empty set, DECLARED.

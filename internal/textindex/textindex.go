@@ -31,8 +31,9 @@
 //
 // Not here. This package holds the analyzer and the arithmetic, as pure
 // functions over values, so both are testable without a database and neither
-// can be quietly changed by an index rebuild. [internal/projection] owns the
-// tables and the statements.
+// can be quietly changed by an index rebuild. [internal/search] owns the
+// tables and the statements — its Indexer maintains the inverted list this
+// package's arithmetic ranks.
 package textindex
 
 import (

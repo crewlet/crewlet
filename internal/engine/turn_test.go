@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -378,9 +380,10 @@ func TestAFailedTurnIsStillRecordedAsWorked(t *testing.T) {
 // A broken phase that proved nothing reached outside the engine is the case
 // the dispatcher's old comment described for EVERY failure: nothing was
 // recorded, so a redelivery genuinely does run it cleanly. A provider that
-// never answered, a runner that could not be built, a refused budget and a
-// seat handed to another node mid-call all land here — none of them proves a
-// write, and every one of them is worth trying again.
+// never answered, a runner that could not be built and a refused budget all
+// land here — none of them proves a write, and every one of them is worth
+// trying again. A seat handed to another node mid-turn is worth trying again
+// too, and gets the cheaper verb: see the deferral test below.
 func TestABrokenPhaseThatProvedNothingStillNAKsAndRecordsNothing(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -398,6 +401,67 @@ func TestABrokenPhaseThatProvedNothingStillNAKsAndRecordsNothing(t *testing.T) {
 	}
 	if len(completions.Worked(ctx, "ceo", []string{workkey.Derive([]string{a.ID.String()})})) != 0 {
 		t.Error("a broken phase recorded the trigger as worked")
+	}
+}
+
+// A SEAT THAT MOVED MID-TURN DEFERS RATHER THAN NAKS.
+//
+// It is the same condition [inbox.Screen] refuses before the turn starts —
+// "seat is not owned here" — caught a phase later, because the window is open
+// for the whole length of a turn and only one end of it was ever checked. One
+// condition, so one disposition: a deferral hands the delivery to the seat's
+// new owner at zero accrued redeliveries and quiesces this attachment, where
+// a NAK spends one of the trigger's twenty-five deliveries on a node with no
+// further claim to the seat.
+func TestASeatThatMovedMidTurnIsDeferredToItsNewOwner(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	a := ev("notification")
+	r := &recorder{err: fmt.Errorf("runner: execute: %w", seat.ErrSeatMoved)}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	ctx := context.Background()
+
+	got := d.Dispatch(ctx, "ceo", []*events.Event{a})
+	if got.Outcome != queue.OutcomeDefer {
+		t.Fatalf("outcome = %v, want a deferral: the delivery is healthy and a "+
+			"successor is entitled to it", got.Outcome)
+	}
+	if len(completions.Worked(ctx, "ceo", []string{workkey.Derive([]string{a.ID.String()})})) != 0 {
+		t.Error("a seat that moved recorded the trigger as worked, so its new " +
+			"owner will never run it")
+	}
+	// The host has to hear about it, or the consumer stays attached to a
+	// seat this node no longer serves.
+	if len(r.deferred) != 1 || r.deferred[0] != "ceo" {
+		t.Errorf("deferred = %v, want the seat host told once", r.deferred)
+	}
+}
+
+// AND NOT WHEN THE TURN ALREADY ACTED, which is the half a deferral must not
+// take: handing the delivery to a successor that would repeat a chat post is
+// the storm [Dispatcher.abandon] exists to stop, and it does not stop being
+// that because the reason this node gave up was losing the seat.
+func TestASeatThatMovedAfterActingIsStillRecordedRatherThanDeferred(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	a := ev("notification")
+	r := &recorder{
+		result: turn.Result{Acted: true},
+		err:    fmt.Errorf("runner: execute: %w", seat.ErrSeatMoved),
+	}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	ctx := context.Background()
+
+	got := d.Dispatch(ctx, "ceo", []*events.Event{a})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK — the successor would repeat this "+
+			"turn's writes", got.Outcome)
+	}
+	key := workkey.Derive([]string{a.ID.String()})
+	if !completions.Worked(ctx, "ceo", []string{key})[key] {
+		t.Error("the trigger was not recorded, so a peer's redelivery runs it again")
 	}
 }
 

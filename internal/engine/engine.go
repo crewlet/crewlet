@@ -217,6 +217,11 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
+		// Threaded from the caller rather than resolved here, because
+		// whether this node holds the seat is a fact about its leases and
+		// not about the configuration — the same reason reg is a
+		// parameter.
+		Fence: in.Fence,
 		// The company's own delegation caps AND the seat's visible worker
 		// templates, from the SAME pinned epoch as the round caps above,
 		// so a revision landing mid-turn cannot move a cap a call is
@@ -293,6 +298,11 @@ type RunnerInput struct {
 	// Judge decides round-cap extensions. Nil sends every exhaustion
 	// straight to the rescue path.
 	Judge extension.Judge
+
+	// Fence stops the turn's tool loop the moment this node stops holding
+	// the seat's grant. Built by [Engine.seatFence]; nil is an open fence,
+	// which is the single-node case and every test with no seat host.
+	Fence func() error
 
 	// Remaining reads the seat's token headroom for a sub-agent spawn.
 	// Nil means the seat is uncapped, which is what a company with no

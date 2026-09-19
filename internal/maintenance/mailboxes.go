@@ -317,7 +317,11 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 // the cutoff a tick hands it is the instant before which an absence has lasted
 // long enough.
 func (m *Mailboxes) Jobs() []Job {
-	return []Job{{Name: mailboxesJobName, Horizon: MailboxRetirementGrace, Run: m.sweep}}
+	// [Fleet]: what this deletes is BROKER state — a seat's durable
+	// subscriptions and the mail they hold — which the whole company shares
+	// one copy of, so a second node running it would be deleting what the
+	// first already did. It is the one job here whose rows are not rows.
+	return []Job{{Name: mailboxesJobName, Scope: Fleet, Horizon: MailboxRetirementGrace, Run: m.sweep}}
 }
 
 // Register records that a seat's mailbox exists or is about to, and returns

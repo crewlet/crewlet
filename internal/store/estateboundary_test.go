@@ -42,11 +42,12 @@ import (
 // # Why the control strings are the load-bearing half
 //
 // A guard asserting an absence passes identically when the thing is absent
-// and when the guard has stopped working — and today the replicated estate
-// has no tables at all, so the walk over the tree can find nothing by
-// construction. The controls below run the matcher on strings whose verdict
-// is known, which is what makes this a test that can fail today rather than
-// one that starts working later and is trusted in the meantime.
+// and when the guard has stopped working. That was acute when this was
+// written, because the replicated estate had no tables at all and the walk
+// could find nothing by construction; it now derives sixty of them, and the
+// controls are what keep the guarantee the same either way. They run the
+// matcher on strings whose verdict is known, so this is a test that can fail
+// today rather than one that starts working later and is trusted meanwhile.
 func TestNoStatementNamesBothEstates(t *testing.T) {
 	t.Parallel()
 
@@ -59,8 +60,9 @@ func TestNoStatementNamesBothEstates(t *testing.T) {
 
 	// The matcher, exercised on strings whose verdict is known. Both
 	// estates are named explicitly here rather than taken from the schema,
-	// so these cases keep their meaning while the replicated estate is
-	// still empty.
+	// so these cases keep their meaning whatever either schema does next —
+	// including an estate emptied by a migration, which is the state this
+	// was written in.
 	fakeNode := map[string]bool{"crewlet_events": true}
 	fakeReplicated := map[string]bool{"tracker_tasks": true}
 	for _, positive := range []string{
