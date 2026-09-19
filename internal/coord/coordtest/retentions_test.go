@@ -2,6 +2,7 @@ package coordtest_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -46,5 +47,20 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 		t.Errorf("coord.FireRetention %v can expire a claim a catchup pass could still "+
 			"evaluate (catchup ceiling %v), so a scheduled fire runs twice",
 			coord.FireRetention, schedule.DefaultCatchupMax)
+	}
+
+	// The thread-follow horizon is the one here that is not sized from
+	// another subsystem's cadence — it is sized from a fact about chat
+	// products, that a quarter-old thread is reachable only through search
+	// on every backend that ships one. What can still be checked is the
+	// direction it must never drift in: a follow that expires inside a
+	// conversation somebody is still having is a seat that goes quiet
+	// mid-thread, which is the failure a person notices and cannot
+	// diagnose. A month is far inside any live thread.
+	if coord.FollowRetention <= 30*24*time.Hour {
+		t.Errorf("coord.FollowRetention %v is short enough to expire a follow "+
+			"inside a conversation that is still live, so a seat goes quiet "+
+			"mid-thread and only a fresh mention brings it back",
+			coord.FollowRetention)
 	}
 }

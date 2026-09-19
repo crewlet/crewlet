@@ -5,10 +5,13 @@
 //
 // # Pure functions over values, and why that is the whole point
 //
-// Everything here takes values and returns values. No database, no store, no
-// query — the SQL that scans `kb_vectors_bin` lives with the rest of the
-// projection's statements, and this package is what says whether the ranking
-// that SQL produces is the right one.
+// Everything in THIS FILE and its siblings on the arithmetic — [Quantize],
+// [Hamming], [TwoStage], [Fuse] — takes values and returns values. No
+// database, no store, no query. The SQL that scans `kb_vectors_bin` lives in
+// this package too (the estate boundary is why: the vectors are replicated
+// and the lexical index is this node's own, so no read joins them), but in
+// its own files, and the arithmetic is what says whether the ranking that SQL
+// produces is the right one.
 //
 // The reason is the reason [textindex] gives for the same shape: a ranking
 // that can only be exercised through a database is a ranking nobody

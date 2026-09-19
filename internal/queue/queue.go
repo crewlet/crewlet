@@ -6,7 +6,10 @@
 // conformance suite. A
 // backend that the suite has not certified does not exist as far as the
 // engine is concerned, and nothing above this package may branch on which
-// backend is running.
+// backend is running. One broker carries both this stream and the fleet's
+// coordination store, on one connection — ADR-0001, and the reason a broker
+// without compare-and-set cannot be a backend here however good its
+// messaging is.
 //
 // The rationale a reader should not have to re-derive:
 //

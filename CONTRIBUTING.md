@@ -319,6 +319,20 @@ make test-solo   # internal/e2e, and every other package that runs alone
   field, the file or the variable they have to change — not just what failed.
 - **Comments explain WHY**, and especially why an obvious alternative is
   wrong. The diff shows what the code does.
+- **Every piece of state answers "who has to agree on it?"** — *this node
+  alone* is the node's own database file; *every node, identically, derived
+  from an ordered log* is the replicated estate, written only by a state log's
+  applier; *the whole company, now* is the coordination store. There is a
+  FOURTH, and it is narrow: *whichever node holds this seat, and only the
+  current value* is a compacted changelog — see
+  [`adr/0014`](adr/0014-a-compacted-changelog-is-the-fourth-answer.md), which
+  exists because a seat's memory was answered with the first and was forgotten
+  every time placement moved a seat. What is not an answer is "it has always
+  been in the store": nine tables took that default and cost five repair
+  migrations. The estate gates in `internal/store` will not let a new table
+  skip the question — see
+  [`adr/0003`](adr/0003-fleet-agreement-state-lives-in-coordination.md) and
+  [`adr/0002`](adr/0002-the-stream-is-the-write-ahead-log.md).
 - **Docs are part of the change** — any change to public APIs, config
   formats, CLI commands, or behavior must update the relevant page under
   `docs/`.
@@ -551,6 +565,29 @@ the code does has not earned its line.
 None of it binds. If a rationale no longer matches the engine, change the code
 and rewrite the comment in the same commit — a doc comment describing a design
 the tree no longer has is worse than none.
+
+### Architecture decision records
+
+A decision that binds **more than one package** goes in `adr/`. A decision
+inside one package stays in that package's doc comment and gets no record —
+that single criterion is the whole filing rule, and it is what stops the
+directory becoming a second copy of the package docs. Eleven packages in this
+tree exist because one rule was written down twice and the copies drifted, so a
+record here never restates its authority; it names it.
+
+Each record carries an **Authority** (the one package or page holding the
+detail), an **Enforced-by** (a named test, a compile error, or the literal
+`nothing`), and the numbers it was settled on. The authority's own doc names
+the record back, and `internal/adr` checks that anchor in both directions
+inside `make check`: a record whose authority does not cite it fails, and so
+does a doc citing a record that does not exist.
+
+`Enforced-by: nothing` is an allowed and often honest answer. It goes in
+`adr.Unenforced` with a sentence saying what a gate would have to look at —
+checked two-sided, so an entry that stops being true also fails. The register
+this replaced had fifteen decisions, no anchor, no gate, and six false
+statements by the time anybody compared it with the code; `adr/README.md`
+records that, because it is the argument for every field in the template.
 
 ## Commit messages
 

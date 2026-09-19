@@ -3,6 +3,11 @@
 // N node databases, with the checkpoint committed in the same transaction as
 // the rows.
 //
+// This is ADR-0002, and the sentence above is the whole of it: the stream is
+// the write-ahead log and the SQL estate is derived. A write that reaches
+// those rows any other way is the one failure nothing on the node that makes
+// it can see.
+//
 // # This is NOT the store's write-ahead log
 //
 // journal_mode=WAL is the database engine's own local transaction journal:
@@ -54,11 +59,15 @@
 // BEHIND, never inconsistent; and a transaction ends at a RECORD boundary,
 // never inside one.
 //
-// The shape this must not copy is in the tree already and is correct for its
-// own estate: [internal/projection] commits its batch and THEN writes its
-// cursor, reasoning that "a crash between the two replays the batch — which
-// is free". That is true while the source can always redeliver. It is false
-// for a log that gets trimmed.
+// The shape this must not copy is the one this framework replaced, and it was
+// correct for its own estate. internal/projection — deleted by node migration
+// 0025, and named here because the reasoning is what matters rather than the
+// package — committed its batch and THEN wrote its cursor, on the argument
+// that "a crash between the two replays the batch, which is free". That is
+// true while the source can always redeliver. It is false for a log that gets
+// trimmed: a checkpoint behind its rows is a node that will one day ask for a
+// position the stream no longer holds, and the only way back is a full
+// snapshot from a peer.
 //
 // # Retry is three layers and only one may be relied on
 //
@@ -156,4 +165,15 @@
 // The deferral probe, the per-tick floor check and the per-write fence are
 // therefore LOAD-BEARING rather than defensive. None may be optimised away as
 // a rare case.
+//
+// # The alarm table borrows every threshold it fires at
+//
+// It is in this package rather than beside any one subsystem because an alarm
+// is the framework's answer to "is this node doing its job", and everything
+// above it asks the same question. The rule is ADR-0015 and alarms.go is where
+// it is carried out: an alarm never invents a number, it fires at the one some
+// OTHER decision already made — the grace that sheds a node, the grace that
+// moves its seats, the budget a caller was promised — and ONE evaluation feeds
+// every surface, so a gauge, a log line and a screen cannot disagree about
+// whether something is wrong.
 package statelog

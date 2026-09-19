@@ -417,6 +417,7 @@ func TestFleetContract(t *testing.T) {
 			ClaimTTL:        10 * time.Minute,
 			LedgerRetention: 10 * time.Minute,
 			FireRetention:   10 * time.Minute,
+			FollowRetention: 10 * time.Minute,
 			CooldownMax:     time.Hour,
 			StatusFreshness: 10 * time.Minute,
 		})
@@ -442,7 +443,8 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		FollowRetention: time.Minute,
+		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
 		BucketPrefix: prefix,
 	})
 	if err != nil {

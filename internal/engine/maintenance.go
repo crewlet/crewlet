@@ -143,11 +143,25 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		jobs = append(jobs, e.mailboxes.Jobs()...)
 	}
 
-	e.maintenance = maintenance.New(maintenance.Options{
+	w, err := maintenance.New(maintenance.Options{
 		Jobs: jobs,
 		ClaimDuty: maintenance.DutyFunc(
 			e.workerDuty(maintenanceDutyName, maintenanceDutyTTL)),
 	})
+	if err != nil {
+		// A JOB THIS WIRING GOT WRONG IS A WIRING BUG, not a runtime
+		// condition, and it is the same for every node of the fleet — so
+		// it cannot be recovered from here and must not be swallowed.
+		// Every table these jobs cover grows for the life of the
+		// deployment if its sweep never runs, and that has no other
+		// symptom until a volume fills. Logged at ERROR with the whole
+		// list rather than returned, because startMaintenance is the last
+		// thing a boot does and refusing to serve a company over a
+		// housekeeping misconfiguration is the worse of the two failures.
+		log.ErrorContext(ctx, "maintenance_worker_not_started", "error", err.Error())
+		return
+	}
+	e.maintenance = w
 	// Detached, for the same reason the node's loops are: a sweep loop
 	// bound to a signal context stops at SIGTERM, which is harmless here
 	// but would make the worker's lifetime differ from every other loop's

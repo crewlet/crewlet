@@ -19,7 +19,9 @@
 //     its tool calls against an empty response and its thinking appeared only
 //     when the phase ended.
 //   - THE SEAT FENCE RUNS AT THE TOP OF EVERY ROUND, before any tokens are
-//     spent and before anything fires. A node whose lease moved stops there
+//     spent and before anything fires, AND BEFORE EACH OF THE ROUND'S TOOL
+//     CALLS, because a round is one model turn but many calls and the calls
+//     are what reach outside the engine. A node whose lease moved stops there
 //     rather than running the rest of the turn beside the seat's new owner.
 //   - A FORCED TOOL CALL IS ENFORCED, NOT REQUESTED. Some endpoints ignore
 //     tool_choice and some models think-then-stop without emitting the call,
@@ -377,8 +379,13 @@ type Config struct {
 	Budget BudgetMeter
 
 	// Fence is checked at the top of every round, before any tokens are
-	// spent. A non-nil error ends the loop immediately and is returned
-	// unwrapped so the caller can recognise its own sentinel.
+	// spent, AND before each of a round's tool calls — because a round is
+	// one model turn but many calls, and the calls are what reach outside
+	// the engine. A non-nil error ends the loop immediately and is
+	// returned unwrapped so the caller can recognise its own sentinel.
+	//
+	// Nil is an open fence. The engine supplies [seat.Host.Fence], which
+	// closes when this node stops holding the seat's grant.
 	Fence func() error
 
 	// PartialInterval bounds how often a round in flight republishes.
@@ -778,6 +785,23 @@ func runCalls(
 	execs *[]Execution,
 ) (suspended bool, pendingID, pendingName string, payload map[string]any, err error) {
 	for _, call := range calls {
+		// THE FENCE AGAIN, PER CALL. The round check is one per model
+		// turn, and a round is every tool the model asked for in it — a
+		// sandbox launch, a search, three tracker writes and a chat post,
+		// serially, which is minutes. Checking only at the top of the
+		// round would let a node that lost the seat run out the whole of
+		// the round it was already in, and it is the calls, not the model
+		// round, that reach outside the engine.
+		//
+		// Before Execute rather than after, so a closed fence stops the
+		// NEXT call rather than discarding the one that already ran: the
+		// surface has recorded everything up to here, and the caller
+		// reads that record to decide whether this turn may be retried.
+		if cfg.Fence != nil {
+			if err := cfg.Fence(); err != nil {
+				return false, "", "", nil, err
+			}
+		}
 		res, execErr := cfg.Surface.Execute(ctx, call)
 		if execErr != nil {
 			return false, "", "", nil, fmt.Errorf(

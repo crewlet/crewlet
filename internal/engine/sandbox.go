@@ -392,6 +392,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// its budget already partly spent.
 			Judge:     e.judgeFor(company, in.Turn.Handle()),
 			Remaining: e.remainingFor(company, in.Turn.Handle()),
+			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
+			// more than a fresh turn does: this loop was parked across a
+			// coding run that may have taken an hour, and the node that
+			// resumes it is not always the node that suspended it. The
+			// grant it closes on is the one THIS node holds now — which
+			// is the correct anchor, since the resume is what this node is
+			// admitted for.
+			Fence: e.seatFence(in.Turn.Handle()),
 			// THE SKILL REGISTRY, which this call site omitted. With nil
 			// Skills the runner's guardFor returns nil, so the load-before-use
 			// gate was disarmed for every resumed turn: a seat could call a

@@ -643,6 +643,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
 
+	// AND THE FOLLOWS, on the same reasoning and in the same window: before
+	// the epoch below builds the chat transports, so nothing is matching an
+	// inbound message against the bucket while it is being filled. See
+	// [Engine.migrateFollows].
+	e.migrateFollows(ctx)
+
 	// A NIL COMPANY IS THE UNCONFIGURED NODE, not a caller's mistake.
 	//
 	// The store is authoritative at runtime and a fleet's first revision
@@ -1250,6 +1256,26 @@ func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Co
 	}
 }
 
+// seatFence is the per-round ownership check a turn on this seat runs under,
+// or nil when this process holds no grant to check against.
+//
+// THE MISSING HALF OF THE ADMISSION. [Engine.conditionsFor] above asks
+// [seat.Host.MayStart] once, when the delivery arrives, and a turn then runs
+// for minutes past that answer — calling models, firing tools, posting to
+// chat and writing to the tracker as a seat the placement sweep may have
+// handed to a peer two sweeps ago. The tool loop has checked a fence at the
+// top of every round since it was written; nothing ever supplied one, so the
+// mechanism was inert and all three places that documented the protection
+// described something that did not run. See [seat.Host.Fence] for why the
+// check is on the EPOCH rather than on membership, and for the two states —
+// a store blip and an unproven teardown — that deliberately do not close it.
+func (e *Engine) seatFence(handle string) func() error {
+	if e.node == nil {
+		return nil
+	}
+	return e.node.Host().Fence(handle)
+}
+
 // park requeues a partition onto the seat's own inbox.
 //
 // Republished one at a time, and a failure part way through is reported: the
@@ -1356,6 +1382,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// purpose: nil is "no ceiling configured", and a FAILED read
 		// refuses the spawn rather than granting it no ceiling.
 		Remaining: e.remainingFor(company, req.Handle),
+		// Built HERE, at turn start, because the epoch it closes on is
+		// the grant THIS turn was admitted under — a fence built later
+		// would compare a re-claim against itself.
+		Fence: e.seatFence(req.Handle),
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A

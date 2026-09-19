@@ -96,4 +96,3 @@ already live there.
 - **[Metrics](reference/metrics.md)** — Every instrument the engine exports, generated from the catalogue: what each one measures, its unit, its attributes, and the failure it makes visible. Plus the `OTEL_*` variables that switch the export on, and what is deliberately not exported
 - **[Alarms](reference/alarms.md)** — Every condition the engine raises about itself, generated from the alarm table: what each one means and what to do about it. One table, reaching you as a gauge and as a named log line on entry and exit
 - **[Environment Variables](reference/environment-variables.md)** — All configuration env vars
-- **[Design Decisions](reference/design-decisions.md)** — Why certain architectural choices were made

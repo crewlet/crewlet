@@ -62,23 +62,6 @@ const (
 	// closes a channel somebody is about to answer on.
 	ChannelIdleTimeout = time.Hour
 
-	// FollowRetention is how long a chat thread-follow survives with no
-	// activity. updated_at is refreshed on every re-assert — a mention, a
-	// collective address, the seat posting into the thread — so it is a
-	// true last-activity stamp rather than a creation date.
-	//
-	// Ninety days is the point past which a chat thread has stopped being
-	// a live conversation on every backend that ships one: Slack and
-	// Mattermost both surface a quarter-old thread only through search.
-	//
-	// The asymmetry decides the value. Dropping a stale follow costs at
-	// most one missed NON-mention reply, and the very next mention
-	// re-follows through the ordinary path — while keeping every follow
-	// for ever costs unbounded growth on a table read on the hot path of
-	// every inbound chat message. A cheap, self-healing miss beats an
-	// unbounded read.
-	FollowRetention = 90 * 24 * time.Hour
-
 	// CounterpartyRetention is how long a profile survives with no
 	// interaction.
 	//
@@ -105,6 +88,14 @@ const (
 
 // StoreJobs is the sweep for everything in the main store.
 //
+// EVERY JOB HERE IS [NodeLocal], and that is a property of the estate rather
+// than of any one table: this is the node's own file, owned exclusively by
+// this process, so no peer's sweep can reach these rows and a tick that skips
+// them because somebody else holds the duty skips them for ever. Both were
+// [Fleet] by omission until the scope became a required answer — including
+// `events`, which is the audit log, so a company's configured event retention
+// applied on whichever single node happened to hold the duty.
+//
 // A nil database contributes nothing rather than a job that fails every
 // tick: a deployment with no store is a real deployment, and its in-memory
 // twins prune themselves inline because a process-local map dies with the
@@ -118,16 +109,16 @@ func StoreJobs(db *store.DB) []Job {
 		// The event log carries its OWN horizon — retention is a property
 		// of the log, set where the log is configured — so it declares no
 		// Horizon here and ignores the cutoff.
-		{Name: "events", Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
-			return log.Purge(ctx)
-		}},
+		{Name: "events", Scope: NodeLocal,
+			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
+				return log.Purge(ctx)
+			}},
 		// NOT HERE any more: webhook_deliveries, rate_limits,
-		// turn_completions and config_apply_status. All four moved to the
-		// coordination store, where a bucket's own age is the retention
-		// and the BROKER expires the records — so there is nothing left
-		// for a sweep to delete, and a job that swept an empty table
-		// every tick would only report that it had.
-		Purge("chat_thread_follows", FollowRetention, db.ThreadFollows().Purge),
+		// turn_completions, config_apply_status and chat_thread_follows.
+		// All five moved to the coordination store, where a bucket's own
+		// age is the retention and the BROKER expires the records — so
+		// there is nothing left for a sweep to delete, and a job that
+		// swept an empty table every tick would only report that it had.
 	}
 }
 
@@ -141,18 +132,19 @@ type OpsLedger interface {
 
 // StatelogJobs sweeps each registered domain's operation ledger.
 //
-// PER NODE, and that is what this job is FOR. Every `<domain>_ops` migration
+// [NodeLocal], and that is what this job is FOR. Every `<domain>_ops` migration
 // says the table is swept and ships `<domain>_ops_swept_idx` for the range
 // delete — and nothing swept them, so a row was written for every applied
 // record and never deleted, on every node, for the life of the deployment. On
 // the census rate that is 357 MB a year of a table whose only reader asks
 // "did my operation land", a question nobody asks about a month-old op id.
 //
-// It is per node rather than a fleet singleton because each node owns its own
-// copy: the rows record which operations THIS applier wrote. Swept under the
-// singleton it would be tidied on one node and grow for ever on the others —
-// which looks exactly like a sweep that is working, to the operator who checks
-// the node it ran on.
+// It is node-local rather than a fleet singleton because each node owns its
+// own copy: the rows record which operations THIS applier wrote. Swept under
+// the singleton it would be tidied on one node and grow for ever on the others
+// — which looks exactly like a sweep that is working, to the operator who
+// checks the node it ran on. For a long time this was the ONLY job that said
+// so, while six others needed to; see [Scope].
 func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
 	names := make([]string, 0, len(ledgers))
 	for name := range ledgers {
@@ -167,7 +159,7 @@ func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
 	for _, name := range names {
 		ledger := ledgers[name]
 		jobs = append(jobs, Job{
-			Name: name + "_ops", Horizon: retention, PerNode: true,
+			Name: name + "_ops", Scope: NodeLocal, Horizon: retention,
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 				return ledger.PurgeOps(ctx, cutoff)
 			},
@@ -208,13 +200,18 @@ type DiaryStore interface {
 // This is the exact failure the package doc names — Diary.Expire existed,
 // diary.go's comments described the background sweep, and nothing anywhere
 // called it.
+//
+// [NodeLocal]: a seat's diary rows are written into whichever node's store was
+// running its turn, and memsync carries them between nodes as a compacted
+// changelog rather than making one node's copy authoritative. So every node
+// holds rows only its own sweep can reach.
 func LearningJobs(d DiaryStore) []Job {
 	if d == nil {
 		return nil
 	}
 	return []Job{
 		{
-			Name: "agent_diary",
+			Name: "agent_diary", Scope: NodeLocal,
 			Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
 				return d.Expire(ctx, now)
 			},
@@ -226,7 +223,7 @@ func LearningJobs(d DiaryStore) []Job {
 			// pass — but recall scans every one of them on every
 			// Plan phase, so it cannot be unbounded either. See
 			// learning.DiaryLongCap.
-			Name: "agent_diary_long",
+			Name: "agent_diary_long", Scope: NodeLocal,
 			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
 				return d.TrimLong(ctx, 0)
 			},
@@ -239,11 +236,15 @@ func LearningJobs(d DiaryStore) []Job {
 //
 // Separate from LearningJobs because the seam is: this reads a different
 // store, and folding it in would make LearningJobs' one parameter two.
+//
+// [NodeLocal] for the same reason as the diary, and with more at stake: a
+// profile is republished to every peer on each memory-sync cycle, so a copy
+// that is never swept is a copy that is repeatedly sent.
 func CounterpartyJobs(c CounterpartyStore) []Job {
 	if c == nil {
 		return nil
 	}
-	return []Job{Purge("counterparty_profiles", CounterpartyRetention, c.Purge)}
+	return []Job{Purge("counterparty_profiles", NodeLocal, CounterpartyRetention, c.Purge)}
 }
 
 // ChannelJobs is the sweep for agent-to-agent channels: close what nobody
@@ -267,22 +268,27 @@ func ChannelJobs(s a2a.Store) []Job {
 	}
 	return []Job{
 		{
-			Name: "a2a_channels_idle", Horizon: ChannelIdleTimeout,
+			Name: "a2a_channels_idle", Scope: Fleet, Horizon: ChannelIdleTimeout,
 			Run: func(ctx context.Context, now, cutoff time.Time) (int64, error) {
 				closed, err := s.CloseIdle(ctx, cutoff, now)
 				return int64(len(closed)), err
 			},
 		},
-		Purge("a2a_channels", ChannelRetention, s.Purge),
+		Purge("a2a_channels", Fleet, ChannelRetention, s.Purge),
 	}
 }
 
 // ScheduleJobs is the sweep for the scheduled-run ledger.
+//
+// [NodeLocal]. The fleet half of scheduling — "may I start this fire" — moved
+// to coordination, where the bucket's own age is the retention; what is left
+// in `scheduled_runs` is this node's own audit row for the fires it ran. See
+// internal/schedule/sharedclaim.go for the split and what the old shape cost.
 func ScheduleJobs(l schedule.Ledger) []Job {
 	if l == nil {
 		return nil
 	}
-	return []Job{PurgeN("scheduled_runs", ScheduledRunRetention, l.Purge)}
+	return []Job{PurgeN("scheduled_runs", NodeLocal, ScheduledRunRetention, l.Purge)}
 }
 
 // LedgerJobs is the sweep for the turn ledgers.
@@ -291,6 +297,10 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 // where the bucket's own age is the retention and the broker expires the
 // records — see coord.LedgerRetention, and coordtest's guard that it still
 // outlasts the scheduler's catchup ceiling.
+//
+// [NodeLocal]: a conversation row records what a seat said in a thread from
+// the node that ran the turn, so each node holds its own and no peer's sweep
+// reaches it.
 //
 // conversationRetention is the operator-facing horizon. Zero or less takes
 // [ConversationRetention] — the engine's config validation refuses a
@@ -304,5 +314,5 @@ func LedgerJobs(s ledgerstore.Conversations, conversationRetention time.Duration
 	if s == nil {
 		return nil
 	}
-	return []Job{Purge("conversation_sessions", conversationRetention, s.Purge)}
+	return []Job{Purge("conversation_sessions", NodeLocal, conversationRetention, s.Purge)}
 }

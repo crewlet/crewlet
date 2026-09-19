@@ -37,6 +37,7 @@ type Fleet struct {
 	applies      map[string]coord.NodeApply
 	budgets      map[string]coord.Usage
 	channels     map[string]coord.Channel
+	follows      map[string]followEntry
 	fires        map[string]time.Time
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
@@ -87,6 +88,7 @@ func NewFleet() *Fleet {
 		applies:      map[string]coord.NodeApply{},
 		budgets:      map[string]coord.Usage{},
 		channels:     map[string]coord.Channel{},
+		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
@@ -729,4 +731,82 @@ func (f *Fleet) DeleteIntegrationStatus(_ context.Context, kind string) error {
 	defer f.mu.Unlock()
 	delete(f.integrations, kind)
 	return nil
+}
+
+// ---- the chat thread-follows ------------------------------------------- //
+
+// followEntry is one follow in the twin.
+//
+// The instant is kept although nothing here reads it, so the twin holds the
+// same record the real backend does: a test that asserted on a field the twin
+// silently dropped would pass against a backend that never stored it.
+type followEntry struct {
+	reason string
+	at     time.Time
+}
+
+// followKey composes one follow's key, through the SAME grammar the real
+// backend uses — so a segment containing a separator collides in both or in
+// neither, and the conformance suite's case for it means something.
+func followKey(backend, handle, channel, thread string) string {
+	return coord.DocumentKey("follow", backend, handle, channel, thread)
+}
+
+// Follow records or refreshes a seat's follow on a thread.
+func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) error {
+	if backend == "" || handle == "" || thread == "" {
+		return errors.New("coord/memory: a follow needs a backend, a handle and a thread")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.follows[followKey(backend, handle, channel, thread)] = followEntry{reason: reason, at: at.UTC()}
+	return nil
+}
+
+// Following reports why a seat follows a thread, and whether it does.
+func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread string) (string, bool, error) {
+	if backend == "" || handle == "" || thread == "" {
+		return "", false, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.follows[followKey(backend, handle, channel, thread)]
+	if !ok {
+		return "", false, nil
+	}
+	return entry.reason, true, nil
+}
+
+// FollowIfAbsent records a follow only where none exists, reporting whether
+// this call created it.
+//
+// ONE MUTEX ACROSS THE CHECK AND THE WRITE, which is what the KV backend buys
+// with Create — see [coord.Follows.FollowIfAbsent] for what depends on it.
+func (f *Fleet) FollowIfAbsent(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error) {
+	if backend == "" || handle == "" || thread == "" {
+		return false, errors.New("coord/memory: a follow needs a backend, a handle and a thread")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := followKey(backend, handle, channel, thread)
+	if _, held := f.follows[key]; held {
+		return false, nil
+	}
+	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
+	return true, nil
+}
+
+// Unfollow drops a follow, reporting whether one was there.
+func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
+	if backend == "" || handle == "" || thread == "" {
+		return false, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := followKey(backend, handle, channel, thread)
+	if _, ok := f.follows[key]; !ok {
+		return false, nil
+	}
+	delete(f.follows, key)
+	return true, nil
 }

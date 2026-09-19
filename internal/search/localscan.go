@@ -23,9 +23,28 @@ type NodeScanner struct{ Index *Indexer }
 // lexical half can already answer. What it may NOT do is degrade silently, so
 // the slice carries [Slice.SemanticSkipped] and the answer above it reports
 // the fraction.
+//
+// THE LEXICAL HALF IS NOT BEST EFFORT, and the difference decides the shape
+// of this function. It is what makes a bucket range covered at all, so an
+// index that has not finished its first lap means this participant did not
+// scan its range — reported as [Slice.Building] and counted MISSING, never as
+// a thin answer merged under complete coverage.
 func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (Slice, error) {
 	if n.Index == nil {
 		return Slice{}, fmt.Errorf("search: scan a bucket range with no index")
+	}
+	// BEFORE THE SCAN, because a scan over an index that has not finished
+	// its first lap answers almost nothing and is indistinguishable from a
+	// range with almost nothing in it. The whole corpus is on this node —
+	// what is missing is this node's OWN index over it — so the honest
+	// answer is that this range was not covered, which the coordinator
+	// counts as missing rather than merging as complete. See
+	// [Slice.Building].
+	//
+	// PER SOURCE, so a query naming only the corpus that IS built is
+	// answered normally.
+	if !n.Index.ReadyFor(q.Sources...) {
+		return Slice{Shards: shards, Building: true}, nil
 	}
 	out := Slice{Shards: shards}
 

@@ -131,6 +131,24 @@ const (
 	// maintenance sweep against [Channels.OpenChannels] and
 	// [Channels.PurgeChannels], not by a broker's clock.
 
+	// FollowRetention is how long a seat's chat thread-follow survives
+	// with no activity, and the bucket's own age is what enforces it: every
+	// re-assert — a mention, a collective address, the seat posting into
+	// the thread — rewrites the record, so the age IS a last-activity
+	// stamp and no sweep has anything to delete.
+	//
+	// Ninety days is the point past which a chat thread has stopped being
+	// a live conversation on every backend that ships one: Slack and
+	// Mattermost both surface a quarter-old thread only through search.
+	//
+	// The asymmetry decides the value. Dropping a stale follow costs at
+	// most one missed NON-mention reply, and the very next mention
+	// re-follows through the ordinary path — while keeping every follow
+	// for ever costs unbounded growth on a record read on the hot path of
+	// every inbound chat message. A cheap, self-healing miss beats an
+	// unbounded read.
+	FollowRetention = 90 * 24 * time.Hour
+
 	// StatusFreshness bounds how old a node's apply status may be and
 	// still count. A node that stops reporting must VANISH from the fleet
 	// view rather than linger as a healthy row nobody is writing, and the
@@ -958,6 +976,7 @@ type Fleet interface {
 	Budgets
 	Plane
 	Channels
+	Follows
 	Fires
 	SandboxRuns
 	Secrets
@@ -968,6 +987,81 @@ type Fleet interface {
 	FloorRegister
 	BackupRegister
 	MaintenanceRegister
+}
+
+// Follows is which chat threads each seat is following.
+//
+// # Why this is company-wide rather than a node's own record
+//
+// No chat backend exposes per-bot thread subscription state, so this IS that
+// state — and the node that writes it is rarely the node that reads it. An
+// inbound chat message is claimed and parsed by ONE node of the fleet, chosen
+// by a competing-consumer group, and the next reply in the same thread is
+// claimed by whichever node wins that time. A follow held in the node's own
+// database is therefore a follow the next reply's node cannot see, so a thread
+// reply that is not a mention reaches its seat only by chance — and the more
+// nodes a company runs, the less often that is.
+//
+// It lived in the node's own database until it did not, which is the shape
+// migration 0012 moved `a2a_channels` out for and the one node migration 0010
+// moved four tables out for before that. See ADR-0003.
+//
+// # Three methods, and no purge
+//
+// Retention here is the BUCKET's age, like every other aged slot: every
+// re-assert rewrites the record, so the age is a true last-activity stamp and
+// the broker expires what has gone quiet. A sweep would have nothing to delete.
+type Follows interface {
+	// Follow records that a seat follows a thread, or refreshes an
+	// existing follow's reason.
+	//
+	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
+	// a thread by a collective shout and later named personally is now
+	// following for the stronger reason, and an operator asking why it
+	// answered should see the mention rather than the shout that happened
+	// to come first.
+	Follow(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) error
+
+	// Following reports why a seat follows a thread, and whether it does.
+	//
+	// THREE ANSWERS, not two. A reason and true is a follow; an empty
+	// reason and false is definitively not following; an error is UNKNOWN
+	// and says nothing about either. The caller decides what to do with
+	// the third — internal/notify fails closed, because a missed thread
+	// reply is quiet and self-healing where a spurious wake is a burst of
+	// turns that cannot be taken back.
+	Following(ctx context.Context, backend, handle, channel, thread string) (string, bool, error)
+
+	// Unfollow drops a follow, reporting whether one was there.
+	//
+	// The counterpart of an explicit subscription: a seat told to stop
+	// watching a thread must actually stop, and waiting out the retention
+	// horizon is not stopping.
+	//
+	// SERIALIZABLE, which is the property both backends have to reach by
+	// different means: `true` is reported exactly when this call removed
+	// something, and every outcome is one some sequential order of the
+	// concurrent calls would have produced. A follow re-asserted while an
+	// unfollow is in flight is therefore removed, exactly as it is when the
+	// re-assert loses by a nanosecond — and the next mention re-follows
+	// through the ordinary path.
+	Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error)
+
+	// FollowIfAbsent records a follow only where none exists, reporting
+	// whether this call created it.
+	//
+	// THE ONE-TIME HANDOFF'S WRITE — see internal/notify/followsync — and
+	// create-only is what makes it safe to run while inbound chat is live.
+	// A plain Follow would overwrite whatever the fleet already holds: a
+	// stale local row landing on top of a fresh mention downgrades the
+	// reason an operator reads, and one whose fleet copy was unfollowed
+	// after the move began would be resurrected by a node that booted late.
+	//
+	// It is also what makes two nodes handing off at once correct with
+	// nothing agreed between them: both hold their own local table, the
+	// keys overlap, exactly one create wins, and the loser removes its own
+	// row having learned the fleet already has the record.
+	FollowIfAbsent(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error)
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

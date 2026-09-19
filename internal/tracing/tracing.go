@@ -16,7 +16,7 @@
 // no collector a deployment whose stored events have no usable ids. That is
 // the state this package was written to end.
 //
-// # Why the environment configures it and Tier A does not
+// # Why the environment configures it and Tier A does not — ADR-0010
 //
 // The same call `internal/sandbox/otel.go` already made and wrote down: the
 // OTLP endpoint and headers are "the standard OTel spelling every collector's

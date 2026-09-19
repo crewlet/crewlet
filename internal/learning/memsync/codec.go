@@ -23,6 +23,10 @@
 // replicated layer already holds". For memory that was aspiration rather than
 // fact: nothing replicated it. This package makes it true.
 //
+// This is ADR-0014: a compacted changelog is a durability class of its own,
+// beside the three ADR-0003 names, and that record says why none of the three
+// fits a seat's memory.
+//
 // Every memory row is published to a COMPACTED CHANGELOG on the stream —
 // one subject per row, `crewlet.memory.<handle>.<table>.<key>`, on a stream
 // configured to retain exactly one message per subject. The stream therefore

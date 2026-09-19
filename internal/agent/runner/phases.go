@@ -79,6 +79,21 @@ type Config struct {
 	// counter is shared with anyone.
 	Budget toolloop.BudgetMeter
 
+	// Fence stops a turn whose seat this node no longer holds, checked at
+	// the top of every round before any tokens are spent.
+	//
+	// It answers the question [internal/seat.Host.MayStart] deliberately
+	// does not: admission proves the seat was held when the turn STARTED,
+	// and a turn outlives its admission. A node that loses a seat mid-turn
+	// keeps calling models, keeps calling tools and keeps publishing
+	// records for a seat a peer is now running.
+	//
+	// Nil disables it, which is the single-node case and every test that
+	// has no seat host — and it is why this was dead for so long: the
+	// field existed on the loop, the loop checked it, and nothing ever
+	// supplied one.
+	Fence func() error
+
 	// Task is the ask, and Conversation is the prior-turns block. Both are
 	// fixed for the turn.
 	Task         string
@@ -782,6 +797,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
+			Fence:        r.cfg.Fence,
 			ToolChoice:   in.toolChoice,
 			AllowSuspend: in.allowSuspend,
 			// A phase that has SUBMITTED is finished. Without this the

@@ -2,113 +2,108 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 )
 
-// ThreadFollows is the per-seat chat thread-follow state.
+// ThreadFollows is what is LEFT of the per-seat chat thread-follow state after
+// migration 0028 moved it to the coordination store.
 //
-// One store for every chat backend, scoped by a `backend` key rather than a
-// table each: the follow MODEL is identical everywhere — mention, collective
-// address, participation, explicit subscription — and only the shape of a
-// thread id differs. Two tables would mean two of every statement saying the
-// same thing, and a third backend would need a third.
+// # Why this survives at all
+//
+// The follows are coordination's now — a company-wide fact, and the node's own
+// file was the wrong estate for it (see ADR-0003, and the migration's own
+// text). What is left here is the one-time HANDOFF SOURCE: rows written by
+// builds before the move are still in this table, and nothing but Go code can
+// carry them onto the bucket, because a `.sql` file has no KV client.
+//
+// So the surface is two methods rather than the five it had. There is no
+// Follow, no Following and no Purge, and their absence is the point: a writer
+// here would be a second place the answer lives, and a reader would be a node
+// answering from its own copy of a fact the fleet decides. Only
+// internal/notify/followsync uses this, once per boot, and its steady state is
+// an empty table.
 type ThreadFollows struct{ db *DB }
 
-// ThreadFollows returns the follow state backed by this database.
+// ThreadFollows returns the handoff source backed by this database.
 func (d *DB) ThreadFollows() *ThreadFollows { return &ThreadFollows{db: d} }
 
-// followSQL upserts, refreshing both the reason and the activity stamp.
+// Follow is one row carried onto the fleet.
 //
-// The reason is OVERWRITTEN rather than kept: a seat first pulled into a
-// thread by a collective shout and later named personally is now following
-// for the stronger reason, and an operator asking why it answered should see
-// the mention, not the shout that happened to come first.
-const followSQL = `
-INSERT INTO chat_thread_follows
-    (backend, agent_handle, channel_id, thread_id, reason, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (backend, agent_handle, channel_id, thread_id) DO UPDATE
-SET reason = excluded.reason, updated_at = excluded.updated_at`
-
-// Follow records that a seat follows a thread, or refreshes an existing
-// follow's reason and activity stamp.
-func (f *ThreadFollows) Follow(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) error {
-	if backend == "" || handle == "" || thread == "" {
-		return fmt.Errorf("store: follow needs a backend, a handle and a thread")
-	}
-	// created_at is written on the insert branch and deliberately NOT
-	// touched on the update: it says when this seat first joined the
-	// thread, which is the question updated_at cannot answer once it has
-	// been refreshed by a re-assert.
-	stamp := EncodeTime(at)
-	if _, err := f.db.sql.ExecContext(ctx, followSQL,
-		backend, handle, channel, thread, reason, stamp, stamp); err != nil {
-		return fmt.Errorf("store: follow %s thread %s for %s: %w",
-			backend, thread, handle, err)
-	}
-	return nil
+// The reason and the activity stamp travel; `created_at` does not, because the
+// coordination record has no field for it — a follow there carries why and
+// when it was last asserted, which is what a reader asks. Losing the
+// first-joined instant on rows written before the move is the honest price of
+// the move, and it is stated here rather than discovered.
+//
+// WHAT THE STAMP DOES NOT DO is preserve the expiry clock. Retention on the
+// coordination side is the BUCKET's age, measured from the write, and the
+// record's own instant is diagnostic — nothing branches on it (see
+// `coord/kv.followRecord`). So a row that was 89 days stale when it was
+// handed off gets a fresh ninety, and the honest reading of that is that the
+// handoff is a re-assert: the same thing a mention would have done, once, for
+// rows somebody has been following all along.
+type Follow struct {
+	Backend   string
+	Handle    string
+	Channel   string
+	Thread    string
+	Reason    string
+	UpdatedAt time.Time
 }
 
-// Following reports why a seat follows a thread, and whether it does.
+// List reads every follow this node still holds locally.
 //
-// The reason comes back rather than a bare bool because a caller deciding
-// what to do with a delivery wants it: "this seat was named here" and "this
-// seat was in the room when somebody shouted" lead to different handling and
-// very different log lines.
-func (f *ThreadFollows) Following(ctx context.Context, backend, handle, channel, thread string) (string, bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return "", false, nil
-	}
-	var reason string
-	err := f.db.sql.QueryRowContext(ctx,
-		`SELECT reason FROM chat_thread_follows
-		 WHERE backend = ? AND agent_handle = ? AND channel_id = ? AND thread_id = ?`,
-		backend, handle, channel, thread).Scan(&reason)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
+// WHOLE, not paged, and deliberately: this is a table nothing has written
+// since the build that moved it, read once at boot, and the alternative —
+// paging — would need a cursor that survives a crash mid-handoff for no gain,
+// since a partial handoff simply leaves the rest of the rows to the next boot.
+func (f *ThreadFollows) List(ctx context.Context) ([]Follow, error) {
+	rows, err := f.db.sql.QueryContext(ctx,
+		`SELECT backend, agent_handle, channel_id, thread_id, reason, updated_at
+		 FROM chat_thread_follows
+		 ORDER BY backend, agent_handle, channel_id, thread_id`)
 	if err != nil {
-		return "", false, fmt.Errorf("store: read follow %s thread %s for %s: %w",
-			backend, thread, handle, err)
+		return nil, fmt.Errorf("store: list the thread follows to hand off: %w", err)
 	}
-	return reason, true, nil
+	defer rows.Close()
+
+	var out []Follow
+	for rows.Next() {
+		var one Follow
+		var updated int64
+		if err := rows.Scan(&one.Backend, &one.Handle, &one.Channel,
+			&one.Thread, &one.Reason, &updated); err != nil {
+			return nil, fmt.Errorf("store: scan a thread follow: %w", err)
+		}
+		one.UpdatedAt = DecodeTime(updated)
+		out = append(out, one)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list the thread follows to hand off: %w", err)
+	}
+	return out, nil
 }
 
-// Unfollow drops a follow, reporting whether one was there.
+// Drop removes one follow by its identity, reporting whether a row went.
 //
-// The counterpart of an explicit subscription: a seat told to stop watching
-// a thread must actually stop, and waiting out the retention horizon is not
-// stopping.
-func (f *ThreadFollows) Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error) {
+// BY IDENTITY rather than by rowid, so it is safe to call with a value that
+// came back from a List taken earlier: the table has no writer, so a row
+// cannot have changed under it, and a row that is already gone answers false
+// rather than failing.
+func (f *ThreadFollows) Drop(ctx context.Context, one Follow) (bool, error) {
 	res, err := f.db.sql.ExecContext(ctx,
 		`DELETE FROM chat_thread_follows
 		 WHERE backend = ? AND agent_handle = ? AND channel_id = ? AND thread_id = ?`,
-		backend, handle, channel, thread)
+		one.Backend, one.Handle, one.Channel, one.Thread)
 	if err != nil {
-		return false, fmt.Errorf("store: unfollow %s thread %s for %s: %w",
-			backend, thread, handle, err)
+		return false, fmt.Errorf("store: drop the handed-off follow on %s thread %s for %s: %w",
+			one.Backend, one.Thread, one.Handle, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("store: unfollow %s thread %s for %s: rows affected: %w",
-			backend, thread, handle, err)
+		return false, fmt.Errorf("store: drop the handed-off follow on %s thread %s for %s: "+
+			"rows affected: %w", one.Backend, one.Thread, one.Handle, err)
 	}
 	return n > 0, nil
-}
-
-// Purge deletes follows last active before cutoff, returning how many went.
-func (f *ThreadFollows) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := f.db.sql.ExecContext(ctx,
-		`DELETE FROM chat_thread_follows WHERE updated_at < ?`, EncodeTime(cutoff))
-	if err != nil {
-		return 0, fmt.Errorf("store: purge thread follows: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("store: purge thread follows: rows affected: %w", err)
-	}
-	return n, nil
 }

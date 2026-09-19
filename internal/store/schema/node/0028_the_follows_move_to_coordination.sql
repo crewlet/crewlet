@@ -1,0 +1,73 @@
+-- Chat thread-follows leave this database for the coordination store.
+--
+-- # What was wrong with them being here
+--
+-- `chat_thread_follows` answered a question the whole COMPANY has to agree on
+-- while living in a file one process owns exclusively, which is the mistake
+-- migrations 0010 through 0013 repaired five times over for other tables.
+--
+-- The shape is exactly `a2a_channels`', which 0012 took: an inbound chat
+-- message is claimed and parsed by ONE node — `notify-inbound` is a competing
+-- consumer group — and the next reply in the same thread is claimed by
+-- whichever node wins that time. A follow recorded on the first node is
+-- invisible to the second, so a thread reply that is not a mention reached its
+-- seat only when the two happened to coincide, and less often the more nodes a
+-- company ran. On one node it worked perfectly, which is why it survived.
+--
+-- What it was NOT is a memory row. The memory-sync changelog's own guard
+-- exempted this table with the note that it is "re-asserted by the next
+-- mention, so it self-heals faster than replication would carry it" — an
+-- argument about a seat MOVING node, which is a different question from a
+-- delivery landing on a different node each time, and the one it needed to
+-- answer.
+--
+-- # Where it went, and what is not lost
+--
+-- A record per (backend, seat, channel, thread) in the coordination store's
+-- own bucket, keyed through the segment grammar in internal/coord/keys.go —
+-- because a chat backend's thread id is not something this engine gets to
+-- promise is a valid subject token.
+--
+-- Retention is now the BUCKET's age, which is the rule for every aged slot
+-- there, and it is the same ninety days: every re-assert rewrites the record,
+-- so the age is a true last-activity stamp. The maintenance sweep's job for
+-- this table goes with it, exactly as 0010's four did — the broker expires
+-- the records, so a sweep would have nothing to delete.
+--
+-- # The table STAYS, and this is the part that is easy to get wrong
+--
+-- Existing rows are HANDED OFF rather than dropped, by
+-- internal/notify/followsync at the next start, in the shape
+-- internal/fleetsecrets already carries `secret_values` onto the fleet in.
+-- A migration cannot do it — a .sql file has no KV client — but that
+-- establishes only that the copy happens elsewhere, never that it may be
+-- skipped.
+--
+-- Dropping here would destroy every ACTIVE subscription, which is not what
+-- the ninety-day horizon does and must not be mistaken for it. That horizon
+-- expires a follow after ninety days of INACTIVITY, so the population it
+-- takes is threads nobody has touched in a quarter and the documented cost —
+-- at most one missed non-mention reply — is true of them. A drop at upgrade
+-- takes the opposite population, ordered by recency, the busiest threads
+-- first. For a live thread the cost is every subsequent reply until a fresh
+-- mention, and it is SELF-LOCKING: the reply that would prompt the seat to
+-- post into the thread is the one it no longer receives. For a follow whose
+-- reason is `explicit` there is no mention coming at all, so those are gone
+-- for good.
+--
+-- Nor may a LATER migration drop it. Migrations apply in one pass in filename
+-- order at Open, before any Go code runs, so a database upgrading from a
+-- pre-0028 build straight to one carrying both this file and a later drop
+-- would apply both and leave the handoff an empty table. With no releases to
+-- separate them, that can never be scheduled safely — so the table survives,
+-- its steady state is empty, and internal/store/placement_test.go carries the
+-- entry that says why.
+--
+-- Both INDEXES go, because both served readers that have left: the thread
+-- index served the hot-path lookup, which is coordination's now, and the
+-- updated_at index served the retention sweep, which the bucket's own age
+-- replaced. The handoff is a full scan and a delete by identity, and needs
+-- neither.
+
+DROP INDEX IF EXISTS chat_thread_follows_thread_idx;
+DROP INDEX IF EXISTS chat_thread_follows_updated_at_idx;

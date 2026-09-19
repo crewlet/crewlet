@@ -157,8 +157,8 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		// before the guard above, not merely the one the retention tick hit.
 		"Configs":       func(t *testing.T) { _ = d.Configs() },
 		"Events":        func(t *testing.T) { _ = d.Events() },
-		"ThreadFollows": func(t *testing.T) { _ = d.ThreadFollows() },
 		"SecretValues":  func(t *testing.T) { _ = d.SecretValues(nil) },
+		"ThreadFollows": func(t *testing.T) { _ = d.ThreadFollows() },
 	}
 
 	// THE ROSTER IS THE TYPE'S OWN. A method added to *DB and not classified

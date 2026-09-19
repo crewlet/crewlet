@@ -2,10 +2,11 @@
 // company configuration it is running, and what a node does when it does not
 // have the current one.
 //
-// Two facts drive everything here. An append-only ACTIVATION POINTER names
-// the current epoch, and every node writes a per-node APPLY STATUS saying
-// what happened when it tried to reach that epoch. A node reads both and
-// decides a posture.
+// Two facts drive everything here, and their split is ADR-0009: WHICH
+// revision is current is fleet-wide, and APPLYING it is a per-node act. An
+// append-only ACTIVATION POINTER names the current epoch, and every node
+// writes a per-node APPLY STATUS saying what happened when it tried to reach
+// that epoch. A node reads both and decides a posture.
 //
 // The pointer is append-only rather than a mutable "current revision"
 // because re-activating an UNCHANGED revision is the documented

@@ -1,11 +1,16 @@
-// Package statelog is the durable-state framework: one ordered stream per
-// domain is the write-ahead log, N identical SQL copies are the durable
-// state, and the checkpoint commits in the same transaction as the rows.
-//
-// This file is the ALARM TABLE, and it is here rather than beside any one
-// subsystem because an alarm is the framework's answer to "is this node
-// doing its job", and every subsystem above it asks the same question.
 package statelog
+
+// THE ALARM TABLE, and it is in this package rather than beside any one
+// subsystem because an alarm is the framework's answer to "is this node doing
+// its job", and every subsystem above it asks the same question.
+//
+
+// The package's own doc is in doc.go and is NOT restated here. It was, and
+// `go doc` concatenates every package comment in file order — so this file's
+// copy, sorting first, told a reader that the ordered stream is "the
+// write-ahead log" twelve lines before doc.go's own heading told them "This is
+// NOT the store's write-ahead log". Two package comments are ADR-0008's
+// failure inside one package: one rule, written twice, disagreeing.
 
 import (
 	"fmt"
@@ -422,9 +427,12 @@ var table = []rule{
 			return fmt.Sprintf("%.0f%% of searches were answered over part of the "+
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
-		remedy: "A node did not answer its bucket range, so part of the corpus " +
-			"went unscanned. The answers were complete for what was searched " +
-			"and silent about what was not; the log line names who was absent.",
+		remedy: "A node did not cover its bucket range, so part of the corpus " +
+			"went unscanned — it was unreachable, or its own lexical index has " +
+			"not finished its first lap, which is what a node that joined a " +
+			"few minutes ago looks like and clears itself. The answers were " +
+			"complete for what was searched and silent about what was not; the " +
+			"log line names who was absent.",
 	},
 	{
 		kind: KindRecallBelowFloor,

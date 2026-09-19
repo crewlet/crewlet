@@ -16,7 +16,7 @@ The framework models the same structures found in real companies:
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — the engine's own work tracker by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues) — see [The Tracker](task-engine.md)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
-- **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (BM25 over a per-node index; the semantic half is embedded and stored but not yet queried) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
+- **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (keyword over a BM25 index this node holds, semantic over embeddings the fleet derives once, or the two fused by reciprocal rank fusion — `hybrid` is the default) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
 ---
@@ -68,7 +68,7 @@ flowchart TB
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.HANDLE.inbox · .control<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>one local file, owned exclusively</i><br/>crewlet_events · agent_diary · episodes<br/>company_config · conversation_sessions · …")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -107,7 +107,7 @@ appears.
 | Language | Go 1.27+ | One self-contained binary, real parallelism, a standard library that covers most of this table |
 | Distribution | A single `CGO_ENABLED=0` binary | Nothing to install alongside it. The matrix is linux and macOS on amd64 and arm64 — bounded by the platforms the store driver embeds its database engine for, not by the compiler. The linux binaries need glibc: that engine is loaded with `dlopen`, which no pure-Go build avoids |
 | Event stream | Embedded NATS JetStream | Persistent pub/sub *inside the process* — a company runs with no broker to operate. An external NATS cluster takes the same slot for a fleet, on the same client code. A seat's mailbox is a durable consumer created with nothing attached, which here is an ordinary API call (~1.7 ms) rather than an admin endpoint |
-| Store | Turso | One local file this process owns exclusively; pure Go, SQLite file format, and the vector functions the learning subsystem's recall is written against |
+| Store | Turso | Two local files this process owns exclusively — this node's own estate and the replicated one beside it; pure Go, SQLite file format, and the vector functions the learning subsystem's recall is written against |
 | Vector search | The store's vector distance functions | The per-agent diary and the episodic store, in the same file as everything else. The *arithmetic* is the database's; there is no ANN index reachable from the Go driver yet, so recall is a scan behind the per-agent index |
 | Event store | A table in that file | LLM-invocation observability and the event dashboards, written inline by a publish listener |
 | Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV riding the stream's own NATS connection — never the store file, and never a second connection that could fail on its own |
@@ -143,7 +143,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any O
 
 ### Database
 
-One local file, opened by Turso — a pure-Go driver over the SQLite file format — and built from a forward-only migration sequence. There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
+**Two** local files, brought up by one `Open` — this node's own estate and the replicated one beside it, each a Turso database over the SQLite file format and each built from its own forward-only migration sequence. Two rather than one because a snapshot is a copy of ONE of them: a node too far behind to replay the log installs a peer's replicated file wholesale, and that file must not carry the donor's audit log or its agents' memory. No transaction spans the two and no read joins across them, which a static walk enforces (see [Architecture § Where state lives](architecture.md#5-where-state-lives)). There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns both files exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything the company has to agree on *now* lives in the coordination KV instead. The load-bearing tables of the node's own estate:
 
 - **`agent_diary`** (embedding column): each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is a separate read: on the native backend it is this node's own projection of the company's pages, indexed for BM25 search; on Confluence it is a live query with no local copy at all (see [knowledge system](knowledge-system.md)).
 - **`episodes`** (embedding column): one row per completed turn; raw and LLM-compacted aggregates share the same table.
@@ -153,7 +153,7 @@ One local file, opened by Turso — a pure-Go driver over the SQLite file format
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
 - **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
 
-Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs`, `chat_thread_follows` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
+Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 
 What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the credential cooldowns, the token counter, the activation pointer and each node's apply status all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file.
 
@@ -164,6 +164,9 @@ Everything else is YAML config, in-memory state, or an external tool.
 ## Package Structure
 
 ```
+adr/                      # Architecture decision records — a decision that
+                          #   binds more than one package, with the gate that
+                          #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, secrets, config, llm, and the six
                           #   integration CLIs — gitlab/github/jira/slack
@@ -185,8 +188,24 @@ internal/
 │                         #   and the in-memory twin, both certified by one
 │                         #   suite
 ├── coord/                # TTL leases with a fencing epoch + the shared KV
+├── statelog/             # The durable-state framework: one ordered stream per
+│                         #   domain is the write-ahead log, N identical SQL
+│                         #   copies are the state, and the checkpoint commits
+│                         #   in the same transaction as the rows
+├── tracker/              # The engine's own work tracker — statelog's first
+│                         #   domain: records, subjects, ranks, custom fields
+├── pages/                # The engine's own knowledge base — statelog's third
+│                         #   domain: containers, pages, revisions, comments
+├── search/               # Both halves of knowledge search — the BM25 index
+│                         #   and the two-stage semantic retrieval — plus the
+│                         #   embedding domain and the fleet's bucket fan-out
+├── textindex/            # The analyzer and the BM25 arithmetic, as pure
+│                         #   functions: Turso has no fts5
+├── changefeed/           # How a committed record becomes a WAKE, derived by
+│                         #   something that outlives the writer
 ├── seat/                 # Which seats this node runs, and the watchdog
-├── store/                # The local file: events, learning, runtime state
+├── store/                # The two local files: this node's own estate, and
+│                         #   the replicated one a state log's applier writes
 ├── events/               # The envelope and the typed-payload registry
 ├── a2a/                  # Agent-to-agent channels (one ask, one answer)
 ├── schedule/             # Role/unit cron-style recurring work
@@ -237,9 +256,18 @@ internal/
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields
+├── fleetsecrets/         # The company's credential store: this package owns
+│                         #   the key, coordination owns the bytes
+├── runtoken/             # The signed, self-describing credential a per-run
+│                         #   endpoint carries in its own URL path
 ├── secrets/              # The keyring and the sealed envelope: config encryption
 │                         #   at rest and the secret store's values (the ${VAR}
 │                         #   resolver is config.Resolver)
+├── skipgate/ solo/       # The suite's own gates: a skip is not a pass, and
+│                         #   which packages need the runner to themselves
+├── clientsource/         # Holds a constant the dashboard declares against the
+│                         #   engine's own
+├── e2e/                  # The end-to-end company, and the dashboard replay
 └── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
 
 dashboard/                # The dashboard's SOURCE — React + TypeScript, built
