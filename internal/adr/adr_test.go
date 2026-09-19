@@ -91,10 +91,10 @@ var whyRequired = map[string]string{
 // person about to change the state log.
 //
 // Backward: a doc that cites a record which does not exist fails. This is not
-// hypothetical tidiness. Three package docs in this tree cited
-// [internal/projection] for months after migration 0025 deleted the package,
-// and the tree's own withdrawn-vocabulary gate did not catch it, because a
-// dangling reference reads exactly like a live one.
+// hypothetical tidiness. Three package docs in this tree cited a package that
+// migration 0025 had deleted, for months afterwards, and the tree's own
+// withdrawn-vocabulary gate did not catch it — because a dangling reference
+// reads exactly like a live one.
 func TestEveryRecordIsAnchoredAtItsAuthority(t *testing.T) {
 	t.Parallel()
 	root := moduleRoot(t)
@@ -396,6 +396,100 @@ func packageDoc(src string) string {
 	}
 	return strings.Join(lines[start:end], "\n")
 }
+
+// A REFERENCE THAT POINTS AT NOTHING READS EXACTLY LIKE A LIVE ONE.
+//
+// This is the same failure the anchor above is for, one level out. A doc
+// comment that puts an import path in square brackets is making a claim about
+// the tree; godoc renders it as a link, and when the package goes the claim
+// stays — silently, because a deleted package produces no compile error in a
+// comment.
+//
+// It is not hypothetical. internal/projection was deleted by node migration
+// 0025 and three package docs went on citing it for months, including the
+// state log's own, where the dangling reference sat inside the paragraph that
+// argues the framework's central safety property. The tree's
+// withdrawn-vocabulary gate did not catch it, because that list is keyed on
+// names somebody thought to withdraw.
+//
+// # What it checks, and what it leaves alone
+//
+// Only a bracketed reference whose text looks like an import path in THIS
+// module — it starts with internal/ or cmd/ — because that is the form whose
+// target this walk can resolve. [Type], [pkg.Func] and [Type.Method] are
+// godoc's other link forms and are left to the compiler and to go vet, which
+// see them.
+func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
+	t.Parallel()
+	root := moduleRoot(t)
+
+	// The matcher, on input whose verdict is known.
+	for _, positive := range []string{"[internal/coord]", "see [cmd/crewlet] for"} {
+		if len(packageLinks(positive)) != 1 {
+			t.Errorf("control: %q names a package and the matcher missed it", positive)
+		}
+	}
+	for _, negative := range []string{"[Writer.Tx]", "[Scope]", "[maintenance.Fleet]", "a [link](x.md)"} {
+		if got := packageLinks(negative); len(got) != 0 {
+			t.Errorf("control: %q names no package and the matcher found %v", negative, got)
+		}
+	}
+
+	files := 0
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "dist", "static":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		files++
+		rel, _ := filepath.Rel(root, path)
+		for i, line := range strings.Split(read(t, path), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			for _, pkg := range packageLinks(line) {
+				if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(pkg))); statErr == nil {
+					continue
+				}
+				t.Errorf("%s:%d links [%s] and there is no such package.\n"+
+					"\tgodoc renders that as a live link and a deleted "+
+					"package leaves no compile error behind in a comment, so "+
+					"the claim outlives the code. Name the package that took "+
+					"the responsibility over, or drop the brackets and say "+
+					"what the reasoning was.", rel, i+1, pkg)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if files == 0 {
+		t.Fatal("parsed no Go files — this guard was certifying nothing")
+	}
+}
+
+// packageLinks is every [internal/…] or [cmd/…] reference on one line.
+func packageLinks(line string) []string {
+	var out []string
+	for _, m := range packageLinkRE.FindAllStringSubmatch(line, -1) {
+		if !slices.Contains(out, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+var packageLinkRE = regexp.MustCompile(`\[((?:internal|cmd)/[a-z0-9]+(?:/[a-z0-9]+)*)\]`)
 
 var linkRE = regexp.MustCompile(`\]\(([^)]+)\)`)
 

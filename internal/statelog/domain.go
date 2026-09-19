@@ -15,8 +15,8 @@ import (
 // CLAUDE.md's rule is that an interface belongs to its consumer, and here the
 // framework is the consumer: it calls the applier, derives the scrub list,
 // picks the replay loop and gates seat admission from these answers. The
-// domain packages export concrete types. This is the same arrangement
-// [internal/projection] states at its own Applier — "DECLARED HERE,
+// domain packages export concrete types. It is the arrangement the projection
+// estate this framework replaced stated at its own Applier — "DECLARED HERE,
 // implemented by the packages that own the documents" — one layer down.
 type Domain interface {
 	// Name is the register key, the manifest key and the operator

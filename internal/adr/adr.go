@@ -25,7 +25,7 @@
 //     nothing points at is a record nobody reads;
 //   - a doc carrying an id no record declares fails, because a dangling
 //     pointer reads exactly like a live one. Three package docs in this tree
-//     cited [internal/projection] for months after the package was deleted.
+//     cited internal/projection for months after the package was deleted.
 //
 // The anchor is what puts the decision in front of the person about to violate
 // it: `go doc ./internal/statelog` prints ADR-0002 on its first screen.

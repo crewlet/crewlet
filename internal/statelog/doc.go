@@ -59,11 +59,15 @@
 // BEHIND, never inconsistent; and a transaction ends at a RECORD boundary,
 // never inside one.
 //
-// The shape this must not copy is in the tree already and is correct for its
-// own estate: [internal/projection] commits its batch and THEN writes its
-// cursor, reasoning that "a crash between the two replays the batch — which
-// is free". That is true while the source can always redeliver. It is false
-// for a log that gets trimmed.
+// The shape this must not copy is the one this framework replaced, and it was
+// correct for its own estate. internal/projection — deleted by node migration
+// 0025, and named here because the reasoning is what matters rather than the
+// package — committed its batch and THEN wrote its cursor, on the argument
+// that "a crash between the two replays the batch, which is free". That is
+// true while the source can always redeliver. It is false for a log that gets
+// trimmed: a checkpoint behind its rows is a node that will one day ask for a
+// position the stream no longer holds, and the only way back is a full
+// snapshot from a peer.
 //
 // # Retry is three layers and only one may be relied on
 //
