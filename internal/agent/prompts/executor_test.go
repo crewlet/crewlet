@@ -228,6 +228,8 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	t.Parallel()
 	in := ExecutorInput{
 		ThreadContext:       "- **Ana Ruiz (ana)**: staging redirects in a loop",
+		OnboardingHint:      "- read #eng's Onboarding page",
+		AvailableTools:      []string{"mark_onboarded"},
 		PersonalMemory:      "- prefers short replies",
 		SynthesizedSkills:   "- how to triage a sev-1",
 		RelevantKnowledge:   "- **Incident Response Runbook**: Steps for a sev-1.",
@@ -235,10 +237,17 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		CounterpartyProfile: "Subject: U0TESTUSER1",
 	}
 	p := BuildExecutor(engineer(), in)
-	// Ordered so the agent reads the conversation it was woken in, then
-	// memory, then what it learned, then the team's docs, then prior work,
-	// then who it is talking to. The thread leads because it is the
-	// trigger's own context rather than something retrieved about it.
+	// Ordered so the agent reads the conversation it was woken in, then the
+	// standing first-turn instruction, then memory, then what it learned,
+	// then the team's docs, then prior work, then who it is talking to. The
+	// thread leads because it is the trigger's own context rather than
+	// something retrieved about it — and it led in the prose before it led
+	// in the prompt, with the onboarding block appended above it.
+	//
+	// EVERY BLOCK IS AN ANCHOR. A subset pins the blocks it names and says
+	// nothing about one appended between two of them, which is exactly how
+	// the onboarding block came to render first while the comment beside it
+	// and the docs both said the thread did.
 	//
 	// Anchored on the section break rather than the bare heading:
 	// ExecutorHeader itself mentions `## Relevant knowledge` in prose, and
@@ -246,6 +255,7 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	// no block at all.
 	order(t, p,
 		"\n## The thread so far\n",
+		"\n## First-turn onboarding\n",
 		"\n## Personal memory\n",
 		"\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n",
@@ -260,7 +270,7 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 	excludes(t, p, "## Thread context")
 	// Each block is dropped whole when empty — no stub headings.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}),
-		"\n## The thread so far\n",
+		"\n## The thread so far\n", "\n## First-turn onboarding\n",
 		"\n## Personal memory\n", "\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n", "\n## Similar prior work\n", "\n## Known counterparty\n")
 }

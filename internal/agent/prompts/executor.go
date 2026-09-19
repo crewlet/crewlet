@@ -223,16 +223,11 @@ func BuildExecutor(seat Seat, in ExecutorInput) string {
 		parts = append(parts, executorSandboxSection)
 	}
 
-	// The onboarding hint gates on the tool as well as the marker: the
-	// same rule the memory / skill blocks follow, so a prompt never tells
-	// the model to call something that is not registered.
-	if in.OnboardingHint != "" && slices.Contains(in.AvailableTools, "mark_onboarded") {
-		parts = append(parts, "\n## First-turn onboarding", in.OnboardingHint)
-	}
 	// FIRST of the prefetched blocks, because it is the trigger's own
 	// context rather than something retrieved about it, and the executor
 	// reads this prompt top-down: what the conversation is before what the
-	// seat remembers about conversations like it.
+	// seat remembers about conversations like it, and before the standing
+	// instruction to go and read the team's onboarding pages.
 	//
 	// "The thread so far" rather than "Thread context", which is what the
 	// chat prompt titles the section it writes into the notification BODY
@@ -241,6 +236,12 @@ func BuildExecutor(seat Seat, in ExecutorInput) string {
 	// whichever it saw last.
 	if in.ThreadContext != "" {
 		parts = append(parts, "\n## The thread so far", in.ThreadContext)
+	}
+	// The onboarding hint gates on the tool as well as the marker: the
+	// same rule the memory / skill blocks follow, so a prompt never tells
+	// the model to call something that is not registered.
+	if in.OnboardingHint != "" && slices.Contains(in.AvailableTools, "mark_onboarded") {
+		parts = append(parts, "\n## First-turn onboarding", in.OnboardingHint)
 	}
 	if in.PersonalMemory != "" {
 		parts = append(parts, "\n## Personal memory", in.PersonalMemory)
