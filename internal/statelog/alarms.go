@@ -426,9 +426,12 @@ var table = []rule{
 			return fmt.Sprintf("%.0f%% of searches were answered over part of the "+
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
-		remedy: "A node did not answer its bucket range, so part of the corpus " +
-			"went unscanned. The answers were complete for what was searched " +
-			"and silent about what was not; the log line names who was absent.",
+		remedy: "A node did not cover its bucket range, so part of the corpus " +
+			"went unscanned — it was unreachable, or its own lexical index has " +
+			"not finished its first lap, which is what a node that joined a " +
+			"few minutes ago looks like and clears itself. The answers were " +
+			"complete for what was searched and silent about what was not; the " +
+			"log line names who was absent.",
 	},
 	{
 		kind: KindRecallBelowFloor,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -345,6 +346,18 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 	for {
 		var moved []string
 		var wrapped bool
+		// THE CURSOR IS STAGED, NEVER ADVANCED INSIDE THE TRANSACTION.
+		// It is in-memory state and the transaction below can fail after
+		// it has been set — the index read and the body fetch are both
+		// store reads — and an in-memory write is not rolled back with
+		// the transaction that produced it. Advanced in place, one
+		// transient read failure SKIPPED every document in that scan
+		// window until the walk wrapped, which is exactly the staleness
+		// this walk's whole design is measured against: at ten thousand
+		// documents a lap was about seventeen minutes. Staged here and
+		// committed only on success, a failed step is retried over the
+		// same window on the next call.
+		next, advance := x.cursor[name], false
 		// ONE TRANSACTION PER SCAN STEP, holding the scan and the fetch
 		// together: the walk's correctness argument is that a batch is
 		// compared against one snapshot of the other side, and reading
@@ -371,7 +384,27 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 				wrapped = true
 				return nil
 			}
-			x.cursor[name] = scan[len(scan)-1].ID
+			// A SCAN THAT DID NOT ADVANCE IS A SOURCE BREAKING ITS
+			// CONTRACT, and it has to be an error rather than another
+			// turn of this loop. [LexicalSource.Versions] promises ids
+			// AFTER the cursor, ordered by id; a source that ignores
+			// the cursor — or whose ordering disagrees with the
+			// comparison the cursor is carried through, which is a
+			// collation question rather than a hypothetical — hands
+			// back the same batch for ever. The loop's three exits are
+			// "it wrapped", "it found work" and "the context ended",
+			// and none of them is reachable from there: the indexer
+			// spins on one batch, never indexes again, never marks the
+			// source built, and the only symptom is search that is
+			// permanently scoped with nothing in the log to say why.
+			if last := scan[len(scan)-1].ID; last <= x.cursor[name] {
+				return fmt.Errorf("search: source %s answered a scan after %q "+
+					"with a batch ending at %q, which is not after it — the "+
+					"source's Versions must return ids strictly after the "+
+					"cursor, ordered by id, or this walk cannot terminate",
+					name, x.cursor[name], last)
+			}
+			next, advance = scan[len(scan)-1].ID, true
 			indexed, err := x.versions(ctx, name, scan)
 			if err != nil {
 				return err
@@ -388,7 +421,7 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 					// this scan reached further than one
 					// batch of bodies, and everything
 					// after this id is still to do.
-					x.cursor[name] = at.ID
+					next = at.ID
 					break
 				}
 			}
@@ -400,6 +433,9 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		}); err != nil {
 			return nil, fmt.Errorf("search: read the next %s documents to "+
 				"index: %w", name, err)
+		}
+		if advance {
+			x.cursor[name] = next
 		}
 		if wrapped {
 			x.cursor[name] = ""
@@ -609,9 +645,27 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 //
 // NO I/O, which is the other half: it was one count per empty search, on a
 // path taken by every turn's knowledge block.
-func (x *Indexer) Ready() bool {
+func (x *Indexer) Ready() bool { return x.ReadyFor() }
+
+// ReadyFor is [Indexer.Ready] narrowed to the sources a query actually asks
+// for. No names means every source this index covers.
+//
+// PER SOURCE, because the corpora build independently and a query that names
+// one of them must not be held back by the other's lap. A name this index does
+// not cover is ignored rather than refused: the source filter crosses the
+// broker, and a peer running a build that knows a corpus this one does not
+// must narrow to what it can answer — the reasoning [sourcesOf] states for the
+// same value.
+func (x *Indexer) ReadyFor(sources ...string) bool {
+	if x == nil {
+		return false
+	}
 	for _, source := range x.sources {
-		flag := x.built[source.Source()]
+		name := source.Source()
+		if len(sources) > 0 && !slices.Contains(sources, name) {
+			continue
+		}
+		flag := x.built[name]
 		if flag == nil || !flag.Load() {
 			return false
 		}

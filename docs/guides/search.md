@@ -110,16 +110,26 @@ The asking node holds the whole corpus and could have answered alone — which i
 exactly why a short answer must say so, because a search that returns one fewer
 result looks identical to a corpus with one fewer document.
 
-So the answer is **labelled partial** and names what it missed: how many buckets
-were answered, how many were not, and which nodes were silent. The
-`search_scoped` alarm reports the fraction of searches answered that way; see
-[Alarms](../reference/alarms.md).
+There is a second way not to cover an assignment, and it is the quieter one.
+Every node holds the whole corpus, but the **lexical index over it is each
+node's own** — built by that node's own walk, in its own database, on its own
+schedule. A node that joined a few minutes ago therefore holds every document
+and can find none of them. Such a node answers its range and says so, and the
+coordinator counts its buckets missing rather than merging an almost-empty
+answer under complete coverage. It clears itself when that node finishes its
+first lap, and it applies to the asking node too: a freshly booted node reports
+its own range missing rather than reporting an empty corpus.
+
+Either way the answer is **labelled partial** and names what it missed: how many
+buckets were answered, how many were not, and which nodes did not cover theirs.
+The `search_scoped` alarm reports the fraction of searches answered that way;
+see [Alarms](../reference/alarms.md).
 
 The three search alarms are kept apart because they cost different things:
 
 | Alarm | What happened | What the answer lost |
 |---|---|---|
-| `search_scoped` | A node did not answer its assignment. | A range of the corpus went unscanned. |
+| `search_scoped` | A node did not cover its assignment — it was silent, or its own lexical index has not finished its first lap. | A range of the corpus went unscanned. |
 | `search_degraded` | A semantic scan was asked for and did not run. | Over the range it *did* scan, only what shares words with the query was found. |
 | `search_slow` | Interactive search is over its p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
 

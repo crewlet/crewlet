@@ -363,6 +363,75 @@ func TestASlowPeerCostsItsBucketsAndNotTheAnswer(t *testing.T) {
 	}
 }
 
+// A PARTICIPANT STILL BUILDING ITS INDEX IS ABSENT, NOT SHORT.
+//
+// Every node holds the whole corpus, but the LEXICAL INDEX over it is each
+// node's own — built by that node's own walk, on its own schedule. So a node
+// that joined a minute ago holds every document and can find none of them, and
+// handed a bucket range it answers almost nothing. Counted as an answer, the
+// coordinator reports complete coverage over a corpus it silently dropped a
+// slice of, which is the one failure the whole coverage partition exists to
+// make visible — and the sentence was only ever true for a participant that did
+// not reply at all.
+func TestAPeerStillBuildingItsIndexCostsItsBucketsRatherThanGoingUnnoticed(t *testing.T) {
+	t.Parallel()
+	fan := &search.FanOut{
+		Self:  "n1",
+		Local: fixed{search.Slice{Node: "n1", Lexical: []search.Scored{{Key: "page:A", Score: 1}}}},
+		Peers: peersFunc(func(context.Context, search.FanQuery, []search.Assigned) ([]search.Slice, error) {
+			return []search.Slice{{Node: "n2", Building: true}}, nil
+		}),
+		Roster: func(context.Context) ([]string, error) { return []string{"n1", "n2"}, nil },
+		Corpus: func(context.Context) (int, error) { return search.FanOutFloor * 10, nil },
+	}
+	answer, err := fan.Search(t.Context(), search.FanQuery{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !answer.Partial() {
+		t.Fatal("a peer that replied \"my index is still building\" was counted as " +
+			"having covered its range, so the answer claims a corpus it never scanned")
+	}
+	if !slices.Equal(answer.Absent, []string{"n2"}) {
+		t.Fatalf("absent = %v, want the building peer named so an operator "+
+			"has somewhere to look", answer.Absent)
+	}
+	if answer.BucketsAnswered+answer.BucketsMissing != search.SearchShards {
+		t.Fatalf("answered %d + missing %d does not partition %d buckets",
+			answer.BucketsAnswered, answer.BucketsMissing, search.SearchShards)
+	}
+	// AND THE HALF THAT DID ANSWER STILL ANSWERS. A partial answer is a
+	// worse answer, never a failed one.
+	if !slices.Equal(answer.Hits, []string{"page:A"}) {
+		t.Fatalf("the covered half of a partial answer is %v", answer.Hits)
+	}
+}
+
+// AND THE COORDINATOR'S OWN RANGE IS NOT EXEMPT.
+//
+// A node that has just booted is the coordinator for its own searches, and the
+// local slice is the one nobody would think to doubt: it comes back, it comes
+// back fast, and it is short for exactly the reason a peer's would be.
+func TestACoordinatorStillBuildingReportsItsOwnRangeMissing(t *testing.T) {
+	t.Parallel()
+	fan := &search.FanOut{
+		Self:  "n1",
+		Local: fixed{search.Slice{Node: "n1", Building: true}},
+	}
+	answer, err := fan.Search(t.Context(), search.FanQuery{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.BucketsMissing != search.SearchShards {
+		t.Fatalf("a solo coordinator whose index is still building reported %d "+
+			"of %d buckets missing — its empty answer reads as an empty corpus",
+			answer.BucketsMissing, search.SearchShards)
+	}
+	if !slices.Equal(answer.Absent, []string{"n1"}) {
+		t.Fatalf("absent = %v, want the coordinator itself named", answer.Absent)
+	}
+}
+
 // --- fixtures -------------------------------------------------------------
 
 // fixed is a scanner and a peer set that answers with one canned slice.
