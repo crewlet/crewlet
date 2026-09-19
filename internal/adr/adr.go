@@ -79,7 +79,29 @@ const Dir = "adr"
 // what would a test have to look at to catch a violation? The four gates that
 // exist over this tree's architectural rules were all written after somebody
 // asked that about a rule that had just been broken.
-var Unenforced = []Exemption{}
+var Unenforced = []Exemption{
+	{
+		ID: "ADR-0009",
+		Why: "A gate would have to observe two nodes applying one pointer and " +
+			"converging on the same epoch, which is a property of a running " +
+			"fleet rather than of the source. The nearest static formulation " +
+			"— no configuration is applied from a consumed message — would " +
+			"forbid a shape nothing currently writes, so it would certify " +
+			"nothing. internal/configplane's suite covers the posture " +
+			"arithmetic and the reconcile cadence; what is uncovered is the " +
+			"delivery mechanism the decision rejected.",
+	},
+	{
+		ID: "ADR-0010",
+		Why: "The engine's exporter and the sandbox forwarder agree because " +
+			"they read the same standard environment variables directly, " +
+			"which is the point — so there is no shared helper for a walk to " +
+			"hold them against. A test that both resolve one endpoint from " +
+			"one environment is the right gate and is worth building the day " +
+			"a third reader appears; with two, it would assert what the " +
+			"variable names already do.",
+	},
+}
 
 // Exemption is one record that no gate holds, and the case for that.
 type Exemption struct {

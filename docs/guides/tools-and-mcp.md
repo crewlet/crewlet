@@ -151,8 +151,10 @@ Two things MCP does not cover, and what to do instead:
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
   [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
   [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay —
-  every one of them routes end to end (see
-  [Design Decisions](../reference/design-decisions.md#every-third-party-app-is-served)).
+  every one of them routes end to end. A config block the engine cannot honour
+  is refused rather than ignored, because a silently dropped integration block
+  looks exactly like one that is working until somebody notices the messages
+  never arrived.
 - **Company-wide periodic work.** An MCP server is called by an agent; it does
   not get a tick of its own. Schedule it as [cron work](../concepts/scheduling.md)
   against a seat, which gives it an agent, a turn, and the engine's own

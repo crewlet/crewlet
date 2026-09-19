@@ -41,7 +41,7 @@ decayed.**
 So the load-bearing field of a record here is **`Enforced-by:`**, and the
 record is the preface to the gate rather than a substitute for it. An ADR
 whose `Enforced-by:` is `nothing` is allowed, and it must say so in that word,
-and it is then listed in `internal/adr/unenforced.go` with a reason — two-sided,
+and it is then listed in `adr.Unenforced` with a reason — two-sided,
 so an entry that stops being true fails the build. Writing `nothing` is the
 honest answer often enough that hiding it would be the worse outcome; what is
 not allowed is leaving the question out.
@@ -96,3 +96,5 @@ six false statements by the time anybody checked.
 | [0006](0006-event-evolution-is-additive-only.md) | Event evolution is additive-only and unknown types round-trip | `TestAnUnknownTypesLargeIntegersSurviveARoundTrip` |
 | [0007](0007-turso-is-the-only-store-driver.md) | Turso is the only store driver, and it bounds the release matrix | `TestTursoIsTheOnlyDriverInTheBinary` |
 | [0008](0008-a-shared-rule-gets-one-implementation.md) | A rule more than one package needs gets exactly one implementation | `TestNoClientSitsOnTheProcessGlobalPool` and its siblings |
+| [0009](0009-one-activation-pointer-applied-per-node.md) | Which revision is current is fleet-wide; applying it is per node | nothing — declared |
+| [0010](0010-tracing-is-configured-by-the-standard-otel-environment.md) | Tracing is configured by the standard OTel environment, not by Tier A | nothing — declared |

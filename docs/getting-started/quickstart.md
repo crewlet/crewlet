@@ -54,9 +54,13 @@ stream:
                           #   published survives a restart
 
 store:
-  path: "./acme-data/acme.db"   # ONE file, owned exclusively by this
-                          #   process. Not a shared database and no DSN:
-                          #   two engines pointed at one file corrupt it
+  path: "./acme-data/acme.db"   # this node's own database, owned
+                          #   EXCLUSIVELY by this process. Not a shared
+                          #   database and no DSN: two engines pointed at one
+                          #   path corrupt it. A second file is created beside
+                          #   it for the replicated estate — a snapshot is a
+                          #   copy of one of the two, which is why they are
+                          #   not one file. See concepts/architecture.md
 
 coordination:
   type: local             # a single node holding its own seat leases;
