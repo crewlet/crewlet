@@ -327,6 +327,37 @@ describe("the frame's layout", () => {
     expect(row).toMatch(/min-width:\s*100%/);
   });
 
+  // A LABEL THE RAIL CANNOT HOLD GOES WITH THE REST OF THEM.
+  //
+  // `Shell.tsx` drops the engine's word when the READER collapses the rail,
+  // and that `collapsed` is a React state rather than this breakpoint. The two
+  // are independent: at 960 and below the rail is 48px wide by media query
+  // with `collapsed` still false, so "connected" rendered at 61px inside a
+  // 48px column and spilled out of both sides of it. Measured at 900px.
+  //
+  // It comes back in the bottom bar, where a row is 56px and the workspace
+  // labels come back too — the pair has to move together or the rail carries a
+  // word beside eight unlabelled glyphs.
+  test("the rail's own labels leave and return together", () => {
+    const css = sheet("frame.css");
+    const at = (px: number): string => {
+      const from = css.indexOf(`@media (max-width: ${px}px)`);
+      expect(from, `the ${px}px breakpoint is gone`).toBeGreaterThan(-1);
+      const next = css.indexOf("@media (", from + 10);
+      return css.slice(from, next === -1 ? undefined : next);
+    };
+    // 48px of column holds neither.
+    expect(block(at(960), ".rail-label")).toMatch(/display:\s*none/);
+    expect(block(at(960), ".rail-engine > .truncate")).toMatch(/display:\s*none/);
+    // A 56px bar row holds both, and the later rule is what restores them.
+    expect(block(at(860), ".rail-label")).toMatch(/display:\s*block/);
+    expect(block(at(860), ".rail-engine > .truncate")).toMatch(/display:\s*inline/);
+    expect(
+      css.indexOf("@media (max-width: 860px)"),
+      "the bottom bar's block has to come after the 960 one to win the tie",
+    ).toBeGreaterThan(css.indexOf("@media (max-width: 960px)"));
+  });
+
   // A RESET DOES NOT TAKE THE FOCUS RING WITH IT.
   //
   // `all: unset` is how a <button> becomes a plain box, and `all` is every
@@ -471,11 +502,27 @@ describe("the frame's layout", () => {
     const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
     expect(narrow, "the narrow breakpoint is gone").toContain(".page-bar");
 
-    // THE BAR IS TWO LINES HERE, and a fixed height would clip the second.
-    const bar = block(narrow, ".page-bar");
-    expect(bar).toMatch(/flex-wrap:\s*wrap/);
-    expect(bar).toMatch(/min-height:\s*var\(--page-bar-h\)/);
-    expect(bar).toMatch(/height:\s*auto/);
+    // THE BAR WRAPS AT EVERY WIDTH, because what overflows it is CONTENT.
+    // Behind the phone breakpoint this missed a whole second band: a screen's
+    // own control group is `flex: 0 0 auto` and the turns list's is 478px, so
+    // at 1180px with the rail and the sidebar open the SEARCH TRIGGER — the
+    // command palette's only pointer affordance — was past the right edge on
+    // the turns list and the event log, and the turns page took the whole
+    // document to 1263 so the heading scrolled sideways with it.
+    //
+    // A FLOOR RATHER THAN A HEIGHT, so a wrapped bar is not clipped and an
+    // unwrapped one is exactly the height it always was.
+    const base = css.slice(0, css.indexOf("@media (max-width: 860px)"));
+    const wide = block(base, ".page-bar");
+    expect(wide).toMatch(/flex-wrap:\s*wrap/);
+    expect(wide).toMatch(/min-height:\s*var\(--page-bar-h\)/);
+    expect(wide).toMatch(/height:\s*auto/);
+    // AND NOT A FIXED HEIGHT ANYWHERE ELSE, which is the declaration that
+    // would silently undo it.
+    expect(
+      rules(css, ".page-bar").join(" "),
+      "a fixed height clips the second line the wrap creates",
+    ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
     // AND THE SECOND LINE IS THE PAGE'S OWN CONTROLS: a full basis is what
     // breaks the line, an order past the globals is what keeps the viewer

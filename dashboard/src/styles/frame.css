@@ -434,11 +434,31 @@
   min-height: 0;
 }
 
+/* THE BAR WRAPS AT EVERY WIDTH, because what overflows it is CONTENT rather
+   than a viewport. It used to wrap only under 860, and the failure the phone
+   block below describes — the star, Copy link, the viewer chip and the SEARCH
+   TRIGGER, which is the command palette's only pointer affordance, all shoved
+   past the right edge of a bar whose `overflow` is `visible`, so off the edge
+   meant UNREACHABLE — turned out to have a whole second band. A screen's own
+   control group is `flex: 0 0 auto` and the turns list's is 478px: measured at
+   1180px with the rail and the sidebar open, the search trigger was past the
+   edge on the turns list and the event log, and the turns page took the whole
+   DOCUMENT to 1263 so the heading scrolled sideways with it. A 1000px window —
+   a laptop, or half a wide screen — was worse.
+
+   `wrap` costs nothing on a line that fits: a flex container only breaks a
+   line it cannot hold. What stays behind the phone breakpoint is the
+   `flex: 0 0 100%` that forces the controls onto their OWN line unconditionally
+   — that one is a phone decision, not an overflow. A FLOOR RATHER THAN A
+   HEIGHT for the same reason it is one down there: a fixed height clips the
+   second row, and an unwrapped bar is exactly the height it always was. */
 .page-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  height: var(--page-bar-h);
+  height: auto;
+  min-height: var(--page-bar-h);
   padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface-1);
@@ -1034,6 +1054,18 @@
     display: none;
   }
 
+  /* AND THE ENGINE'S WORD GOES WITH THEM. `Shell.tsx` already drops it when
+     the READER collapses the rail — but that `collapsed` is a React state and
+     this is a breakpoint, and the two are independent: at 960 and below the
+     rail is 48px wide with `collapsed` still false, so "connected" rendered at
+     61px inside a 48px column and spilled out of both sides of it. The dot is
+     the state and the word is the label for it, and the labels are already
+     gone here. It comes back with them in the bottom bar below, where a row is
+     56px wide and can hold one. */
+  .rail-engine > .truncate {
+    display: none;
+  }
+
   .workspace-side {
     position: fixed;
     top: 0;
@@ -1371,6 +1403,12 @@ button.histogram-bar[data-empty]:hover {
     display: block;
   }
 
+  /* AND SO DOES THE ENGINE'S WORD, for the same reason and in the same place:
+     the foot is a row of the bar here rather than a 48px column. */
+  .rail-engine > .truncate {
+    display: inline;
+  }
+
   .rail-foot {
     flex-direction: row;
     align-items: center;
@@ -1409,13 +1447,10 @@ button.histogram-bar[data-empty]:hover {
      the way in and out stays on the first line, and what this page can do
      takes the second. That is the shape the file already argues for one rule
      up — "THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out". */
+  /* The wrap, the floor and the auto height are the BASE rule's now — see the
+     comment on `.page-bar` above, which is where the band this used to miss is
+     written down. What is left here is the phone's own tightening. */
   .page-bar {
-    flex-wrap: wrap;
-    /* A FLOOR RATHER THAN A HEIGHT, because the bar is two rows here and a
-       fixed one would clip the second. Unwrapped — a screen with no controls
-       at all — it is exactly the height it was. */
-    height: auto;
-    min-height: var(--page-bar-h);
     padding: 0 var(--space-2);
     gap: var(--space-1);
   }
