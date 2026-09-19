@@ -62,23 +62,6 @@ const (
 	// closes a channel somebody is about to answer on.
 	ChannelIdleTimeout = time.Hour
 
-	// FollowRetention is how long a chat thread-follow survives with no
-	// activity. updated_at is refreshed on every re-assert — a mention, a
-	// collective address, the seat posting into the thread — so it is a
-	// true last-activity stamp rather than a creation date.
-	//
-	// Ninety days is the point past which a chat thread has stopped being
-	// a live conversation on every backend that ships one: Slack and
-	// Mattermost both surface a quarter-old thread only through search.
-	//
-	// The asymmetry decides the value. Dropping a stale follow costs at
-	// most one missed NON-mention reply, and the very next mention
-	// re-follows through the ordinary path — while keeping every follow
-	// for ever costs unbounded growth on a table read on the hot path of
-	// every inbound chat message. A cheap, self-healing miss beats an
-	// unbounded read.
-	FollowRetention = 90 * 24 * time.Hour
-
 	// CounterpartyRetention is how long a profile survives with no
 	// interaction.
 	//
@@ -131,12 +114,11 @@ func StoreJobs(db *store.DB) []Job {
 				return log.Purge(ctx)
 			}},
 		// NOT HERE any more: webhook_deliveries, rate_limits,
-		// turn_completions and config_apply_status. All four moved to the
-		// coordination store, where a bucket's own age is the retention
-		// and the BROKER expires the records — so there is nothing left
-		// for a sweep to delete, and a job that swept an empty table
-		// every tick would only report that it had.
-		Purge("chat_thread_follows", NodeLocal, FollowRetention, db.ThreadFollows().Purge),
+		// turn_completions, config_apply_status and chat_thread_follows.
+		// All five moved to the coordination store, where a bucket's own
+		// age is the retention and the BROKER expires the records — so
+		// there is nothing left for a sweep to delete, and a job that
+		// swept an empty table every tick would only report that it had.
 	}
 }
 

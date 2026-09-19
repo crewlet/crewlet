@@ -53,7 +53,6 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
-		"chat_thread_follows",
 		"conversation_sessions",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on
@@ -275,14 +274,15 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 	t.Parallel()
 	for table, horizon := range map[string]time.Duration{
-		// NOT turn_completions: it is retained by the COORDINATION
-		// bucket now, whose age no sweep here ticks against.
-		// coordtest holds that horizon to the catchup ceiling.
+		// NOT turn_completions, and NOT chat_thread_follows: both are
+		// retained by a COORDINATION bucket now, whose age no sweep
+		// here ticks against. coordtest holds those horizons — the
+		// ledger's to the catchup ceiling, the follows' to its own
+		// declared constant.
 		"scheduled_runs":        maintenance.ScheduledRunRetention,
 		"conversation_sessions": maintenance.ConversationRetention,
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
-		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
 		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the

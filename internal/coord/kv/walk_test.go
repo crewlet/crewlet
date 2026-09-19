@@ -97,6 +97,7 @@ func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 		ClaimTTL:        10 * time.Minute,
 		LedgerRetention: 10 * time.Minute,
 		FireRetention:   10 * time.Minute,
+		FollowRetention: 10 * time.Minute,
 		CooldownMax:     time.Hour,
 		StatusFreshness: 10 * time.Minute,
 	})

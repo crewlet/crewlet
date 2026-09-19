@@ -467,6 +467,7 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered boo
 		ClaimTTL:        coord.ClaimTTL,
 		LedgerRetention: coord.LedgerRetention,
 		FireRetention:   coord.FireRetention,
+		FollowRetention: coord.FollowRetention,
 		CooldownMax:     coord.CooldownMax,
 		StatusFreshness: coord.StatusFreshness,
 		Replicas:        replicas,

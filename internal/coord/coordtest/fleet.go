@@ -41,6 +41,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"plane", planeCases},
 		{"payload", payloadCases},
 		{"channels", channelCases},
+		{"follows", followCases},
 		{"fires", fireCases},
 		{"sandbox_runs", runCases},
 		{"secrets", secretCases},
@@ -2184,3 +2185,145 @@ var integrationCases = []fleetCase{
 		}
 	}},
 }
+
+// ---- the chat thread-follows -------------------------------------------- //
+
+func (h *fleetHarness) follow(backend, handle, channel, thread, reason string) {
+	h.t.Helper()
+	if err := h.f.Follow(h.ctx, backend, handle, channel, thread, reason, h.now()); err != nil {
+		h.t.Fatalf("Follow(%s/%s/%s): %v", backend, handle, thread, err)
+	}
+}
+
+func (h *fleetHarness) following(backend, handle, channel, thread string) (string, bool) {
+	h.t.Helper()
+	reason, ok, err := h.f.Following(h.ctx, backend, handle, channel, thread)
+	if err != nil {
+		h.t.Fatalf("Following(%s/%s/%s): %v", backend, handle, thread, err)
+	}
+	return reason, ok
+}
+
+var followCases = []fleetCase{{
+	// THE REASON THIS IS COMPANY-WIDE. An inbound chat message is claimed
+	// and parsed by ONE node of the fleet, and the next reply in the same
+	// thread by whichever node wins that time — so a follow only one node
+	// can see is a thread reply that reaches its seat by chance.
+	name: "a follow one caller records is visible to every other",
+	fn: func(h *fleetHarness) {
+		h.follow("mattermost", "agent-swe", "town-square", "root-1", "mention")
+		reason, ok := h.following("mattermost", "agent-swe", "town-square", "root-1")
+		if !ok {
+			h.t.Fatal("the follow is not readable, so a reply on another node is dropped")
+		}
+		if reason != "mention" {
+			h.t.Fatalf("reason = %q, want the one that was recorded", reason)
+		}
+	},
+}, {
+	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
+	// a thread by a collective shout and later named personally is now
+	// following for the stronger reason, and an operator asking why it
+	// answered should see the mention.
+	name: "a re-assert overwrites the reason",
+	fn: func(h *fleetHarness) {
+		h.follow("slack", "agent-pm", "C1", "1700.1", "collective")
+		h.follow("slack", "agent-pm", "C1", "1700.1", "mention")
+		if reason, _ := h.following("slack", "agent-pm", "C1", "1700.1"); reason != "mention" {
+			h.t.Fatalf("reason = %q, want the re-asserted one", reason)
+		}
+	},
+}, {
+	// Every segment is part of the identity. Two backends' thread ids come
+	// from different namespaces and are not comparable; two seats follow
+	// for themselves; and one thread id under two channels is two threads.
+	name: "the backend, the seat and the channel are all part of the identity",
+	fn: func(h *fleetHarness) {
+		h.follow("slack", "agent-swe", "C1", "t-1", "mention")
+
+		if _, ok := h.following("mattermost", "agent-swe", "C1", "t-1"); ok {
+			h.t.Error("another backend's thread id read as the same thread")
+		}
+		if _, ok := h.following("slack", "agent-pm", "C1", "t-1"); ok {
+			h.t.Error("one seat's follow answered for another seat")
+		}
+		if _, ok := h.following("slack", "agent-swe", "C2", "t-1"); ok {
+			h.t.Error("the same thread id under another channel read as the same thread")
+		}
+	},
+}, {
+	// A KEY IS A SUBJECT TOKEN PATH, and a chat backend's ids are not this
+	// engine's to promise about. A separator inside a segment must not be
+	// able to compose the key some other segmentation would.
+	name: "a separator inside a segment does not collide with another key",
+	fn: func(h *fleetHarness) {
+		h.follow("slack", "agent-swe", "C1.C2", "t-1", "mention")
+		if _, ok := h.following("slack", "agent-swe", "C1", "C2.t-1"); ok {
+			h.t.Fatal("two different (channel, thread) pairs composed one key, " +
+				"so one seat's follow answers for a thread it never joined")
+		}
+	},
+}, {
+	name: "unfollow removes exactly one follow and reports it",
+	fn: func(h *fleetHarness) {
+		h.follow("slack", "agent-swe", "C1", "t-1", "mention")
+		h.follow("slack", "agent-swe", "C1", "t-2", "mention")
+
+		gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "t-1")
+		if err != nil {
+			h.t.Fatalf("Unfollow: %v", err)
+		}
+		if !gone {
+			h.t.Error("Unfollow reported nothing was there")
+		}
+		if _, ok := h.following("slack", "agent-swe", "C1", "t-1"); ok {
+			h.t.Error("the follow survived an explicit unfollow, so a seat told " +
+				"to stop watching a thread keeps waking on it")
+		}
+		if _, ok := h.following("slack", "agent-swe", "C1", "t-2"); !ok {
+			h.t.Error("unfollowing one thread dropped another")
+		}
+	},
+}, {
+	name: "unfollowing a thread nobody follows reports so rather than failing",
+	fn: func(h *fleetHarness) {
+		gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "never")
+		if err != nil {
+			h.t.Fatalf("Unfollow: %v", err)
+		}
+		if gone {
+			h.t.Error("Unfollow reported it removed a follow that was never there")
+		}
+	},
+}, {
+	// AN INCOMPLETE IDENTITY IS REFUSED rather than written under a key
+	// missing a segment, which would be a record no read could ever find.
+	name: "an incomplete identity is refused",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		for _, missing := range []struct{ backend, handle, thread string }{
+			{"", "agent-swe", "t-1"},
+			{"slack", "", "t-1"},
+			{"slack", "agent-swe", ""},
+		} {
+			err := h.f.Follow(h.ctx, missing.backend, missing.handle, "C1", missing.thread, "mention", at)
+			if err == nil {
+				h.t.Errorf("a follow with backend=%q handle=%q thread=%q was accepted",
+					missing.backend, missing.handle, missing.thread)
+			}
+		}
+	},
+}, {
+	// A read with an incomplete identity is NOT an error: it is the
+	// ordinary shape of a top-level message, where there is no thread.
+	name: "reading with no thread reports not following rather than failing",
+	fn: func(h *fleetHarness) {
+		reason, ok, err := h.f.Following(h.ctx, "slack", "agent-swe", "C1", "")
+		if err != nil {
+			h.t.Fatalf("Following with no thread: %v", err)
+		}
+		if ok || reason != "" {
+			h.t.Fatal("a message with no thread read as a followed thread")
+		}
+	},
+}}

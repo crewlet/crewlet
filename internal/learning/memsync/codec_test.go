@@ -307,8 +307,6 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 			"and a peer's copy would claim this node had seen it too",
 		"scheduled_runs": "this node's dispatch history; the claim that stops a " +
 			"double fire is the fleet's, in coordination",
-		"chat_thread_follows": "re-asserted by the next mention, so it self-heals " +
-			"faster than replication would carry it",
 	}
 
 	rows, err := db.SQL().QueryContext(t.Context(),

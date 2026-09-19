@@ -1,0 +1,42 @@
+-- Chat thread-follows leave this database for the coordination store.
+--
+-- # What was wrong with them being here
+--
+-- `chat_thread_follows` answered a question the whole COMPANY has to agree on
+-- while living in a file one process owns exclusively, which is the mistake
+-- migrations 0010 through 0013 repaired five times over for other tables.
+--
+-- The shape is exactly `a2a_channels`', which 0012 took: an inbound chat
+-- message is claimed and parsed by ONE node — `notify-inbound` is a competing
+-- consumer group — and the next reply in the same thread is claimed by
+-- whichever node wins that time. A follow recorded on the first node is
+-- invisible to the second, so a thread reply that is not a mention reached its
+-- seat only when the two happened to coincide, and less often the more nodes a
+-- company ran. On one node it worked perfectly, which is why it survived.
+--
+-- What it was NOT is a memory row. The memory-sync changelog's own guard
+-- exempted this table with the note that it is "re-asserted by the next
+-- mention, so it self-heals faster than replication would carry it" — an
+-- argument about a seat MOVING node, which is a different question from a
+-- delivery landing on a different node each time, and the one it needed to
+-- answer.
+--
+-- # Where it went, and what is not lost
+--
+-- A record per (backend, seat, channel, thread) in the coordination store's
+-- own bucket, keyed through the segment grammar in internal/coord/keys.go —
+-- because a chat backend's thread id is not something this engine gets to
+-- promise is a valid subject token.
+--
+-- Retention is now the BUCKET's age, which is the rule for every aged slot
+-- there, and it is the same ninety days: every re-assert rewrites the record,
+-- so the age is a true last-activity stamp. The maintenance sweep's job for
+-- this table goes with it, exactly as 0010's four did — the broker expires
+-- the records, so a sweep would have nothing to delete.
+--
+-- Existing rows are DROPPED rather than migrated. A follow is re-established
+-- by the next mention through the ordinary path, which is the same cost as
+-- the ninety-day horizon expiring one, and copying them would mean this
+-- migration reaching a store it has no client for.
+
+DROP TABLE IF EXISTS chat_thread_follows;

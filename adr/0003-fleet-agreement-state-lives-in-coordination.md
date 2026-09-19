@@ -3,8 +3,8 @@
 - **Status:** accepted
 - **Authority:** `internal/coord`
 - **Enforced-by:** `internal/store.TestEveryNodeTableSaysWhoHasToAgreeOnIt`
-- **Measured:** seven tables moved, across four migrations — `internal/store/schema/node/0010` through `0013`
-- **Cost-when-tried:** four separate repair migrations, each discovering the previous one was incomplete. `0012` says so in its own text: `a2a_channels` "was the last of the tables migration 0010 should have taken". `0013` said it again about the next one.
+- **Measured:** eight tables moved, across five migrations — `internal/store/schema/node/0010` through `0013`, and `0028`
+- **Cost-when-tried:** five separate repair migrations, each discovering the previous one was incomplete. `0012` says so in its own text: `a2a_channels` "was the last of the tables migration 0010 should have taken". `0013` said it again about the next one, and `0028` about the one after that.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -61,15 +61,17 @@ short-lived; and coordination is deliberately **not** itself a replicated log �
 `internal/coord` gives five reasons, the first being that the framework's
 central property is the one a lease must not have.
 
-## The table this record is still about
+## The table this record was written for
 
-`chat_thread_follows` is company-wide chat routing state in the node's own
+`chat_thread_follows` was company-wide chat routing state in the node's own
 file, written and read from the fleet-wide `notify-inbound` consumer group. On
-more than one node a reply that is not a mention reaches the node holding the
+more than one node a reply that is not a mention reached the node holding the
 follow row only by chance — the same shape `a2a_channels` was moved out for in
-`0012`. Its only written justification was an exemption string in a memory-sync
-test, arguing about seat movement rather than about per-delivery node fan-out.
+`0012`. Its only written justification was an exemption string in a
+memory-sync test, arguing about seat movement rather than about per-delivery
+node fan-out, which is a different question and the one it needed to answer.
 
-It is recorded here rather than left as a comment because that is the point of
-the field: `Enforced-by:` on this record is a gate that made the table state
-its case, and the case it states is that it does not have one yet.
+It moved, in node migration `0028`, to a coordination bucket whose own age is
+the retention. That is what makes this record's `Enforced-by:` mean something:
+the gate made the table state its case, the case did not hold, and the table
+went where the case pointed.

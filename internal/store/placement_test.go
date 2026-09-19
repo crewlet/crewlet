@@ -233,6 +233,11 @@ var nodeEstatePlacements = []placement{
 	// A per-node OBSERVATION about shared infrastructure. Two nodes
 	// legitimately hold different answers, which is what makes a shared
 	// copy wrong rather than merely unnecessary.
+	//
+	// `chat_thread_follows` was in this group and did not belong: two
+	// nodes holding different follows is not a legitimate difference, it
+	// is the bug. It is in coordination now — see ADR-0003 and node
+	// migration 0028.
 	// -----------------------------------------------------------------
 	{
 		Table: "stream_identity",
@@ -246,16 +251,6 @@ var nodeEstatePlacements = []placement{
 		Why: "This node's own progress through adopting a replicated estate " +
 			"file. It describes a local file operation and means nothing on " +
 			"a peer.",
-	},
-	{
-		Table: "chat_thread_follows",
-		Why: "Which chat threads a seat is following. THIS ONE IS THE " +
-			"EXCEPTION AND IT IS NOT SETTLED: the rows are written and read " +
-			"from the fleet-wide notify-inbound consumer group, so on more " +
-			"than one node a non-mention reply reaches the node holding the " +
-			"row only by chance — the same shape migration 0012 moved " +
-			"a2a_channels out for. It is here because it was here; see " +
-			"adr/0003, which records the move as the decision it is.",
 	},
 
 	// -----------------------------------------------------------------

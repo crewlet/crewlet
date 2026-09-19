@@ -511,7 +511,7 @@ By default, agents only receive thread replies in threads they are **following**
 2. **Collective address** — `<!channel>` or `<!here>`
 3. **Participation** — the agent replies in the thread. Because the reply goes out through the Slack MCP tools rather than the engine, the follow is recorded from Slack's own **echo** of that message: the parser writes it on the way past as it suppresses the seat's own post, which is also what lets a node record a follow for a seat it is not running.
 
-Thread tracking state is persisted in the store (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
+Thread tracking state is persisted in the fleet's [coordination store](../concepts/coordination.md), keyed by backend, so it survives engine restarts *and* is visible to whichever node claims the next reply — an inbound message is parsed by one node of the fleet, and a follow only that node could see would make a non-mention reply reach its seat by chance. Bot messages are automatically ignored to prevent loops.
 
 A follow is dropped after **90 days without activity** — the row's timestamp is refreshed every time the follow is re-asserted (a mention, a collective address, the agent posting), so it means last activity rather than when the thread started. The asymmetry is what sets the number: a dropped stale follow costs at most one missed non-mention reply, and the next mention re-follows through the ordinary path above, while keeping every follow forever grows a table that is read on the hot path of every inbound message. The sweep runs on the maintenance worker, once per fleet.
 
