@@ -149,10 +149,17 @@ func TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount(t *testing.T) {
 	if !strings.Contains(woken.Body, "been assigned an issue") {
 		t.Fatalf("the trigger was not built for an assignment:\n%s", woken.Body)
 	}
-	// The conversation key is project-qualified: two repositories both
-	// have a #42.
-	if got := woken.Metadata[notify.KeyField]; !strings.HasSuffix(got, "nimbus/api#42") {
-		t.Fatalf("the conversation key reads %q", got)
+	// The keys are project-qualified: two repositories both have a #42.
+	// BOTH OF THEM, and this is the end-to-end statement that a vendor
+	// whose two keys coincide says so — GitLab's identity delegates to its
+	// partition key, so the item reference is the merge unit and the
+	// durable thread at once.
+	if got := woken.Metadata[notify.PartitionField]; !strings.HasSuffix(got, "nimbus/api#42") {
+		t.Fatalf("the partition key reads %q", got)
+	}
+	if got := woken.Metadata[notify.ConversationField]; got != woken.Metadata[notify.PartitionField] {
+		t.Fatalf("the conversation identity reads %q and the partition key %q",
+			got, woken.Metadata[notify.PartitionField])
 	}
 }
 

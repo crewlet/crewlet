@@ -175,18 +175,27 @@ func TestTheBoardIsToldWhetherABoxExistsAndWhetherItIsHeld(t *testing.T) {
 func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 	store := seedRuns(t,
 		sandbox.PendingRun{TurnID: "chat", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "slack:C1:1699.1", CreatedAt: runBase},
+			ConversationKey: "chat:D1:1699.1", ConversationIdentity: "chat:D1",
+			CreatedAt: runBase},
 		sandbox.PendingRun{TurnID: "tick", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
-			ConversationKey: "event:018f-…", CreatedAt: runBase.Add(time.Minute)},
+			ConversationKey: "event:018f-…", ConversationIdentity: "event:018f-…",
+			CreatedAt: runBase.Add(time.Minute)},
 		sandbox.PendingRun{TurnID: "none", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 			CreatedAt: runBase.Add(2 * time.Minute)},
+		// A ROW FROM BEFORE THE SPLIT carries only the partition key, and
+		// the column is answered off the conversation — so the identity
+		// read has to fall back to it or every parked run written by an
+		// older build is reported unanswerable while a person is in fact
+		// waiting in that thread.
+		sandbox.PendingRun{TurnID: "presplit", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
+			ConversationKey: "chat:D1:1699.9", CreatedAt: runBase.Add(3 * time.Minute)},
 	)
-	for _, id := range []string{"chat", "tick", "none"} {
+	for _, id := range []string{"chat", "tick", "none", "presplit"} {
 		if err := store.SetStatus(t.Context(), id, sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
 	}
-	want := map[string]bool{"chat": true, "tick": false, "none": false}
+	want := map[string]bool{"chat": true, "tick": false, "none": false, "presplit": true}
 	for _, row := range askRuns(t, store) {
 		id := row["turn_id"].(string)
 		if row["answerable_in_chat"] != want[id] {

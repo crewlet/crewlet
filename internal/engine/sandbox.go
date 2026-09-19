@@ -580,7 +580,13 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 	// re-enters the run that suspended, so the entry names that one rather
 	// than a fresh id, and it dedupes against the same trigger the dispatch
 	// that launched it did.
-	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
+	//
+	// AND UNDER THE CONVERSATION IT REPORTS BACK TO, never the partition it
+	// was matched on: for a direct message those are different values, and
+	// filing here under the match value would put the coding work in a row
+	// the seat's next turn on that DM never looks up — the same silence
+	// this frame exists to end.
+	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.Conversation(),
 		in.Run.TurnID, in.Run.UnitOfWork(), resumeTask(in), res, e.dispatch.now())
 }
 
@@ -822,7 +828,12 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			// entry at all, so the next turn on that thread re-read
 			// history that stopped at the moment the run detached and
 			// planned as though the coding work had never happened.
-			ConversationKey: t.ConversationKey,
+			//
+			// BOTH HALVES, because the row asks two questions of them:
+			// the identity is where the resume reports, the partition
+			// is what a person's answer is matched against.
+			ConversationKey:      t.PartitionKey,
+			ConversationIdentity: t.ConversationKey,
 			// The brief and the delivery obligation, so the resumed turn
 			// has both when the trigger is long gone. Neither can be
 			// recovered from the row any other way.

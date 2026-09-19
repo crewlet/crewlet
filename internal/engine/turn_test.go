@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -73,21 +74,45 @@ func said(sender, body string, at time.Time) *events.Event {
 	}, events.TraceContext{})
 	e.Source = "notify.slack"
 	e.Timestamp = at
-	notifyStamp(e, "slack:C1")
+	notifyStamp(e, "slack:C1", "slack:C1")
 	return e
 }
 
-// notifyStamp writes a conversation key the way internal/notify does.
-func notifyStamp(e *events.Event, key string) {
+// notifyStamp writes both keys the way internal/notify does — THROUGH THE
+// CONSTANTS, never the literals they hold: with the identity read falling back
+// to the partition field for an older peer's event, a test spelling
+// "conversation_key" out keeps passing whichever field production reads, which
+// is the blind spot node/concurrency_test.go records having shipped once.
+func notifyStamp(e *events.Event, partition, conversation string) {
 	if e.Payload == nil {
 		e.Payload = map[string]any{}
 	}
-	e.Payload["conversation_key"] = key
+	e.Payload[notify.PartitionField] = partition
+	e.Payload[notify.ConversationField] = conversation
 }
 
+// inThread is an event whose two keys coincide — a shared channel, an issue,
+// a page: every source but a direct message.
 func inThread(kind, conversation string) *events.Event {
 	e := ev(kind)
-	notifyStamp(e, conversation)
+	notifyStamp(e, conversation, conversation)
+	return e
+}
+
+// notifyStampedIn is one notification with both keys stated outright, for the
+// cases that need two events in one partition.
+func notifyStampedIn(partition, conversation string) *events.Event {
+	e := ev("notification")
+	notifyStamp(e, partition, conversation)
+	return e
+}
+
+// inDirectThread is the one shape where they differ: a reply in the thread a
+// direct message started partitions on the thread and belongs to the whole DM
+// channel.
+func inDirectThread(kind, channel, thread string) *events.Event {
+	e := ev(kind)
+	notifyStamp(e, channel+":"+thread, channel)
 	return e
 }
 
@@ -1135,9 +1160,10 @@ func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 
 func TestTheConversationKeyComesFromTheFirstEventThatNamesOne(t *testing.T) {
 	t.Parallel()
-	// A partition is one conversation by construction — that is what the
-	// broker's key function guarantees — so taking the first keeps the
-	// answer stable rather than depending on which event sorts last.
+	// A partition is one conversation by construction — the broker's key
+	// function guarantees the partition key and a source's partition key
+	// refines its identity — so taking the first keeps the answer stable
+	// rather than depending on which event sorts last.
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 	d.Dispatch(context.Background(), "ceo", []*events.Event{
@@ -1551,10 +1577,14 @@ func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
 		t.Errorf("the merged ask carries %d constituents, want both — the learning "+
 			"workers observe each distinct sender", len(note.Messages))
 	}
-	// The conversation key rides the merged envelope, which is what a
-	// parked coding run matches a person's answer back on.
-	if got, _ := merged.Payload["conversation_key"].(string); got != "slack:C1" {
-		t.Errorf("the merged ask carries conversation %q", got)
+	// BOTH KEYS ride the merged envelope, because from here on this one
+	// event IS the partition and a reader handed it must be able to ask
+	// either question.
+	if got, _ := merged.Payload[notify.PartitionField].(string); got != "slack:C1" {
+		t.Errorf("the merged ask carries partition key %q", got)
+	}
+	if got, _ := merged.Payload[notify.ConversationField].(string); got != "slack:C1" {
+		t.Errorf("the merged ask carries conversation identity %q", got)
 	}
 	// And the obligation the turn engine enforces is derived from the
 	// constituents either way — including WHERE it is owed, which a merge
@@ -1578,7 +1608,7 @@ func TestAnUnmergeablePartitionDegradesToPerEventDispatch(t *testing.T) {
 	// build cannot decode looks like.
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 
 	if got := d.Dispatch(context.Background(), "ceo",
 		[]*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
@@ -1616,7 +1646,7 @@ func TestADegradeWhoseRequeueFailsRunsNothing(t *testing.T) {
 
 	head := said("ana", "first", clock)
 	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
-	notifyStamp(opaque, "slack:C1")
+	notifyStamp(opaque, "slack:C1", "slack:C1")
 
 	if got := d.Dispatch(context.Background(), "ceo",
 		[]*events.Event{head, opaque}); got.Outcome != queue.OutcomeNak {
@@ -1758,5 +1788,117 @@ func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
 	if r.reqs[0].RunID == r.reqs[1].RunID {
 		t.Errorf("both runs share the id %q — the retry would publish its phases "+
 			"under the identity the previous attempt already occupied", r.reqs[0].RunID)
+	}
+}
+
+// A DIRECT MESSAGE'S TWO TURNS SHARE ONE LEDGER, which is the defect this
+// split exists to fix and the only test that states it end to end inside the
+// dispatcher.
+//
+// Turn one is a burst of top-level DMs: one partition on the bare channel,
+// filed under the channel. Turn two is the person's reply in the thread the
+// agent opened: a DIFFERENT partition — it must not merge with unrelated
+// top-level pings — and the SAME conversation, so it reads turn one's entry
+// back. While one value answered both questions turn two looked its history up
+// under "chat:D1:root" and found a first turn, every time.
+func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
+	t.Parallel()
+	conversations := ledgerstore.NewMemoryConversations()
+	ctx := context.Background()
+
+	burst := &recorder{result: turn.Result{
+		Decision: phase.Done, Delivered: true, Artifact: "answered the DM",
+	}}
+	d := dispatcher(t, burst)
+	d.Conversations = conversations
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{
+		notifyStampedIn("chat:D1", "chat:D1"),
+		notifyStampedIn("chat:D1", "chat:D1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(burst.reqs) != 1 {
+		t.Fatalf("a typing burst ran %d turns, want one", len(burst.reqs))
+	}
+	if burst.reqs[0].ConversationKey != "chat:D1" {
+		t.Fatalf("the burst filed under %q", burst.reqs[0].ConversationKey)
+	}
+
+	reply := &recorder{result: turn.Result{Decision: phase.Done}}
+	d2 := dispatcher(t, reply)
+	d2.Conversations = conversations
+	if got := d2.Dispatch(ctx, "ceo", []*events.Event{
+		inDirectThread("notification", "chat:D1", "root-1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(reply.reqs) != 1 {
+		t.Fatalf("the reply ran %d turns", len(reply.reqs))
+	}
+	if reply.reqs[0].ConversationKey != "chat:D1" {
+		t.Fatalf("the reply filed under %q, want the DM line the burst used",
+			reply.reqs[0].ConversationKey)
+	}
+	if len(reply.reqs[0].History) != 1 ||
+		reply.reqs[0].History[0].Reply != "answered the DM" {
+		t.Fatalf("the reply turn read %+v as its history — the seat's own answer of a "+
+			"moment earlier is filed where it cannot see it", reply.reqs[0].History)
+	}
+}
+
+// THE TWO QUESTIONS REACH THE TWO READERS, asserted on the one trigger shape
+// where they differ: a reply in the thread a direct message started.
+//
+// The parked coding run's answer match is offered the PARTITION key, because
+// it compares by exact equality against what the row was written with, while
+// the ledger read and the session write take the IDENTITY. A collapse back to
+// one value fails one of these two whichever value survives.
+func TestTheAnswerMatchTakesThePartitionAndTheLedgerTheIdentity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var offered string
+	parked := &recorder{}
+	dp := dispatcher(t, parked)
+	dp.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, AwaitingSandbox: true}
+	}
+	dp.Answer = func(_ context.Context, _, partition, _ string, _ *events.Event) (bool, error) {
+		offered = partition
+		return true, nil
+	}
+	if got := dp.Dispatch(ctx, "swe", []*events.Event{
+		inDirectThread("notification", "chat:D1", "root-1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if offered != "chat:D1:root-1" {
+		t.Errorf("the parked run was offered %q, want the partition its row was written with",
+			offered)
+	}
+
+	// THE SAME TRIGGER through an ordinary dispatch: the ledger keys on the
+	// DM line rather than on the thread the reply happened to land in.
+	conversations := ledgerstore.NewMemoryConversations()
+	r := &recorder{result: turn.Result{
+		Decision: phase.Done, Delivered: true, Artifact: "done",
+	}}
+	d := dispatcher(t, r)
+	d.Conversations = conversations
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{
+		inDirectThread("notification", "chat:D1", "root-1"),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(r.reqs) != 1 || r.reqs[0].ConversationKey != "chat:D1" {
+		t.Fatalf("the turn served conversation %+v, want the whole DM line", r.reqs)
+	}
+	filed, err := conversations.History(ctx, "ceo", "chat:D1", 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(filed) != 1 {
+		t.Fatalf("the ledger holds %d entries under the DM line, want the turn's", len(filed))
 	}
 }

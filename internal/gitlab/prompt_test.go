@@ -202,7 +202,7 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 // review request on the other.
 func TestTheConversationKeyIsProjectQualified(t *testing.T) {
 	t.Parallel()
-	key := gitlab.Prompt{}.ConversationKey
+	key := gitlab.Prompt{}.PartitionKey
 	if got := key(map[string]string{"project": "nimbus/api", "mr_iid": "42"}, ""); got != "nimbus/api!42" {
 		t.Fatalf("a merge request keys on %q", got)
 	}
@@ -225,6 +225,24 @@ func TestTheConversationKeyIsProjectQualified(t *testing.T) {
 	// repository in the instance.
 	if got := key(map[string]string{"mr_iid": "42"}, ""); got != "" {
 		t.Fatalf("a project-less event keys on %q, want nothing", got)
+	}
+}
+
+// A GITLAB ITEM'S TWO KEYS COINCIDE, which is this source's whole answer to
+// the split: the project-qualified reference is both the merge unit and the
+// durable thread, and it is DELEGATED rather than derived twice so the two
+// cannot drift into well-formed keys that never merge what belongs together.
+func TestTheItemIsBothThePartitionAndTheConversation(t *testing.T) {
+	t.Parallel()
+	for _, meta := range []map[string]string{
+		{"project": "nimbus/api", "mr_iid": "42"},
+		{"project": "nimbus/api", "issue_iid": "42"},
+		{"project": "nimbus/api"},
+	} {
+		part := (gitlab.Prompt{}).PartitionKey(meta, "")
+		if got := (gitlab.Prompt{}).ConversationIdentity(meta, ""); got != part {
+			t.Errorf("%v: identity %q diverged from the partition key %q", meta, got, part)
+		}
 	}
 }
 

@@ -100,11 +100,11 @@ func (p ChatPrompt) IsDirect(metadata map[string]string) bool {
 	return p.DMPrefix != "" && strings.HasPrefix(metadata["channel"], p.DMPrefix)
 }
 
-// ConversationKey implements [Prompt].
+// PartitionKey implements [Prompt].
 //
 // In a direct conversation a person's consecutive TOP-LEVEL messages are one
-// conversation, so they key on the channel alone and a typing burst
-// coalesces into one turn — the headline case for coalescing at all.
+// partition, so they key on the channel alone and a typing burst coalesces
+// into one turn — the headline case for coalescing at all.
 //
 // A direct THREAD REPLY keeps its thread key: merging it with unrelated
 // top-level pings would hand the turn one merged metadata whose thread
@@ -115,7 +115,7 @@ func (p ChatPrompt) IsDirect(metadata map[string]string) bool {
 // key stays thread-grained throughout — a reply carries the root's id, and a
 // top-level message keys on its OWN id so its later replies land in the same
 // partition.
-func (p ChatPrompt) ConversationKey(metadata map[string]string, _ string) string {
+func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 	channel := metadata["channel"]
 	if channel == "" {
 		// No channel, no conversation identity — and a key that was
@@ -134,6 +134,44 @@ func (p ChatPrompt) ConversationKey(metadata map[string]string, _ string) string
 		return ""
 	}
 	return channel + ":" + anchor
+}
+
+// ConversationIdentity implements [Prompt]. THIS IS THE ONE SOURCE WHERE THE
+// TWO ANSWERS DIFFER, and the invariant is what decides how.
+//
+// A DIRECT CONVERSATION IS ONE CONVERSATION, thread or no thread: the whole
+// DM channel, regardless of thread_ts. What forces that is
+// [Prompt.ConversationIdentity]'s invariant — the identity must be constant
+// across every event in a partition. A top-level DM burst partitions on the
+// bare channel while its constituents carry different ts values, so an
+// identity of "channel:anchor" would give that ONE partition three different
+// identities and the ledger key would fall to whichever event sorted first.
+// The channel is the only value every constituent of that partition agrees
+// on.
+//
+// It is also what a person means. A DM is a 1:1 line that runs for months;
+// the thread a reply hangs off is a formatting detail of the transport, and
+// keying history on it filed the answer to "what did we say yesterday" under
+// an address the next turn never looked up.
+//
+// ELSEWHERE THE ANSWER IS THE PARTITION KEY: in a shared channel a thread IS
+// the conversation, and the partition is already thread-grained, so the two
+// coincide and the invariant holds trivially.
+//
+// THE ANCHOR IS THE SAME ONE [ConversationOf] resolves for the working
+// indicator and the same ts [ChatPrompt.Build] prints as "reply as a thread".
+// Three derivations of one anchor that agree only by inspection is how the
+// spinner a person is watching, the thread the reply lands in and the ledger
+// the seat reads would come to name three different threads.
+func (p ChatPrompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	channel := metadata["channel"]
+	if channel == "" {
+		return ""
+	}
+	if p.IsDirect(metadata) {
+		return channel
+	}
+	return p.PartitionKey(metadata, subject)
 }
 
 // Build implements [Prompt].

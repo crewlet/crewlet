@@ -30,12 +30,24 @@ type TurnRef struct {
 	// say which trigger it came from after the run outlives its process.
 	WorkKey string
 
-	AgentID         string
-	AgentHandle     string
-	Role            string
-	ConversationKey string
-	TraceID         string
-	SpanID          string
+	AgentID     string
+	AgentHandle string
+	Role        string
+
+	// ConversationKey is the inbox PARTITION key and ConversationIdentity
+	// the durable conversation. BOTH travel, and both are written onto the
+	// row: the first is what matches a person's answer back to this run,
+	// the second is where the resumed turn reports. See [PendingRun].
+	//
+	// Two fields where there was one, and the miss this guards against is
+	// now available twice: this struct's ConversationKey was empty at its
+	// only construction site for the whole life of the feature, so every
+	// resumed turn recorded nothing at all.
+	ConversationKey      string
+	ConversationIdentity string
+
+	TraceID string
+	SpanID  string
 
 	// Reply is who is waiting for this turn, persisted so the resumed turn
 	// inherits the same delivery obligation. See [PendingRun.Reply].
@@ -124,8 +136,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
 		ConversationKey: req.Turn.ConversationKey,
-		Reply:           req.Turn.Reply,
-		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
+		// The report-back address beside the match value, because a
+		// resume days later has neither the trigger nor this frame.
+		ConversationIdentity: req.Turn.ConversationIdentity,
+		Reply:                req.Turn.Reply,
+		TraceID:              req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
 		CreatedAt: now(),
 	}, req.Fence); err != nil {
@@ -184,7 +199,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
-		ConversationKey: req.Turn.ConversationKey,
+		// THE IDENTITY on the announcement: this event is read for
+		// display, and what a person means by "which conversation is
+		// this run for" is the durable thread rather than the batch the
+		// trigger arrived in.
+		ConversationKey: req.Turn.ConversationIdentity,
 		Task:            summarise(req.Brief),
 	}
 	ev := events.New(started, events.TraceContext{

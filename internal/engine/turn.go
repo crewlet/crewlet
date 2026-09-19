@@ -176,8 +176,17 @@ type Request struct {
 	// History is what this seat already said in this conversation.
 	History []ledger.Session
 
-	// ConversationKey is the surface-scoped conversation identity, empty
-	// when the trigger has none.
+	// ConversationKey is the surface-scoped conversation IDENTITY — the
+	// durable thread this turn is part of — empty when the trigger has
+	// none.
+	//
+	// The identity, never the inbox partition key beside it: this field is
+	// what reaches the conversation ledger, the turn telemetry that becomes
+	// the event store's conversation_key tag and the episodes column, and
+	// the row a detached coding run reports back through. The partition key
+	// is read straight off the events where the three readers that want it
+	// are (see [partitionKeyOf]), because nothing above the dispatch has a
+	// use for it.
 	ConversationKey string
 
 	// Depth is the delegation depth this turn inherited: zero for a turn a
@@ -345,7 +354,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// requeued copies collapse on the next drain through the
 			// same-id dedupe in [inbox.Screen].
 			log.WarnContext(ctx, "partition_not_mergeable", "seat", handle,
-				"conversation", conversationKeyOf(routing.Events),
+				"partition", partitionKeyOf(routing.Events),
 				"events", len(routing.Events),
 				"detail", "a partition whose constituents are not all decodable "+
 					"external notifications; dispatching per event")
@@ -399,7 +408,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		Handle: handle, Events: routing.Events, Trigger: trigger,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
 		TimeoutSeconds:  wallClockOf(routing.Events),
-		ConversationKey: conversationKeyOf(routing.Events),
+		ConversationKey: conversationIdentityOf(routing.Events),
 		// READ OFF THE TRIGGER, and it was read off nothing: this field
 		// was set at no site on the inbox path, so every turn ran at
 		// depth 0, turn.CheckDepth could never fire, and
@@ -409,7 +418,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		Depth:           depth,
 		DelegationChain: chain,
 	}
-	d.noteCoalesced(ctx, handle, req.ConversationKey, routing)
+	// THE PARTITION, not the identity: this records that N events were
+	// MERGED, and merging is what the partition key decides. The two differ
+	// for a direct message's thread reply, where the record would otherwise
+	// name the whole DM channel and say nothing about which batch collapsed.
+	d.noteCoalesced(ctx, handle, partitionKeyOf(routing.Events), routing)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if history, err := d.history(ctx, handle, req.ConversationKey); err == nil {
 		req.History = history
@@ -639,26 +652,29 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 
 // answered offers a parked seat's delivery to its waiting coding run.
 //
-// FAIL-OPEN, in both senses. A missing seam, a partition with no conversation
-// key and a failed lookup all report false, and the delivery is parked as it
+// FAIL-OPEN, in both senses. A missing seam, a partition with no key at all
+// and a failed lookup all report false, and the delivery is parked as it
 // would have been — which is recoverable, where acking a message nothing
 // handled is not.
 //
-// The conversation key is the disambiguation: the coordinator matches on the
-// conversation the question was asked in, so a delivery on any other thread is
-// not this run's answer and parks like the rest.
+// THE PARTITION KEY is the disambiguation, and it has to be: the coordinator
+// matches by exact string equality against the value written on the parked
+// row at kick-off, so the question and the answer must be derived the same
+// way. It is also the honest reading of the rule — "the next inbound on the
+// question's conversation IS the answer" is positional, about what arrives
+// next in one inbox, which is what a partition is.
 func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) bool {
 	if d.Answer == nil {
 		return false
 	}
-	conversation := conversationKeyOf(evs)
-	if conversation == "" {
+	partition := partitionKeyOf(evs)
+	if partition == "" {
 		return false
 	}
-	handled, err := d.Answer(ctx, handle, conversation, DescribeTrigger(evs), first(evs))
+	handled, err := d.Answer(ctx, handle, partition, DescribeTrigger(evs), first(evs))
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
-			"agent_handle", handle, "conversation_key", conversation, "error", err)
+			"agent_handle", handle, "partition_key", partition, "error", err)
 		return false
 	}
 	return handled
@@ -887,17 +903,30 @@ func (d *Dispatcher) now() time.Time {
 	return d.Now()
 }
 
-// conversationKeyOf takes the conversation identity from the events.
+// conversationIdentityOf takes the durable conversation identity from the
+// events, and partitionKeyOf takes the inbox partition key.
 //
-// The FIRST event that names one wins. A partition is one conversation by
-// construction — that is what the broker's key function guarantees — so a
-// later event naming a different one is a routing bug, and taking the first
-// keeps the answer stable rather than depending on which event happened to
-// sort last.
+// TWO FUNCTIONS BECAUSE THERE ARE TWO QUESTIONS, and the dispatcher asks both
+// on every turn: the ledger, the telemetry and the episodes want the identity,
+// while the coalescing record and a parked run's answer match want the
+// partition. One value answering both is what filed a seat's own prior turn on
+// a direct message under a key its next turn never looked up.
 //
-// [notify.KeyOfAll], not a copy of it: the field name lived here as a literal
-// as well, so the grammar that calls itself the one definition had three.
-func conversationKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
+// The FIRST event that names one wins, for both. A partition is one
+// conversation by construction — the broker's key function guarantees the
+// partition key, and a source's partition key refines its identity (see
+// [notify.Prompt.ConversationIdentity]) — so a later event naming a different
+// one is a routing bug, and taking the first keeps the answer stable rather
+// than depending on which event happened to sort last.
+//
+// [notify.ConversationIdentityOfAll] and [notify.KeyOfAll], not copies of
+// them: the field names lived here as literals as well, so the grammar that
+// calls itself the one definition had three.
+func conversationIdentityOf(evs []*events.Event) string {
+	return notify.ConversationIdentityOfAll(evs)
+}
+
+func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 
 // DescribeTrigger renders a partition as the ask a turn is given.
 //
@@ -1033,7 +1062,7 @@ func payloadBody(ev *events.Event) string {
 // report how many deliveries ARRIVED and not how many turns they became: a
 // seat draining a thread's backlog as one turn looked, from the feed, like a
 // seat that ignored twelve messages.
-func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation string,
+func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string,
 	routing inbox.Routing,
 ) {
 	if !routing.Coalesce || d.Observe == nil || len(routing.Events) == 0 {
@@ -1049,7 +1078,10 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation str
 		}
 	}
 	ev := events.New(types.NotificationsCoalesced{
-		AgentHandle: handle, ConversationKey: conversation,
+		// THE PARTITION KEY under the wire field's older name, because
+		// what merged is a partition: this event exists to say "N
+		// deliveries became one turn", and the batch is the subject.
+		AgentHandle: handle, ConversationKey: partition,
 		// THE VENDOR NAMES THE INTEGRATION. A merge is always one
 		// conversation's worth of external notifications and a conversation
 		// belongs to one third-party app, so the constituents cannot disagree and

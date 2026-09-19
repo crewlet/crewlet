@@ -159,13 +159,21 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 		// The person wake carries a task key and keys on it, which is
 		// right: a priorities write IS about that task.
 		delete(wake.Metadata, tracker.MetaTaskKey)
-		key := tracker.Prompt{}.ConversationKey(wake.Metadata, "")
+		key := tracker.Prompt{}.PartitionKey(wake.Metadata, "")
 		if key == "" {
-			t.Errorf("%q has no conversation key", kind)
+			t.Errorf("%q has no partition key", kind)
 			continue
 		}
+		// THE OBJECT IS BOTH KEYS: a task (or the object a non-task wake
+		// names) is one thing that is both the merge unit and the durable
+		// thread, so the identity delegates. A divergence would break the
+		// alignment the key is chosen for — a chat thread about ENG-42 and
+		// the tracker activity on it landing in one ledger.
+		if got := (tracker.Prompt{}).ConversationIdentity(wake.Metadata, ""); got != key {
+			t.Errorf("%q: identity %q diverged from the partition key %q", kind, got, key)
+		}
 		if other, clash := seen[key]; clash {
-			t.Errorf("%q and %q share the conversation key %q", kind, other, key)
+			t.Errorf("%q and %q share the partition key %q", kind, other, key)
 		}
 		seen[key] = string(kind)
 	}

@@ -243,10 +243,16 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	if !n.ContextRequiresRecon {
 		t.Fatal("a pointer trigger did not ask for recon")
 	}
-	// The third-party app's conversation key rides along so the inbox coalescer
-	// partitions without re-deriving the third-party app's rule.
-	if got := n.Metadata[notify.KeyField]; got != "tracker:u-1" {
-		t.Fatalf("conversation key = %q", got)
+	// BOTH KEYS ride along in the metadata copy: the partition key so the
+	// inbox coalescer groups without re-deriving the third-party app's rule,
+	// and the identity so a person reading a stored event is not told the
+	// two are one value. For this source they coincide — an issue is both
+	// the merge unit and the durable thread.
+	if got := n.Metadata[notify.PartitionField]; got != "tracker:u-1" {
+		t.Fatalf("partition key = %q", got)
+	}
+	if got := n.Metadata[notify.ConversationField]; got != "tracker:u-1" {
+		t.Fatalf("conversation identity = %q", got)
 	}
 	// And the trace is the webhook's, so a delivery and the turn it wakes
 	// are one story.
@@ -255,7 +261,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	}
 }
 
-// THE ENVELOPE CARRIES THE CONVERSATION KEY, not only the payload's metadata.
+// THE ENVELOPE CARRIES BOTH KEYS, not only the payload's metadata.
 //
 // The regression this exists for, and why the assertion above was not enough:
 // the key was written ONLY into the notification's Metadata map, which travels
@@ -266,7 +272,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 // of the one digest turn the design describes. Both copies are load-bearing:
 // the metadata one is what a prompt renders from, this one is what the broker
 // groups on.
-func TestTheWakeEnvelopeCarriesTheConversationKey(t *testing.T) {
+func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 	h := newService(t, nil)
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
 
@@ -280,6 +286,61 @@ func TestTheWakeEnvelopeCarriesTheConversationKey(t *testing.T) {
 	}
 	if got := notify.KeyOf(woken[0]); got != "tracker:u-1" {
 		t.Errorf("the partition function reads %q, want the third-party app's key", got)
+	}
+	// THE SECOND COPY IS WHAT THE LEDGER KEYS ON. The regression above
+	// shipped once with one copy of one key; there are two keys and two
+	// copies now, and a stamp that wrote only the partition would leave
+	// every ledger entry filed on the fallback of the partition field.
+	if got := notify.ConversationIdentityOf(woken[0]); got != "tracker:u-1" {
+		t.Errorf("the ledger would key this turn on %q", got)
+	}
+	if _, present := woken[0].Payload[notify.ConversationField]; !present {
+		t.Error("the identity reached the envelope only through the partition fallback, " +
+			"so a producer that stopped stamping it would look correct")
+	}
+}
+
+// A DIRECT MESSAGE IS WHERE THE TWO ANSWERS DIFFER, end to end: two top-level
+// DMs land in ONE partition and ONE conversation, and the reply the agent
+// makes in a thread lands in a DIFFERENT partition and the SAME conversation.
+//
+// That last pair is the whole defect. While one value answered both, the
+// reply's turn looked its history up under the thread and found nothing —
+// the seat's own answer of ten seconds earlier was filed under the channel.
+func TestADirectMessageThreadReplyRejoinsItsConversation(t *testing.T) {
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = o.Prompts.With(notify.ChatPrompt{
+			Backend: "chat", Label: "Chat", DirectKinds: []string{"D"},
+		})
+	})
+
+	send := func(meta map[string]string) {
+		r := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
+		r.Inbound.Source, r.Inbound.EventType = "chat", "message"
+		r.Inbound.Metadata = meta
+		h.parser.out = []notify.Routed{r}
+		if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+	}
+	send(map[string]string{"channel": "D1", "channel_type": "D", "ts": "p1"})
+	send(map[string]string{"channel": "D1", "channel_type": "D", "ts": "p2"})
+	send(map[string]string{"channel": "D1", "channel_type": "D", "ts": "p3", "thread_ts": "p1"})
+
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 3 {
+		t.Fatalf("the seat was woken %d times, want three", len(woken))
+	}
+	if a, b := notify.KeyOf(woken[0]), notify.KeyOf(woken[1]); a != b || a != "chat:D1" {
+		t.Errorf("a typing burst partitioned as %q and %q, want one channel partition", a, b)
+	}
+	if got := notify.KeyOf(woken[2]); got != "chat:D1:p1" {
+		t.Errorf("a DM thread reply partitioned as %q, want its own thread", got)
+	}
+	for i, ev := range woken {
+		if got := notify.ConversationIdentityOf(ev); got != "chat:D1" {
+			t.Errorf("message %d belongs to conversation %q, want the one DM line", i, got)
+		}
 	}
 }
 

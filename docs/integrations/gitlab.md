@@ -395,7 +395,7 @@ GitLab **does not auto-retry** failed webhook deliveries (and auto-disables a ho
 
 ### Event routing
 
-The parser turns a payload into a **list** of per-recipient notifications (one comment can @-mention several agents; one update can add several assignees/reviewers). Each names exactly one GitLab username, which the inbound service resolves to an agent or human seat, and carries `project`, `mr_iid`/`issue_iid`, `url`, `actor_external_id` (who caused the event) and an `event_type` of `"{object_kind}.{action}"`. The MR or issue is the **conversation** — `nimbus/api!42`, `nimbus/api#42` — project-qualified because an iid is unique only within its project, and that reference is the same string the prompt prints and the coalescer keys on.
+The parser turns a payload into a **list** of per-recipient notifications (one comment can @-mention several agents; one update can add several assignees/reviewers). Each names exactly one GitLab username, which the inbound service resolves to an agent or human seat, and carries `project`, `mr_iid`/`issue_iid`, `url`, `actor_external_id` (who caused the event) and an `event_type` of `"{object_kind}.{action}"`. The MR or issue is the **conversation** — `nimbus/api!42`, `nimbus/api#42` — project-qualified because an iid is unique only within its project, and that reference is the same string the prompt prints, the coalescer partitions on and the conversation ledger files under — GitLab's two keys coincide, because an item is one object that is both the merge unit and the durable thread.
 
 Routing mirrors GitLab's own notification semantics, in **two layers**:
 

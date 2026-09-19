@@ -259,10 +259,15 @@ func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
 		// derives a different id for the same seat.
 		TurnID: l.turn.RunID, WorkKey: l.turn.WorkKey,
 		AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
-		Role:            l.seat.Name,
-		ConversationKey: l.turn.ConversationKey,
-		Reply:           l.turn.Reply,
-		TraceID:         runTrace.TraceID, SpanID: runTrace.SpanID,
+		Role: l.seat.Name,
+		// BOTH CONVERSATION VALUES, for the reason the run_sandbox launch
+		// carries both: this row is the one a person's answer is matched
+		// against (the partition) and the one the resumed turn reports
+		// back through (the identity).
+		ConversationKey:      l.turn.PartitionKey,
+		ConversationIdentity: l.turn.ConversationKey,
+		Reply:                l.turn.Reply,
+		TraceID:              runTrace.TraceID, SpanID: runTrace.SpanID,
 		Depth: l.turn.Depth, Chain: l.turn.Chain,
 	}
 }

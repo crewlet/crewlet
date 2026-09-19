@@ -545,7 +545,7 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 	rig.resumer.err = errors.New("no seat here")
 
 	handled, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", "chat:C1", "use main", nil)
+		t.Context(), "swe", "chat:D1:root-1", "use main", nil)
 	if err == nil {
 		t.Fatal("a failed resume reported success")
 	}
@@ -1785,7 +1785,7 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	}
 
 	handled, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", "chat:C1", "use main", nil)
+		t.Context(), "swe", "chat:D1:root-1", "use main", nil)
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
@@ -1825,7 +1825,7 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	rig.tick()
 
 	if _, err := rig.coordinator.TryResumeFromAnswer(
-		t.Context(), "swe", "chat:C1", "use main", nil); err != nil {
+		t.Context(), "swe", "chat:D1:root-1", "use main", nil); err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}
 	calls := rig.resumer.calls()
@@ -1889,8 +1889,12 @@ func TestAParkedQuestionIsAnnounced(t *testing.T) {
 	if found.Question != "which branch?" || found.Audience != "team" {
 		t.Fatalf("announcement = %+v", found)
 	}
-	if found.ConversationKey != "chat:C1" {
-		t.Fatalf("the answer's conversation was not carried: %q", found.ConversationKey)
+	// THE ANNOUNCEMENT NAMES THE CONVERSATION, not the partition the answer
+	// will be matched on: this event is read for display, and the durable
+	// thread is what a person means by the run's conversation.
+	if found.ConversationKey != "chat:D1" {
+		t.Fatalf("the announcement names %q, want the conversation the run reports to",
+			found.ConversationKey)
 	}
 }
 
@@ -1950,7 +1954,7 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "hello", nil)
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:D1:root-1", "hello", nil)
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
 	}

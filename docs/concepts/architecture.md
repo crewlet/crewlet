@@ -330,7 +330,7 @@ sequenceDiagram
     participant M as LLM + MCP
 
     S->>O: the seat's durable consumer,<br/>group agent-HANDLE
-    O->>O: drain the backlog, partition by<br/>conversation key, one digest per partition
+    O->>O: drain the backlog, partition by<br/>partition key, one digest per partition
     O->>O: take a slot at node.max_concurrent
     O->>M: executor → reviewer
     M-->>O: the reply is posted by the agent's<br/>own Slack tool, as itself
@@ -740,7 +740,7 @@ here.
 | Webhook routes, verification, parsers | `internal/api/webhooks`, `internal/whsec` | [Jira](../integrations/jira.md) · [Confluence](../integrations/confluence.md) · [GitHub](../integrations/github.md) · [GitLab](../integrations/gitlab.md) · [Slack](../integrations/slack.md) · [Mattermost](../integrations/mattermost.md) |
 | Routing a delivery to a seat | `internal/notify` | [Event system](event-system.md) |
 | Subjects, streams, delivery semantics | `internal/queue`, `internal/events` | [Event system](event-system.md) |
-| Inbox batching and coalescing | `internal/queue` (the drain and the partition), `internal/agent/inbox` (the guard order), `internal/notify` (the merge), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
+| Inbox batching and coalescing | `internal/queue` (the drain and the partition), `internal/agent/inbox` (the guard order), `internal/notify` (the merge, and where BOTH keys — the inbox partition and the durable conversation identity — are defined), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
 | Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |

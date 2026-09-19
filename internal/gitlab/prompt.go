@@ -101,7 +101,7 @@ func (Prompt) DigestBody(eventType, body string) string {
 	return ""
 }
 
-// ConversationKey implements [notify.Prompt]: the item is the conversation.
+// PartitionKey implements [notify.Prompt]: the item is the conversation.
 //
 // PROJECT-QUALIFIED, because an iid is unique only within its project — two
 // repositories both have a !1, and a key that was just the number would
@@ -112,13 +112,25 @@ func (Prompt) DigestBody(eventType, body string) string {
 // A pipeline for a branch push names no item and so derives no key: it is
 // never merged with anything, which is right — two unrelated builds failing
 // are two problems.
-func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
+func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	// THROUGH [ItemRef], never rebuilt here. The key and the reference
 	// the prompt prints are the same string by construction, so they
 	// cannot drift into disagreeing about which separator a merge request
 	// uses — and a drift there would be invisible: two well-formed keys
 	// that simply never merge what belongs together.
 	return ItemRef(metadata)
+}
+
+// ConversationIdentity implements [notify.Prompt]: the same item reference.
+//
+// The two coincide because the item is one object that is both the merge unit
+// and the durable thread; a discussion on a merge request has no sub-thread
+// grain here. DELEGATED rather than re-derived, for the reason the key itself
+// goes through [ItemRef]: a second derivation of one reference drifts
+// invisibly, into two well-formed keys that simply never merge what belongs
+// together.
+func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
+	return p.PartitionKey(metadata, subject)
 }
 
 // Build implements [notify.Prompt].

@@ -152,11 +152,21 @@ func TestTheFetchBlockCarriesTheLinkWhenThereIsOne(t *testing.T) {
 func TestTheIssueKeyIsTheConversation(t *testing.T) {
 	t.Parallel()
 	meta := map[string]string{"issue_key": "ENG-42", "issue_id": "10001"}
-	if got := (jira.Prompt{}).ConversationKey(meta, "[ENG-42] anything"); got != "ENG-42" {
-		t.Fatalf("conversation key = %q", got)
+	if got := (jira.Prompt{}).PartitionKey(meta, "[ENG-42] anything"); got != "ENG-42" {
+		t.Fatalf("partition key = %q", got)
 	}
-	if got := (jira.Prompt{}).ConversationKey(map[string]string{"issue_id": "10001"}, "x"); got != "" {
+	if got := (jira.Prompt{}).PartitionKey(map[string]string{"issue_id": "10001"}, "x"); got != "" {
 		t.Fatalf("a payload naming no issue got the key %q", got)
+	}
+	// THE MERGE UNIT AND THE DURABLE THREAD ARE ONE OBJECT HERE: an issue
+	// has no sub-thread grain, so the identity must not diverge from the
+	// partition key — a divergence would file the issue's history under an
+	// address the next comment on it never resolves to.
+	for _, m := range []map[string]string{meta, {"issue_id": "10001"}} {
+		if got, want := (jira.Prompt{}).ConversationIdentity(m, "x"),
+			(jira.Prompt{}).PartitionKey(m, "x"); got != want {
+			t.Errorf("identity %q diverged from the partition key %q", got, want)
+		}
 	}
 }
 

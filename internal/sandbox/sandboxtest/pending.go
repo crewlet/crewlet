@@ -69,6 +69,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
+		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
 		{"ListingsAreStable", testListingsAreStable},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -91,7 +92,13 @@ func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", TaskDescription: "fix the flake",
-		ConversationKey: "slack:C1", Reply: "tool",
+		// THE TWO CONVERSATION VALUES OF A DIRECT MESSAGE, which is the
+		// one shape where they differ — a reply in the thread this run's
+		// question was asked in partitions on the thread while the
+		// conversation is the whole DM line. A fixture that made them
+		// equal would let every backend certify the split by accident.
+		ConversationKey: "chat:D1:root-1", ConversationIdentity: "chat:D1",
+		Reply:   "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
 }
@@ -413,7 +420,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	if seat, err := s.ListActiveForSeat(ctx, "swe"); err != nil || len(seat) != 0 {
 		t.Errorf("the seat's busy read still sees a finished run: %+v, %v", seat, err)
 	}
-	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", "slack:C1"); err != nil || found {
+	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", "chat:D1:root-1"); err != nil || found {
 		t.Errorf("an answer matched the question of a finished run: found %v, %v", found, err)
 	}
 	if _, won, err := s.ClaimForResume(ctx, "t1", tail); err != nil || won {
@@ -1044,7 +1051,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", "slack:C1")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", "chat:D1:root-1")
 	if err != nil || !ok {
 		t.Fatalf("find: ok=%v err=%v", ok, err)
 	}
@@ -1052,8 +1059,40 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("matched %s, want the most recently parked question", got.TurnID)
 	}
 	// And a different seat's thread is not this seat's.
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", "slack:C1"); ok {
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", "chat:D1:root-1"); ok {
 		t.Error("another seat's answer matched this seat's run")
+	}
+	// THE MATCH IS ON THE PARTITION KEY, NEVER THE CONVERSATION BESIDE IT.
+	// Both are on the row and only one is compared: handing this reader the
+	// coarser value would let any message on the DM line resume a run parked
+	// on one particular question in it.
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", "chat:D1"); ok {
+		t.Error("a run was matched on its conversation identity rather than its partition key")
+	}
+	// And the identity IS carried, so the resume knows where to report.
+	if got.ConversationIdentity != "chat:D1" {
+		t.Errorf("the run reports back to %q, want the DM line it was launched from",
+			got.ConversationIdentity)
+	}
+	if got.Conversation() != "chat:D1" {
+		t.Errorf("Conversation() = %q", got.Conversation())
+	}
+}
+
+// A ROW FROM BEFORE THE SPLIT carries only the partition key, and a resume
+// must still know where to report: nothing rewrites a parked run, and one
+// waits for a person, so this row shape outlives any upgrade window.
+func testARowWithNoIdentityReportsBackToItsPartition(t *testing.T, s sandbox.PendingStore) {
+	old := run("t1")
+	old.ConversationIdentity = ""
+	mustLaunched(t, s, old)
+	got, found, err := s.Get(t.Context(), "t1")
+	if err != nil || !found {
+		t.Fatalf("Get: found=%v err=%v", found, err)
+	}
+	if got.Conversation() != "chat:D1:root-1" {
+		t.Errorf("a pre-split row reports back to %q, want the one key it carries — "+
+			"an empty answer records no ledger entry at all", got.Conversation())
 	}
 }
 

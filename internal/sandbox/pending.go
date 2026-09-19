@@ -311,9 +311,31 @@ type PendingRun struct {
 	// [turn.Reply].
 	Reply string `json:"reply,omitempty"`
 
-	// ConversationKey is where to report back AND what matches a person's
-	// answer to this run.
+	// ConversationKey is the inbox PARTITION key the run was launched
+	// under: what matches a person's answer back to this run.
+	//
+	// The match is exact string equality against rows already written (see
+	// [CoordStore.FindAwaitingByConversation]), and the engine derives the
+	// same value for an arriving delivery, so the two halves of the match
+	// must be the same question. It is the positional one — "the next
+	// inbound in this batch is the answer".
 	ConversationKey string `json:"conversation_key"`
+
+	// ConversationIdentity is the durable conversation to REPORT BACK to:
+	// what the resumed turn's ledger entry is filed under.
+	//
+	// The two were one field, and its doc said so — "where to report back
+	// AND what matches a person's answer". They are different questions
+	// and, for a direct message, different values: the match wants the
+	// batch a reply arrives in, the report-back wants the thread a person
+	// reads. Filing the resumed turn under the match value put a DM's
+	// coding work in a ledger row the next turn never looked up.
+	//
+	// ADDITIVE on this row, which is what a coordination-KV record needs:
+	// nothing rewrites a parked run, so a run launched by an older build
+	// decodes with this empty and [PendingRun.Conversation] falls back to
+	// the field that is there. Omitted when empty for the same reason.
+	ConversationIdentity string `json:"conversation_identity,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone.
@@ -561,8 +583,26 @@ type PendingStore interface {
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
 	// FindAwaitingByConversation matches a person's answer back to the run
-	// that asked.
-	FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error)
+	// that asked, on the run's PARTITION key — [PendingRun.ConversationKey]
+	// — rather than on the conversation it reports back to.
+	FindAwaitingByConversation(ctx context.Context, handle, partition string) (PendingRun, bool, error)
+}
+
+// Conversation is the durable conversation this run reports back to.
+//
+// FALLS BACK to the partition key, for the peer reason
+// [notify.ConversationIdentityOf] gives about the event it mirrors: a row
+// parked by a build from before the split carries only conversation_key, and
+// that value is what such a build would have reported back under. Reading the
+// absence as "no conversation" instead would make a resumed turn record
+// nothing at all — the very gap [Engine.recordResume] exists to close — and a
+// parked run outlives any upgrade window by design, because it waits for a
+// person to answer.
+func (r PendingRun) Conversation() string {
+	if r.ConversationIdentity != "" {
+		return r.ConversationIdentity
+	}
+	return r.ConversationKey
 }
 
 // Clarification is what a parked run is waiting for.

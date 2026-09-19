@@ -114,8 +114,13 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 	}
 	run := PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		CodingAgent: "claude-code", ConversationKey: "chat:C1",
-		TraceID: "tr-1", SpanID: "sp-1", CreatedAt: r.now,
+		// A DIRECT MESSAGE'S TWO VALUES: the partition key an answer is
+		// matched on, and the conversation the resume reports back to.
+		// Different here on purpose — equal ones would let a path that
+		// read the wrong field pass every case below.
+		CodingAgent: "claude-code", ConversationKey: "chat:D1:root-1",
+		ConversationIdentity: "chat:D1",
+		TraceID:              "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 	}
 	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)

@@ -78,7 +78,10 @@ type Turn struct {
 	// able to show its source.
 	Trigger types.Trigger
 
-	// ConversationKey is which conversation this turn served. It is the
+	// ConversationKey is which conversation this turn served — the durable
+	// CONVERSATION IDENTITY, never the inbox partition key beside it
+	// ([notify.Prompt.ConversationIdentity]), so a direct message's phases
+	// are one thread however the messages in it were threaded. It is the
 	// only way to ask the store for one thread's phases: the reasoning is
 	// durably kept as the <think> prefix of a phase response, and without
 	// this it is addressable by agent and time alone.

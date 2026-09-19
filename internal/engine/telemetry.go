@@ -48,10 +48,17 @@ type turnTelemetry struct {
 	// completion name the same run. See ADR-0017.
 	runID string
 	// workKey is the unit of work, stable across a re-run.
-	workKey   string
-	agentID   string
-	trigger   types.Trigger
+	workKey string
+	agentID string
+	trigger types.Trigger
+
+	// convKey is the CONVERSATION IDENTITY — what every event this turn
+	// publishes is tagged with, and what the episode row is filed under —
+	// while partKey is the inbox PARTITION the trigger arrived in, carried
+	// only so a detached coding run's row gets the value its answer will be
+	// matched against.
 	convKey   string
+	partKey   string
 	startedAt time.Time
 	trace     events.TraceContext
 
@@ -88,10 +95,18 @@ func newRunID() string { return uuid.NewString() }
 // message happened to arrive while the seat was busy.
 func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
 	t := turnTelemetry{
-		handle:    req.Handle,
-		runID:     req.RunID,
-		workKey:   req.WorkKey,
-		convKey:   req.ConversationKey,
+		handle:  req.Handle,
+		runID:   req.RunID,
+		workKey: req.WorkKey,
+		convKey: req.ConversationKey,
+		// READ OFF THE PARTITION'S OWN EVENTS rather than carried on the
+		// Request beside the identity, because every constituent already
+		// holds it and a field would be one more thing a second Request
+		// construction site could leave empty — which is exactly how the
+		// conversation reached the sandbox row as "" for the whole life of
+		// that feature. The identity has no such source: a resumed turn
+		// has no events at all, so it has to travel.
+		partKey:   partitionKeyOf(req.Events),
 		startedAt: time.Now().UTC(),
 	}
 	t.role, t.agentID = seatIdentity(company, req.Handle)
@@ -155,7 +170,10 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// The conversation this turn owes an answer to, so work it
 			// detaches carries it: a coding run's row is written from
 			// here, and the resumed turn reports back from the row.
+			// The partition beside it is what that row is MATCHED on
+			// when the person answers.
 			ConversationKey: t.convKey,
+			PartitionKey:    t.partKey,
 			// The brief and the delivery obligation, carried for the
 			// same reason: a resumed turn sees neither its trigger nor
 			// this frame, so both have to reach the row from here.
@@ -410,9 +428,14 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// second id here would split one turn across two on every screen.
 		// The work key rides the row for the same reason its reply does:
 		// the resume sees no trigger and could not re-derive it.
-		runID:     in.Run.TurnID,
-		workKey:   in.Run.UnitOfWork(),
-		convKey:   in.Run.ConversationKey,
+		runID:   in.Run.TurnID,
+		workKey: in.Run.UnitOfWork(),
+		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
+		// turn's events are tagged with the conversation it reports back
+		// to, while a run that suspends AGAIN has to be re-matched on the
+		// partition it was parked under.
+		convKey:   in.Run.Conversation(),
+		partKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,

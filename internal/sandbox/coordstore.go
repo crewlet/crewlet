@@ -379,12 +379,20 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 }
 
 // FindAwaitingByConversation finds the parked run a reply belongs to.
-func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, conversation string) (PendingRun, bool, error) {
-	if conversation == "" {
+//
+// MATCHED ON THE PARTITION KEY — [PendingRun.ConversationKey] — by exact
+// string equality against rows already written, never on the identity beside
+// it: the caller derives its half from the arriving delivery, so the two
+// halves have to be the same question, and only one of them is a value rows
+// in this store already hold.
+func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle, partition string) (PendingRun, bool, error) {
+	if partition == "" {
+		// An empty key must never match, or every parked run answers
+		// every wake that could not name a conversation.
 		return PendingRun{}, false, nil
 	}
 	got, err := s.list(ctx, func(r PendingRun) bool {
-		return r.AgentHandle == handle && r.ConversationKey == conversation &&
+		return r.AgentHandle == handle && r.ConversationKey == partition &&
 			slices.Contains(Awaiting, r.Status)
 	})
 	if err != nil || len(got) == 0 {

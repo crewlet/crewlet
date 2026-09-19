@@ -2452,7 +2452,7 @@ know that a box exists and that it is currently paused (and being billed
 for as a snapshot), not which box it is. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule tick, a task assignment, an A2A wake — because the
-resume path matches an inbound conversation key by exact equality, and
+resume path matches an inbound partition key by exact equality, and
 those runs stored a key no chat message can reproduce. Telling somebody to
 "reply in the thread" would send them to a thread that does not exist.
 

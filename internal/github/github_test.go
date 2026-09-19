@@ -577,7 +577,14 @@ func TestMentionsReadGitHubsOwnLoginGrammar(t *testing.T) {
 func TestTheConversationKeyNamesTheRepository(t *testing.T) {
 	t.Parallel()
 	key := func(meta map[string]string) string {
-		return (github.Prompt{}).ConversationKey(meta, "")
+		return (github.Prompt{}).PartitionKey(meta, "")
+	}
+	// THE MERGE UNIT AND THE DURABLE THREAD ARE ONE OBJECT: the identity
+	// delegates to the key rather than deriving the reference a second
+	// time, and a divergence here would be two well-formed keys that never
+	// merge what belongs together.
+	identity := func(meta map[string]string) string {
+		return (github.Prompt{}).ConversationIdentity(meta, "")
 	}
 	if got := key(map[string]string{"repo": "acme/api", "pr_number": "7"}); got != "acme/api#7" {
 		t.Errorf("pull request key = %q", got)
@@ -593,6 +600,15 @@ func TestTheConversationKeyNamesTheRepository(t *testing.T) {
 	// problems.
 	if got := key(map[string]string{"repo": "acme/api"}); got != "" {
 		t.Errorf("a workflow run on a branch got the key %q", got)
+	}
+	for _, meta := range []map[string]string{
+		{"repo": "acme/api", "pr_number": "7"},
+		{"repo": "acme/api", "issue_number": "3"},
+		{"repo": "acme/api"},
+	} {
+		if got, want := identity(meta), key(meta); got != want {
+			t.Errorf("%v: identity %q diverged from the partition key %q", meta, got, want)
+		}
 	}
 }
 

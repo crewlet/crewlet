@@ -90,7 +90,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"pause_ttl_seconds":  run.PauseTTLSeconds,
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
-		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		"answerable_in_chat": answerableInChat(run.Conversation()),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see
@@ -119,17 +119,24 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 // answerableInChat reports whether a reply on a chat surface could ever reach
 // this run.
 //
-// The resume path matches an inbound notification's conversation key against
-// the one stored at kick-off, by exact string equality. A run started by
-// anything OTHER than an external notification — a schedule tick, a task
-// assignment, an A2A wake — stored a key derived from an event id, which no
-// inbound message can reproduce. Such a run is not answerable through any chat
-// surface, and telling somebody to "reply in the thread" would send them to a
-// thread that does not exist.
+// A run started by anything OTHER than an external notification — a schedule
+// tick, a task assignment, an A2A wake — stored a key derived from an event
+// id, which no inbound message can reproduce. Such a run is not answerable
+// through any chat surface, and telling somebody to "reply in the thread"
+// would send them to a thread that does not exist.
+//
+// ASKED OF THE CONVERSATION the run reports back to, not the partition key it
+// is matched on. The question a person reading this board has is "is there a
+// thread I can answer in", which is a property of the durable conversation;
+// the partition is an inbox-grouping artefact with no surface anybody could
+// reply to. The two are derivable or not TOGETHER on every source — a chat
+// event naming a channel yields both, one naming none yields neither — so
+// this is a statement about which question the column answers rather than a
+// change of verdict.
 //
 // [notify.Derived] answers exactly that, and this had its own copy of the
 // prefix to answer it with — so a rename of the fallback's namespace would
 // have left this route confidently offering a thread that does not exist.
-func answerableInChat(conversationKey string) bool {
-	return notify.Derived(conversationKey)
+func answerableInChat(conversation string) bool {
+	return notify.Derived(conversation)
 }

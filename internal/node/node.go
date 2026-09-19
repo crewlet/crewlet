@@ -498,7 +498,7 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 		func(ctx context.Context, evs []*events.Event) queue.Result {
 			return n.runTurn(ctx, handle, evs)
 		},
-		conversationKey,
+		partitionKey,
 		opts,
 	)
 	if err != nil {
@@ -642,17 +642,24 @@ func (n *Node) Attached() []string {
 	return out
 }
 
-// conversationKey partitions a seat's inbox by conversation.
+// partitionKey groups a seat's inbox into the batches one turn is given.
 //
-// [notify.KeyOf], not a copy of it. The grammar states that it is stamped by
-// the producer and read by everyone else — "three readers, so one definition"
-// — and this was a fourth definition spelling the field name and the fallback
-// prefix out again. Both live in exactly one place now, so renaming either is
-// a change to one constant rather than a silent partition-key mismatch with a
-// regression test that stays green because it uses the constant too.
+// [notify.KeyOf], not a copy of it. The grammar states that the key is stamped
+// by the producer and read by everyone else, and this was one more definition
+// spelling the field name and the fallback prefix out again. Both live in
+// exactly one place now, so renaming either is a change to one constant rather
+// than a silent partition-key mismatch with a regression test that stays green
+// because it uses the constant too.
+//
+// THE PARTITION KEY, which is the merge unit rather than the durable
+// conversation identity beside it (see [notify.ConversationIdentityOf]): this
+// is the reader that decides which events reach a handler together, and for a
+// direct message that is deliberately finer than the conversation — a thread
+// reply must not merge with unrelated top-level pings, whose merged metadata
+// would name one of two reply targets.
 //
 // An event that cannot name a conversation gets a key of its OWN — derived
 // from its id, so nothing else can ever share it — and is therefore never
 // coalesced with anything. That is the honest default: merging two unrelated
 // triggers into one digest turn loses one of them.
-func conversationKey(ev *events.Event) string { return notify.KeyOf(ev) }
+func partitionKey(ev *events.Event) string { return notify.KeyOf(ev) }

@@ -496,7 +496,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
 		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
 		Question: redact.Secrets(result.Question), Audience: result.AskTo,
-		ConversationKey: run.ConversationKey,
+		// THE IDENTITY, like the launch announcement: this event is
+		// display, and the durable thread is what a person reading the
+		// feed means by the run's conversation.
+		ConversationKey: run.Conversation(),
 	}
 	ev := events.New(announcement, events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
@@ -530,19 +533,22 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 // TryResumeFromAnswer resumes a parked run if this event answers its question.
 //
 // Reports whether it handled the event, so the caller skips normal handling.
-// The disambiguation is positional: the next inbound on the question's
-// conversation while a clarification is pending IS the answer.
-func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversation, answer string, trigger *events.Event) (bool, error) {
-	if conversation == "" {
+// The disambiguation is positional: the next inbound in the question's own
+// inbox PARTITION while a clarification is pending IS the answer — which is
+// why the argument is the partition key and not the conversation identity
+// beside it. The match is exact equality against what the row was written
+// with, so both halves must ask the same question.
+func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, partition, answer string, trigger *events.Event) (bool, error) {
+	if partition == "" {
 		return false, nil
 	}
-	run, found, err := c.pending.FindAwaitingByConversation(ctx, handle, conversation)
+	run, found, err := c.pending.FindAwaitingByConversation(ctx, handle, partition)
 	if err != nil {
 		// FAIL OPEN. An unreadable store must not swallow an ordinary
 		// message: handling it as a normal inbound is recoverable, dropping
 		// it is not.
 		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
-			"agent", handle, "conversation", conversation, "error", err.Error())
+			"agent", handle, "partition_key", partition, "error", err.Error())
 		return false, nil
 	}
 	if !found {
@@ -561,7 +567,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 		return true, nil
 	}
 	log.InfoContext(ctx, "sandbox_clarification_answered",
-		"turn_id", claimed.TurnID, "conversation_key", conversation)
+		"turn_id", claimed.TurnID, "partition_key", partition)
 	// The seat goes busy again for the duration of the resume: the parked
 	// run freed it, and re-entering the Execute loop is work like any other.
 	c.markBusy(claimed.AgentHandle)
