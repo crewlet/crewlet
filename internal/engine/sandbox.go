@@ -836,7 +836,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			// batch this run was launched from — which is all a peer
 			// predating the identity has to match on.
 			PartitionKey:    t.PartitionKey,
-			ConversationKey: t.PartitionKey,
+			ConversationKey: t.ConversationKey,
 			// The brief and the delivery obligation, so the resumed turn
 			// has both when the trigger is long gone. Neither can be
 			// recovered from the row any other way.

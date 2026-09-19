@@ -266,7 +266,7 @@ func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
 		// partition states the batch this run was launched from, which is
 		// the only thing a peer predating the identity can match on.
 		PartitionKey:    l.turn.PartitionKey,
-		ConversationKey: l.turn.PartitionKey,
+		ConversationKey: l.turn.ConversationKey,
 		Reply:           l.turn.Reply,
 		TraceID:         runTrace.TraceID, SpanID: runTrace.SpanID,
 		Depth: l.turn.Depth, Chain: l.turn.Chain,

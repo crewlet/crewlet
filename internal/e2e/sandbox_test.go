@@ -24,9 +24,19 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
-// codingConversation is the thread the coding gate's turn arrives on, so the
-// entry the resumed turn files has somewhere to be filed.
-const codingConversation = "slack:C-coding"
+// codingConversation is the DM line the coding gate's turn arrives on, and
+// codingThread the thread within it the kick-off message sits in.
+//
+// A DIRECT MESSAGE, which is the one surface where the inbox partition and the
+// durable conversation differ — the batch is the thread, the conversation is
+// the whole line. The two values are carried apart from the turn onto the
+// detached run's row and back, and on every other surface they are the same
+// string: a gate that woke the seat there would pass for a frame that wrote
+// either one into both, which is exactly the mis-mapping this pair invites.
+const (
+	codingConversation = "slack:D-coding"
+	codingThread       = "root-1"
+)
 
 // conversation reads a seat's thread history straight from the node's own
 // store, which is where the ledger lives.
@@ -332,10 +342,12 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	// ON A THREAD, as a chat message arrives. The conversation is what the
-	// resumed turn owes an answer to, and what its ledger entry is filed
-	// under — neither of which can be asserted on a trigger that has none.
-	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
+	// IN A DM THREAD, as a chat message arrives. The conversation is what
+	// the resumed turn owes an answer to and what its ledger entry is filed
+	// under; the thread beside it is the batch this run was launched from,
+	// and the row carries both.
+	n.wakeInDirectThread(t, "swe", "the api test is flaking, please fix it",
+		codingConversation, codingThread)
 
 	// The SUSPEND: the turn ends with a row that outlives it.
 	waitFor(t, "a detached run to be recorded", func() bool {
@@ -396,9 +408,21 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// End to end because the two halves are in different processes' worth of
 	// code: the LAUNCH writes the conversation onto the run's row, and the
 	// RESUME — which cannot see the trigger any more — reads it back.
+	//
+	// AND UNDER THE CONVERSATION RATHER THAN THE BATCH, which only a DM-shaped
+	// wake can assert: the launch copies two values off the turn into two
+	// fields of the row, and a crossed pair compiles — both are strings — so
+	// the entry filed here is the only end-to-end proof they did not swap.
 	history := n.conversation(t, "swe", codingConversation)
 	if len(history) != 1 {
-		t.Fatalf("the resumed turn left %d conversation entries, want 1", len(history))
+		t.Fatalf("the resumed turn left %d conversation entries under the DM line, "+
+			"want 1: the row it reported through names the wrong conversation",
+			len(history))
+	}
+	if batch := n.conversation(t, "swe", codingConversation+":"+codingThread); len(batch) != 0 {
+		t.Errorf("the resumed turn filed %d entries under the inbox batch instead; "+
+			"the seat's next turn on this DM reads the conversation and finds "+
+			"nothing", len(batch))
 	}
 	if history[0].Reply == "" {
 		t.Errorf("the entry carries no reply: %+v", history[0])
@@ -425,10 +449,13 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	// ON A THREAD, because that is what the answer is matched on: a run
-	// launched from a trigger that named no conversation is answerable by
-	// nothing, which is a different story with its own test.
-	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
+	// IN A DM THREAD, which is the shape that stranded every clarification:
+	// the run parks under the thread it was asked in, and a person answering
+	// on the DM line arrives in a different batch entirely. Matched on the
+	// batch the two never meet; matched on the conversation — one line
+	// however it is threaded — the answer arrives.
+	n.wakeInDirectThread(t, "swe", "the api test is flaking, please fix it",
+		codingConversation, codingThread)
 
 	waitFor(t, "the run to park on its question", func() bool {
 		for _, run := range n.activeRuns(t) {
@@ -459,7 +486,9 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 		t.Fatal("the row does not record that a snapshot is being held")
 	}
 
-	// THE PERSON ANSWERS, on the conversation they were asked in.
+	// THE PERSON ANSWERS, top-level on the DM line rather than back in the
+	// thread — a different inbox batch from the one the run parked under, and
+	// the same conversation.
 	n.wakeInConversation(t, "swe", "target main, please", codingConversation)
 
 	waitFor(t, "the answer to resume the suspended turn", func() bool {

@@ -711,7 +711,7 @@ func TestAPanicWhileRequeuingLeavesThePublishedCopiesToRun(t *testing.T) {
 	// requeued rather than worked.
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
-			AwaitingSandbox: true}
+			SeatHeldBySandbox: true}
 	}
 	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
 		r.parked = append(r.parked, evs[:1])
