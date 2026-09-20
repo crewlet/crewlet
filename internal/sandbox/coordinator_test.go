@@ -50,14 +50,16 @@ func (s *resumeSpy) calls() []ResumeRequest {
 
 // ledgerSpy records post-charges.
 //
-// A refusal moves nothing, which is what the engine's accountant does: it is
-// coord.Budgets.Charge underneath, and a charge a cap refuses leaves both
-// counters where they were.
+// IT RECORDS AN OVER-CAP CHARGE, which is what the engine's accountant does:
+// it is coord.Budgets.PostCharge underneath, which moves both counters whatever
+// the caps say, and answers whether the run took one PAST its cap. A spy that
+// dropped those tokens would certify a coordinator that offers an over-cap run
+// again on every retry.
 type ledgerSpy struct {
 	mu      sync.Mutex
 	charged int
 	calls   int
-	refuse  bool
+	over    bool
 	err     error
 }
 
@@ -68,11 +70,8 @@ func (l *ledgerSpy) Charge(_ context.Context, _, _ string, tokens int) (bool, er
 	if l.err != nil {
 		return false, l.err
 	}
-	if l.refuse {
-		return true, nil
-	}
 	l.charged += tokens
-	return false, nil
+	return l.over, nil
 }
 
 func (l *ledgerSpy) total() int {
@@ -81,10 +80,10 @@ func (l *ledgerSpy) total() int {
 	return l.charged
 }
 
-func (l *ledgerSpy) set(refuse bool, err error) {
+func (l *ledgerSpy) set(over bool, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.refuse, l.err = refuse, err
+	l.over, l.err = over, err
 }
 
 func (l *ledgerSpy) asked() int {
@@ -1627,39 +1626,55 @@ func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
 	}
 }
 
-// ONLY A CHARGE THAT MOVED THE COUNTER IS RECORDED. A refusal and an
-// unanswered counter both left it where it was, so the retry offers the spend
-// again rather than inheriting an answer about a counter that may have room,
-// or be reachable, by then.
+// ONLY A CHARGE THAT MOVED THE COUNTER IS RECORDED. A counter that never
+// answered left it where it was, so the retry offers the spend again rather
+// than inheriting an answer about a counter that may be reachable by then.
 func TestAnUnrecordedChargeIsOfferedAgainOnTheRetry(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		refused bool
-		err     error
-	}{
-		{"refused by a cap", true, nil},
-		{"the counter did not answer", false, errors.New("counter unreachable")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rig := newCoordRig(t)
-			rig.launch("t1")
-			rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
-			rig.accountant.set(tc.refused, tc.err)
-			rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.set(false, errors.New("counter unreachable"))
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
 
-			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
-				t.Fatal("a failed resume was acked")
-			}
-			rig.accountant.set(false, nil)
-			rig.resumer.failWith(nil)
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Fatalf("the retry: %v", err)
-			}
-			if got := rig.accountant.total(); got != 1000 {
-				t.Fatalf("charged %d, want the retry to count the spend the first pass did not", got)
-			}
-		})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	rig.accountant.set(false, nil)
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d, want the retry to count the spend the first pass did not", got)
+	}
+}
+
+// A RUN THAT WENT OVER A CAP IS STILL CHARGED ONCE.
+//
+// The post-charge records the spend whatever the caps say, so the boolean it
+// answers with says the run took a counter PAST its cap — not that nothing was
+// recorded. Read the second way, an over-cap run is charged again on every
+// completion retry, which is the double-charge the run's own record exists to
+// stop, reintroduced for exactly the companies a cap is binding on.
+func TestARunThatWentOverItsCapIsChargedOnceAcrossARetry(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.set(true, nil)
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for one run of 1000: an over-cap charge was "+
+			"read as unrecorded and offered again", got)
 	}
 }
 

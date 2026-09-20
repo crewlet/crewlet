@@ -640,10 +640,16 @@ func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
 	}
 }
 
-// A CAP THAT REFUSES A COLLECTED RUN MOVES NEITHER COUNTER, which is the answer
-// the shared counter gives every charge it refuses, and the run's turn goes on:
-// the tokens are spent either way.
-func TestARefusedCodingRunChargeMovesNeitherCounter(t *testing.T) {
+// A RUN THAT OVERRUNS A CAP IS STILL RECORDED ON BOTH COUNTERS, and the turn
+// goes on: the tokens are spent either way, and a cap cannot un-spend them.
+//
+// The charge is a POST-charge, not the gate a round passes. Put through the
+// gate it was recorded not at all whenever it did not fit — which is exactly
+// when a cap binds — so the counter under-stated the company by the whole run
+// at that moment, and the seat's next round was admitted against room the run
+// had already used. Recorded, the next round is refused against the figure
+// that includes it.
+func TestAnOverCapCodingRunIsRecordedOnBothCounters(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		orgCap, seatCap int
@@ -654,12 +660,42 @@ func TestARefusedCodingRunChargeMovesNeitherCounter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newChargeRig(t, 1000, tc.orgCap, tc.seatCap, &movedSeat{})
 			if err := rig.deliver(t); err != nil {
-				t.Fatalf("a refused charge stopped the turn: %v", err)
+				t.Fatalf("an over-cap charge stopped the turn: %v", err)
 			}
-			if org, seat := rig.used(t, coord.OrgScope), rig.used(t, coord.AgentScope(chargeAgent)); org != 0 || seat != 0 {
-				t.Errorf("a refused charge moved the counters to org=%d seat=%d", org, seat)
+			org, seat := rig.used(t, coord.OrgScope), rig.used(t, coord.AgentScope(chargeAgent))
+			if org != 1000 || seat != 1000 {
+				t.Errorf("counters at org=%d seat=%d after a run of 1000 past a cap "+
+					"of 500; the spend happened and both counters have to hold it",
+					org, seat)
 			}
 		})
+	}
+}
+
+// AND ONCE, however often its completion comes back.
+//
+// The two halves meet here: the charge is recorded past the cap, and the
+// coordinator reads the answer as "recorded" rather than as "refused, offer it
+// again". Read the other way, the one company a cap is binding on is charged
+// for its over-cap run once per completion retry.
+func TestAnOverCapCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+	rig := newChargeRig(t, 1000, 500, 0, &movedSeat{fails: 2})
+	for attempt := range 2 {
+		if err := rig.deliver(t); !errors.Is(err, sandbox.ErrResumeUnavailable) {
+			t.Fatalf("attempt %d = %v, want the completion sent back", attempt+1, err)
+		}
+	}
+	if err := rig.deliver(t); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+
+	if got := rig.used(t, coord.OrgScope); got != 1000 {
+		t.Errorf("the company was charged %d for one over-cap run of 1000 "+
+			"delivered three times", got)
+	}
+	if got := rig.used(t, coord.AgentScope(chargeAgent)); got != 1000 {
+		t.Errorf("the seat was charged %d for one over-cap run of 1000 "+
+			"delivered three times", got)
 	}
 }
 

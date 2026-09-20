@@ -653,18 +653,25 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// The scripted model reports 150 tokens on its first call and 130 on
 	// the next, so the cap bites partway through the turn rather than
 	// before it starts — which is the case a pre-flight check would miss.
+	//
+	// SETTLED ON THE REFUSAL, which the gate records on the scope that
+	// made it. The second charge is attempted only after the first has
+	// returned, so once the company has refused one both counters are
+	// final. Waiting on the org's counter alone read it between the
+	// org's write and the seat's (a charge is two writes, org first), and
+	// failed a correct engine on a loaded machine with the seat at 0.
 	budgets := n.engine.Backends().Fleet
-	waitFor(t, "the budget to be charged", func() bool {
-		used, err := budgets.Used(t.Context(), coord.OrgScope)
-		return err == nil && used > 0
-	})
-	waitFor(t, "the turn to stop", func() bool {
-		used, err := budgets.Used(t.Context(), coord.OrgScope)
+	waitFor(t, "the company cap to refuse a charge", func() bool {
+		rows, err := budgets.Usage(t.Context())
 		if err != nil {
 			return false
 		}
-		// Settled: no further charge fits under the cap.
-		return used > 0 && used+150 > 200
+		for _, row := range rows {
+			if row.Scope == coord.OrgScope {
+				return !row.RefusedAt.IsZero()
+			}
+		}
+		return false
 	})
 
 	used, err := budgets.Used(t.Context(), coord.OrgScope)

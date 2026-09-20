@@ -499,7 +499,7 @@ export function LiveNow() {
                 value={orgMeter.used}
                 max={orgMeter.max}
                 label={
-                  <span title="a process-lifetime meter — not comparable to the spend window above">
+                  <span title="spend since the last reset, against the configured cap; not comparable to the spend window above">
                     Company budget meter
                   </span>
                 }

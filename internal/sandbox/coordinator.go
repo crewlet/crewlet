@@ -102,11 +102,15 @@ type ResumeRequest struct {
 // Accountant post-charges a collected run's tokens.
 //
 // The charge happens AFTER the spend, so it cannot stop anything: the tokens
-// are spent and the turn continues whatever the answer. It is checked against
-// the caps like any round's charge, and a cap that refuses it leaves both
-// counters where they were, which is the answer the shared counter gives every
-// charge it refuses. It reports the refusal so the caller can say the run went
-// over.
+// are spent and the turn continues whatever the answer. It is RECORDED
+// whatever the caps say, because a refusal cannot un-spend a run that already
+// ran and a counter that dropped it would under-state the company by the whole
+// run at exactly the moment its cap bound.
+//
+// So the boolean is not "nothing was recorded". It says the run took a counter
+// PAST its cap, for the caller to report; the spend is on both counters either
+// way, and the next round the seat or the company attempts is refused against
+// the figure that includes it.
 type Accountant interface {
 	Charge(ctx context.Context, agentID, handle string, tokens int) (refused bool, err error)
 }
@@ -406,11 +410,16 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 // the claim leaves the run resumed, which no signal claims and the seat's next
 // owner reaps.
 //
-// A REFUSED CHARGE IS NOT RECORDED: it moved neither counter, so the retry
-// offers the spend again, to a counter that may have room by then. Nor is one
-// the counter never answered, which may or may not have landed; offering it
-// again can only over-state the counter, which trips a cap early rather than
-// late, the direction the counter itself takes when a node dies mid-charge.
+// A CHARGE THE COUNTER NEVER ANSWERED IS NOT RECORDED: it may or may not have
+// landed, and offering it again can only over-state the counter, which trips a
+// cap early rather than late — the direction the counter itself takes when a
+// node dies mid-charge.
+//
+// A charge that went OVER A CAP is recorded like any other, because it landed
+// like any other: the post-charge records the spend whatever the caps say (see
+// [Accountant]). Reading that answer as "unrecorded" and offering it again is
+// how one over-cap run is charged once per completion retry, which is the
+// double-charge this record exists to stop.
 func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) bool {
 	tokens := result.InputTokens + result.OutputTokens
 	if run.Charged {
@@ -421,16 +430,16 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 	if c.account == nil || tokens == 0 {
 		return false
 	}
-	refused, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
+	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
 		return false
 	}
-	if refused {
+	if over {
 		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
-		return false
 	}
+	// RECORDED EITHER WAY, because the counters moved either way.
 	return true
 }
 

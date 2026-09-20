@@ -770,7 +770,7 @@ test rather than vanishing quietly.
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
-| `budget_reported` | A **rollup** of live meters on a 15-second tick, so a durable row per tick is about two million a year to answer a question the live projection answers for free. What the audit log holds instead is the per-turn spend the rollup is a sum *of* — `agent_turn_completed` rows — so "what did we spend last month" is answerable and "what were the meters reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `budget_reported` | A **snapshot** of the shared token counter, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events
 
@@ -1225,12 +1225,28 @@ Set budgets at two levels:
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
 
-When a charge would exceed a cap, the tool loop refuses it and stops the phase;
-the engine ends the turn as failed and publishes `budget_exhausted` beside its
-`agent_turn_completed`. The check is atomic: if the agent's budget
-fails, the org-level consumption it had already charged is rolled back. In a
-fleet the counters live in the coordination slot, so an org cap of 500 k is
-500 k across every node rather than per process.
+Every model round is charged against both before it runs. A charge that does
+not fit is refused: the turn stops and the engine publishes a
+`budget_exhausted` event naming the scope that refused and its figures,
+beside the turn's own `agent_turn_completed`. The
+check is atomic: if the agent's budget refuses, the org-level consumption it
+had already charged is rolled back. In a fleet the counters live in the
+coordination slot, so an org cap of 500 k is 500 k across every node rather
+than per process.
+
+A refusal is also recorded beside the counter, as when that scope last refused
+a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
+and the next charge the scope admits clears it. That, not a counter at its cap,
+is what exhausted means: a refused charge increments nothing, so the counter
+stops short of the cap by the size of the round that did not fit.
+
+A coding run is the one spend that cannot be checked first. Its box spends
+while the turn is suspended, so its tokens are known only when the run is
+collected, and they are **post-charged**: added to both counters without a
+check, because no answer can un-spend them. A run that takes a counter past its
+cap is logged as `sandbox_spend_over_budget`, and the next round the seat or
+the company attempts is refused against the recorded figure.
 
 ### Structured Logging
 

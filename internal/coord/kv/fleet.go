@@ -897,9 +897,21 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 // ---- the token counters ------------------------------------------------ //
 
 // budgetRecord is one scope's spend.
+//
+// RefusedAt is omitted when zero, so a record no refusal has touched encodes
+// exactly as it did before the field existed, and a build that predates it
+// reads a stamped record by ignoring the key.
+//
+// Such a build also DROPS the key when it writes the record, because it
+// re-encodes only the fields it knows: during a rolling upgrade, a charge an
+// older node makes clears the stamp whether or not the scope had room. That is
+// the harmless direction, and the only one available without a second key: the
+// stamp is what a dashboard shows, never what the gate decides with, and the
+// next refusal by an upgraded node writes it again.
 type budgetRecord struct {
-	Used int       `json:"used"`
-	At   time.Time `json:"at"`
+	Used      int       `json:"used"`
+	At        time.Time `json:"at"`
+	RefusedAt time.Time `json:"refused_at,omitzero"`
 }
 
 // Charge checks and increments the org's counter and the seat's.
@@ -919,118 +931,319 @@ func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgL
 	}
 
 	// A charge larger than a whole cap can never fit, so it is screened
-	// before anything is written — org first, matching the order below, and
-	// so a seat whose own cap is smaller than the charge never costs the
-	// org a bump and an unwind.
-	for _, scope := range []struct {
-		name, key string
-		limit     int
-	}{{"org", coord.OrgScope, orgLimit}, {"agent", agentScope, agentLimit}} {
-		if scope.limit > 0 && tokens > scope.limit {
-			used, err := f.Used(ctx, scope.key)
+	// before anything is written, and a seat whose own cap is smaller than
+	// the charge never costs the org a bump and an unwind.
+	if orgLimit > 0 && tokens > orgLimit {
+		used, err := f.Used(ctx, coord.OrgScope)
+		if err != nil {
+			return coord.Spend{}, err
+		}
+		return f.refuse(ctx, coord.OrgScope, "org", used, orgLimit), nil
+	}
+	if agentLimit > 0 && tokens > agentLimit {
+		// ORG FIRST even here, which is why the screen reads the org's
+		// counter before naming the seat. Testing each cap alone reported
+		// the seat for a charge the company had no room for either, and
+		// the contract's ordering rule exists for exactly that case: an
+		// operator who raised this seat's ceiling would still be refused.
+		if orgLimit > 0 {
+			orgUsed, err := f.Used(ctx, coord.OrgScope)
 			if err != nil {
 				return coord.Spend{}, err
 			}
-			return coord.Spend{RefusedScope: scope.name, RefusedUsed: used, RefusedLimit: scope.limit}, nil
+			if orgUsed+tokens > orgLimit {
+				return f.refuse(ctx, coord.OrgScope, "org", orgUsed, orgLimit), nil
+			}
 		}
+		used, err := f.Used(ctx, agentScope)
+		if err != nil {
+			return coord.Spend{}, err
+		}
+		return f.refuse(ctx, agentScope, "agent", used, agentLimit), nil
 	}
 
-	orgUsed, fits, err := f.bump(ctx, coord.OrgScope, tokens, orgLimit)
+	org, fits, err := f.bump(ctx, coord.OrgScope, tokens, orgLimit)
 	if err != nil {
 		return coord.Spend{}, err
 	}
 	if !fits {
-		return coord.Spend{RefusedScope: "org", RefusedUsed: orgUsed, RefusedLimit: orgLimit}, nil
+		return f.refuse(ctx, coord.OrgScope, "org", org.Used, orgLimit), nil
 	}
 
-	agentUsed, fits, err := f.bump(ctx, agentScope, tokens, agentLimit)
+	agent, fits, err := f.bump(ctx, agentScope, tokens, agentLimit)
 	switch {
 	case err != nil, !fits:
 		// COMPENSATE, which is what a single SQL transaction used to do
 		// for free: charging the company for a turn that never ran lets
 		// it exhaust its budget on work it did not do.
-		if _, _, undo := f.bump(ctx, coord.OrgScope, -tokens, 0); undo != nil {
-			// Logged rather than returned: the caller's answer is
-			// already decided, and a compensation that failed leaves
-			// the org over-stated, which trips the cap EARLY. That is
-			// the safe direction, and it is worth a line saying so
-			// rather than a drift nobody can later explain.
-			log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
-				"tokens", tokens, "error", undo,
-				"detail", "the org counter is over-stated by this charge and will refuse "+
-					"early; clear it with `crewlet budgets reset`")
-		}
+		f.unwindOrg(ctx, tokens)
 		if err != nil {
 			return coord.Spend{}, err
 		}
-		return coord.Spend{RefusedScope: "agent", RefusedUsed: agentUsed, RefusedLimit: agentLimit}, nil
+		return f.refuse(ctx, agentScope, "agent", agent.Used, agentLimit), nil
 	}
-	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
+	// ADMITTED, so each scope that carried a refusal has just had room for
+	// a charge. The counter writes above deliberately kept the stamp: the
+	// org is written before the seat is tested, and clearing it there would
+	// let a charge that was refused overall erase the company's refusal.
+	for _, scope := range []struct {
+		key  string
+		seen time.Time
+	}{{coord.OrgScope, org.RefusedAt}, {agentScope, agent.RefusedAt}} {
+		if !scope.seen.IsZero() {
+			f.clearRefusal(ctx, scope.key, scope.seen)
+		}
+	}
+	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
+}
+
+// PostCharge adds spend that already happened to the org's counter and the
+// seat's, refusing nothing. See [coord.Budgets.PostCharge].
+//
+// The same two writes as an admitted [FleetStore.Charge], org first, with no
+// cap to test and no refusal stamp cleared: [FleetStore.bump] carries a stamp
+// through, and nothing here decided the scope had room.
+func (f *FleetStore) PostCharge(ctx context.Context, agentScope string, tokens int) (coord.Spend, error) {
+	if tokens <= 0 {
+		return coord.Spend{OK: true}, nil
+	}
+	if agentScope == "" {
+		return coord.Spend{}, errors.New("coord/kv: a charge needs a seat scope")
+	}
+	org, _, err := f.bump(ctx, coord.OrgScope, tokens, 0)
+	if err != nil {
+		return coord.Spend{}, err
+	}
+	agent, _, err := f.bump(ctx, agentScope, tokens, 0)
+	if err != nil {
+		f.unwindOrg(ctx, tokens)
+		return coord.Spend{}, err
+	}
+	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
+}
+
+// unwindOrg takes back the org's half of a charge whose seat half did not land.
+//
+// On a context that OUTLIVES the caller's. The failure being undone is often
+// the caller's own cancellation (a turn stopped mid-charge, a node draining),
+// and an unwind that inherited that dead context failed with it: the company
+// was billed for a round that never ran, and refused early until an operator
+// reset the counter. It cannot hang in the caller's place: the client bounds
+// every request made on a context with no deadline by its own API timeout.
+//
+// Logged rather than returned: the caller's answer is already decided, and a
+// compensation that failed leaves the org over-stated, which trips the cap
+// EARLY. That is the safe direction, and it is worth a line saying so rather
+// than a drift nobody can later explain.
+func (f *FleetStore) unwindOrg(ctx context.Context, tokens int) {
+	if _, _, undo := f.bump(context.WithoutCancel(ctx), coord.OrgScope, -tokens, 0); undo != nil {
+		log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
+			"tokens", tokens, "error", undo,
+			"detail", "the org counter is over-stated by this charge and will refuse "+
+				"early; clear it with `crewlet budgets reset`")
+	}
+}
+
+// refuse stamps a refusal on the scope that made it and answers with it.
+//
+// A stamp that cannot be written is LOGGED and the refusal still stands. The
+// decision was taken from a counter this call read, so it is true whether or
+// not the stamp lands; turning it into an error would report an outage for a
+// company that is simply out of budget, and those send an operator to
+// different places. What the failure costs is one dashboard not saying
+// "refusing charges" until the next refusal writes.
+func (f *FleetStore) refuse(ctx context.Context, scope, name string, used, limit int) coord.Spend {
+	if err := f.stampRefusal(ctx, scope); err != nil {
+		log.WarnContext(ctx, "coord_kv_budget_refusal_not_recorded", "scope", scope, "error", err,
+			"detail", "the charge was still refused; the live meter will not show "+
+				"this refusal until the scope refuses another charge")
+	}
+	return coord.Spend{RefusedScope: name, RefusedUsed: used, RefusedLimit: limit}
+}
+
+// stampRefusal records now as the scope's last refusal, under a
+// compare-and-swap that leaves its spend untouched.
+//
+// A scope with no record yet gets one at zero spend: a seat refused on its
+// first charge has refused a charge, and that is worth listing.
+func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
+	key := encodeKey(scope)
+	for range fleetCASRetries {
+		now := time.Now().UTC()
+		entry, err := f.budgets.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			raw, encoded := encodeBudget(budgetRecord{RefusedAt: now})
+			if encoded != nil {
+				return encoded
+			}
+			_, created := f.budgets.Create(ctx, key, raw)
+			switch {
+			case created == nil:
+				return nil
+			case errors.Is(created, jetstream.ErrKeyExists):
+				continue
+			default:
+				return unavailable("record the budget refusal", created)
+			}
+		}
+		if err != nil {
+			return unavailable("read the budget", err)
+		}
+		var record budgetRecord
+		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
+			return unavailable("decode the budget", decode)
+		}
+		record.RefusedAt = now
+		raw, encoded := encodeBudget(record)
+		if encoded != nil {
+			return encoded
+		}
+		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			return unavailable("record the budget refusal", err)
+		}
+	}
+	return contended("refuse", scope)
+}
+
+// clearRefusal drops the refusal an admitted charge found on the scope.
+//
+// ONLY THE STAMP IT SAW. Between the charge's write and this one another
+// caller may have been refused and stamped a newer instant, and that refusal
+// is still true; clearing it would hide a scope that is refusing right now.
+// A failure is logged for the reason [FleetStore.refuse] gives: the charge
+// already happened, and the stamp is what a dashboard reads, not what the gate
+// decides with.
+//
+// On a context that OUTLIVES the caller's, for the reason [FleetStore.unwindOrg]
+// gives: this runs AFTER both counters have been written, so the charge is a
+// fact whatever happens next, and the caller's context dying between the two
+// writes and this one is ordinary — a turn cancelled, a node draining. Left on
+// that context the clear failed with it, and the scope kept telling every
+// dashboard it was refusing charges while it had just admitted one. It cannot
+// hang in the caller's place: the client bounds a request made on a context
+// with no deadline by its own API timeout.
+func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen time.Time) {
+	key := encodeKey(scope)
+	ctx = context.WithoutCancel(ctx)
+	for range fleetCASRetries {
+		entry, err := f.budgets.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			// Reset by an operator in between, which cleared it.
+			return
+		}
+		if err != nil {
+			f.logUncleared(ctx, scope, unavailable("read the budget", err))
+			return
+		}
+		var record budgetRecord
+		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
+			f.logUncleared(ctx, scope, unavailable("decode the budget", decode))
+			return
+		}
+		if !record.RefusedAt.Equal(seen) {
+			// Already cleared, or stamped again since.
+			return
+		}
+		record.RefusedAt = time.Time{}
+		raw, encoded := encodeBudget(record)
+		if encoded != nil {
+			f.logUncleared(ctx, scope, encoded)
+			return
+		}
+		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
+		switch {
+		case err == nil:
+			return
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			f.logUncleared(ctx, scope, unavailable("clear the budget refusal", err))
+			return
+		}
+	}
+	f.logUncleared(ctx, scope, contended("clear refusal", scope))
+}
+
+func (f *FleetStore) logUncleared(ctx context.Context, scope string, err error) {
+	log.WarnContext(ctx, "coord_kv_budget_refusal_not_cleared", "scope", scope, "error", err,
+		"detail", "the charge was admitted; the live meter keeps showing the old "+
+			"refusal until the scope's next admitted charge clears it")
 }
 
 // bump applies one scope's delta under a compare-and-swap, reporting the
-// resulting usage and whether it fit.
+// record it wrote and whether the delta fit.
 //
 // A negative delta is a compensation and is never refused: it is undoing a
 // charge this caller already made, so a limit has nothing to say about it.
-func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (int, bool, error) {
+//
+// The record's refusal stamp is CARRIED through, never cleared here: see
+// [FleetStore.Charge] for who clears it and why this cannot.
+func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (budgetRecord, bool, error) {
 	key := encodeKey(scope)
 	for range fleetCASRetries {
 		entry, err := f.budgets.Get(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			if limit > 0 && delta > limit {
-				return 0, false, nil
+				return budgetRecord{}, false, nil
 			}
-			raw, encoded := encodeBudget(max(delta, 0))
+			record := budgetRecord{Used: max(delta, 0), At: time.Now().UTC()}
+			raw, encoded := encodeBudget(record)
 			if encoded != nil {
-				return 0, false, encoded
+				return budgetRecord{}, false, encoded
 			}
 			_, created := f.budgets.Create(ctx, key, raw)
 			switch {
 			case created == nil:
-				return max(delta, 0), true, nil
+				return record, true, nil
 			case errors.Is(created, jetstream.ErrKeyExists):
 				continue
 			default:
-				return 0, false, unavailable("charge the budget", created)
+				return budgetRecord{}, false, unavailable("charge the budget", created)
 			}
 		}
 		if err != nil {
-			return 0, false, unavailable("read the budget", err)
+			return budgetRecord{}, false, unavailable("read the budget", err)
 		}
 		var record budgetRecord
 		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
-			return 0, false, unavailable("decode the budget", decode)
+			return budgetRecord{}, false, unavailable("decode the budget", decode)
 		}
 		// Floored at zero: a compensation for a charge whose own write
 		// was already reaped (or reset by an operator mid-turn) must not
 		// leave a counter that reads as credit.
 		next := max(record.Used+delta, 0)
 		if limit > 0 && next > limit {
-			return record.Used, false, nil
+			return record, false, nil
 		}
-		raw, encoded := encodeBudget(next)
+		record.Used, record.At = next, time.Now().UTC()
+		raw, encoded := encodeBudget(record)
 		if encoded != nil {
-			return 0, false, encoded
+			return budgetRecord{}, false, encoded
 		}
 		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
 		switch {
 		case err == nil:
-			return next, true, nil
+			return record, true, nil
 		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
 			continue
 		default:
-			return 0, false, unavailable("charge the budget", err)
+			return budgetRecord{}, false, unavailable("charge the budget", err)
 		}
 	}
 	// Exhausting the retries is reported as an ERROR, never as a refusal:
 	// the caller fails the round rather than telling an agent it is out of
 	// budget, which is the fail-closed direction the contract requires.
-	return 0, false, contended("charge", scope)
+	return budgetRecord{}, false, contended("charge", scope)
 }
 
-func encodeBudget(used int) ([]byte, error) {
-	raw, err := json.Marshal(budgetRecord{Used: used, At: time.Now().UTC()})
+func encodeBudget(record budgetRecord) ([]byte, error) {
+	raw, err := json.Marshal(record)
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: encode the budget: %w", err)
 	}
@@ -1072,7 +1285,9 @@ func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 			// a missing one.
 			return nil
 		}
-		out = append(out, coord.Usage{Scope: scope, Used: record.Used, UpdatedAt: record.At})
+		out = append(out, coord.Usage{
+			Scope: scope, Used: record.Used, UpdatedAt: record.At, RefusedAt: record.RefusedAt,
+		})
 		return nil
 	})
 	if err != nil {

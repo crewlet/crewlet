@@ -195,29 +195,32 @@ export interface LiveCall {
   started_at?: string;
 }
 
-/** A live token meter. Process-lifetime — never comparable to a spend rollup.
- *
- *  THERE IS NO `refused_at`. The field was on the wire, read here to draw a
- *  "refusing charges" badge, and never written by the engine — so the badge
- *  was unreachable on every company. It could not have been written either:
- *  the report is built per NODE and a refusal happens inside one node's tool
- *  loop, so a node that refused nothing would report no refusal while the
- *  company next door was turning charges away. At or past the cap is what the
- *  shared counter can honestly say. */
+/** A live token meter: the fleet's SHARED counter, as the budget gate enforces
+ *  it — every node's spend since the last deliberate reset, against the cap in
+ *  the active revision. Never comparable to a spend rollup, which is a window
+ *  over time rather than the life of a counter. */
 export interface Meter {
   used: number;
   max: number;
+  /** When this scope last turned a charge away, in UTC; empty while it is not
+   *  refusing. The gate's own record, kept in the shared counter beside the
+   *  spend, so every node reports the same one and it clears on the scope's
+   *  next admitted charge. It is what "exhausted" means: a refused charge
+   *  increments nothing, so `used >= max` is sufficient but never necessary —
+   *  a scope charged in rounds stops short of its cap for ever. */
+  refused_at?: string;
 }
 
 /** The live half of a seat row, merged onto its static config row. */
 export interface Overlay {
+  /**
+   * Omitted until an event says whether the seat is running, so the state the
+   * roster sent (or the one a client already holds) stands.
+   */
   state?: string;
   runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
   live_call?: LiveCall | null;
   last_error?: ErrorInfo | null;
   budget?: Meter | null;
@@ -478,11 +481,8 @@ export interface BudgetsAnswer {
     max_tokens: number;
     durable_used: number;
     durable_updated_at: string;
-    /** NULL when this node holds no live meter — "nothing spent this run" and
-     *  "no meter here" are different facts, and the answer has always sent
-     *  null for the second. Typed as a plain number, a reader rendering it
-     *  drew a confident 0 for a seat this process has never run. */
-    live_used: number | null;
+    /** When the company cap last refused a charge; empty while it is not refusing. */
+    refused_at: string;
   };
   seats: {
     role: string;
@@ -491,7 +491,8 @@ export interface BudgetsAnswer {
     max_tokens: number;
     durable_used: number;
     durable_updated_at: string;
-    live_used: number | null;
+    /** When this seat's cap last refused a charge; empty while it is not refusing. */
+    refused_at: string;
   }[];
   /** False means the durable counter could not be READ — never that it is zero. */
   durable: boolean;

@@ -61,6 +61,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"RelatedAgentIndexIsSweptWithTheLog", testRelatedSwept},
 		{"SpendFoldsTheWholeWindowNotACappedPrefix", testSpendUncapped},
 		{"SpendSurvivesARecordBuiltByHand", testSpendDerived},
+		{"SpendLimitKeepsTheNewestOfTheWindow", testSpendLimited},
 		{"BackupIsAReadableCopyOfTheData", testBackup},
 		{"BackupIsOneSelfContainedFile", testBackupSelfContained},
 		{"BackupRefusesAnOccupiedDestination", testBackupOccupied},
@@ -904,6 +905,53 @@ func testSpendUncapped(t *testing.T, db *store.DB) {
 	}
 	if want := rows * 3; total != want {
 		t.Errorf("total tokens = %d, want %d", total, want)
+	}
+}
+
+// testSpendLimited: a Limit keeps the NEWEST records of the window, and zero
+// keeps the whole window.
+//
+// The tail is for a caller that retains only a bounded tail anyway (the live
+// projection's startup seed); the whole window is what every rollup reads, and
+// the case above insists that one is never cut. The window applies BEFORE the
+// limit, so a record that aged out is never the one a short read returns.
+func testSpendLimited(t *testing.T, db *store.DB) {
+	log := db.Events()
+	now := time.Now().UTC()
+	for i, id := range []string{"oldest", "older", "newer", "newest"} {
+		write(t, log, store.EventRecord{
+			ID: id, Type: "agent_phase_completed", Source: "agent", Category: "agent",
+			Time:    now.Add(-time.Duration(4-i) * time.Minute),
+			Payload: []byte(`{"phase":"execute","model":"m","total_tokens":1}`),
+		})
+	}
+	write(t, log, store.EventRecord{
+		ID: "aged-out", Type: "agent_phase_completed", Source: "agent", Category: "agent",
+		Time:    now.Add(-48 * time.Hour),
+		Payload: []byte(`{"phase":"execute","model":"m","total_tokens":1}`),
+	})
+
+	spendIDs := func(q store.PhaseTokenQuery) []string {
+		t.Helper()
+		got, err := log.PhaseTokens(t.Context(), q)
+		if err != nil {
+			t.Fatalf("phase tokens %+v: %v", q, err)
+		}
+		out := make([]string, len(got))
+		for i, r := range got {
+			out[i] = r.EventID
+		}
+		return out
+	}
+	if got := spendIDs(store.PhaseTokenQuery{SinceDays: 1, Limit: 2}); !slices.Equal(got, []string{"newest", "newer"}) {
+		t.Errorf("limit 2 = %v, want the two newest of the window", got)
+	}
+	if got := spendIDs(store.PhaseTokenQuery{SinceDays: 1, Limit: 10}); !slices.Equal(got,
+		[]string{"newest", "newer", "older", "oldest"}) {
+		t.Errorf("limit past the window = %v, want the window and nothing older", got)
+	}
+	if got := spendIDs(store.PhaseTokenQuery{SinceDays: 1}); len(got) != 4 {
+		t.Errorf("no limit = %v, want the whole window", got)
 	}
 }
 

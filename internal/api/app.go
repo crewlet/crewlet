@@ -501,46 +501,15 @@ func (a *App) Configured() bool {
 // it would only reject.
 func (a *App) SetConfigured(v bool) { a.configured.Store(v) }
 
-// Start brings up the shared health tick and seeds the live spend window.
+// Start brings up the shared health tick.
 //
-// THE HYDRATION IS NOT OPTIONAL POLISH. The projection is fed by one ephemeral
-// subscription, so without this a restarted node reports a day of zeroes in a
-// window it labels a full day — beside a chart drawn from the store that shows
-// the real spend. See [livestate.LiveState.HydrateSpend], which is deduped by
-// event id precisely so that this racing the subscription is a non-question.
-//
-// BEST EFFORT, and loudly so: a store that cannot be read leaves the window to
-// fill from the stream as it always did, which is the pre-existing behaviour
-// rather than a new failure — but a screen quietly showing less than it should
-// is exactly what this exists to stop, so it is logged rather than swallowed.
+// IT DOES NOT SEED THE PROJECTION. The seed reads the node's event store for
+// both halves — the feed and the spend window — and it has to run AFTER the
+// broadcast subscription is attached, or an event published between the read
+// and the subscribe falls into the gap. This runs before it, so the seed is
+// the caller's (see observe.Seed, wired in cmd/crewlet).
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
-	a.hydrateSpend(ctx)
-}
-
-// hydrateSpend seeds the live window from the event store.
-func (a *App) hydrateSpend(ctx context.Context) {
-	if a.events == nil {
-		return
-	}
-	records, err := a.events.PhaseTokens(ctx, store.PhaseTokenQuery{
-		// THE PROJECTION'S OWN WINDOW, asked for as instants rather than
-		// as a day count: the two are not the same window whenever the
-		// live window is not a whole number of days, and seeding more
-		// than the projection retains would be pruned on the next event
-		// anyway.
-		Since: a.now().Add(-livestate.LiveSpendWindow),
-	})
-	if err != nil {
-		log.WarnContext(ctx, "spend_hydration_failed", "error", err,
-			"hint", "the live spend window will fill from the stream instead, "+
-				"so figures read low until it does")
-		return
-	}
-	if landed := a.state.HydrateSpend(records); landed > 0 {
-		log.InfoContext(ctx, "spend_hydrated", "records", landed,
-			"window", livestate.LiveSpendWindow.String())
-	}
 }
 
 // Stop ends the tick and disconnects every client.

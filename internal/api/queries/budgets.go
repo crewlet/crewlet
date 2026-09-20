@@ -4,22 +4,27 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The budgets answer: the CAP the engine enforces against, paired with the
 // DURABLE counter it enforces with.
 //
-// THREE SPANS SIT ON THIS SCREEN and only two of them are comparable. The cap
-// is config. The durable counter is every process since the last deliberate
-// reset — what the engine actually refuses against — and those two go together.
-// The LIVE meter beside them is this process's own run, and it shares a span
-// with neither, which is why it is a separate field a reader can see is
-// separate rather than a number silently mixed into the other two.
+// TWO SPANS, and they are the two that belong together. The cap is config; the
+// counter is every node's spend since the last deliberate reset, which is what
+// the gate actually refuses against, and the refusal stamp beside it is the
+// gate's own record of saying no. The live meter a dashboard is pushed is this
+// same counter, so it is not a third figure here.
 //
-// So `durable: false` means UNREADABLE, never zero, and live_used is null
-// rather than 0 on a node with no meter: a zero is a measurement, and printing
-// one for "we could not look" is the lie this shape exists to avoid.
+// There used to be a third, `live_used`, labelled as "this process": the
+// per-seat token totals the live projection summed from the turns it happened
+// to have seen since it started. It shared a span with nothing an operator
+// could name, and its org half summed an empty list and was null on every
+// node. What a seat spent over a stated window is the spend rollup's per-agent
+// row, which is one aggregation for every screen that shows spend.
+//
+// So `durable: false` means UNREADABLE, never zero: a company drawn at 0% of
+// its budget when the truth is that nobody looked is the lie this shape exists
+// to avoid.
 
 // Budgets answers the whole budget surface.
 func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
@@ -65,7 +70,7 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		"max_tokens":         company.TokenBudget,
 		"durable_used":       orgRow.Used,
 		"durable_updated_at": isoOrEmpty(orgRow.UpdatedAt),
-		"live_used":          s.liveOrgUsed(),
+		"refused_at":         isoOrEmpty(orgRow.RefusedAt),
 	}
 
 	seats := []any{}
@@ -85,46 +90,9 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 			"max_tokens":         role.TokenBudget,
 			"durable_used":       row.Used,
 			"durable_updated_at": isoOrEmpty(row.UpdatedAt),
-			// NULL, not zero, when this node has no live meter for the
-			// seat: "nothing spent this run" and "no meter here" are
-			// different facts and the client renders them differently.
-			"live_used": s.liveSeatUsed(role),
+			"refused_at":         isoOrEmpty(row.RefusedAt),
 		})
 	}
 	out["seats"] = seats
 	return out, nil
-}
-
-// liveOrgUsed is this process's own meter, or nil.
-//
-// Summed from the projection's per-seat overlays rather than held as its own
-// counter: the overlay is what the engine reports and a second accumulator
-// here would be a number that drifts from the one on the seat rows beside it.
-func (s Sources) liveOrgUsed() any {
-	if s.State == nil {
-		return nil
-	}
-	total, any := 0, false
-	for _, row := range s.State.MergeAgents(nil) {
-		if n, ok := row["total_tokens"].(int); ok {
-			total += n
-			any = true
-		}
-	}
-	if !any {
-		return nil
-	}
-	return total
-}
-
-// liveSeatUsed is one seat's meter on this node, or nil.
-func (s Sources) liveSeatUsed(role *org.Role) any {
-	if s.State == nil || role == nil {
-		return nil
-	}
-	overlay := s.State.AgentOverlay(role.Name)
-	if overlay == nil {
-		return nil
-	}
-	return overlay.TotalTokens
 }
