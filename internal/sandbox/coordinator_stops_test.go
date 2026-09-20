@@ -159,7 +159,7 @@ var coordinatorEntries = map[string][]entryDrive{
 			setup: func(t *testing.T, rig *coordRig) {
 				suspendedRun(t, rig)
 				rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away",
-					ErrResumeActed)
+					ErrResumeAbandoned)
 			},
 			call: completes,
 		},
@@ -518,11 +518,12 @@ func (s *refusingStore) SetStatus(ctx context.Context, turnID, status string, fe
 	return s.inner.SetStatus(ctx, turnID, status, fence)
 }
 
-func (s *refusingStore) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
+func (s *refusingStore) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+) (PendingRun, bool, error) {
 	if s.called("Finish") {
-		return false, errRefusedCall
+		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.Finish(ctx, turnID, fence)
+	return s.inner.Finish(ctx, turnID, fence, whileIn)
 }
 
 func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, error) {

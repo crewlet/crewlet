@@ -592,19 +592,32 @@ type PendingStore interface {
 	// Ending a run is not a status; see Finish.
 	SetStatus(ctx context.Context, turnID, status string, fence Fence) error
 
-	// Finish ends a run by deleting its record, unless a newer lease
-	// outranks the fence, reporting whether THIS call deleted it.
+	// Finish ends a run by deleting its record — while its status is one of
+	// whileIn and no newer lease outranks the fence — and hands back the
+	// record it deleted, so a caller acts on what the store held rather
+	// than on a snapshot taken before the tail ran.
 	//
 	// The caller reclaims the box FIRST. A record naming a box that is
 	// already gone is harmless (recovery reaps it and a kill of a gone box
 	// is a no-op), while a live box whose record was deleted is named by
-	// nothing and billed until its provider's TTL.
+	// nothing and billed until its provider's TTL. The one caller that
+	// inverts that is the one whose LICENSE is the decision — see
+	// [Coordinator.settleClaimed].
+	//
+	// WHILEIN IS A LICENSE, NOT A FILTER: it is the set of statuses this
+	// ending is entitled to end a run from. [Active] — every status a
+	// record can hold — is what a settle that has already reclaimed the box
+	// takes, and a narrower set is how a caller that could NOT read the row
+	// still refuses to end one that has moved on under it. An empty set
+	// licenses nothing and deletes nothing, which is the safe way round for
+	// a zero value.
 	//
 	// Conditional on the version it read and re-decided on a lost race, so
 	// a delete racing a write sees that write before it deletes. FALSE IS
 	// NOT AN ERROR: the run is already gone, which is the ordinary shape of
-	// two parties reaching the end of one run, or a newer lease owns it.
-	Finish(ctx context.Context, turnID string, fence Fence) (bool, error)
+	// two parties reaching the end of one run, or a newer lease owns it, or
+	// its status is not one this ending was licensed for.
+	Finish(ctx context.Context, turnID string, fence Fence, whileIn []string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
 	// clears its box record, reporting whether THIS call won.

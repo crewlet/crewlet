@@ -302,7 +302,9 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
 	}
-	if _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence); err != nil {
+	// Every live status, like every other settle that has already reclaimed
+	// the box: this launch is abandoned whatever the row reached.
+	if _, _, err := store.Finish(ctx, req.Turn.TurnID, req.Fence, Active); err != nil {
 		log.WarnContext(ctx, "sandbox_launch_finish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}

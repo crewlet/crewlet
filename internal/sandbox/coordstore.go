@@ -407,26 +407,30 @@ func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle stri
 // [PendingStore].
 //
 // A read-decide-delete under the record's version, like every flip here: the
-// fence is evaluated against what the store holds, and a lost race re-reads,
-// so a claim that moved the lease in between is seen rather than deleted over.
-func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
+// fence AND the status license are evaluated against what the store holds, and
+// a lost race re-reads, so a claim that moved the lease — or a relaunch that
+// moved the status — in between is seen rather than deleted over. That is what
+// lets a caller that could not read the row hand the decision here instead.
+func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+) (PendingRun, bool, error) {
 	for range casRetries {
 		run, version, found, err := s.read(ctx, turnID)
 		if err != nil {
-			return false, err
+			return PendingRun{}, false, err
 		}
-		if !found || outranked(run, fence) {
-			return false, nil
+		if !found || outranked(run, fence) || !slices.Contains(whileIn, run.Status) {
+			return PendingRun{}, false, nil
 		}
 		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
 		if err != nil {
-			return false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
+			return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
 		}
 		if gone {
-			return true, nil
+			return run, true, nil
 		}
 	}
-	return false, fmt.Errorf("sandbox: finish run %s: the record kept changing under the delete", turnID)
+	return PendingRun{}, false, fmt.Errorf(
+		"sandbox: finish run %s: the record kept changing under the delete", turnID)
 }
 
 // read decodes one record and the version it was read at.

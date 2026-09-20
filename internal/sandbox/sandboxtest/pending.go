@@ -46,6 +46,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AFinishedRunIsGoneForEveryReader", testAFinishedRunIsGoneForEveryReader},
 		{"AFinishedRunIsNotRecreatedByALateWrite", testAFinishedRunIsNotRecreatedByALateWrite},
 		{"ARunIsFinishedExactlyOnce", testARunIsFinishedExactlyOnce},
+		{"AnEndingIsRefusedOutsideItsLicense", testAnEndingIsRefusedOutsideItsLicense},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
 		{"AClaimForAnotherLaunchIsRefused", testAClaimForAnotherLaunchIsRefused},
@@ -418,9 +419,17 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	// after the delete there is nothing left to read one from.
 	tail := answerTo(t, s, "t1")
 
-	finished, err := s.Finish(ctx, "t1", sandbox.Fence{})
+	settled, finished, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active)
 	if err != nil || !finished {
 		t.Fatalf("Finish = %v, %v; want the record deleted", finished, err)
+	}
+	// THE RECORD IT DELETED, not the caller's snapshot of it: a settle that
+	// could not read the row first reclaims the box this names, so a store
+	// handing back a zero value there would leave a live box named by
+	// nothing.
+	if settled.TurnID != "t1" || settled.SandboxID != "box-t1" ||
+		settled.Status != sandbox.StatusAwaiting {
+		t.Errorf("Finish handed back %+v; want the record as the store held it", settled)
 	}
 	if got, found, err := s.Get(ctx, "t1"); err != nil || found {
 		t.Fatalf("Get after Finish = %+v, found %v, %v; want no record", got, found, err)
@@ -438,7 +447,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 		t.Errorf("a finished run was claimed: won=%v err=%v", won, err)
 	}
 	// Two parties reaching the end of one run is ordinary, not an error.
-	if again, err := s.Finish(ctx, "t1", sandbox.Fence{}); err != nil || again {
+	if _, again, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil || again {
 		t.Errorf("a second Finish = %v, %v; want false and no error", again, err)
 	}
 }
@@ -450,7 +459,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
-	if _, err := s.Finish(ctx, "t1", sandbox.Fence{}); err != nil {
+	if _, _, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
 	late := map[string]func() error{
@@ -502,7 +511,7 @@ func testARunIsFinishedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	for range racers {
 		wg.Go(func() {
 			<-start
-			finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{})
+			_, finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{}, sandbox.Active)
 			if err != nil {
 				t.Errorf("Finish: %v", err)
 				return
@@ -516,6 +525,42 @@ func testARunIsFinishedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	wg.Wait()
 	if got := wins.Load(); got != 1 {
 		t.Fatalf("%d of %d concurrent Finish calls reported deleting the record, want exactly 1", got, racers)
+	}
+}
+
+// A settle that could NOT read the row hands the decision to the store: it
+// asks for the run to be ended only while it is still the status its claim
+// left it in. So a row that moved on under it — a relaunch the resumed turn
+// made, which takes the run back through launching and reuses the very box
+// this settle would kill — has to survive the call, and a row still in the
+// claim has to be deleted by it.
+func testAnEndingIsRefusedOutsideItsLicense(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	claimed := []string{sandbox.StatusResumed}
+
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, claimed); err != nil || ended {
+		t.Errorf("a running run was ended under a claimed-only licence: %v, %v", ended, err)
+	}
+	if got, found, err := s.Get(ctx, "t1"); err != nil || !found {
+		t.Fatalf("the record is gone after a refused ending (found %v, %v)", found, err)
+	} else if got.Status != sandbox.StatusRunning {
+		t.Errorf("a refused ending left the record at %q", got.Status)
+	}
+	// An empty licence ends nothing at all, which is the safe reading of a
+	// caller that stated none.
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, nil); err != nil || ended {
+		t.Errorf("an ending with no licence deleted the record: %v, %v", ended, err)
+	}
+
+	if _, _, err := s.ClaimForResume(ctx, "t1", completionOf(t, s, "t1")); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, claimed); err != nil || !ended {
+		t.Errorf("the run the claim left behind was not ended: %v, %v", ended, err)
+	}
+	if _, found, err := s.Get(ctx, "t1"); err != nil || found {
+		t.Errorf("the claimed run still has a record (found %v, %v)", found, err)
 	}
 }
 
@@ -683,7 +728,8 @@ func testAReleaseOfARunNoLongerClaimedIsRefused(t *testing.T, s sandbox.PendingS
 	// back at all.
 	mustLaunched(t, s, run("t1"))
 	claimed := mustClaim(t, s, "t1")
-	if finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil || !finished {
+	if _, finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{},
+		sandbox.Active); err != nil || !finished {
 		t.Fatalf("reap: finished=%v err=%v", finished, err)
 	}
 	if released, err := s.ReleaseClaim(t.Context(), "t1", releaseOf(claimed)); err != nil || released {
@@ -953,13 +999,14 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	}
 	// Nor may it END the run: a node whose lease moved deleting the record
 	// its successor recovered strands the successor's box.
-	if finished, err := s.Finish(t.Context(), "t1", stale); err != nil || finished {
+	if _, finished, err := s.Finish(t.Context(), "t1", stale, sandbox.Active); err != nil || finished {
 		t.Errorf("a stale fence finished the run: %v, %v", finished, err)
 	}
 	if _, found, err := s.Get(t.Context(), "t1"); err != nil || !found {
 		t.Fatalf("the record is gone after a stale Finish (found %v, %v)", found, err)
 	}
-	if finished, err := s.Finish(t.Context(), "t1", sandbox.Fence{Owner: "node-b:2", Epoch: 7}); err != nil || !finished {
+	if _, finished, err := s.Finish(t.Context(), "t1",
+		sandbox.Fence{Owner: "node-b:2", Epoch: 7}, sandbox.Active); err != nil || !finished {
 		t.Errorf("the owning lease could not finish its own run: %v, %v", finished, err)
 	}
 }
@@ -1040,7 +1087,7 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 	}
 
 	// A finished run does not.
-	if _, err := s.Finish(t.Context(), "t1", sandbox.Fence{}); err != nil {
+	if _, _, err := s.Finish(t.Context(), "t1", sandbox.Fence{}, sandbox.Active); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	if got, _ := s.ListActive(t.Context()); len(got) != 0 {

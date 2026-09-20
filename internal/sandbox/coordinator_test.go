@@ -59,7 +59,7 @@ type resumeSpy struct {
 
 	// owned counts the re-entries after which the TURN's own frame is
 	// answerable for whatever was held up while it worked: one that returned
-	// nil ran to its end, and one that returned [ErrResumeActed] broke after
+	// nil ran to its end, and one that returned [ErrResumeAbandoned] broke after
 	// acting — both took their hold down on the way out.
 	//
 	// NOT EVERY RE-ENTRY, which is the distinction the coordinator's contract
@@ -79,7 +79,7 @@ type resumeSpy struct {
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
 	err, during := s.err, s.during
-	if err == nil || errors.Is(err, ErrResumeActed) {
+	if err == nil || errors.Is(err, ErrResumeAbandoned) {
 		s.owned++
 	}
 	if err == nil {
@@ -685,29 +685,98 @@ func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 	}
 }
 
-// The same holds when the resume was a person's answer to the run's question
-// rather than its completion: the box the answer would have continued in is
-// reclaimed, and the seat is not left holding a question nobody will resume.
-func TestAnAbandonedAnswerResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
+// AND NEITHER SETTLE IS SILENT WHEN THE RECORD CANNOT BE READ.
+//
+// Both tails above read the row back before settling it, to learn which box to
+// reclaim — and answered an unreadable read by returning, which leaves the run
+// exactly where the two cases above spend their whole argument not leaving it:
+// [StatusResumed], where no poll looks, no redelivery can re-claim, no answer
+// matches and no reaper expires. The box stays paused and billed until the
+// seat happens to change hands, and on a node that keeps its seat that is for
+// ever.
+//
+// Driven for BOTH tails from one table, because the defect was one shape
+// written twice and a case covering one of them is how the second survived.
+func TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		resume error
+	}{
+		{"a resumed turn that finished", nil},
+		{"a resumed turn that broke after acting", fmt.Errorf(
+			"%w: the reviewer's provider went away", ErrResumeAbandoned)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRig(t)
+			run := rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			rig.resumer.err = tc.resume
+			// The read that says which box to settle, and nothing else:
+			// the claim, the collect and the resume all land.
+			rig.coordinator.pending = &refusingStore{
+				inner: rig.pending, refuse: []string{"Get"},
+			}
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted = %v, want nil: the turn was re-entered, so the "+
+					"completion must not come round again", err)
+			}
+			rig.finished("t1")
+			if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+				t.Errorf("killed %v, want the paused box of a run nothing else will "+
+					"ever settle reclaimed", killed)
+			}
+			if held, awaits := rig.coordinator.SeatRuns("swe"); held || awaits {
+				t.Errorf("SeatRuns = held %v / awaiting %v, want neither", held, awaits)
+			}
+			if got := rig.stoppedTurns(); len(got) != 1 || got[0] != "swe/t1" {
+				t.Errorf("reported %v as stopped, want the turn this settle ended", got)
+			}
+		})
+	}
+}
+
+// AND IT STILL DOES NOT KILL A RELAUNCHED JOB, which is the one hazard the
+// read ever guarded against and the reason the old answer was to do nothing.
+//
+// The condition moves to the store instead: the ending is licensed for the
+// claim alone, and a resumed executor that called run_sandbox again has taken
+// the row back through launching — so the delete declines, the box the new job
+// is running in survives, and the row is left to the paths that end a
+// launching run. Doing nothing bought the same protection at the price of
+// stranding every run that had NOT relaunched, which is nearly all of them.
+func TestAnUnreadableSettleLeavesARelaunchedJobAlone(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
-		Question: "which branch?", Audience: "requester",
-	}); err != nil {
-		t.Fatalf("MarkAwaiting: %v", err)
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
 	}
-	rig.resumer.err = fmt.Errorf("%w: panic: nil map", ErrResumeAbandoned)
+	rig.coordinator.pending = &refusingStore{
+		inner: rig.pending, refuse: []string{"Get"},
+	}
 
-	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", nil)
-	if err != nil || !handled {
-		t.Fatalf("TryResumeFromAnswer = (%v, %v), want the answer handled", handled, err)
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
 	}
-	if rig.coordinator.SeatHeldBySandbox("swe") {
-		t.Fatal("the seat stayed parked after its answer's resume was abandoned")
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v out from under the job the resumed turn relaunched", killed)
 	}
-	rig.finished("t1")
-	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
-		t.Fatalf("killed %v, want the parked box reclaimed", killed)
+	got := rig.get("t1")
+	if got.Status != StatusLaunching {
+		t.Fatalf("status = %q, want the relaunch left where its own turn will take it",
+			got.Status)
+	}
+	if got.SandboxID != run.SandboxID {
+		t.Fatalf("sandbox_id = %q, want the reused box still named by the row", got.SandboxID)
 	}
 }
 
@@ -1314,11 +1383,12 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 // before this caller does.
 type endedFirst struct{ PendingStore }
 
-func (s endedFirst) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
-	if _, err := s.PendingStore.Finish(ctx, turnID, fence); err != nil {
-		return false, err
+func (s endedFirst) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+) (PendingRun, bool, error) {
+	if _, _, err := s.PendingStore.Finish(ctx, turnID, fence, whileIn); err != nil {
+		return PendingRun{}, false, err
 	}
-	return s.PendingStore.Finish(ctx, turnID, fence)
+	return s.PendingStore.Finish(ctx, turnID, fence, whileIn)
 }
 
 // ---------------------------------------------------------------------
@@ -3018,10 +3088,11 @@ type finishWitness struct {
 	finished, killedFirst bool
 }
 
-func (w *finishWitness) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
+func (w *finishWitness) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+) (PendingRun, bool, error) {
 	w.finished = true
 	w.killedFirst = slices.Contains(w.provider.KilledIDs(), w.box)
-	return w.PendingStore.Finish(ctx, turnID, fence)
+	return w.PendingStore.Finish(ctx, turnID, fence, whileIn)
 }
 
 // EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK, and a run parked before

@@ -1168,7 +1168,7 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 					// Where the coordinator's claim will put it back.
 					ClaimedFrom: sandbox.StatusAwaiting,
 				},
-				Turn:    &turnctx.Turn{ID: "wk-code", Seat: seat, Org: company.Org},
+				Turn:    &turnctx.Turn{RunID: "run-wk-code", WorkKey: "wk-code", Seat: seat, Org: company.Org},
 				Answer:  "use the release branch",
 				Trigger: chatTrigger("D0ANA"),
 			})

@@ -870,7 +870,14 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"turn_id", run.TurnID, "error", err.Error(),
 				"detail", "the run is settled rather than un-claimed, so the completion is "+
 					"not redelivered into a conversation a retry must not re-enter")
-			if settle, ok := c.current(ctx, run); ok {
+			// AND SETTLED EVEN WHEN THE RECORD CANNOT BE READ. A read
+			// failure here used to settle nothing, which left the row in
+			// the claim this branch exists to keep — the one state
+			// nothing recovers from. See [Coordinator.settleClaimed].
+			settle, readErr := c.current(ctx, run)
+			if readErr != nil {
+				c.settleClaimed(ctx, run, readErr)
+			} else {
 				c.finish(ctx, settle, fenceOf(run))
 			}
 			c.syncSeat(ctx, run.AgentHandle)
@@ -891,8 +898,15 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		return err
 	}
 
-	latest, ok := c.current(ctx, run)
-	if !ok {
+	latest, err := c.current(ctx, run)
+	if err != nil {
+		// THE SAME ANSWER THE ACTED BRANCH GIVES, and for the same
+		// reason: the resume is over, so a row left in the claim is
+		// picked up by nothing. The store decides whether this run is
+		// still the one that was claimed — see
+		// [Coordinator.settleClaimed].
+		c.settleClaimed(ctx, run, err)
+		c.syncSeat(ctx, run.AgentHandle)
 		return nil
 	}
 	if latest.LaunchID != run.LaunchID && slices.Contains(Active, latest.Status) {
@@ -925,25 +939,94 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 }
 
 // current is a claimed run as its record stands after the resumed turn
-// returned, false when the record could not be read.
+// returned.
 //
 // The LATEST record, because the box to settle is the one it names now: a
 // re-seeded run provisioned a fresh box, so the claimed snapshot's id is stale,
 // and a resumed executor that called run_sandbox again has a new job in it. A
 // record that is already gone is answered with the snapshot, whose settle then
-// reclaims a box that may still be there and finds nothing to delete. A read
-// that fails settles nothing: the record is still active, so the seat's next
-// recovery reaps it, where acting on the snapshot could kill a relaunched job.
-func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, bool) {
+// reclaims a box that may still be there and finds nothing to delete.
+//
+// THREE ANSWERS RATHER THAN TWO. "Here is the record", "the record is gone"
+// and "the store could not be read" are three different facts, and the last is
+// the one a caller must not read as either of the others. It was a bool, and
+// both callers read the false as "settle nothing" — which leaves the row in
+// [StatusResumed], the one state nothing recovers from (see
+// [Coordinator.revertClaim]). What a caller does with the error instead is
+// [Coordinator.settleClaimed].
+func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, error) {
 	latest, found, err := c.pending.Get(ctx, run.TurnID)
 	if err != nil {
-		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
-		return PendingRun{}, false
+		return PendingRun{}, fmt.Errorf("sandbox: reading run %s to settle it: %w", run.TurnID, err)
 	}
 	if !found {
-		return run, true
+		return run, nil
 	}
-	return latest, true
+	return latest, nil
+}
+
+// claimedOnly is the license a settle takes when it could not read the record:
+// the run is ended only while it is still the one the claim flipped.
+var claimedOnly = []string{StatusResumed}
+
+// settleClaimed ends a run whose record could not be read, WHILE IT IS STILL
+// CLAIMED.
+//
+// SILENCE IS NOT AN ANSWER HERE. Both callers reach it having just taken a
+// suspended turn out of the engine's hands, and the row they would leave
+// behind is the claim itself: the completion poll does not read a
+// [StatusResumed] row, a redelivery cannot re-claim one, no answer matches one
+// and no reaper expires one. So "leave it for the next pass" is a turn
+// destroyed in silence beside a paused box billed until the seat happens to
+// change hands — exactly what [Coordinator.revertClaim] settles a run rather
+// than accept.
+//
+// THE CONDITION MOVES TO THE STORE, which is what makes acting without the
+// read safe. The only hazard the read ever guarded was killing a job the
+// resumed turn RELAUNCHED — a relaunch reuses this very box — and a relaunch
+// takes the row back through [StatusLaunching], so a delete licensed for
+// [StatusResumed] alone declines it. What that leaves is a launching row,
+// which is the shape [Coordinator.FailRun] and the seat's next recovery pass
+// already end, rather than a box killed under a live job, which nothing undoes.
+//
+// DELETED FIRST AND RECLAIMED SECOND, the one inversion of
+// [Coordinator.finish]'s order, and for the reason that order exists: here the
+// delete IS the decision, so reclaiming first would destroy the box before
+// anything had established the row was still this call's to end. The window it
+// opens is a crash between the two, which leaves a box named by nothing until
+// its provider's TTL or the local orphan reaper takes it; the window the other
+// order opens is a live checkout killed out from under a turn.
+func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause error) {
+	// DETACHED, like every other teardown: this is reached from a failure
+	// path and from a queue handler a drain cancels, so the context that
+	// got here is very often already dead — and a settle that no-ops is the
+	// stranded row all over again.
+	settleCtx, cancel := detached(ctx)
+	defer cancel()
+	settled, ended, err := c.pending.Finish(settleCtx, run.TurnID, fenceOf(run), claimedOnly)
+	if err != nil {
+		log.ErrorContext(ctx, "sandbox_claimed_settle_failed",
+			"turn_id", run.TurnID, "error", err.Error(), "cause", cause.Error(),
+			"detail", "the run's record could neither be read nor deleted, so it is left in "+
+				"the claim with its box paused; the seat's next recovery pass reaps it")
+		return
+	}
+	if !ended {
+		// Not ours: the run either moved on under us — a relaunch the
+		// turn made before it broke — or somebody else ended it. Either
+		// way that party owns the box and the record.
+		log.InfoContext(ctx, "sandbox_claimed_settle_declined",
+			"turn_id", run.TurnID, "cause", cause.Error(),
+			"detail", "the run is no longer the claim this settle took, so it is left to "+
+				"whoever moved it")
+		return
+	}
+	log.WarnContext(ctx, "sandbox_claimed_settled_unread",
+		"turn_id", run.TurnID, "sandbox_id", settled.SandboxID, "error", cause.Error(),
+		"detail", "the run's record could not be read after the resume, so it was ended on "+
+			"the status the store still held rather than left in the claim")
+	_ = c.reclaimBox(ctx, settleCtx, settled)
+	c.reportStopped(ctx, settled)
 }
 
 // unclaim hands a claimed tail back, so the signal's retry can win the flip
@@ -1226,7 +1309,11 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) b
 	killCtx, cancel := detached(ctx)
 	defer cancel()
 	_ = c.reclaimBox(ctx, killCtx, run)
-	ended, err := c.pending.Finish(killCtx, run.TurnID, fence)
+	// LICENSED FOR EVERY LIVE STATUS, because the box is already reclaimed:
+	// whatever the row says now, this run is over and its record must not
+	// outlive it. The narrow license belongs to the one settle that has not
+	// touched the box yet — see [Coordinator.settleClaimed].
+	_, ended, err := c.pending.Finish(killCtx, run.TurnID, fence, Active)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the run's box is reclaimed but its record was not deleted; the seat's "+
@@ -1426,7 +1513,7 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 				run.TurnID, handle, err))
 			continue
 		}
-		ended, err := c.pending.Finish(ctx, run.TurnID, fence)
+		_, ended, err := c.pending.Finish(ctx, run.TurnID, fence, Active)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",
 				run.TurnID, handle, err))
