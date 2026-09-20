@@ -349,9 +349,9 @@ uses, on every start and idempotently: the six engine streams
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
+call, measured at 1.7 ms), and the nineteen `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and fifteen in the fleet store holding the
+leases and the fencing epochs, and sixteen in the fleet store holding the
 shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
@@ -402,7 +402,7 @@ comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens eighteen buckets and several streams in a
+was otherwise silent — a node opens nineteen buckets and several streams in a
 row and logged nothing between them, so one that hung emitted nothing at all
 until its budget expired and the log could not say which object it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
