@@ -41,6 +41,20 @@ const consumerCleanupTimeout = 5 * time.Second
 // couple of pulls.
 const fetchBatch = 256
 
+// fetchWait bounds ONE pull, and is deliberately a fraction of [hydrateWait].
+//
+// They used to be the same value, which meant a single pull that delivered
+// nothing spent the WHOLE hydration budget waiting — and the replay then
+// surfaced not as "the changelog stopped delivering" but as the outer
+// deadline killing a transaction mid-commit, reported as `store: commit: sql:
+// transaction has already been committed or rolled back`. A bound that
+// consumes the budget it sits inside cannot report what it bounded.
+//
+// Three seconds leaves room for several pulls inside the fifteen, so a replay
+// that stalls reports the stall with the count it stalled at, which is the
+// fact a seat is refused on.
+const fetchWait = 3 * time.Second
+
 // AgentIDFor derives a seat's stable id from its handle.
 //
 // Injected rather than imported, because the derivation belongs to the
@@ -206,43 +220,83 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	carried := 0
 	for pending > 0 {
 		want := min(pending, fetchBatch)
-		batch, err := consumer.Fetch(want, jetstream.FetchMaxWait(hydrateWait))
+		batch, err := consumer.Fetch(want, jetstream.FetchMaxWait(fetchWait))
 		if err != nil {
 			return carried, fmt.Errorf("memsync: replay %s: %w", handle, err)
 		}
-		got := 0
-		if err := s.db.Tx(ctx, func(tx *sql.Tx) error {
-			for msg := range batch.Messages() {
-				got++
-				row, spec, known, decodeErr := decode(msg.Data())
-				if decodeErr != nil {
-					return decodeErr
+		// DRAINED BEFORE THE TRANSACTION OPENS. Ranging the batch inside
+		// the tx held a store transaction open across a blocking network
+		// wait — so a pull that delivered nothing sat there for the whole
+		// fetch window and the transaction died of the outer deadline,
+		// reporting a commit failure rather than the replay's own
+		// shortfall. The batch is bounded by `want`, so this buffers at
+		// most [fetchBatch] small rows.
+		payloads := make([][]byte, 0, want)
+		for msg := range batch.Messages() {
+			payloads = append(payloads, msg.Data())
+		}
+		if err := batch.Error(); err != nil {
+			return carried, fmt.Errorf("memsync: replay %s: %w", handle, err)
+		}
+		got := len(payloads)
+		if got > 0 {
+			if err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+				for _, data := range payloads {
+					row, spec, known, decodeErr := decode(data)
+					if decodeErr != nil {
+						return decodeErr
+					}
+					if !known {
+						// A table a newer peer replicates and
+						// this build does not carry. Skipped
+						// rather than fatal: a rolling upgrade
+						// puts both builds on one stream, and
+						// refusing to hydrate at all would be
+						// worse than hydrating what this build
+						// understands.
+						log.WarnContext(ctx, "memory_row_unknown_table",
+							"seat", handle, "table", row.Table)
+						continue
+					}
+					if err := upsert(ctx, tx, spec, row); err != nil {
+						return err
+					}
+					carried++
 				}
-				if !known {
-					// A table a newer peer replicates and this
-					// build does not carry. Skipped rather than
-					// fatal: a rolling upgrade puts both builds
-					// on one stream, and refusing to hydrate at
-					// all would be worse than hydrating what
-					// this build understands.
-					log.WarnContext(ctx, "memory_row_unknown_table",
-						"seat", handle, "table", row.Table)
-					continue
-				}
-				if err := upsert(ctx, tx, spec, row); err != nil {
-					return err
-				}
-				carried++
+				return nil
+			}); err != nil {
+				return carried, err
 			}
-			return batch.Error()
-		}); err != nil {
-			return carried, err
 		}
 		if got == 0 {
-			// The stream said there were more and delivered none:
-			// stopping is the only way this loop is guaranteed to
-			// end, and a short hydration is better than a stuck one.
-			break
+			// THE STREAM SAID THERE WERE MORE AND DELIVERED NONE.
+			//
+			// Stopping is right — it is the only thing that makes this
+			// loop guaranteed to end — but this BROKE INTO SUCCESS, and
+			// a short hydration is not better than a stuck one, it is
+			// the same failure [Syncer.checkIdentity] refuses one
+			// function down, one degree weaker. That guard exists
+			// because "a recreated changelog is EMPTY, so every check
+			// below reads it as a seat with nothing to carry and
+			// reports success"; a short pull admits the seat with a
+			// FRACTION of its memory and writes a `memory_hydrated`
+			// line naming only what arrived, so nothing anywhere says
+			// why.
+			//
+			// [Syncer.Hydrate]'s own doc already states the answer: "A
+			// failure refuses the seat, which is the honest outcome: a
+			// peer that takes the seat instead may have the memory, and
+			// a seat that runs with amnesia produces work its own
+			// history contradicts." The rows carried so far are still
+			// returned beside the error, because they are what the
+			// caller's own log line reports.
+			return carried, fmt.Errorf(
+				"memsync: replay %s: the changelog reported %d row(s) still "+
+					"pending and delivered none within %s, so this seat's "+
+					"memory is incomplete at %d row(s) — it is not admitted "+
+					"on a partial diary, because a seat that runs with "+
+					"amnesia produces work its own history contradicts",
+				handle, pending, fetchWait, carried)
 		}
 		pending -= got
 	}
