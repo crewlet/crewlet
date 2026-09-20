@@ -2499,13 +2499,6 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
-			// AND THE GOAL WRITER, for the same reason: a goal is an
-			// outcome a person commits the company to, so no seat is
-			// given the tool that sets one.
-			GoalWriter: func(actor builtin.Actor) builtin.GoalWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
 			// AND THE CATALOGUE WRITER: the company's own vocabulary is
 			// a person's to set, never a seat's to widen so its own
 			// create succeeds.

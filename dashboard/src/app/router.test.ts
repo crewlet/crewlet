@@ -64,10 +64,7 @@ describe("navigation identity", () => {
     expect(workspaceOf(["activity", "turns", "abc"])).toBe("activity");
     expect(workspaceOf(["activity", "events", "abc"])).toBe("activity");
     expect(workspaceOf(["work", "ENG-42"])).toBe("work");
-    // GOALS IS WORK'S, although its first segment is its own: the tier above
-    // projects belongs with the projects, and a rail row that unmarked itself
-    // whenever somebody opened a goal would be the proof it does not.
-    expect(workspaceOf(["goals"])).toBe("work");
+    // A SEGMENT NO WORKSPACE OWNS IS NOBODY'S, which is the case below.
     expect(workspaceOf([])).toBe("inbox");
   });
 
@@ -288,20 +285,6 @@ test("every fixed destination names itself rather than reading as a key", () => 
     expect(last?.label, `#/${dest.path.join("/")}`).toBe(dest.label);
     expect(last?.path, `#/${dest.path.join("/")} links to itself`).toBeUndefined();
   }
-});
-
-// A WORKSPACE THAT OWNS TWO FIRST SEGMENTS still says which one you are on.
-//
-// Work owns `work` and `goals`. The trail read "Work" for both, so the goals
-// list and the company's board were indistinguishable in the page bar and in
-// the browser tab — which is exactly what a breadcrumb exists to prevent.
-test("a second owned segment names itself in the trail", () => {
-  const goals = crumbsFor(["goals"]);
-  expect(goals.map((c) => c.label)).toEqual(["Work", "Goals"]);
-  expect(goals[0]?.path).toEqual(["work"]);
-  expect(goals[1]?.path).toBeUndefined();
-  // And the workspace's OWN landing page is still a single crumb.
-  expect(crumbsFor(["work"]).map((c) => c.label)).toEqual(["Work"]);
 });
 
 /**

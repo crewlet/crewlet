@@ -166,6 +166,21 @@ func filedTask(t *testing.T, r *roundTrip, id string) {
 	r.drain()
 }
 
+// itoa is strconv.Itoa for a non-negative int, spelled out so a case can
+// compose an id or read a cap back out of a refusal without importing strconv
+// into every file that needs one.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var out []byte
+	for n > 0 {
+		out = append([]byte{byte('0' + n%10)}, out...)
+		n /= 10
+	}
+	return string(out)
+}
+
 func newTask(id string) tracker.Task {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	return tracker.Task{

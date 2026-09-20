@@ -226,7 +226,7 @@ func (t *setPins) Parameters() map[string]any {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"kind": map[string]any{"type": "string", "description": "project, task, view or goal."},
+						"kind": map[string]any{"type": "string", "description": "project, task or view."},
 						"id":   map[string]any{"type": "string"},
 					},
 					"required": []string{"kind", "id"},

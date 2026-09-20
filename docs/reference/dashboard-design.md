@@ -256,9 +256,9 @@ what they did, what it cost, the machine.
 
 | Row | Route prefix | Badge |
 |---|---|---|
-| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a goal you own was updated), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
+| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a comment you were cc'd on landed), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
 | **My work** | `#/me` | — |
-| **Work** | `#/work`, `#/goals` | — |
+| **Work** | `#/work` | — |
 | **Company** | `#/company` | — |
 | **Knowledge** | `#/knowledge` | — |
 | **Activity** | `#/activity` | seats working now, neutral |
@@ -323,7 +323,6 @@ because every single-modifier combination worth having is already the browser's.
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
-| `#/goals` · `#/goals/{id}` | **Goals** | |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
@@ -360,7 +359,7 @@ been able to answer.** Search is the ranking a seat gets from `search_work` —
 BM25 over the engine's own index — which the operator reading the same company
 had no access to at all; the board's `q=` is an escaped substring over an
 excerpt and answers something else. The item's **Woke** tab is who one change
-actually reached and under which of nineteen reasons, which is the fact no
+actually reached and under which of eighteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
 say why. And a seat's **Conversations** tab is its own thread ledger — the only
 account of what a seat said on a surface this engine does not own. Every one of
@@ -640,8 +639,8 @@ the kind, in `app/frame/peeks.tsx`, and the shell dispatches on the `peek=`
 token — so a list opens a peek by naming what it points at and needs to know
 nothing about it. The rail took its body as `children` once, which meant the
 screen that opened a peek had to know how to render one, and so exactly one
-screen ever did: nineteen kinds were addressable and only a work item could
-appear in the rail. A kind with no entry in that table is not an error — a
+screen ever did: every addressable kind — seventeen of them — could be named
+and only a work item could appear in the rail. A kind with no entry in that table is not an error — a
 notice is read in its own inbox and a model has no page at all — and the rail
 closes rather than opening empty.
 
@@ -850,7 +849,7 @@ that has re-decided what counts as primary gets its own badge without the
 client knowing anything about it.
 
 **The wake reason opens every row.** The applier records, per change and per
-recipient, the ONE reason of nineteen under which that person heard about it.
+recipient, the ONE reason of eighteen under which that person heard about it.
 Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
 Jira and ClickUp can all tell you that you were notified, and none can tell you
 why. The client carries no copy of the split — that is a property of the person,
@@ -1931,9 +1930,9 @@ thing somebody scans.
 `Meter` derived its tone from the fill alone — 75% caution, 100% critical —
 which is exactly right for a budget and exactly backwards for progress. A bar
 at 100% is two opposite pieces of news: a budget at 100% is refused charges, a
-goal at 100% is the goal reached. So a goal three-quarters of the way there
-rendered as a **warning**, and one fully achieved would have rendered as a
-**crisis**, on the one screen a founder reads to see how a quarter is going.
+completion bar at 100% is the thing finished. So progress three-quarters of the
+way there rendered as a **warning**, and fully achieved would have rendered as
+a **crisis**.
 
 `fullMeans` is therefore **required**, not defaulted. A default is the wrong
 answer half the time, silently — and the one call site that had noticed was
@@ -1943,7 +1942,10 @@ the shape a wrong default always leaves behind.
 - `spent` — a budget, a capacity, a quota. Full is bad and the bar warns
   before it gets there.
 - `achieved` — progress towards something wanted. Full is GOOD and says so;
-  nothing below it is a fault the bar can diagnose.
+  nothing below it is a fault the bar can diagnose. Nothing in the product
+  measures this today — the goals screen did, and it left with goals — which
+  is exactly why the prop stays required: the next progress bar has to state
+  its direction rather than inherit the budget ramp in silence.
 
 An explicit `tone` still wins, for what a caller knows and a ratio does not: a
 budget already refusing charges is critical at any fill.
@@ -2795,7 +2797,7 @@ to.
    structural fact and therefore an edge rather than a hue. A hand-rolled mark
    holding a robot glyph drew the KIND, which the roster gives at a glance, in
    the slot that should have been saying WHO: the same engineer was "FE" on the
-   board and an identical generic robot on Search and on a goal's Owners panel.
+   board and an identical generic robot on Search and on a project's Lead panel.
    `tone="brand"` is for the one badge that IS the reader, in the rail's own
    account row, and for nothing else.
 2. **No new colour, size, radius or spacing literal.** If a component needs

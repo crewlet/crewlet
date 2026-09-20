@@ -267,7 +267,7 @@ func join(segments ...string) string {
 //
 // NOT A NEW NUMBER: it is this design's universal fan-out batch — 64
 // descendants per move batch, 64 children per merge batch, 64 dependents, 64
-// watchers, 64 tasks per goal target, 64 tasks per bulk update. A writer whose
+// watchers, 64 tasks per bulk update. A writer whose
 // affected set would exceed it emits the smallest COVERING container or family
 // term instead, so the field is bounded by construction rather than by a cap a
 // writer can hit and then have to handle.
@@ -809,7 +809,6 @@ const (
 	ChangeProjectCreated  ChangeKind = "project_created"
 	ChangeProjectUpdated  ChangeKind = "project_updated"
 	ChangePolicyChanged   ChangeKind = "policy_changed"
-	ChangeGoalUpdated     ChangeKind = "goal_updated"
 	ChangeViewSaved       ChangeKind = "view_saved"
 	ChangeCatalogue       ChangeKind = "catalogue_updated"
 	ChangePrioritised     ChangeKind = "prioritised"
@@ -831,9 +830,9 @@ const (
 	ChangePersonUpdated ChangeKind = "person_updated"
 )
 
-// ChangeKinds are the twenty-eight.
+// ChangeKinds are the twenty-seven.
 //
-// TWENTY-EIGHT AGAINST FOURTEEN SUBJECTS, and the gap is not an
+// TWENTY-SEVEN AGAINST THIRTEEN SUBJECTS, and the gap is not an
 // inconsistency: five commit classes carry no notification at all — a turn, a
 // generation, an eviction, a rank move and a barrier — because a reposition is
 // not history and a barrier writes no rows whatever.
@@ -844,7 +843,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
-	ChangePolicyChanged, ChangeGoalUpdated, ChangeViewSaved, ChangeCatalogue,
+	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated,
 }
 
@@ -969,10 +968,6 @@ type Snapshot struct {
 	// ChecklistAssignees are the people whose checklist items changed.
 	ChecklistAssignees []string `json:"checklist_assignees,omitempty"`
 
-	// GoalOwners and GoalMembers hear about a goal.
-	GoalOwners  []string `json:"goal_owners,omitempty"`
-	GoalMembers []string `json:"goal_members,omitempty"`
-
 	// RoutedTo is the effective lead of a task's NEW routing unit, and it
 	// is an ORDINARY candidate rather than a fallback.
 	//
@@ -986,16 +981,6 @@ type Snapshot struct {
 	// Person is whose object a person-scoped change was about — the
 	// handle whose priorities somebody else wrote.
 	Person string `json:"person,omitempty"`
-
-	// GoalName is what a NON-TASK wake is called.
-	//
-	// ON THE SNAPSHOT for the reason every other field here is: the node
-	// that wins the delivery is rarely the node that wrote the record and
-	// is often behind on its own rows, so a name looked up at wake time
-	// would be read from a row that has moved on — or, for a goal
-	// somebody archived in between, from no row at all. The record
-	// carries what a card has to render.
-	GoalName string `json:"goal_name,omitempty"`
 
 	// PrioritisedBy is who wrote somebody else's priority list, and
 	// Position is where in it the task named by Key now sits, ONE-BASED
@@ -1020,8 +1005,8 @@ type Snapshot struct {
 // TaskID is the task this wake points at, or empty when it points at none.
 //
 // THE SNAPSHOT'S OWN, falling back to the subject only when the subject IS a
-// task. Three of the four routable kinds are not tasks, and handing the prompt
-// a goal's uuid under `item_id` would render a "read this task first" block
+// task. One of the two routable kinds is not a task, and handing the prompt a
+// person's handle under `item_id` would render a "read this task first" block
 // naming something `get_work_item` cannot resolve.
 func (s Snapshot) TaskID(subject Subject) string {
 	if s.Task != "" {
@@ -1146,8 +1131,6 @@ func (n *Notify) checkSnapshot() error {
 		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
 		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
 		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
-		{"goal_owners", len(n.Snapshot.GoalOwners), MaxGoalOwners},
-		{"goal_members", len(n.Snapshot.GoalMembers), MaxGoalMembers},
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {
 		if c.size > c.max {

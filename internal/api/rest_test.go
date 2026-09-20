@@ -312,10 +312,6 @@ func (stubWorkReader) ExpandedQuery(context.Context, map[string]any, tracker.Vie
 	return tracker.Query{}, nil
 }
 
-func (stubWorkReader) Goals(context.Context, tracker.GoalQuery) (tracker.GoalListing, error) {
-	return tracker.GoalListing{}, nil
-}
-
 func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (
 	tracker.CatalogueAnswer, error) {
 	return tracker.CatalogueAnswer{}, nil

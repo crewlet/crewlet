@@ -112,8 +112,8 @@ function inkOnFill(css: string): string[] {
  * a fact's label and its provenance, the properties rail's section heads, the
  * palette's group heads and its own scope footer — the one thing the palette
  * doc says must be readable, since "a sigil nobody is told about is a feature
- * that does not exist" — and the empty states, "No goal has been set."
- * included. All at three to one, in both themes, at 11px.
+ * that does not exist" — and the empty states, "No project has been created
+ * yet." included. All at three to one, in both themes, at 11px.
  *
  * What is left is ten marks, named here with the reason each is one. Two-sided:
  * a new rule reaching for this rung fails until somebody writes down why it is

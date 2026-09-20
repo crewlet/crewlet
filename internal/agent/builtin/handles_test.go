@@ -21,8 +21,7 @@ import (
 // a misspelling is indistinguishable from a colleague who is simply quiet.
 //
 // The table is every live site rather than the one the finding named, because
-// the hole was systemic: goal owners were found first and the assignee is the
-// one that matters most.
+// the hole was systemic, and the assignee is the one that matters most.
 func TestAHandleNobodyHasIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -34,13 +33,6 @@ func TestAHandleNobodyHasIsRefused(t *testing.T) {
 		}},
 		"an update's assignee": {tracker.UpdateWorkItemTool, map[string]any{
 			"item": "ENG-1", "assignee": "nobody-here",
-		}},
-		"a goal's owners": {tracker.WriteWorkGoalTool, map[string]any{
-			"name": "Ship it", "owners": []any{"nobody-here"},
-		}},
-		"a goal's members": {tracker.WriteWorkGoalTool, map[string]any{
-			"name": "Ship it", "owners": []any{"alice"},
-			"members": []any{"nobody-here"},
 		}},
 		"a priority list's owner": {tracker.SetPrioritiesTool, map[string]any{
 			"handle": "nobody-here", "items": []any{"ENG-1"},
@@ -125,35 +117,6 @@ func TestNoRosterAdmitsEveryHandle(t *testing.T) {
 	}
 }
 
-// A SAVE MAY CARRY A HANDLE THAT NO LONGER RESOLVES, so long as it does not
-// ADD one.
-//
-// `write_work_goal` replaces the whole document, so a flat refusal would make
-// a goal whose owner LEFT THE COMPANY permanently unsaveable — including the
-// one edit that takes them off it. A departure is repaired by editing the
-// object, never blocked by it.
-func TestAGoalKeepsAnOwnerWhoLeft(t *testing.T) {
-	t.Parallel()
-	trk := newFakeTracker()
-	trk.goalListing = tracker.GoalListing{Goals: []tracker.GoalRow{{
-		ID: "g-1", Name: "Ship it", Owners: []string{"departed"},
-	}}}
-	reg := rosterRegistry(t, trk)
-
-	// THE SAVE CARRYING THEM IS ALLOWED.
-	if got := callWork(t, reg, tracker.WriteWorkGoalTool, map[string]any{
-		"id": "g-1", "name": "Ship it", "owners": []any{"departed", "alice"},
-	}); got.Failed {
-		t.Fatalf("a goal whose owner left could not be saved: %q", got.Output)
-	}
-	// AND A SAVE THAT ADDS A NEW UNKNOWN IS NOT.
-	if got := callWork(t, reg, tracker.WriteWorkGoalTool, map[string]any{
-		"id": "g-1", "name": "Ship it", "owners": []any{"departed", "typo-here"},
-	}); !got.Failed {
-		t.Fatal("a save added an owner nobody has")
-	}
-}
-
 // rosterRegistry is the operator surface over a fake tracker and a two-seat
 // company, which is what the handle checks resolve against.
 func rosterRegistry(t *testing.T, trk *fakeTracker) *tools.Registry {
@@ -167,7 +130,6 @@ func rosterRegistry(t *testing.T, trk *fakeTracker) *tools.Registry {
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as,
-			GoalWriter:     func(builtin.Actor) builtin.GoalWriter { return trk },
 			PersonWriter:   func(builtin.Actor) builtin.PersonWriter { return person },
 			ProjectWriter:  func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Seats:          func() []colleague.Seat { return seats },

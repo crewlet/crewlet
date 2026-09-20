@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -386,8 +387,7 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	// invisible. With one, a re-estimate wrote a history row and a
 	// notification card carrying NO deltas at all — which renders as the
 	// bare kind, and reads as a change that lost what it changed.
-	// THE WHOLE INSTANT, which is [instantText] — the same helper a GOAL's
-	// due and start deltas already take, for the same two field names.
+	// THE WHOLE INSTANT, which is [instantText].
 	//
 	// A DAY IS NOT A DELTA. Rendered as a calendar day these compared
 	// equal whenever a move stayed inside one, so pulling a due time from
@@ -500,4 +500,17 @@ func pointsText(points float64) string {
 		return ""
 	}
 	return strconv.FormatFloat(points, 'f', -1, 64)
+}
+
+// instantText renders an optional instant for a delta, and an absent one as
+// the empty string.
+//
+// A DELTA IS TEXT, because it is read by a card and by a history row rather
+// than compared — so an absent date is the empty string rather than a zero
+// instant that renders as the year one.
+func instantText(at *time.Time) string {
+	if at == nil {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339)
 }

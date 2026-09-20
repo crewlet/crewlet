@@ -125,9 +125,9 @@ func (s Status) Description() string { return statusTable[s].description }
 
 // Delivered is THE measurement predicate, and there is exactly one.
 //
-// Read by children_done, cycle and lead time, a goal's task targets and
-// created-vs-resolved. NO BIT IS STAMPED
-// ANYWHERE: the status IS the verdict, so two nodes cannot disagree about it
+// Read by children_done, cycle and lead time and created-vs-resolved. NO BIT
+// IS STAMPED ANYWHERE: the status IS the verdict, so two nodes cannot disagree
+// about it
 // and no policy edit can re-decide it for work already finished. Every
 // "abandoned" path in this design simply writes cancelled, which is what
 // makes those tasks invisible to a delivery count without a second field.

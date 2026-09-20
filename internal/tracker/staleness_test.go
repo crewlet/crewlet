@@ -13,7 +13,7 @@ import (
 // EVERY READER CARRIES THE CALLER'S STALENESS BOUND INTO THE FRAMEWORK'S OWN
 // QUERY, and this is the hop nothing above this package can see.
 //
-// A surface builds a `tracker.GoalQuery` with `MaxLagSeq: 250` and hands it
+// A surface builds a `tracker.ViewQuery` with `MaxLagSeq: 250` and hands it
 // over; whether the field then reaches [statelog.Query.MaxLagSeq] is a
 // line inside each reader, and a reader that dropped it produces an answer
 // identical in every visible respect to one that honoured it — same rows, same
@@ -81,15 +81,6 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 					Level: stale, MaxLagSeq: 1,
 					Container: tracker.Container{Kind: tracker.ContainerWorkspace},
 				})
-				return err
-			}},
-		{"work_goals",
-			func() error {
-				_, err := reader.Goals(ctx, tracker.GoalQuery{Level: stale, MaxLag: time.Second})
-				return err
-			},
-			func() error {
-				_, err := reader.Goals(ctx, tracker.GoalQuery{Level: stale, MaxLagSeq: 1})
 				return err
 			}},
 		{"work_catalogue",
@@ -222,10 +213,6 @@ func TestAReaderWithNoBoundAnswersHoweverFarBehindItIs(t *testing.T) {
 		t.Fatalf("tracker reader: %v", err)
 	}
 	ctx := t.Context()
-	if _, err := reader.Goals(ctx, tracker.GoalQuery{Level: statelog.ReadStale}); err != nil {
-		t.Errorf("an unbounded stale read refused: %v — zero accepts anything, "+
-			"which is what makes the bound the caller's decision", err)
-	}
 	if _, err := reader.Projects(ctx, tracker.ProjectQuery{
 		Level: statelog.ReadStale,
 	}); err != nil {

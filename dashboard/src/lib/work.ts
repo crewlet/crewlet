@@ -170,7 +170,6 @@ export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
   { kind: "project_created", mark: "create_new_folder", phrase: "created the project" },
   { kind: "project_updated", mark: "folder", phrase: "changed the project" },
   { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
-  { kind: "goal_updated", mark: "target", phrase: "changed a goal" },
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow_upward", phrase: "reordered somebody's priorities" },
@@ -196,29 +195,6 @@ export function changePhrase(kind: string): string {
   // The raw kind for one from a newer peer — lower-cased and unpunctuated rather
   // than `humanize`d, because this lands mid-sentence after a name.
   return BY_KIND.get(kind)?.phrase ?? kind.replaceAll("_", " ");
-}
-
-/**
- * A goal's health, and what each value is called.
- *
- * HERE RATHER THAN ON THE SCREEN THAT DRAWS IT. These were declared inside
- * `routes/work/Goals.tsx` and a `health` delta needs the same four words in a
- * sentence — two copies of one vocabulary is the shape this file exists to end
- * (see its own doc). The TONE stays with the screen: a tone is a drawing
- * decision and a sentence has no room for one.
- *
- * A VALUE THIS BUILD HAS NEVER HEARD OF RENDERS AS ITSELF, humanized, which is
- * the same last resort [statusLabel] takes.
- */
-export const GOAL_HEALTHS: { value: string; label: string }[] = [
-  { value: "on_track", label: "On track" },
-  { value: "at_risk", label: "At risk" },
-  { value: "off_track", label: "Off track" },
-  { value: "done", label: "Done" },
-];
-
-export function healthLabel(health: string): string {
-  return GOAL_HEALTHS.find((h) => h.value === health)?.label ?? humanize(health);
 }
 
 /**
@@ -389,8 +365,8 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
  */
 function deltaValue(field: string, value: string, ctx: LabelContext): string {
   if (!value) return "";
-  // THE ENGINE JOINS A LIST WITH ", " BEFORE IT STORES IT (wake.go, goals.go),
-  // so it splits back on the same separator.
+  // THE ENGINE JOINS A LIST WITH ", " BEFORE IT STORES IT (wake.go), so it
+  // splits back on the same separator.
   const people = (handles: string) =>
     handles
       .split(", ")
@@ -402,8 +378,6 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     case "type":
       return typeName(value, ctx.types);
     case "assignee":
-    case "owners":
-    case "members":
     case "mentions":
       return people(value);
     case "tags":
@@ -421,8 +395,6 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     // this build does not recognise passes through rather than being guessed at.
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
-    case "health":
-      return healthLabel(value);
     // The checkbox vocabulary [fieldValueText] already uses. "false" is a real
     // side of this delta — an UN-archive — so both sides render.
     case "archived":

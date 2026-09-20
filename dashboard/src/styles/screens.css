@@ -1065,7 +1065,7 @@
    `Card.Title` call sites in this tree hold a single text expression — which
    is what makes `block` safe here and would not make it safe upstream. The
    ones that can actually run long are the data-driven ones: a unit's name, a
-   checklist's, a goal's.
+   checklist's, a saved view's.
 
    uilet's own rule survives untouched around this: the SUBTITLE still gives
    way first (`flex-shrink: 100`), so this only ever applies once there is no

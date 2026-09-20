@@ -10,8 +10,8 @@ import (
 
 // The objects, and the two shapes a record carries them in.
 //
-// A small whole-document object — a view, a goal, a tag set, a person, a
-// project, a generation, an eviction — travels as FULL POST-STATE:
+// A small whole-document object — a view, a tag set, a person, a project, a
+// generation, an eviction — travels as FULL POST-STATE:
 // one document field, one upsert, and no patch semantics to get wrong. A task
 // and the field catalogue travel as a TYPED PATCH, because full post-state
 // would put a 64 KiB body on the wire for a status flip, and the catalogue is
@@ -867,21 +867,6 @@ const (
 	MaxTagsPerProject = 512
 	MaxTagLabel       = MaxViewName
 
-	// MaxGoalOwners, MaxGoalMembers, MaxGoalTargets, MaxGoalUpdates and
-	// MaxTasksPerTarget bound a goal.
-	MaxGoalOwners  = 8
-	MaxGoalMembers = 32
-	MaxGoalTargets = 32
-	MaxGoalUpdates = 100
-
-	// MaxGoalUpdateText bounds one health update's prose, at the plan's
-	// own 2 KiB. It is the one part of a goal somebody writes in their own
-	// words, and it is what the wake's card carries — so it is cut here
-	// rather than at the card, where a longer stored value would be
-	// invisible until somebody opened the goal.
-	MaxGoalUpdateText = 2 << 10
-	MaxTasksPerTarget = 64
-
 	// MaxViewParamsBytes and MaxViewParamKeys bound a saved view's query;
 	// MaxViewName bounds its tab label at half a task's title, because a
 	// name that does not fit its strip is one nobody can tell from its
@@ -1133,7 +1118,7 @@ type Container struct {
 	ID   string `json:"id"`
 }
 
-// The container kinds a view or a goal may belong to.
+// The container kinds a view may belong to.
 //
 // A CLOSED SET, named so a fourth cannot appear by typo — which is the same
 // reason [CatalogueTypes] and [CatalogueFields] are named. The workspace is
@@ -1146,7 +1131,7 @@ const (
 	ContainerPerson    = "person"
 )
 
-// ValidContainerKind reports whether a view or goal names a real container.
+// ValidContainerKind reports whether a view names a real container.
 func ValidContainerKind(kind string) bool {
 	switch kind {
 	case ContainerWorkspace, ContainerProject, ContainerUnit, ContainerPerson:
@@ -1176,55 +1161,6 @@ type View struct {
 
 	Rank      Rank      `json:"rank,omitempty"`
 	Icon      string    `json:"icon,omitempty"`
-	CreatedBy string    `json:"created_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-// GoalUpdate is one progress note on a goal.
-type GoalUpdate struct {
-	At     time.Time `json:"at"`
-	Author string    `json:"author"`
-	Health string    `json:"health,omitempty"`
-	Text   string    `json:"text,omitempty"`
-}
-
-// GoalTarget is one measurable outcome.
-type GoalTarget struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Type     string   `json:"type"`
-	Start    float64  `json:"start,omitempty"`
-	Goal     float64  `json:"goal,omitempty"`
-	Current  float64  `json:"current,omitempty"`
-	Unit     string   `json:"unit,omitempty"`
-	Tasks    []string `json:"tasks,omitempty"`
-	Projects []string `json:"projects,omitempty"`
-	Done     bool     `json:"done,omitempty"`
-}
-
-// Goal is an outcome with targets, carried as full post-state.
-type Goal struct {
-	V       int    `json:"v"`
-	Version uint64 `json:"version"`
-
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Owners      []string `json:"owners"`
-	Members     []string `json:"members,omitempty"`
-	Group       string   `json:"group,omitempty"`
-
-	StartAt *time.Time `json:"start_at,omitempty"`
-	DueAt   *time.Time `json:"due_at,omitempty"`
-
-	Health  string       `json:"health,omitempty"`
-	Updates []GoalUpdate `json:"updates,omitempty"`
-	Targets []GoalTarget `json:"targets,omitempty"`
-
-	Archived  bool      `json:"archived,omitempty"`
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

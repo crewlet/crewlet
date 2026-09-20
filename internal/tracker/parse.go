@@ -29,11 +29,12 @@ const (
 	MetaLate       = "late"
 
 	// MetaObject and MetaObjectID are WHAT the change was about, and they
-	// exist because two of the three routable kinds are not tasks. The
+	// exist because one of the two routable kinds is not a task. The
 	// prompt keys its opener on the object rather than on the change kind:
-	// "a goal you own" is a different sentence from "a task you are
-	// assigned to", and a builder that had only the kind would have to
-	// infer the noun from a switch that grows with every kind.
+	// "somebody wrote your priority list" is a different sentence from "a
+	// task you are assigned to", and a builder that had only the kind
+	// would have to infer the noun from a switch that grows with every
+	// kind.
 	MetaObject   = "object"
 	MetaObjectID = "object_id"
 
@@ -154,16 +155,16 @@ func registryHas(reg *notify.Registry) func(string) bool {
 //
 // # Why the task id is the SNAPSHOT's and not the subject's
 //
-// Two of the three routable kinds are not tasks, and on those the subject's
-// id is a goal's uuid or a person's handle. Writing either of those into
-// `item_id` would hand the prompt a pointer that `get_work_item`
-// cannot resolve — and the prompt would render a "read this task first" block
-// naming something that is not a task, which costs the seat a round and a
-// failed tool call to discover.
+// One of the two routable kinds is not a task, and on it the subject's id is a
+// person's handle. Writing that into `item_id` would hand the prompt a pointer
+// that `get_work_item` cannot resolve — and the prompt would render a "read
+// this task first" block naming something that is not a task, which costs the
+// seat a round and a failed tool call to discover.
 //
 // So the task fields come from the SNAPSHOT, which carries a task only when
 // the wake is genuinely about one: a `prioritised` wake names the task that
-// reached the top of somebody's list, and a goal wake names none.
+// reached the top of somebody's list, and a person's own bookkeeping names
+// none.
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	snapshot := record.Notify.Snapshot
 	metadata := map[string]string{
@@ -199,13 +200,14 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 
 // subjectLine is the one line a recipient sees before they read anything.
 //
-// IT NAMES THE OBJECT, because a line that said "a task" for a goal would be
-// the first false sentence a recipient reads — and the subject is also what a
-// digest coalesces on, so a wrong noun there is wrong in every summary too.
+// IT NAMES THE OBJECT, because a line that said "a task" for a person's own
+// priority list would be the first false sentence a recipient reads — and the
+// subject is also what a digest coalesces on, so a wrong noun there is wrong
+// in every summary too.
 func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
 	key := snapshot.Key
 	if key == "" {
-		key = objectLabel(snapshot, subject)
+		key = objectLabel(subject)
 	}
 	if snapshot.Title == "" {
 		return fmt.Sprintf("%s: %s", key, kind)
@@ -215,17 +217,10 @@ func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
 
 // objectLabel is what a non-task subject is CALLED in one line.
 //
-// The name rather than the id wherever the snapshot carries one: a goal's uuid
-// and a person's handle are not the same kind of thing, and a recipient
-// reading "3f2a…: goal_updated" learns nothing they can act on.
-func objectLabel(snapshot Snapshot, subject Subject) string {
-	switch subject.Kind {
-	case KindGoal:
-		if snapshot.GoalName != "" {
-			return snapshot.GoalName
-		}
-		return "a goal"
-	case KindPerson:
+// What it is FOR rather than its id: a recipient reading
+// "alice: prioritised" learns nothing they can act on.
+func objectLabel(subject Subject) string {
+	if subject.Kind == KindPerson {
 		return "your priorities"
 	}
 	return "a task"

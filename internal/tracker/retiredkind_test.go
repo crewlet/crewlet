@@ -10,23 +10,37 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// sprintRecord is a record as the PRE-REMOVAL build published one: a readable
-// record version, a subject kind this build has retired, and a body this build
-// has no type for at all.
+// retiredBodies is one pre-removal payload per retired kind, as the build that
+// still published it wrote one.
 //
 // The body matters. A retired record is one whose payload this build may be
 // entirely unable to decode, so the gate has to answer from the ENVELOPE — a
 // gate that decoded first would fault on exactly the records it exists to read
-// past.
-func sprintRecord(id string) tracker.MutationRecord {
-	body, _ := json.Marshal(map[string]any{
+// past. Every one of these is a shape this build has no type for.
+var retiredBodies = map[tracker.ObjectKind]map[string]any{
+	tracker.KindSprint: {
 		"number": 3, "state": "active", "project": "ENG",
 		"policy": map[string]any{"capacity": 21, "measure": "points"},
-	})
+	},
+	tracker.KindGoal: {
+		"id": "g-1", "name": "Ship the thing", "health": "on_track",
+		"owners": []any{"ana"},
+		"targets": []any{map[string]any{
+			"id": "t-1", "name": "the work", "type": "tasks",
+			"projects": []any{"ENG"},
+		}},
+	},
+}
+
+// retiredRecord is a record as the PRE-REMOVAL build published one: a readable
+// record version, a subject kind this build has retired, and a body from the
+// table above.
+func retiredRecord(kind tracker.ObjectKind, id string) tracker.MutationRecord {
+	body, _ := json.Marshal(retiredBodies[kind])
 	return tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: "sprint-" + id,
-			Subject:   tracker.Subject{Kind: tracker.KindSprint, ID: id},
+			V: tracker.RecordVersion, OpID: string(kind) + "-" + id,
+			Subject:   tracker.Subject{Kind: kind, ID: id},
 			Op:        tracker.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
 			Writer:    "node-old",
@@ -41,14 +55,15 @@ func sprintRecord(id string) tracker.MutationRecord {
 // # What this protects
 //
 // Removing sprints deleted `KindSprint` from [tracker.ObjectKinds] and from
-// the applier's dispatch. The dispatch has no default case — an unmatched kind
-// falls out of the switch to an unconditional error — and `statelog` turns
-// that error into a rolled-back batch and a checkpoint that does not advance.
-// The applier retries the same record for ever.
+// the applier's dispatch, and removing goals did the same to `KindGoal`. The
+// dispatch has no default case — an unmatched kind falls out of the switch to
+// an unconditional error — and `statelog` turns that error into a rolled-back
+// batch and a checkpoint that does not advance. The applier retries the same
+// record for ever.
 //
 // Nothing upstream catches it. The deferral that handles a NEWER peer's record
 // is keyed on the record VERSION (`rec.V > domain.RecordVersion()`), and a
-// sprint record's version is one this build reads perfectly — it is the KIND
+// retired record's version is one this build reads perfectly — it is the KIND
 // that is gone. The tracker stream's subject filter is a wildcard, so the
 // record is delivered rather than filtered out. And the log holds it for
 // `stream.tracker_retention` — seven days by default, unbounded where the trim
@@ -57,27 +72,43 @@ func sprintRecord(id string) tracker.MutationRecord {
 // So the failure is: one old peer publishing during a rolling upgrade, or one
 // old record still in the log, wedges the NEWEST node in the fleet — silently,
 // and at the position it stopped.
+//
+// THE WALK IS OVER [tracker.RetiredKinds] rather than over one kind, so the
+// kind retired next is covered without anybody remembering to — and a
+// retirement whose body this build happens to decode proves nothing, which is
+// why [retiredBodies] has to carry one per kind.
 func TestARetiredKindIsGatedRatherThanFaultedOn(t *testing.T) {
 	t.Parallel()
-	h := newApplyHarness(t)
+	for _, kind := range tracker.RetiredKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			if retiredBodies[kind] == nil {
+				t.Fatalf("%q is retired and has no body in retiredBodies — "+
+					"a record this build can decode is not the record this "+
+					"gate exists for", kind)
+			}
+			h := newApplyHarness(t)
 
-	rows, err := h.apply(sprintRecord("ENG-3"), time.Unix(1_700_000_100, 0).UTC())
+			rows, err := h.apply(retiredRecord(kind, "ENG-3"),
+				time.Unix(1_700_000_100, 0).UTC())
 
-	var gate *gateError
-	if !errors.As(err, &gate) {
-		t.Fatalf("a sprint record answered %v, want it GATED — an ungated "+
-			"retired kind matches no case in the applier's dispatch and "+
-			"faults, which stops this node's checkpoint at that position "+
-			"for as long as the record is in the log", err)
-	}
-	if gate.reason != statelog.ReasonRetired {
-		t.Errorf("the gate answered %q, want %q — the reason is what a "+
-			"`statelog_record_gated` line and the gated metric carry, and "+
-			"an eviction or a deletion would name the wrong cause",
-			gate.reason, statelog.ReasonRetired)
-	}
-	if rows != 0 {
-		t.Errorf("a gated record wrote %d rows, want none", rows)
+			var gate *gateError
+			if !errors.As(err, &gate) {
+				t.Fatalf("a %s record answered %v, want it GATED — an ungated "+
+					"retired kind matches no case in the applier's dispatch and "+
+					"faults, which stops this node's checkpoint at that position "+
+					"for as long as the record is in the log", kind, err)
+			}
+			if gate.reason != statelog.ReasonRetired {
+				t.Errorf("the gate answered %q, want %q — the reason is what a "+
+					"`statelog_record_gated` line and the gated metric carry, and "+
+					"an eviction or a deletion would name the wrong cause",
+					gate.reason, statelog.ReasonRetired)
+			}
+			if rows != 0 {
+				t.Errorf("a gated record wrote %d rows, want none", rows)
+			}
+		})
 	}
 }
 
@@ -95,7 +126,7 @@ func TestAKindNobodyEverPublishedStillFaults(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 
-	rec := sprintRecord("ENG-3")
+	rec := retiredRecord(tracker.KindSprint, "ENG-3")
 	rec.Subject.Kind = "nonesuch"
 	rec.OpID = "nonesuch-1"
 	_, err := h.apply(rec, time.Unix(1_700_000_100, 0).UTC())

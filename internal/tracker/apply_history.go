@@ -247,8 +247,8 @@ const InboxRetentionDefaultDays = 365
 // company wrote a notice whose subject was a uuid. [InboxNotice.SubjectKey]
 // says what it is for: "an inbox of uuids is an inbox nobody reads."
 //
-// Zero for a subject that has no item key — a project, a view, a person, a
-// goal — which is the honest value rather than a missing one.
+// Zero for a subject that has no item key — a project, a view, a person —
+// which is the honest value rather than a missing one.
 type subjectKeys struct{ Project, Key string }
 
 // inboxSubjectKey is the key a notice carries.

@@ -274,7 +274,6 @@ type Query struct {
 
 	LinkedPage string
 	References string
-	Goal       string
 	Batch      string
 
 	// Any is one level of disjunction, ANDed with the top-level keys.
@@ -392,7 +391,7 @@ var QueryKeys = []string{
 	"any", "archived", "archived_at", "asked_by", "asked_of", "assignee", "batch",
 	"blocked", "blocking", "checklist_assignee", "closed", "collaborator",
 	"container", "created", "cursor", "done", "due", "estimate",
-	"finished", "flag", "goal", "group", "group_by", "group_by2",
+	"finished", "flag", "group", "group_by", "group_by2",
 	"group_limit", "has_children", "has_dependencies", "has_open_asks",
 	"has_parent", "key", "limit", "linked_page",
 	"max_lag_seconds", "max_lag_seq", "min_position", "parent", "points", "preset",
@@ -473,7 +472,6 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		// answering two ways depending on which parameter it was
 		// pasted into.
 		References: ProjectKey(p.String("references")),
-		Goal:       p.String("goal"),
 		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
 		// THE LIST, not the enum. See [Query.PriorityListOf].

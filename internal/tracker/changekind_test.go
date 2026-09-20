@@ -136,7 +136,7 @@ func TestARecordStatesItsKindExactlyWhenItWritesOne(t *testing.T) {
 		switch kind {
 		case tracker.KindTask, tracker.KindProject,
 			tracker.KindTags, tracker.KindCatalogue, tracker.KindView,
-			tracker.KindGoal, tracker.KindPerson:
+			tracker.KindPerson:
 			if !records {
 				t.Errorf("%s writes a history row and says it does not", kind)
 			}
@@ -350,9 +350,9 @@ func historyNotified(t *testing.T, r *roundTrip, kind, id string) bool {
 //
 // It covered twenty of the twenty-eight kinds and nothing connected the two
 // lists, so the gap was invisible from both ends. Of the eight missing, seven
-// never reach it — `Prompt.Build` dispatches on [MetaObject] first, so a goal
-// and a person's queue render through [buildObjectPrompt], and the project,
-// policy, view and catalogue kinds are not routable at all.
+// never reach it — `Prompt.Build` dispatches on [MetaObject] first, so a
+// person's queue renders through [buildObjectPrompt], and the project, policy,
+// view and catalogue kinds are not routable at all.
 // The twelfth was `purged`: task-subject, routable, and rendering no line for
 // the one operation in this engine that cannot be undone.
 //
