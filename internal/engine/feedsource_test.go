@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -31,6 +32,7 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 	}{
 		"the tracker": {tracker.NewTranslator().Source(), "work", "crewlet-tracker-feed"},
 		"the wiki":    {pages.NewTranslator(nil).Source(), "page", "crewlet-pages-feed"},
+		"native chat": {chat.NewTranslator().Source(), "chat", "crewlet-chat-feed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if tc.got.Group != tc.wantGroupExact {
@@ -44,8 +46,21 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 			}
 		})
 	}
-	if tracker.NewTranslator().Source().Group == pages.NewTranslator(nil).Source().Group {
-		t.Error("two estates share a durable consumer, so each would handle " +
-			"records it cannot decode")
+	// AND PAIRWISE DISTINCT, over every translator rather than over the
+	// two there used to be: a third sharing either of the first two's
+	// group is the same failure, and a hand-written comparison of two
+	// stops covering the moment a fourth arrives.
+	holders := map[string]string{}
+	for name, source := range map[string]changefeed.Source{
+		"the tracker": tracker.NewTranslator().Source(),
+		"the wiki":    pages.NewTranslator(nil).Source(),
+		"native chat": chat.NewTranslator().Source(),
+	} {
+		if other, taken := holders[source.Group]; taken {
+			t.Errorf("%s and %s share the durable consumer %q, so each would "+
+				"handle records it cannot decode", other, name, source.Group)
+			continue
+		}
+		holders[source.Group] = name
 	}
 }

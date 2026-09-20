@@ -500,17 +500,17 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL THREE LOGS: the broker
+                                    #   BUDGET FOR ALL FOUR LOGS: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so the derived
-                                    #   ceilings of this field and the two below
-                                    #   are scaled down together to fit half of
-                                    #   what the broker can grant them (never
-                                    #   below 1 GiB each). A value you set is
-                                    #   never scaled, and a boot that cannot
+                                    #   ceilings of this field and the three
+                                    #   below are scaled down together to fit
+                                    #   half of what the broker can grant them
+                                    #   (never below 1 GiB each). A value you set
+                                    #   is never scaled, and a boot that cannot
                                     #   reserve it fails naming the field, the
                                     #   bytes it needed and the bytes the broker
-                                    #   had. Every one of the three is the value
+                                    #   had. Every one of the four is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does
@@ -536,6 +536,28 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
+  # chat_log_max_bytes: 8589934592  #   the chat log, the ordered stream every
+                                    #   native message, reaction and membership
+                                    #   change goes through (1..256 GiB). UNSET
+                                    #   ASKS FOR 8 GiB, capped by the same
+                                    #   quarter of free space the mutation log
+                                    #   derives from — the vector changelog's
+                                    #   shape, not the knowledge base's, because
+                                    #   the number is chosen for an EXCURSION
+                                    #   rather than scaled off a disk. WHY 8 GiB:
+                                    #   at the declared census of 20 000 messages
+                                    #   a day and a mean record near 1.5 KiB the
+                                    #   log grows ~30 MB a day, so a healthy
+                                    #   fleet holds ~210 MB — one min_age window,
+                                    #   not a year. This ceiling is what a
+                                    #   COMPLETELY BLOCKED trim may spend first:
+                                    #   ~9 months at that census, ~4 at the
+                                    #   supported 50 000/day. Crossing it refuses
+                                    #   the append, which for a transcript is the
+                                    #   only acceptable direction — old messages
+                                    #   go by a prune RECORD every node applies
+                                    #   (chat.native.message_retention_days),
+                                    #   never by a stream bound
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

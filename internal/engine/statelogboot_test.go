@@ -77,19 +77,26 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 		}
 		byName[row.Name] = row
 	}
-	// THE TRACKER'S, whose health DOES gate admission.
+	// OVER THE REGISTER, never over a list written here. The list was
+	// three names — the tracker's, the vectors' and the wiki's — and a
+	// fourth domain added to the register would have left this case
+	// passing while covering three of four: an operator cannot watch a
+	// domain fall behind that nothing reports, and a missing row looks
+	// exactly like a healthy one.
+	//
+	// [engine.Engine.Domains] rather than a second copy of the register,
+	// for the reason it is exported at all.
+	for _, domain := range e.Domains() {
+		if _, held := byName[domain.Name()]; !held {
+			t.Errorf("no row for %s, so an operator cannot see this node's "+
+				"copy of it fall behind; rows = %+v", domain.Name(), rows)
+		}
+	}
+	// AND THE TRACKER'S BY NAME, because its health is the one that gates
+	// seat admission: a walk of the register would go on passing if the
+	// register itself lost it.
 	if _, held := byName[tracker.Domain{}.Name()]; !held {
 		t.Errorf("no row for the tracker's own log; rows = %+v", rows)
-	}
-	// AND THE VECTOR DOMAIN'S, whose health does not.
-	if _, held := byName["vectors"]; !held {
-		t.Errorf("no row for the vector domain, so an operator cannot see the "+
-			"company's embeddings fall behind; rows = %+v", rows)
-	}
-	// AND THE WIKI'S, which is still a projector rather than a domain —
-	// the count is over REPLICATION LOOPS, not over one mechanism.
-	if _, held := byName["pages"]; !held {
-		t.Errorf("no row for the wiki's projection; rows = %+v", rows)
 	}
 	for _, row := range rows {
 		switch {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -175,6 +176,21 @@ func nativeFeeds(skills func() string) map[string]nativeFeed {
 					return nil, err
 				}
 				return pages.FeedSource{Log: consumer}, nil
+			},
+		},
+		chat.Domain{}.Name(): {
+			// NO SKILLS ARGUMENT, and the asymmetry is the domain
+			// rather than an omission: the reserved container quiets
+			// PAGES whose edits are machinery, and chat has no
+			// equivalent — every message in a company's own rooms is
+			// somebody talking.
+			translator: chat.NewTranslator(),
+			open: func(running *runningDomain) (changefeed.Opener, error) {
+				consumer, err := domainFeedFor(running, chat.Domain{}.Name())
+				if err != nil {
+					return nil, err
+				}
+				return chat.FeedSource{Log: consumer}, nil
 			},
 		},
 	}

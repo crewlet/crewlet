@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -38,6 +39,7 @@ func TestTheTrimAsksEachDomainForItsOwnWakeFeed(t *testing.T) {
 		tracker.Domain{}.Name(): "crewlet-tracker-feed",
 		pages.Domain{}.Name():   "crewlet-pages-feed",
 		search.Domain{}.Name():  "",
+		chat.Domain{}.Name():    "crewlet-chat-feed",
 	}
 
 	const floor = 4242

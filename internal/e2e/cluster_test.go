@@ -621,7 +621,14 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages"} {
+	//
+	// OVER THE ENGINE'S OWN REGISTER, never over a list written here. It
+	// WAS a list here — "tracker", "vectors", "pages" — and a fourth domain
+	// added to the register would have left this case asserting three of
+	// four while reporting a pass, which is the exact shape of the failure
+	// it exists to catch.
+	for _, domain := range c.nodes[0].engine.Domains() {
+		want := domain.Name()
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",

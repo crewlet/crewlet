@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -83,13 +84,16 @@ type native struct {
 	// indexer keeps the lexical search index behind the page projection.
 	indexer *search.Indexer
 
-	// writer is the tracker's write authority and pages the wiki's.
+	// writer is the tracker's write authority, pages the wiki's and chat
+	// the company's own rooms'.
 	writer *tracker.Writer
 	pages  *pages.Store
+	chat   *chat.Store
 
-	// trackerReader and pageReader are the read paths.
+	// trackerReader, pageReader and chatReader are the read paths.
 	trackerReader *tracker.Reader
 	pageReader    *pages.Reader
+	chatReader    *chat.Reader
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -139,6 +143,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
 	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
+	rooms := c.Config.ChatBackendFor() == config.ChatNative
 
 	// THE RESOLVED ID, not the raw field. `node.id` may be absent, a
 	// `${VAR}` reference, or come from the environment — and the value
@@ -331,6 +336,32 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		})
 	}
 
+	if rooms {
+		running := sl.Domain(chat.Domain{}.Name())
+		if running == nil {
+			return fmt.Errorf("engine: this node runs no chat domain, so the " +
+				"company's own rooms have nowhere to write — the domain is in " +
+				"the register and its stream failed to come up")
+		}
+		var err error
+		if n.chat, err = chat.NewStore(chat.Options{
+			Publisher: running.publisher, DB: e.backends.Store,
+			// THE CHART, READ PER CALL. Who a message wakes is resolved
+			// at WRITE time and carried on the record, so the roster is
+			// what stands between a routing snapshot and handles the
+			// company no longer has. A captured chart would go on waking
+			// a seat that left, for the life of a process.
+			Roster: liveRoster{engine: e},
+		}); err != nil {
+			return fmt.Errorf("engine: chat store: %w", err)
+		}
+		if n.chatReader, err = chat.NewReader(chat.ReaderOptions{
+			Log: running.reader, Committed: running.runner.Committed,
+		}); err != nil {
+			return fmt.Errorf("engine: chat reader: %w", err)
+		}
+	}
+
 	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log
 	// domains, and their apply loops are the state log's own — started
 	// with the register above, stopped with it, and reporting their
@@ -362,7 +393,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// [Engine.applyContainers], and the bug it fixes.
 	e.applyContainers(ctx, c)
 	log.InfoContext(ctx, "native_backends_started",
-		"tracker", runTracker, "knowledge", wiki)
+		"tracker", runTracker, "knowledge", wiki, "chat", rooms)
 	return nil
 }
 
@@ -570,6 +601,22 @@ func (e *Engine) PagesStore() *pages.Store {
 	return e.native.pages
 }
 
+// Chat is this node's chat read side, or nil.
+func (e *Engine) Chat() *chat.Reader {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.chatReader
+}
+
+// ChatStore is this node's chat write side, or nil.
+func (e *Engine) ChatStore() *chat.Store {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.chat
+}
+
 // NativeSearcher is the native knowledge searcher, or nil.
 func (e *Engine) NativeSearcher() *pages.Searcher {
 	if e.native == nil {
@@ -697,6 +744,26 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
 		prompts = append(prompts, pages.Prompt{})
+	}
+	if e.native.chat != nil {
+		// NOTHING TO CONFIGURE, and that is the record rather than a
+		// shortcut. The lead a `lead_fallback` wake names is resolved
+		// at WRITE time, inside the decide, and rides the record — so
+		// a parser handed a lead map here would answer with whoever
+		// holds the role now, which for a message somebody sent last
+		// week is a different person. It is the tracker's arm's
+		// reasoning rather than the wiki's, and it is why this arm
+		// takes no company at all.
+		parsers = append(parsers, chat.NewParser())
+		// A CONSTRUCTOR RATHER THAN `chat.Prompt{}`, which is the one
+		// thing this arm can get wrong silently: the prompt embeds
+		// [notify.ChatPrompt], so a zero value answers an empty
+		// Source, and [notify.NewPrompts] SKIPS a prompt whose source
+		// is empty — every chat wake would render through the generic
+		// fallback with nothing anywhere to say so. The tracker's and
+		// the wiki's zero values are safe only because their Source is
+		// a package constant.
+		prompts = append(prompts, chat.NewPrompt())
 	}
 	return parsers, prompts
 }
@@ -1274,6 +1341,57 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 		return "", false
 	}
 	return found[0].Seat.Handle, true
+}
+
+// liveRoster is chat's two-method view of the company, resolved against the
+// epoch current when the WRITE runs.
+//
+// PER CALL, for every other live seam's reason here: a chat store is built
+// once per node and outlives every revision, so a captured chart would go on
+// admitting a colleague who has left — and in chat that is not a stale label
+// but a wake published to a seat nothing runs.
+//
+// NEITHER METHOD BLOCKS, which [chat.Roster] requires rather than prefers:
+// both are called from inside the decide's own read transaction, where the
+// framework forbids anything that can wait. Both are a walk of the chart this
+// process already holds in memory, and nothing here reaches the broker, the
+// coordination store or a model.
+type liveRoster struct{ engine *Engine }
+
+// Seat reports whether the company still has this handle, and whether it is a
+// PERSON.
+//
+// BOTH FROM ONE LOOKUP, because the routing needs both and they are one fact
+// about one row: a handle the company no longer has is a wake nothing can run,
+// and a person is addressable but never woken.
+//
+// [org.Organization.SeatByHandle] rather than the agent-only lookup beside it:
+// a human seat is exactly what the second answer is about, and resolving
+// through the agent one would report every person in the company as somebody
+// it does not employ.
+func (l liveRoster) Seat(handle string) (exists, human bool) {
+	chart := l.engine.Company().Org
+	if chart == nil {
+		return false, false
+	}
+	seat := chart.SeatByHandle(handle)
+	if seat == nil {
+		return false, false
+	}
+	return true, seat.IsHuman()
+}
+
+// Lead names the seat that answers for a unit, or empty.
+//
+// THE TRACKER'S OWN UNIT LEAD, not a second walk: a company has one answer to
+// "who answers for this team", and two resolutions of it would let a person
+// posting in a unit's room address somebody different from the one an
+// unassigned task in that unit wakes.
+func (l liveRoster) Lead(unit string) string {
+	// A CONVERSION rather than a fresh literal, which says the thing the
+	// literal only implied: these are one seam over one engine, and the
+	// day either grows a field the compiler is what notices.
+	return liveLeads(l).UnitLead(unit)
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.

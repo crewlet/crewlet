@@ -52,6 +52,15 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// THE FOURTH DOMAIN'S LEDGER, and it is the first one on this
+		// list whose horizon is not the framework's thirty days: chat
+		// declares seven, because the table takes one row per applied
+		// record and its size is that domain's commit rate times the
+		// horizon — a log carrying conversation commits an order of
+		// magnitude more often than a work tracker does. See
+		// [chat.ChatOpsRetention]. It is a PER-NODE job for the same
+		// reason every other `<domain>_ops` entry is.
+		"chat_ops",
 		"conversation_sessions",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on

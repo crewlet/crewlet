@@ -930,6 +930,39 @@ type Stream struct {
 	// append rather than shedding history.
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."`
 
+	// ChatLogMaxBytes is the byte ceiling on the chat log, the ordered
+	// stream every native message, reaction and membership change goes
+	// through.
+	//
+	// UNSET ASKS FOR 8 GiB, capped by the same quarter of the stream
+	// volume's free space the mutation log derives from — the vector
+	// changelog's shape rather than the knowledge base's, and for the same
+	// reason: the number is chosen for an EXCURSION rather than scaled off
+	// a disk, so it needs the cap to stay bootable on a small one.
+	//
+	// WHY EIGHT GIBIBYTES, when the steady state is two orders below it.
+	// At the declared census (`chat.ChatMessagesPerDay`, 20 000 messages a
+	// day) and a mean record near a kibibyte and a half, the log grows
+	// about 30 MB a day — so a healthily-trimming fleet holds roughly
+	// 210 MB, one `min_age` window's worth, the same order as the mutation
+	// log's own. This ceiling is therefore not sized for the steady state:
+	// it is what a COMPLETELY BLOCKED TRIM may spend before appends start
+	// being refused, which is about nine months at the declared census and
+	// about four at the 50 000/day supported ceiling. Both are far past
+	// any backup gap or donor outage the retention gates tolerate, which
+	// is what makes a blocked trim here an alarm somebody answers rather
+	// than a company that cannot talk to itself.
+	//
+	// It shares the state logs' one budget, and everything the mutation
+	// log's field says about that holds here unchanged: the value is what
+	// the stream is CREATED with, a derived value is scaled with the
+	// others to fit the broker and a set one is not, and crossing it
+	// refuses the append rather than shedding history — which for a
+	// transcript is the only acceptable direction, since the pruning of
+	// old messages is a RECORD every node applies and never a stream
+	// bound.
+	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped by the same quarter of the stream volume's free space the mutation log derives from."`
+
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
 	// trimming at all, deliberately, when a term it depends on is unknown.
@@ -1183,11 +1216,13 @@ func (s *Stream) validate(path Path) error {
 				"cluster at all")
 	}
 	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
-		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
+		TrackerLogMaxBytesCeiling)
 	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,
-		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
+		TrackerVectorsMaxBytesCeiling)
 	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
-		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
+		PagesLogMaxBytesCeiling)
+	bytesInRange(&p, path, "chat_log_max_bytes", s.ChatLogMaxBytes,
+		ChatLogMaxBytesCeiling)
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
 	// advertise address while STARTING, logs it and shuts the server down

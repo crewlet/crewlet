@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
@@ -205,7 +206,7 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
 // and vector logs were scaled into half of the free space, 1.9 GiB each, and
 // the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all three fit.
+// Every log is sized inside one budget now, and all four fit.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
 	// 7.6 GiB, in tenths so the arithmetic stays in integers.
@@ -258,8 +259,8 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 // A BOOT THAT STILL CANNOT RESERVE ITS LOGS SAYS WHAT IT NEEDED, WHAT IT HAD
 // AND WHAT TO CHANGE.
 //
-// The broker's refusal names none of the three, and the operator who got it
-// went looking at a disk that had room for two of the three logs.
+// The broker's refusal names none of them, and the operator who got it went
+// looking at a disk that had room for two of the three logs there then were.
 //
 // And WHAT TO CHANGE is only what this node can reach. Shrinking a log that
 // already exists is `crewlet retention set-capacity`, which needs a node whose
@@ -274,10 +275,12 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 		says     []string
 		never    []string
 	}{
-		// Every derived ceiling is at its floor and three floors do not
+		// Every derived ceiling is at its floor and the floors do not
 		// fit: the tracker and vector logs take two gibibytes, and the
-		// pages log's one is refused with half a gibibyte left. A ceiling
-		// at the floor goes no lower, so room is the only remedy.
+		// pages log's one is refused with half a gibibyte left — before
+		// the chat log, which the register reaches last, is asked for.
+		// A ceiling at the floor goes no lower, so room is the only
+		// remedy.
 		"a derived ceiling at its floor": {
 			headroom: 5 * gib / 2,
 			needed:   gib,
@@ -334,3 +337,52 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// THE CHAT LOG'S UNSET ASK IS THE DOMAIN'S OWN DECLARED NUMBER, capped by the
+// disk, and a set one is the operator's.
+//
+// This is the one ceiling in the switch whose default does not live in
+// internal/config, because it is derived from a census
+// ([chat.ChatMessagesPerDay]) that only the domain knows — and config cannot
+// import the domain. So the number could drift into two spellings exactly as
+// `internal/textcut`'s cut rule and `internal/whsec`'s secret format each did,
+// with a doc comment on each side claiming they matched. The assertion is
+// against [chat.ChatLogMaxBytes] itself rather than against a literal, which
+// is what makes it a tie rather than a second copy.
+func TestTheChatLogAsksForWhatItsDomainDeclares(t *testing.T) {
+	t.Parallel()
+	// ROOM TO SPARE, so what is measured is the ask rather than the cap:
+	// a quarter of this is well past the declared default.
+	const roomy = 200 * gib
+	asked, derived := chatMaxBytes(config.Stream{}, roomy)
+	if !derived || asked != chat.ChatLogMaxBytes {
+		t.Errorf("unset asked for %d (derived %v), want the domain's own %d — "+
+			"a second spelling of this number is one that stops matching the "+
+			"census it was derived from", asked, derived, chat.ChatLogMaxBytes)
+	}
+
+	// AND CAPPED BY THE DISK, the vector changelog's rule: the declared
+	// number is chosen for a blocked trim rather than for this machine,
+	// and a broker refuses a reservation it cannot back — so a node on a
+	// small volume boots at the smaller value instead of failing.
+	const small = 8 * gib
+	capped, derived := chatMaxBytes(config.Stream{}, small)
+	if want := config.DerivedLogMaxBytes(small); !derived || capped != want {
+		t.Errorf("on a %d-byte volume it asked for %d (derived %v), want %d — "+
+			"an uncapped default is a reservation a small disk's broker refuses, "+
+			"and the node then does not boot at all", small, capped, derived, want)
+	}
+	if capped >= chat.ChatLogMaxBytes {
+		t.Errorf("the cap did not bite at %d free: asked %d against a declared "+
+			"%d, so this case is measuring nothing", small, capped, chat.ChatLogMaxBytes)
+	}
+
+	// AND AN OPERATOR'S OWN VALUE IS NEVER SCALED HERE. They named a
+	// ceiling for a broker they can see; lowering it silently would be the
+	// engine deciding a limit an emergency grant had just raised.
+	set, derived := chatMaxBytes(config.Stream{ChatLogMaxBytes: 3 * gib}, small)
+	if derived || set != 3*gib {
+		t.Errorf("a set ceiling came back as %d (derived %v), want 3 GiB "+
+			"explicit", set, derived)
+	}
+}
