@@ -70,6 +70,14 @@ test("a page filed straight in its container names it once, as the fact", async 
   // saying which question it answers.
   await waitFor(() => expect(screen.getByText("Container")).toBeTruthy());
   expect(containerLinks()).toHaveLength(1);
+  /*
+   * AND THE NOTE ITSELF IS GONE, not merely emptied. `PageNote` renders its
+   * `<p class="page-note">` whatever it is handed, and that paragraph carries
+   * a margin of its own — so a guard on the breadcrumb INSIDE it swapped a
+   * stray link for an empty band, which is the same gap with nothing in it.
+   * Counting links cannot see that, which is why it is asserted separately.
+   */
+  expect(document.querySelector(".page-note")).toBeNull();
 });
 
 test("a page under an ancestor draws the path, because the fact cannot", async () => {
@@ -85,6 +93,8 @@ test("a page under an ancestor draws the path, because the fact cannot", async (
   });
   mount();
   await waitFor(() => expect(screen.getByRole("link", { name: "Runbooks" })).toBeTruthy());
+  // And here the note is drawn, because it now has a path to carry.
+  expect(document.querySelector(".page-note")).toBeTruthy();
   // Two now, and they are not a duplicate: one opens the container, the other
   // is the first step of a path that continues past it.
   expect(containerLinks()).toHaveLength(2);
