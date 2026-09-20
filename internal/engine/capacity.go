@@ -134,9 +134,9 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 // growthRoom is how far the broker will let a running log's ceiling grow, as
 // far as this node can read it, and unstated where it cannot.
 //
-// ASKED OF THE STATE LOG'S OWN HOST, which is the handle [stateLog.host] is
-// kept for and the one that holds the stream being resized. A node with no
-// state log has no such stream either, so the two absences are the same one.
+// ASKED OF THIS NODE'S OWN BROKER, which is the one holding the stream being
+// resized — see [Engine.capacityHost]. A node with no state log has no such
+// stream either, so the two absences are the same one.
 //
 // UNREAD IS UNSTATED, and the window still opens. The check this feeds only
 // spares an operator the restarts of learning a refusal late; the broker is the
@@ -455,11 +455,24 @@ func (e *Engine) streamVolume() string {
 
 // capacityHost is the broker a capacity question is put to, or nil on a node
 // that runs no state log.
+//
+// ASSERTED OFF THE ENGINE'S OWN QUEUE rather than read from a copy the state
+// log keeps. It was that copy, and the copy had ONE writer — a field in one
+// struct literal — which the literal did not set, so this answered nil on
+// every node that ran a log and the preflight it feeds was dead code from the
+// day it was written. A cached type assertion of a handle its owner holds for
+// the life of the process is state that can only ever be wrong; deriving it
+// here is what makes that omission unrepresentable rather than merely fixed.
+//
+// The state log is still what decides WHETHER to ask: a node with none has no
+// stream to resize, and the assertion cannot fail behind that guard, since
+// startStateLog refuses to build one on a broker that does not satisfy this.
 func (e *Engine) capacityHost() domainHost {
-	if e.native == nil || e.native.log == nil {
+	if e.native == nil || e.native.log == nil || e.backends == nil {
 		return nil
 	}
-	return e.native.log.host
+	host, _ := e.backends.Queue.(domainHost)
+	return host
 }
 
 // capacityRefusal is what the broker had left to grant when it refused the

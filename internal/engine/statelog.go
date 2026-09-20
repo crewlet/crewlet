@@ -154,12 +154,6 @@ type stateLog struct {
 	db     *store.DB
 	fleet  coord.Fleet
 
-	// host is the broker this node's logs live on, kept because two
-	// questions outlive the bring-up that took it: what limit a ceiling is
-	// held to, and what to say when one does not fit. A capacity operation
-	// asks both, and it runs long after startStateLog has returned.
-	host domainHost
-
 	// metrics is the process's one recorder, threaded down so the apply
 	// loop's instruments are observed rather than merely declared.
 	metrics *metrics.Recorder

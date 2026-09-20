@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -702,7 +703,15 @@ func (b *blindFleet) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 // by construction — a refusal creates nothing — so those stubs panic rather
 // than pretending to work, which is what stops a later change quietly
 // depending on one.
+//
+// The embedded [queue.EventQueue] is NIL and deliberately so. It is what lets
+// this sit in the engine's own Queue slot, which is where [Engine.capacityHost]
+// reads its broker from — so these cases exercise the path production takes
+// rather than a field a test set for it, which is the arrangement under which
+// the constructor's omission was invisible. Every verb it contributes panics
+// on a nil interface, exactly as the named stubs below do on purpose.
 type budgetHost struct {
+	queue.EventQueue
 	room jetstream.StorageBudget
 	err  error
 }
@@ -744,10 +753,10 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 	t.Helper()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	domain := tracker.Domain{}
+	e.backends.Queue = host
 	e.native = &native{log: &stateLog{
 		order:   []string{domain.Name()},
 		domains: map[string]*runningDomain{domain.Name(): {domain: domain}},
-		host:    host,
 		volume:  t.TempDir(),
 	}}
 	return e, fleet, domain.Stream().Name
