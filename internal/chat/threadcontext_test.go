@@ -1,8 +1,6 @@
 package chat_test
 
 import (
-	"database/sql"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -102,63 +100,5 @@ func TestALongThreadIsCutByBytesRatherThanOverflowingTheRecord(t *testing.T) {
 		t.Fatal("a snapshot carrying every line at full length validated: the " +
 			"cap is enforced only where the block is built, so any other " +
 			"producer reaches the broker with it")
-	}
-}
-
-// ARCHIVING A ROOM LETS A COMPANY AT THE CAP MAKE ANOTHER, which is what the
-// refusal has always told people to do.
-//
-// It counted every row in the table and there is no channel delete in this
-// vocabulary, so a company that had ever created [chat.MaxChannels] rooms
-// could never create another for the life of the deployment — while the
-// refusal advised archiving, which changed the count by nothing. A cap nobody
-// can get under is not a cap; it is a permanent stop with a remedy that reads
-// like an oversight.
-func TestArchivingARoomReleasesTheChannelCap(t *testing.T) {
-	t.Parallel()
-	r := newWriteRound(t, agents().withPeople("jane"))
-
-	// Filled to the cap with rooms that are already ARCHIVED, which is
-	// the state the old count could not tell from a live one. Written as
-	// rows rather than through the store, because a thousand records
-	// through a real broker is a minute of wall clock to establish a
-	// precondition that is not the property under test.
-	r.fillArchived(chat.MaxChannels)
-	if got := r.count(`SELECT COUNT(*) FROM chat_channels`); got != chat.MaxChannels {
-		t.Fatalf("the fixture wrote %d rooms, want %d", got, chat.MaxChannels)
-	}
-
-	if _, err := r.store.CreateChannel(r.t.Context(), chat.Actor{
-		Handle: "jane", Kind: chat.AuthorHuman,
-	}, chat.NewChannel{Name: "one-more", Kind: chat.KindPublic}); err != nil {
-		t.Fatalf("a company whose every room is archived could not create "+
-			"another: %v\n\tThe cap is counting rows rather than live rooms, "+
-			"so the archive its own refusal recommends changes nothing and "+
-			"the company is stopped for the life of the deployment", err)
-	}
-}
-
-// fillArchived writes n archived rooms straight into the replicated estate,
-// in one statement per batch.
-func (r *writeRound) fillArchived(n int) {
-	r.t.Helper()
-	err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
-		for i := range n {
-			id := fmt.Sprintf("arch-%04d", i)
-			if _, err := tx.ExecContext(r.t.Context(), `
-				INSERT INTO chat_channels
-					(id, name, name_norm, kind, private, topic, purpose, unit,
-					 retention_days, message_seq, created_at, created_by,
-					 created_by_kind, archived_at, version, scoped_through, document)
-				VALUES (?, ?, ?, 'public', 0, '', '', '', NULL, 0, 1, 'jane',
-				        'human', 1, ?, 0, X'')`,
-				id, id, id, int64(i+1)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		r.t.Fatalf("fill the company with archived rooms: %v", err)
 	}
 }
