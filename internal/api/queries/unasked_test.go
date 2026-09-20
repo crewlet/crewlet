@@ -5,6 +5,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -175,25 +176,29 @@ func TestARoutingReadWithNoRecordIsRefusedNamingTheParameter(t *testing.T) {
 
 // stubConversations records what it was asked and answers fixtures.
 type stubConversations struct {
-	threads []ledgerstore.Thread
-	entries []ledger.Session
-	handle  string
-	key     string
-	limit   int
-	err     error
+	threads      []ledgerstore.Thread
+	entries      []ledger.Session
+	handle       string
+	key          string
+	limit        int
+	historyLimit int
+	err          error
 }
 
 func (s *stubConversations) Threads(_ context.Context, handle string, limit int) (
 	[]ledgerstore.Thread, error) {
 
 	s.handle, s.limit = handle, limit
+	if limit > 0 && len(s.threads) > limit {
+		return s.threads[:limit], s.err
+	}
 	return s.threads, s.err
 }
 
-func (s *stubConversations) History(_ context.Context, handle, key string, _ int) (
+func (s *stubConversations) History(_ context.Context, handle, key string, limit int) (
 	[]ledger.Session, error) {
 
-	s.handle, s.key = handle, key
+	s.handle, s.key, s.historyLimit = handle, key, limit
 	return s.entries, s.err
 }
 
@@ -341,11 +346,13 @@ func TestAFailedCounterpartyReadIsNotAnEmptyList(t *testing.T) {
 	}
 }
 
-// THE PAGE IS BOUNDED IN BOTH DIRECTIONS, and the ledger is why: its `Threads`
-// and `History` apply a `LIMIT` only when one is positive, so an absent or
-// negative one reads a seat's whole ledger through this process. A busy chat
-// workspace gives a seat a thread per channel and a trim limit's worth of
-// turns in each.
+// THE THREAD ROSTER IS BOUNDED IN BOTH DIRECTIONS, and the ledger is why: its
+// `Threads` applies a `LIMIT` only when one is positive, so an absent or
+// negative one reads every key a seat has ever spoken under through this
+// process. A busy chat workspace gives a seat a thread per channel.
+//
+// The store is asked for ONE MORE than the page, which is the evidence row the
+// truncation flag is read from.
 func TestTheConversationPageIsBoundedInBothDirections(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -371,9 +378,69 @@ func TestTheConversationPageIsBoundedInBothDirections(t *testing.T) {
 			if _, err := askAsOperator(t, s, "conversations", params); err != nil {
 				t.Fatalf("conversations: %v", err)
 			}
-			if ledgerStub.limit != c.want {
-				t.Errorf("the ledger was asked for %d, want %d", ledgerStub.limit, c.want)
+			if ledgerStub.limit != c.want+1 {
+				t.Errorf("the ledger was asked for %d, want %d — the page plus its evidence row",
+					ledgerStub.limit, c.want+1)
 			}
 		})
+	}
+}
+
+// A ROSTER THAT FILLED SAYS SO. A page holding exactly the limit is otherwise
+// indistinguishable from a seat that speaks on exactly that many surfaces, and
+// the reader is looking for one thread — the one that is missing is the one
+// they came for.
+func TestAFullThreadRosterSaysItIsAPage(t *testing.T) {
+	t.Parallel()
+	// One more thread than the page asked for.
+	threads := make([]ledgerstore.Thread, 8)
+	for i := range threads {
+		threads[i] = ledgerstore.Thread{Key: fmt.Sprintf("slack:C%d", i), Entries: 1}
+	}
+	ledgerStub := &stubConversations{threads: threads}
+	s := viewerSources(t, &stubWork{})
+	s.Conversations = ledgerStub
+
+	got := answeredAsOperator(t, s, "conversations", map[string]any{"limit": 7})
+	if got["truncated"] != true {
+		t.Errorf("truncated = %v, want the roster to say it is a page", got["truncated"])
+	}
+	rows, _ := got["conversations"].([]map[string]any)
+	if len(rows) != 7 {
+		t.Fatalf("rendered %d threads, want the page — the evidence row is not a result", len(rows))
+	}
+
+	// And a roster that fits reports itself whole, with the field PRESENT
+	// rather than absent: a client cannot tell a missing key from a false
+	// one without reading the engine's source.
+	ledgerStub.threads = threads[:3]
+	got = answeredAsOperator(t, s, "conversations", map[string]any{"limit": 7})
+	if truncated, ok := got["truncated"].(bool); !ok || truncated {
+		t.Errorf("truncated = %#v, want a present false", got["truncated"])
+	}
+}
+
+// A THREAD IS READ WHOLE. Its entries are bounded by the write-time trim, so
+// the roster's page size has no business cutting them — and cutting them low
+// loses a conversation's OPENING, because the store orders newest-first to
+// make a `LIMIT` keep the recent turns.
+func TestAThreadsHistoryIsNotCutByTheRostersPage(t *testing.T) {
+	t.Parallel()
+	ledgerStub := &stubConversations{
+		threads: []ledgerstore.Thread{{Key: "slack:C1", Entries: 2}},
+		entries: []ledger.Session{{TurnID: "t-1"}},
+	}
+	s := viewerSources(t, &stubWork{})
+	s.Conversations = ledgerStub
+
+	if _, err := askAsOperator(t, s, "conversations", map[string]any{
+		"conversation": "slack:C1", "limit": 7,
+	}); err != nil {
+		t.Fatalf("conversations: %v", err)
+	}
+	if ledgerStub.historyLimit != 0 {
+		t.Errorf("the thread was read with a limit of %d, want the whole thread: "+
+			"the trim is the bound, and this layer cannot see what it is set to",
+			ledgerStub.historyLimit)
 	}
 }
