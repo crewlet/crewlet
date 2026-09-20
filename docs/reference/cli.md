@@ -757,6 +757,17 @@ in the retention guide; this command's help prints the five steps.
 the operation: a verify compares the observed ceiling against it, so a target
 that could move would make a mismatch unreadable.
 
+A raise the broker has no room for is refused **before** the maintenance window
+opens, naming what the raise would reserve, what the broker has left, the limit
+it is held to and the field that sets it — so an operator learns it in one
+round trip rather than after three fleet-wide restarts. A raise the broker
+refuses at the apply is reported as a refusal rather than as an unknown
+outcome, with the same numbers, read at that moment rather than carried from
+the window's opening: an operation spans restarts, and what matters is what the
+broker had when it said no. A limit this node could not read is **not** a
+refusal — a node that could not hear has not been told no — and the operation
+goes ahead for the broker to decide.
+
 `-i-have-excluded-all-publishers` is required only on `stream.type: nats`.
 There the engine does not run the broker and cannot establish who else holds a
 connection to it, so the assertion is yours in your own words rather than a

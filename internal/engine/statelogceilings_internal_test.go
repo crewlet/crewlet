@@ -393,3 +393,54 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 			"which changes nothing about how full their account is")
 	}
 }
+
+// THE ROOM CLAUSE IS THE SAME FOUR NUMBERS WHEREVER IT APPEARS, and its three
+// cases are three different facts.
+//
+// It is the one sentence a refused create and a refused raise share, and they
+// were written separately once — which is the shape internal/textcut,
+// internal/whsec and internal/jsprovision each record drifting while two doc
+// comments asserted the two matched. What a test can hold is that neither of
+// the two unreadable cases is ever spelled as a number: a limit that could not
+// be read reported as zero, or a broker that states none reported as a broker
+// with none, is an operator told there is no room when nobody said so.
+func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
+	t.Parallel()
+	const volume = "/var/lib/crewlet/stream"
+	stated := jetstream.StorageBudget{
+		Limit: 8 * gib, Committed: 6 * gib, Source: jetstream.BudgetServerStore,
+	}
+	said := roomLeft(stated, nil, volume)
+	for _, want := range []string{
+		itoa(2 * gib), // left to reserve
+		itoa(6 * gib), // already reserved
+		itoa(8 * gib), // the limit
+		"stream.store_max_bytes",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("a stated limit does not say %q: %s", want, said)
+		}
+	}
+
+	// UNREAD IS NOT ZERO. The read failed, so there is no number — and a
+	// clause carrying one would be an invention on the one line an
+	// operator reads after a refused boot.
+	unread := roomLeft(jetstream.StorageBudget{}, errors.New("no responders"), volume)
+	if !strings.Contains(unread, "could not be read") {
+		t.Errorf("an unreadable budget does not say so: %s", unread)
+	}
+	if strings.Contains(unread, "0 bytes left") || strings.Contains(unread, "-byte limit") {
+		t.Errorf("an unreadable budget is spelled as a number: %s", unread)
+	}
+
+	// AND UNSTATED IS NOT UNLIMITED. The account states no limit this
+	// client can read; every server behind it still has a cap of its own.
+	unstated := roomLeft(jetstream.StorageBudget{Limit: -1,
+		Source: jetstream.BudgetUnstated}, nil, volume)
+	if !strings.Contains(unstated, "states no limit") {
+		t.Errorf("an unstated limit does not say so: %s", unstated)
+	}
+	if strings.Contains(unstated, "-1") {
+		t.Errorf("an unstated limit reaches an operator as the number -1: %s", unstated)
+	}
+}

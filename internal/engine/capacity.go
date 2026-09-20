@@ -482,10 +482,12 @@ func (e *Engine) capacityRefusal(ctx context.Context, want uint64) string {
 	if room.Limit < 0 {
 		return ""
 	}
-	return fmt.Sprintf(" — it asks to reserve %d bytes and the broker has %d "+
-		"left to reserve (%d of its %d-byte limit already reserved), and %s",
-		want, room.Available(), room.Committed, room.Limit,
-		limitSource(room.Source, e.streamVolume()))
+	// THE SAME SENTENCE THE PROVISIONING REFUSAL BUILDS, over the budget
+	// this call just read. A second wording here would be the rule written
+	// twice, and a second READ would be a message about a different moment
+	// than the one it explains.
+	return fmt.Sprintf(" — it asked to reserve %d bytes and %s",
+		want, roomLeft(room, nil, e.streamVolume()))
 }
 
 // seal collects the barrier, retires the journal against it, and asks the

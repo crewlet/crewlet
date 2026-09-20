@@ -348,18 +348,7 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 	domain statelog.Domain, ceiling domainCeiling, cause error) error {
 
 	budget, err := host.StreamBudget(ctx)
-	var had string
-	switch {
-	case err != nil:
-		had = fmt.Sprintf("what the broker had left could not be read (%v)", err)
-	case budget.Limit < 0:
-		had = "the broker states no limit this node can read, so what refused it " +
-			"is a server's own cap"
-	default:
-		had = fmt.Sprintf("the broker had %d bytes left to reserve (%d of its "+
-			"%d-byte limit already reserved), and %s", budget.Available(),
-			budget.Committed, budget.Limit, limitSource(budget.Source, s.volume))
-	}
+	had := roomLeft(budget, err, s.volume)
 	from := fmt.Sprintf("%s is unset, so the ceiling was derived and scaled into "+
 		"the state logs' share of the broker, and it goes no lower than %d bytes",
 		ceiling.Field, MinDomainCeiling)
@@ -378,6 +367,39 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 		"exist keep the ceilings they were created with, and no Tier A setting "+
 		"changes them: %w",
 		domain.Name(), domain.Stream().Name, ceiling.Bytes, had, from, remedy, cause)
+}
+
+// roomLeft is what the broker had to reserve when it refused, in the terms an
+// operator acts on: how much is left, how much of the limit is spoken for, what
+// the limit is, and who sets it.
+//
+// ONE SENTENCE FOR BOTH REFUSALS, the create's ([stateLog.storageRefused]) and
+// the raise's ([Engine.capacityRefusal]). They are the same four numbers about
+// the same broker and were written twice, which is the shape this tree has paid
+// for before: [internal/textcut], [internal/whsec] and [internal/jsprovision]
+// each record a rule that drifted while two doc comments asserted they matched.
+//
+// PURE OVER THE VALUES IT IS GIVEN, and the read is the caller's — which buys
+// the property that matters here: the numbers in the message are provably the
+// numbers that decided, because there is no second source for them to come
+// from. A caller that read the budget to decide and then asked again for the
+// wording could refuse an operator against one limit and quote them another,
+// on a topology where each read is a live round trip.
+//
+// The three cases are three different facts and never collapse: a limit that
+// could not be read is not a limit of zero, and a broker that states none is
+// not a broker with none — its servers still have caps this client cannot see.
+func roomLeft(budget jetstream.StorageBudget, readErr error, volume string) string {
+	switch {
+	case readErr != nil:
+		return fmt.Sprintf("what the broker had left could not be read (%v)", readErr)
+	case budget.Limit < 0:
+		return "the broker states no limit this node can read, so what refused it " +
+			"is a server's own cap"
+	}
+	return fmt.Sprintf("the broker had %d bytes left to reserve (%d of its "+
+		"%d-byte limit already reserved), and %s", budget.Available(),
+		budget.Committed, budget.Limit, limitSource(budget.Source, volume))
 }
 
 // limitSource says who sets a broker's limit, in the terms an operator
