@@ -63,6 +63,7 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.PagesLogPrefix + ".page.",
 		topics.TrackerLogPrefix + ".task.1",
 		topics.TrackerVectorsPrefix + ".source.1",
+		topics.ChatLogPrefix + ".message.1",
 	} {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
@@ -71,7 +72,8 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// THE THREE DOMAINS' SUBJECT SPACES ARE DISJOINT.
+// THE FOUR DOMAINS' SUBJECT SPACES ARE DISJOINT, and so is chat's ephemeral
+// presence space, which shares chat's own `crewlet.chat.` root.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -79,9 +81,11 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 	t.Parallel()
 	prefixes := map[string]string{
-		"tracker": topics.TrackerLogPrefix + ".",
-		"vectors": topics.TrackerVectorsPrefix + ".",
-		"pages":   topics.PagesLogPrefix + ".",
+		"tracker":  topics.TrackerLogPrefix + ".",
+		"vectors":  topics.TrackerVectorsPrefix + ".",
+		"pages":    topics.PagesLogPrefix + ".",
+		"chat":     topics.ChatLogPrefix + ".",
+		"presence": topics.ChatPresence + ".",
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {
