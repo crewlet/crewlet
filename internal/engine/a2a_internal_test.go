@@ -379,3 +379,53 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 		t.Error("an empty artifact answered with silence")
 	}
 }
+
+// A BLOCKED TURN'S ACCOUNT IS AN ANSWER, not a failure to produce one.
+//
+// This is the one way `done` arrives carrying no prose: the seat answered as
+// far as it could, put the rest to somebody who has to answer it, and had
+// nothing left to write. `submit_work` refuses a blocked outcome with empty
+// evidence, so the one case whose artifact may be empty is the one case
+// guaranteed to have something to say instead.
+//
+// The consequence of getting this wrong is worse than a thin answer:
+// answerColleague CLOSES the channel straight after, so the asker is told the
+// turn produced nothing AND has nowhere to follow up — and it re-asks, which
+// is the duplicate the answer leg exists to stop.
+func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
+	t.Parallel()
+	blocked := turn.Result{
+		Decision: phase.Done,
+		LastWork: &turn.Work{
+			Outcome:  turn.OutcomeBlocked,
+			Evidence: "asked @founder which repo to file against; waiting on them",
+		},
+	}
+	got := answerContent(blocked)
+	if !strings.Contains(got, "waiting on them") {
+		t.Errorf("the asker was not told what the turn is blocked on: %q", got)
+	}
+	if strings.Contains(got, "could not produce an answer") {
+		t.Errorf("a turn that did the right thing was reported as a failure: %q", got)
+	}
+
+	// The artifact still wins where there is one: the evidence is the
+	// fallback for an empty one, never a replacement for the seat's own
+	// answer.
+	withBoth := blocked
+	withBoth.Artifact = "the answer itself"
+	if got := answerContent(withBoth); got != "the answer itself" {
+		t.Errorf("the evidence displaced a real artifact: %q", got)
+	}
+
+	// And a blocked round that somehow carries no evidence falls through
+	// rather than answering with an empty string — silence is the one
+	// outcome the asker cannot act on.
+	bare := turn.Result{
+		Decision: phase.Done,
+		LastWork: &turn.Work{Outcome: turn.OutcomeBlocked, Evidence: "   "},
+	}
+	if got := answerContent(bare); strings.TrimSpace(got) == "" {
+		t.Error("a blocked turn with no evidence answered with silence")
+	}
+}
