@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -62,11 +61,14 @@ var (
 // so does the live projection, which is the disagreement types.Failed's own doc
 // warns about.
 //
-// The names come from the map rather than a literal, for the reason the two
-// event types above are taken from their payload types: a spelling written here
-// is the one place a wire name silently stops matching.
+// The names come from the catalogue rather than a literal, for the reason the
+// two event types above are taken from their payload types: a spelling written
+// here is the one place a wire name silently stops matching. Through
+// [types.FailureEventNames], which is the accessor that exists because this is
+// the caller that has to ENUMERATE the set rather than test one value against
+// it — the map behind it is unexported, so there is no second way in.
 func failedRow() (string, []any) {
-	names := slices.Sorted(maps.Keys(types.FailureEventTypes))
+	names := types.FailureEventNames()
 	args := make([]any, 0, len(names))
 	for _, name := range names {
 		args = append(args, name)

@@ -3,7 +3,6 @@ package store_test
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -469,15 +468,15 @@ func seedRun(t *testing.T, log *store.EventLog, runID, workKey string, at time.T
 // breached guard — so the turns list answered "not failed" for the one turn
 // an operator opens the list to find, and `Failed: &yes` never returned it.
 //
-// Driven off [types.FailureEventTypes] rather than a list spelled here: the
-// map is the one place the rule lives, and a copy is how this stops covering
-// a type somebody adds to it.
+// Driven off [types.FailureEventNames] rather than a list spelled here: the
+// catalogue is the one place the rule lives, and a copy is how this stops
+// covering a type somebody adds to it.
 func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
 
-	failures := slices.Sorted(maps.Keys(types.FailureEventTypes))
+	failures := types.FailureEventNames()
 	for i, eventType := range failures {
 		at := base.Add(time.Duration(i) * time.Minute)
 		id := "t-" + strings.ReplaceAll(eventType, ".", "-")

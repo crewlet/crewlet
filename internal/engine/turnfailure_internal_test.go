@@ -217,7 +217,7 @@ func TestATurnThatDidNotFailPublishesNoFailure(t *testing.T) {
 	e.publishFailure(context.Background(), tel,
 		turn.Result{Decision: phase.Done}, nil)
 
-	// Every one of these types is in FailureEventTypes, so a spurious publish
+	// Every one of these types is a failure BY TYPE, so a spurious publish
 	// does not merely add a row — it flips the seat to afk and paints the
 	// turn red on every surface that reads the taxonomy.
 	none[*types.TurnGuardBreach](t, p, "turn.guard_breach")
