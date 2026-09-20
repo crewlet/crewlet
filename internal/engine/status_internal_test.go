@@ -854,6 +854,137 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	}
 }
 
+// A TEARDOWN IS BOUNDED, NOT JUST DETACHED.
+//
+// Detaching the context takes the caller's DEADLINE with its cancel, and what
+// is left is a synchronous chat request made by something holding a resource
+// while it waits: a turn still holding this node's turn slot, a drain working
+// through one seat at a time, a sandbox completion's handler. With no deadline
+// of its own the only bound is the vendor client's own timeout, on the one
+// surface whose every failure is swallowed as cosmetic.
+func TestTheIndicatorTeardownIsBounded(t *testing.T) {
+	t.Parallel()
+	poster := &deadlinePoster{}
+	set := notify.NewStatuses(notify.NewStatusDriver(notify.StatusOptions{
+		Poster: poster, Mode: notify.StatusAlways,
+	}))
+	session := set.Begin(t.Context(), "swe", "wk-bound", phase.Execute.String(),
+		map[string]string{
+			notify.TransportField: "chat", "channel": "D0ANA",
+			"ts": "1700000001.000100",
+		})
+	if session == nil {
+		t.Fatal("no indicator was raised")
+	}
+
+	endWorkingStatus(t.Context(), session, false)
+
+	left, ok := poster.clearBudget()
+	if !ok {
+		t.Fatal("the clear was made on a context with no deadline: nothing but the " +
+			"chat client's own timeout bounds it")
+	}
+	if left <= 0 || left > statusClearTimeout {
+		t.Errorf("the clear had %v to answer in, want at most %v", left, statusClearTimeout)
+	}
+}
+
+// deadlinePoster records the budget its clear was given.
+type deadlinePoster struct {
+	mu    sync.Mutex
+	left  time.Duration
+	bound bool
+	seen  bool
+}
+
+func (*deadlinePoster) StatusBackend() string        { return "chat" }
+func (*deadlinePoster) SupportsStatusText() bool     { return true }
+func (*deadlinePoster) StatusRefresh() time.Duration { return time.Hour }
+func (*deadlinePoster) DMChannelPrefix() string      { return "D" }
+
+func (*deadlinePoster) SetStatus(context.Context, string, string, string, string) bool {
+	return true
+}
+
+func (p *deadlinePoster) ClearStatus(ctx context.Context, _, _, _ string) bool {
+	deadline, ok := ctx.Deadline()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seen, p.bound = true, ok
+	if ok {
+		p.left = time.Until(deadline)
+	}
+	return true
+}
+
+func (p *deadlinePoster) clearBudget() (time.Duration, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.seen {
+		return 0, false
+	}
+	return p.left, p.bound
+}
+
+// A RESUME THAT NEVER REACHED ITS TURN KEEPS THE INDICATOR IT TOOK BACK.
+//
+// Every early return before the loop is a RETRY, not an ending: a reply this
+// build cannot read routes the completion back to a peer, and a runner that
+// could not be built — an unbuildable provider chain, an MCP registry error,
+// an exhausted credential pool — leaves the coordinator to revert its claim so
+// the same conversation is resumed again. The box's work is intact and
+// somebody is still waiting on it.
+//
+// And unlike the dispatch path, nothing here can put a cleared indicator back:
+// a redelivered TRIGGER raises a fresh one, where a redelivered COMPLETION has
+// only the hold to take back, because a parked run's row carries no chat
+// metadata.
+func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reply       string
+		breakRunner bool
+	}{
+		"a reply this build cannot read":   {reply: "nonsense"},
+		"a runner that could not be built": {reply: "tool", breakRunner: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, ws := indicating(t, notify.StatusAlways)
+			company := e.Company()
+			seat := company.Org.AgentSeatByHandle("swe")
+
+			suspended := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
+				[]*events.Event{chatTrigger("D0ANA")})
+			if suspended == nil {
+				t.Fatal("no indicator was raised for a chat trigger")
+			}
+			ws.awaitShown(t, 1)
+			endWorkingStatus(t.Context(), suspended, true)
+			if tc.breakRunner {
+				seat.LLM = org.ProviderKeys{"a key this company does not have"}
+			}
+
+			err := e.resumeTurn(t.Context(), resumeInput{
+				Company: company,
+				Run: sandbox.PendingRun{
+					TurnID: "wk-1", AgentHandle: "swe", Reply: tc.reply,
+					TaskDescription: "fix the failing test",
+				},
+				Turn:   &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org},
+				Answer: "the tests pass now",
+			})
+			if err == nil {
+				t.Fatal("the resume did not fail, so this case asserts nothing")
+			}
+			if got := ws.shown(); slices.Contains(got, "") {
+				t.Errorf("a resume that will be retried cleared its indicator: %v", got)
+			}
+			if live := e.notify.slack.Status().Live(); len(live) != 1 {
+				t.Errorf("live = %v, want the indicator the retry will take back", live)
+			}
+		})
+	}
+}
+
 // THE METADATA IS THE TRIGGER'S OWN, taken rather than reconstructed: the
 // channel and the thread anchor a status is raised in are exactly the ones the
 // chat parser stamped, which is what makes the indicator appear where the

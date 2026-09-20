@@ -39,6 +39,25 @@ import (
 // renders text, seconds on the one that does not.
 const statusClearTimeout = 5 * time.Second
 
+// statusTeardown is the context every clear is made on.
+//
+// DETACHED, because the ending being reported is often the cancellation itself
+// — a shed seat, a drained node, a turn that ran out of time — and a clear on
+// a dead context does nothing at all, which leaves an indicator claiming the
+// agent is still working.
+//
+// AND BOUNDED, because detaching takes the caller's DEADLINE with its cancel.
+// Every clear is a chat request made synchronously by something that is
+// holding a resource while it waits: a turn holding this node's turn slot, a
+// drain working through a seat at a time, a sandbox completion's handler. With
+// no deadline of its own the only bound left is the vendor client's own
+// timeout, on the one surface whose every failure is swallowed as cosmetic.
+// One helper rather than three copies of the same two calls: the three
+// teardown sites differ in what they are tearing down, not in this.
+func statusTeardown(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), statusClearTimeout)
+}
+
 // chatMetadataOf is the metadata of the chat message that woke a turn, or nil.
 //
 // FIRST WINS, over the FLAT metadata of each notification rather than over the
@@ -101,12 +120,12 @@ func (e *Engine) beginWorkingStatus(ctx context.Context, handle, turnID string,
 // process: the turn never came back, and nothing but a seat handoff or a
 // shutdown would have taken it down.
 //
-// The context is DETACHED because this is a teardown: the ending it is
-// reporting is often the cancellation itself (a shed seat, a drained node, a
-// turn that ran out of time), and a clear on a dead context does nothing at
-// all — which leaves an indicator claiming the agent is still working.
+// The context is the shared teardown one — detached from the turn's and
+// bounded. See [statusTeardown].
 func endWorkingStatus(ctx context.Context, s *notify.StatusSession, keepAlive bool) {
-	s.End(context.WithoutCancel(ctx), keepAlive)
+	clearCtx, stop := statusTeardown(ctx)
+	defer stop()
+	s.End(clearCtx, keepAlive)
 }
 
 // stillWorking reads [Engine.persistSuspension]'s answer as the one question
@@ -143,7 +162,9 @@ func stillWorking(resumable bool, err error) bool {
 // It is one turn's HOLD, not the seat's indicators: a second turn in the same
 // thread keeps its own. See [notify.Statuses.Release].
 func (e *Engine) releaseWorkingStatus(ctx context.Context, handle, turnID string) {
-	e.Status().Release(context.WithoutCancel(ctx), handle, turnID)
+	clearCtx, stop := statusTeardown(ctx)
+	defer stop()
+	e.Status().Release(clearCtx, handle, turnID)
 }
 
 // resumeWorkingStatus is the indicator a RESUMED turn shows.

@@ -452,7 +452,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// that raised a fresh one would be asserting a conversation it cannot
 	// prove it is in.
 	status := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
-	var working bool
+	// TRUE UNTIL THE TURN ACTUALLY RUNS, because every early return below is
+	// a RETRY rather than an ending: a reply this build cannot read and a
+	// runner that could not be built both leave the coordinator to revert
+	// its claim, and the completion comes back to be resumed again. Clearing
+	// there says the agent stopped, and — unlike the dispatch path, where a
+	// redelivered trigger simply raises a fresh indicator — nothing can put
+	// this one back: the run's row carries no chat metadata, so a later
+	// resume has only the hold to take back.
+	working := true
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
 	company := in.Company
@@ -555,9 +563,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// end in silence.
 		Reply: resumedReply,
 	})
-	// What the deferred indicator teardown reads — and on this path a
-	// resumed turn that suspended AGAIN keeps its indicator, because the
-	// same box is still working. See [endWorkingStatus].
+	// THE TURN RAN, so from here the indicator follows what it concluded
+	// rather than the retry rule above: a resumed turn that suspended AGAIN
+	// keeps it, because the same box is still working.
 	working = res.Suspended
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	if err != nil {
@@ -574,8 +582,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// pre-suspend conversation, and the round that called
 			// run_sandbox was never closed, so its writes are in no
 			// ledger and a replay would repeat every one of them.
+			//
+			// The indicator comes down with it: the run is settled,
+			// the box reclaimed and the record deleted, so nothing is
+			// coming back for this turn.
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
+		// Reverted and redelivered, so the turn is not over — a peer, or
+		// this node on the next delivery, resumes the same conversation.
+		working = true
 		return err
 	}
 	// A resumed turn that suspended AGAIN persists its new conversation the
@@ -1419,9 +1434,8 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// DETACHED AND BOUNDED, the same shape the memory flush below takes: the
 	// clear has to go out even when the release is a cancelled drain, and a
 	// chat instance that has stopped answering must cost the drain seconds
-	// rather than a client timeout per seat. See [statusClearTimeout].
-	clearCtx, stopClear := context.WithTimeout(
-		context.WithoutCancel(ctx), statusClearTimeout)
+	// rather than a client timeout per seat. See [statusTeardown].
+	clearCtx, stopClear := statusTeardown(ctx)
 	e.Status().ClearFor(clearCtx, handle)
 	stopClear()
 

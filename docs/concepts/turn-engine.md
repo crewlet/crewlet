@@ -552,6 +552,7 @@ whose indicator carries no text):
 | A suspension the engine could not record | Indicator cleared: the run is settled and its box reclaimed on the spot, so nothing is coming back. A store that could not say whether the write landed keeps it instead, because a run it moved to running is one the completion poll resumes |
 | That run parked on a clarification question | Indicator cleared — the agent has stopped and a person may take days to answer. One turn's hold, so a second turn working in the same thread keeps its own |
 | That run's resume | The hold taken back, never a second indicator over the first — and cleared when the resumed turn ends. A resume driven by a person's ANSWER has no hold left to take back and raises a fresh indicator off the answer's own thread |
+| A resume that never reached its turn — a reply this build cannot read, a runner it could not build — or one whose turn broke without writing outside the engine | Indicator **held**: the coordinator reverts its claim and the completion is resumed again, and nothing could put a cleared one back. A redelivered *trigger* raises a fresh indicator; a redelivered *completion* has only the hold to take back |
 | This node hands the seat to a peer, or shuts down | Indicator cleared, because a kept-alive one would otherwise be re-asserted by a node that is no longer running the turn |
 
 A trigger that is not a chat message raises nothing at all: a schedule tick, an
