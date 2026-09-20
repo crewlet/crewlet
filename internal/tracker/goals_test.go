@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -450,5 +451,78 @@ func TestAGoalSaveNamesTheProjectItStopsCounting(t *testing.T) {
 		t.Fatalf("the save that dropped OPS carries the scope %v, none of "+
 			"which covers %s — the record wrote OPS's target rows out and "+
 			"named every project but that one", scope.Paths, ops)
+	}
+}
+
+// AN EVICTED GOAL UPDATE IS REPORTED, never dropped in silence.
+//
+// A goal keeps a rolling window of its updates, which is right — a goal must
+// keep accepting them — but the oldest went with no warning, no history row
+// and no reader, under `outcome: applied`. That is the argument this same
+// function makes twelve lines up against CUTTING an over-long update: "an
+// update is the STORED value rather than a preview of one — there is nowhere
+// to go and read the rest". It applies word for word to the one that falls off
+// the FRONT, and a quarter's worth of a goal's health narrative disappeared.
+func TestAnEvictedGoalUpdateIsReported(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// FILL THE WINDOW EXACTLY, and nothing is evicted.
+	fill := aGoal("g-1", func(g *tracker.Goal) {
+		for i := range tracker.MaxGoalUpdates {
+			g.Updates = append(g.Updates, tracker.GoalUpdate{
+				Health: string(tracker.HealthOnTrack),
+				Text:   fmt.Sprintf("week %d", i),
+			})
+		}
+	})
+	full, err := r.writer.WriteGoal(t.Context(), "op-fill", fill)
+	if err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if len(full.Warnings) != 0 {
+		t.Errorf("a goal filled exactly to the window warns: %v", full.Warnings)
+	}
+	r.drain()
+
+	// ONE MORE, and the oldest goes — which the caller is now told.
+	over := aGoal("g-1", func(g *tracker.Goal) {
+		g.Updates = []tracker.GoalUpdate{{
+			Health: string(tracker.HealthAtRisk), Text: "the quarter slipped",
+		}}
+	})
+	got, err := r.writer.WriteGoal(t.Context(), "op-over", over)
+	if err != nil {
+		t.Fatalf("over: %v", err)
+	}
+	if len(got.Warnings) == 0 {
+		t.Fatal("an update was evicted and the write reported nothing, so a " +
+			"quarter's assessment left with `outcome: applied`")
+	}
+	for _, want := range []string{"dropped", "not", "readable"} {
+		if !strings.Contains(got.Warnings[0], want) {
+			t.Errorf("the warning does not mention %q: %q", want, got.Warnings[0])
+		}
+	}
+	r.drain()
+
+	// AND THE WINDOW HELD: the newest survived and the oldest is gone.
+	listing, err := r.reader.Goals(t.Context(), tracker.GoalQuery{
+		ID: "g-1", Level: statelog.ReadStale,
+	})
+	if err != nil || len(listing.Goals) != 1 {
+		t.Fatalf("read the goal: %v", err)
+	}
+	updates := listing.Goals[0].Updates
+	if len(updates) != tracker.MaxGoalUpdates {
+		t.Fatalf("the goal holds %d updates, want the window of %d",
+			len(updates), tracker.MaxGoalUpdates)
+	}
+	if updates[len(updates)-1].Text != "the quarter slipped" {
+		t.Errorf("the newest update is %q", updates[len(updates)-1].Text)
+	}
+	if updates[0].Text == "week 0" {
+		t.Error("the oldest update survived, so nothing was actually evicted " +
+			"and the warning describes a drop that did not happen")
 	}
 }
