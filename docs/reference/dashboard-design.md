@@ -463,6 +463,12 @@ saying exactly what the `Container` fact three lines below it already says as a
 link to the same place. The trail is drawn only once it has what the fact
 cannot carry, which is the path THROUGH the tree.
 
+And the guard wraps the NOTE, not its contents. `PageNote` renders its
+paragraph whatever it is handed, and that paragraph carries a margin of its
+own — so a guard on the breadcrumb inside it swaps a stray link for an empty
+band, which is the same gap with nothing in it. A test that counts the links
+cannot see that, so the element is asserted separately.
+
 ### A dropdown's list sizes to its options
 
 The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode,
@@ -1258,6 +1264,20 @@ Four more controls that looked like something they were not:
   screen — rendered as dim static micro-text a reader could only find by
   hovering. `.t-link` is the caption register that keeps `--accent-ink`,
   which the palette suite already measures.
+- **A link inside a sentence says so, because nothing else can tell it apart.**
+  The anchor reset is right for chrome — a breadcrumb, a row that happens to be
+  an anchor, a caption-sized navigation — because each of those is a *thing* on
+  the page rather than a word in a line. It is wrong the moment an anchor is a
+  word in a line: the sentence around it is `--text` and the link is
+  `--accent-ink`, and colour alone is what WCAG 1.4.1 refuses. `.prose-link`
+  puts the underline back and keeps it, at rest rather than on hover.
+  `.prose.md a` (rendered Markdown) and `.int-form-note a` (the sentence under
+  a setup form) are the two containers that get it without asking. The rule was
+  first written as prose here and in `base.css` — "the only two registers in
+  this tree that are genuinely a phrase" — and was already false: seven anchors
+  sat in running sentences in five other files with no cue but colour. No scan
+  can decide whether an anchor is inside a sentence, so `proselinks.test.ts`
+  refuses the shape where nobody asked, an `<a>` carrying no class at all.
 - **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
   gesture, so on a screen whose point is one JSON record — a turn's record,
   the active configuration — it took the nav, the stat row and every phase
@@ -1447,7 +1467,13 @@ Three more header rules follow from the same audit:
   which is the same no-sentence-twice rule that moved it out of the panel in the
   first place. Prose with no boundary at all is left alone, because a cut
   mid-clause reads as a broken string; `.object-title` wears `.clamp` so that
-  case is bounded at two lines rather than by a rule nobody can see.
+  case is bounded at two lines rather than by a rule nobody can see. The
+  TRIGGER follows the same rule, and it is worth saying because the comparison
+  is exact: the panel drops its "Woken by" prose only where the title says ALL
+  of it, which now means a one-sentence trigger. A longer one prints whole,
+  with the header's own sentence at the front of it — dropping it would lose
+  everything the lead did not take, and on a turn with no plan summary that
+  prose is the only account of itself the screen has.
 - **A turn's outcome is a state, so it takes a tone.** `Stat` grows a `tone`
   for the case where the value IS an outcome — `done` positive, `self_iterate`
   caution, a guard breach critical. Deliberately not on the other tiles: a
