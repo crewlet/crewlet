@@ -503,6 +503,14 @@ waiting for room, the other only by a change of setting — so the refusal names
 this case for what it is. Set `stream.replicas` to a class the account
 declares, or have the cluster's operator declare that tier.
 
+The same is true of a class the account **lists without a limit**: it reports
+every class it holds objects in, whether or not a limit was ever set for one,
+so `R3` being present is not `R3` being declared. That reports as
+`account_tier_no_limit` and its remedy is the other one — declare a limit on
+the tier that is already there. A tier declared **unlimited** is neither: it
+states its limit as a negative, the broker creates against it, and the engine
+sizes from its own free disk as it does for any broker that states no limit.
+
 ---
 
 ## Running the Engine + API

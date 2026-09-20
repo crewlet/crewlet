@@ -423,6 +423,17 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 	case jetstream.BudgetAccount:
 		return "that limit is the NATS account's own JetStream storage limit, " +
 			"which whoever operates the broker sets"
+	case jetstream.BudgetAccountTierNoLimit:
+		// THE SAME REFUSAL AS THE MISSING TIER, and a different thing to
+		// go and do about it — which is the whole reason it is a source
+		// of its own rather than the same zero.
+		return "that limit is zero because the NATS account is TIERED, has the replica " +
+			"class stream.replicas puts this node in and declares no limit on it — a " +
+			"class an account holds objects in is reported whether or not a limit was " +
+			"ever set for it — so the broker refuses every stream on it, `no JetStream " +
+			"default or applicable tiered limit present`, whatever ceiling is asked " +
+			"for. Have the cluster's operator declare a limit on that tier, or set " +
+			"stream.replicas to a class that has one"
 	case jetstream.BudgetAccountNoTier:
 		// NOT A CAPACITY SENTENCE, which is why it is not folded into the
 		// one above. The account grants this node's replica class nothing

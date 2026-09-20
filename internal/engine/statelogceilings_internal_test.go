@@ -349,10 +349,11 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 	// the one whose answer depends on it.
 	const volume = "/var/lib/crewlet/stream"
 	levers := map[jetstream.BudgetSource]string{
-		jetstream.BudgetServerStore:   "stream.store_max_bytes",
-		jetstream.BudgetServerMemory:  "stream.store_dir",
-		jetstream.BudgetAccount:       "whoever operates the broker",
-		jetstream.BudgetAccountNoTier: "stream.replicas",
+		jetstream.BudgetServerStore:        "stream.store_max_bytes",
+		jetstream.BudgetServerMemory:       "stream.store_dir",
+		jetstream.BudgetAccount:            "whoever operates the broker",
+		jetstream.BudgetAccountNoTier:      "stream.replicas",
+		jetstream.BudgetAccountTierNoLimit: "declare a limit on that tier",
 		// UNSTATED HAS NO SETTING TO NAME — the account declares no
 		// limit and a client cannot read the server's — so what it owes
 		// a reader is who to ask.

@@ -91,6 +91,25 @@ const (
 	// levers to name and neither is capacity.
 	BudgetAccountNoTier BudgetSource = "account_no_tier"
 
+	// BudgetAccountTierNoLimit is a TIERED account that HAS this node's
+	// replica class and declares no limit on it.
+	//
+	// The report does not promise that a tier it lists carries one:
+	// `Account.JetStreamUsage` builds Tiers from the account's USAGE as
+	// much as from its limits — the tier loop keeps any class with
+	// non-zero usage and fills `Limits: jsa.limits[t]` whether or not that
+	// map has an entry, and the clustered arm below it inserts a bare
+	// `JetStreamTier{}` for every class it finds a stream or a consumer in
+	// (server/jetstream.go). So a class this account holds objects in but
+	// declares no limit for arrives PRESENT, with its MaxStore at the zero
+	// value.
+	//
+	// The server draws no distinction — `jsa.selectLimits` resolves both
+	// shapes through the same map and answers not-ok for each — but an
+	// operator does: "declare a tier" and "declare a limit on the tier you
+	// already have" are different things to go and do.
+	BudgetAccountTierNoLimit BudgetSource = "account_tier_no_limit"
+
 	// BudgetUnstated is an external broker whose account states no limit.
 	// Every server still has a cap of its own, and a client cannot read it.
 	BudgetUnstated BudgetSource = "unstated"
@@ -99,7 +118,7 @@ const (
 // BudgetSources is the closed set.
 var BudgetSources = []BudgetSource{
 	BudgetServerStore, BudgetServerMemory, BudgetAccount,
-	BudgetAccountNoTier, BudgetUnstated,
+	BudgetAccountNoTier, BudgetAccountTierNoLimit, BudgetUnstated,
 }
 
 // Valid reports whether a source is one this build knows.
@@ -240,6 +259,22 @@ func accountBudget(info *jetstream.AccountInfo, replicas int, memory bool) Stora
 	}
 	if limit < 0 {
 		return StorageBudget{Limit: -1, Source: BudgetUnstated}
+	}
+	// A TIER THAT IS THERE AND STATES NOTHING is the missing tier's other
+	// shape, and ZERO IS NOT THE SAME TEST AS BELOW ZERO: a tier declared
+	// unlimited reports its limit negative, selectLimits answers ok for it
+	// and the broker creates against it, so a `<= 0` check here would
+	// refuse the tiered account with the most room of all — which is why
+	// this sits after the negative arm rather than in front of it.
+	if limit == 0 && perCeiling == 1 {
+		// THE USAGE IS CARRIED, although nothing can be reserved
+		// against a limit of zero: it is why the tier is in the report
+		// at all — a class an account merely holds objects in is
+		// listed — so it is the evidence for the diagnosis rather than
+		// a number beside it.
+		return StorageBudget{
+			Limit: 0, Committed: int64(reserved), Source: BudgetAccountTierNoLimit,
+		}
 	}
 	return StorageBudget{
 		Limit:     limit / perCeiling,
