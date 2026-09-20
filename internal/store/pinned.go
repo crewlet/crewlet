@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -27,18 +28,45 @@ import (
 //
 // # It is not a second transaction implementation
 //
-// Tx below carries the SAME retry loop and the SAME stale-snapshot classifier
-// [DB.Tx] does, through retryTransient, because a second copy is how one of them
-// comes to retry an error the other returns. The only difference is which
-// connection the transaction begins on.
+// Tx below takes the SAME place in the SAME queue, begins the SAME transaction
+// through [DB.writeOn] and carries the SAME retry loop and classifier [DB.Tx]
+// does, because a second copy is how one of them comes to retry an error the
+// other returns, or to take the write lock in a way the other does not. The
+// only difference is which connection the transaction begins on.
+//
+// The pin keeps a writer out of the POOL's competition, not out of the
+// QUEUE's: every write transaction on this file, pinned or pooled, is served
+// in the order it asked for the lock (see writequeue.go).
 //
 // A Writer is NOT safe for concurrent use: it is one connection, and its
 // owner is one goroutine. Two goroutines sharing one would interleave
-// statements inside each other's transactions.
+// statements inside each other's transactions. That is also what makes the
+// unguarded fields below safe: only that one goroutine reads or writes them.
 type Writer struct {
-	db   *DB
+	db *DB
+	// conn is the pinned connection. REPLACED rather than kept when a
+	// transaction on it fails to end — see Tx — and nil only when that
+	// replacement could not be had.
 	conn *sql.Conn
+	// retire is conn's own retire switch, captured at the draw for the
+	// reason [retireSwitch] gives. It travels with conn and is replaced
+	// with it.
+	retire func()
+	// closed is the handle's own state, kept separately from conn because
+	// conn is legitimately nil on a live writer. It was the closed marker
+	// once, and a writer that had lost its connection then released its
+	// pin twice and accepted a Tx after Close.
+	closed bool
 }
+
+// ErrWriterClosed is a transaction asked of a [Writer] that has been closed.
+//
+// Its own sentinel because a closed writer is a CALLER's mistake with an
+// obvious remedy, unlike [ErrNoEstate], which is a state a correct caller can
+// legitimately be in. It used to be a nil dereference: [Writer.Close] marked
+// itself closed by nilling the connection, and a connection is now
+// legitimately nil on a live writer.
+var ErrWriterClosed = errors.New("store: this pinned writer is closed")
 
 // Writer pins a connection and returns a handle that owns it until Close.
 //
@@ -70,7 +98,7 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 		d.pins.mu.Unlock()
 		return nil, fmt.Errorf("store: pin a writer connection: %w", err)
 	}
-	return &Writer{db: d, conn: conn}, nil
+	return &Writer{db: d, conn: conn, retire: retireSwitch(conn)}, nil
 }
 
 // Tx runs fn inside a transaction on the pinned connection, with [DB.Tx]'s
@@ -78,40 +106,86 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // ONCE, so anything with an effect outside the transaction belongs after Tx
 // returns rather than inside it.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryTransient(ctx, pinned(w.db.busy), func() error { return w.tx(ctx, fn) })
+	return retryTransient(ctx, budget(w.db.busy), func() (err error) {
+		conn, err := w.pinned(ctx)
+		if err != nil {
+			return err
+		}
+		// REPLACED ON EVERY EXIT THAT IS NOT A CLEAN ONE, a body that
+		// panics included: [txOn] re-panics rather than returning its
+		// verdict, so nobody is left to say whether its rollback
+		// happened. Keeping a connection that may still carry an open
+		// transaction is the failure this path exists to end, and on a
+		// pinned writer it is permanent — every later BEGIN on the one
+		// connection this applier has is refused, and the domain stops
+		// applying for good.
+		fit := false
+		defer func() {
+			if !fit {
+				w.replace(ctx, conn)
+			}
+		}()
+		fit, err = w.db.writeOn(ctx, conn, fn)
+		return err
+	})
 }
 
-// tx is one attempt: begin, run, commit or roll back.
-func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := w.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: begin: %w", err)
+// replace retires the writer's connection and pins a fresh one in its place,
+// under the same declared pin.
+//
+// RE-PINNED NOW rather than at the next Tx, so [Writer.Conn] keeps answering
+// a live connection, and drawn WITHOUT the caller's cancellation: a
+// replacement is cleanup, and the failure that made it necessary is often the
+// cancellation itself (CLAUDE.md's rule that a teardown takes
+// context.WithoutCancel). If it cannot be had, conn stays nil and the next Tx
+// tries again and says why.
+//
+// BOUNDED BY THE BUSY TIMEOUT all the same, because a context with the
+// cancellation taken off it has no deadline either. The bound is that knob
+// rather than a constant of its own for the reason every other wait here
+// takes it: it is the one number an operator already sets for "how long this
+// store may block me". A pool wait here is short by construction — the
+// connection just handed back is a free slot — but this also runs on the way
+// out of a PANIC, and an unbounded wait there would hold the panic inside the
+// store with nothing to say so.
+func (w *Writer) replace(ctx context.Context, conn *sql.Conn) {
+	giveBack(conn, w.retire, false)
+	w.retire = nil
+	w.conn = nil
+	bounded, stop := context.WithTimeout(context.WithoutCancel(ctx), w.db.busy)
+	defer stop()
+	// The error is the NEXT Tx's to report, through [Writer.pinned]: this
+	// runs from a defer, including one unwinding a panic, where there is
+	// no caller left to hand it to.
+	_, _ = w.pinned(bounded)
+}
+
+// pinned is the writer's connection, drawn afresh if the last was retired.
+func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
+	if w == nil || w.closed {
+		return nil, ErrWriterClosed
 	}
-	defer func() {
-		if p := recover(); p != nil {
-			rollback(ctx, tx)
-			panic(p)
+	if w.db == nil || w.db.sql == nil {
+		return nil, ErrNoEstate
+	}
+	if w.conn == nil {
+		conn, err := w.db.sql.Conn(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("store: re-pin a writer connection: %w", err)
 		}
-	}()
-	if err := fn(tx); err != nil {
-		// THROUGH THE SAME HELPER, and here the consequence is worse
-		// than on the pool: this connection is PINNED, so a rollback
-		// that failed leaves a transaction open on the one connection
-		// this applier will ever use — every subsequent attempt is
-		// refused its own BEGIN and the domain stops applying entirely.
-		rollback(ctx, tx)
-		return err
+		w.conn, w.retire = conn, retireSwitch(conn)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit: %w", err)
-	}
-	return nil
+	return w.conn, nil
 }
 
 // Conn exposes the pinned connection for statements that are not transactions
 // — a PRAGMA, a single read.
 //
-// It is the SAME connection every Tx runs on. There is deliberately NO
+// It is the SAME connection every Tx runs on, until a transaction fails to
+// end and Tx replaces it: ask again after a failed Tx rather than holding the
+// old one. It is NIL only when that replacement could not be had, and the
+// next Tx reports why — so a caller reaching for it directly must check,
+// exactly as one reaching for [DB.Replicated] must. There is deliberately NO
 // prepared-statement cache on it, and the reason is a measurement rather than
 // a preference: on this driver, executing an applier-shaped upsert 4 000 times
 // through a statement prepared once on this connection is not faster than
@@ -132,13 +206,23 @@ func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 // doc comment describing what the engine does.
 func (w *Writer) Conn() *sql.Conn { return w.conn }
 
-// Close releases the pinned connection back to the pool.
+// Close releases the pinned connection back to the pool and gives up the pin.
+//
+// IDEMPOTENT ON ITS OWN FLAG, not on the connection. A nil connection was the
+// closed marker once, and it is now a live writer's legitimate state: a
+// writer whose replacement could not be drawn released its pin on the first
+// Close, again on the second, and accepted a Tx afterwards that dereferenced
+// nothing.
 func (w *Writer) Close() error {
-	if w == nil || w.conn == nil {
+	if w == nil || w.closed {
 		return nil
 	}
-	err := w.conn.Close()
-	w.conn = nil
+	w.closed = true
+	var err error
+	if w.conn != nil {
+		err = w.conn.Close()
+		w.conn, w.retire = nil, nil
+	}
 	w.db.pins.mu.Lock()
 	w.db.pins.held--
 	w.db.pins.mu.Unlock()
@@ -168,14 +252,28 @@ func (w *Writer) Close() error {
 // dashboard would be reporting the store's internals as the answer.
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	// BEFORE `d.busy`, which is the whole of this bug. The guard lived in
-	// [DB.txOpts] alone, and `pooled(d.busy)` below is an argument — evaluated
+	// [DB.txOpts] alone, and `budget(d.busy)` below is an argument — evaluated
 	// first, dereferencing the nil handle the guard was put there to refuse.
 	// See [ErrNoEstate]: this is the second time a maintenance tick racing a
 	// shutdown has taken the engine down through this exact path.
 	if d == nil || d.sql == nil {
 		return ErrNoEstate
 	}
-	return retryTransient(ctx, pooled(d.busy), func() error {
-		return d.txOpts(ctx, readTx, func(tx *sql.Tx) error { return fn(tx) })
+	return retryTransient(ctx, budget(d.busy), func() (err error) {
+		conn, err := d.sql.Conn(ctx)
+		if err != nil {
+			return fmt.Errorf("store: begin: %w", err)
+		}
+		// GIVEN BACK ON EVERY EXIT, for the reason [DB.Tx] carries: a
+		// body that panics unwinds past the return path, and a
+		// connection not handed back there is lost to the pool for good.
+		// A read's rollback can fail too, and the connection it leaves
+		// behind poisons the next caller exactly as a write's would —
+		// which [beginModeConn.IsValid] is what stops.
+		retire := retireSwitch(conn)
+		fit := false
+		defer func() { giveBack(conn, retire, fit) }()
+		fit, err = txOn(ctx, conn.BeginTx, readTx, fn)
+		return err
 	})
 }

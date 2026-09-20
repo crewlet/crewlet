@@ -519,14 +519,15 @@ func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Ref
 	}
 
 	// NO RETRY LOOP HERE. This transaction reads the live row and rewrites
-	// it, so a competing refine makes one of the two conflict with its
-	// snapshot — and [store.DB.Tx] retries exactly that, re-running the body
-	// against a fresh read. The loop that used to sit here retried EVERY
-	// error, because telling a write conflict from a dead store once meant
-	// reading driver error strings that two drivers worded differently.
-	// There is one driver, the discrimination is written once in the store,
-	// and a second budget on top of it only multiplied the attempts a
-	// genuinely-down store gets hammered with.
+	// it, and a competing refine cannot interleave with it: [store.DB.Tx]
+	// holds the database's write lock from its BEGIN and queues for it, so
+	// the second refine reads only after the first has committed and there
+	// is no conflict to recover from. The loop that used to sit here
+	// retried EVERY error, because telling a write conflict from a dead
+	// store once meant reading driver error strings that two drivers worded
+	// differently. There is one driver, the discrimination is written once
+	// in the store, and a second budget on top of it only multiplied the
+	// attempts a genuinely-down store gets hammered with.
 	var updated Skill
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -718,10 +719,10 @@ func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use
 	}
 	// NO RETRY LOOP HERE, for the reason [Skills.Update] carries: the
 	// failure this path was built to survive is a write conflict, and
-	// [store.DB.Tx] retries exactly that against a fresh read. What the loop
-	// added on top was a second budget over every OTHER error too — an
-	// outage included — which is the case that cannot be helped by trying
-	// again.
+	// [store.DB.Tx] holds the write lock from its BEGIN, so there is none
+	// left to survive. What the loop added on top was a second budget over
+	// every OTHER error too — an outage included — which is the case that
+	// cannot be helped by trying again.
 	var use Use
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		// The prior state is read in the same transaction as the bump so

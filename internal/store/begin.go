@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"sync/atomic"
 )
 
 // THE WRITE LOCK IS TAKEN AT BEGIN, NOT AT THE FIRST WRITE, and this file is
@@ -81,7 +82,53 @@ func (d *beginModeDriver) Open(name string) (driver.Conn, error) {
 // narrow interface hides the wide ones and drops every statement onto the
 // prepared-statement path. storetest's own fault conn says this in the same
 // words, for the same reason.
-type beginModeConn struct{ driver.Conn }
+type beginModeConn struct {
+	driver.Conn
+
+	// unfit is set when a statement that ENDS a transaction on this
+	// connection failed, which is the state database/sql cannot see: the
+	// driver reports the failure without answering [driver.ErrBadConn], so
+	// the connection goes back to the pool with a transaction possibly
+	// still open on it and the next caller is refused its own BEGIN.
+	//
+	// ATOMIC because database/sql may end a transaction from its own
+	// awaitDone goroutine — a rollback it issues when the caller's context
+	// is cancelled — while the caller is still inside the call that began
+	// it.
+	unfit atomic.Bool
+}
+
+// RetireSwitch hands out the function that says this connection's
+// transaction may still be open, so it must not be handed to another caller.
+// See [beginModeConn.IsValid] for what acts on it, and [retireSwitch] for why
+// the switch is taken out rather than the connection reached back into.
+func (c *beginModeConn) RetireSwitch() func() { return func() { c.unfit.Store(true) } }
+
+// IsValid is how a retired connection is DISCARDED rather than pooled: it is
+// [driver.Validator], which database/sql consults on every hand-back
+// (validateConnection, from putConn) and closes the connection on.
+//
+// # Why the answer is a flag here rather than sql.Conn.Raw at the hand-back
+//
+// Raw answering [driver.ErrBadConn] is database/sql's documented door for
+// "this connection must not be reused", and calling it where the hand-back
+// happens is RACY — against database/sql closing that same *sql.Conn, which
+// is exactly what it does when a transaction's context is cancelled, because
+// the rollback its awaitDone goroutine then issues discards the connection.
+// Conn.Raw reads c.done BEFORE taking c.closemu, so a close landing in that
+// window leaves it dereferencing a nil driverConn. Measured, and not a
+// theoretical window: a SIGSEGV in the retention loop's read during an
+// ordinary engine drain, which takes the whole process with it. The
+// cancellation that opens the window is the ordinary shape of a shutdown,
+// and awaitDone's rollback is still in flight when tx.Rollback has already
+// answered ErrTxDone to the caller — so "the transaction has ended" is not
+// the same fact as "nothing is closing this connection".
+//
+// A flag the driver's connection carries has no window at all: database/sql
+// ASKS it, on its own terms, at a point it has already serialised.
+// [DB.retireSwitch] is how the store reaches it, and reaches it while the
+// connection is provably still its own.
+func (c *beginModeConn) IsValid() bool { return !c.unfit.Load() }
 
 // BeginTx issues the begin this package actually wants.
 //
@@ -95,7 +142,7 @@ type beginModeConn struct{ driver.Conn }
 // NOTHING HERE MAKES THE DRIVER REFUSE A WRITE inside a read-only
 // transaction. The option selects a begin; it is not an enforcement, and
 // [DB.Read]'s doc stays honest about that.
-func (c *beginModeConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+func (c *beginModeConn) BeginTx(ctx context.Context, opts driver.TxOptions) (tx driver.Tx, err error) {
 	ex, ok := c.Conn.(driver.ExecerContext)
 	if !ok {
 		return nil, errNoExecer
@@ -104,10 +151,20 @@ func (c *beginModeConn) BeginTx(ctx context.Context, opts driver.TxOptions) (dri
 	if opts.ReadOnly {
 		stmt = "BEGIN"
 	}
-	if _, err := ex.ExecContext(ctx, stmt, nil); err != nil {
+	defer func() {
+		if err != nil {
+			// A BEGIN THE DRIVER REFUSED, whose usual reason is a
+			// transaction already open on this connection. Retiring
+			// one that was in fact clean costs a reconnect on a path
+			// that is already failing; keeping a dirty one costs
+			// every later caller that draws it.
+			c.unfit.Store(true)
+		}
+	}()
+	if _, err = ex.ExecContext(ctx, stmt, nil); err != nil {
 		return nil, err
 	}
-	return &beginModeTx{ex: ex}, nil
+	return &beginModeTx{ex: ex, conn: c}, nil
 }
 
 // Begin is the path database/sql falls back to for a driver with no
@@ -164,6 +221,7 @@ func (c *beginModeConn) Ping(ctx context.Context) error {
 // strip.
 type beginModeTx struct {
 	ex   driver.ExecerContext
+	conn *beginModeConn
 	done bool
 }
 
@@ -182,6 +240,15 @@ func (t *beginModeTx) end(stmt string) error {
 	}
 	t.done = true
 	_, err := t.ex.ExecContext(context.Background(), stmt, nil)
+	if err != nil {
+		// THE TRANSACTION MAY STILL BE OPEN. A COMMIT the driver
+		// refused leaves one, as SQLite does for a deferred
+		// constraint, and so does a ROLLBACK it refused — and in
+		// neither case does it answer ErrBadConn, so nothing else
+		// would stop this connection being pooled. See
+		// [beginModeConn.IsValid].
+		t.conn.unfit.Store(true)
+	}
 	return err
 }
 

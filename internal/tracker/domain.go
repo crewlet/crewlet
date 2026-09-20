@@ -165,9 +165,11 @@ func (Domain) ReadinessInput() bool { return true }
 // A checksum written today would also be WRONG, and the reason is worth
 // keeping beside the claim: `tracker_projects.rank_duplicate_pending` is an
 // applier-local hint, set by each node's own applier from its own probe and
-// cleared by that node's next rank move or by the duty — see [duty.clearProbe],
-// which states the same thing from the other end. Two nodes legitimately hold
-// different values for it at one checkpoint. So the claim is really "identical
+// cleared ONLY by the fleet-singleton duty's local write on the node that
+// holds the duty — see [duty.clearProbe], which states the same thing from
+// the other end, including that the apply path has no clear at all. So two
+// nodes legitimately hold different values for it at one checkpoint, and a
+// peer's copy stays set until it restarts. So the claim is really "identical
 // in every column a RECORD owns", and a verification has to exclude the
 // columns no record does before it can mean anything.
 func (Domain) ClaimsIdentity() bool { return true }

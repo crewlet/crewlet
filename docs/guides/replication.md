@@ -179,6 +179,33 @@ Both are the system working. `crewlet retention status` publishes the longest
 apply transaction and the longest batch actually observed, so this is a
 measured property of your fleet rather than a surprise.
 
+**The occupancy is per domain, not per node.** Every domain's applier writes
+the same replicated database, and a node hands that database's write lock to
+its writers in the order they asked for it. A bulk update commits one
+transaction at a time — at most 4 000 rows, about two seconds at the measured
+drain — and a waiting writer takes the lock as soon as the one in front of it
+commits. So a bulk update in the work tracker delays the knowledge base's
+apply by the transactions already queued ahead of it, at most one per other
+writer on that node, never by the whole 16 seconds.
+
+A writer that does not reach the front within `store.busy_timeout_seconds`
+fails retryably and rejoins the line, logged as `store_tx_retry` naming the
+knob. With three domains applying and a bulk update in flight, the default
+five seconds is close to the three transactions a fourth writer can
+legitimately wait behind — so that log line on a node doing bulk work is the
+signal to raise it rather than a fault. Raise the knob before you widen
+anything else: a longer per-waiter bound lets one stuck holder block the line
+for longer, and this way the line still drains in order.
+
+**No apply transaction is ever aborted by a commit elsewhere in the database,
+and none is ever re-run because of one.** Every write transaction takes the
+lock when it begins rather than at its first write, so there is no window
+between an applier's read and its write for another commit to land in. The
+`crewlet.statelog.apply.tx.aborts` counter in
+[Metrics](../reference/metrics.md) reads zero on a healthy node for that
+reason, and a non-zero count is the retry budget being spent on something
+else.
+
 ## What a rolling upgrade blocks
 
 A record at a version this build cannot decode is retained, and everything

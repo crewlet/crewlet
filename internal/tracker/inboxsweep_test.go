@@ -50,6 +50,10 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 			jobs[0].Horizon)
 	}
 
+	// THE SWEEP RUNS BESIDE A LIVE APPLIER, which holds the estate's pin
+	// for the life of the process: a sweep that asked for one of its own
+	// was refused on every tick of a running node.
+	holdTheAppliersPin(t, r)
 	swept, err := jobs[0].Run(t.Context(), wednesday,
 		wednesday.Add(-365*24*time.Hour))
 	if err != nil {

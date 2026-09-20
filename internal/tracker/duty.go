@@ -448,16 +448,36 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // LOCAL, and that is correct where the re-spread flag's clear is not: the
 // column is written by every node's own applier from its own probe, never by a
 // record, so a record clearing it would be a record about a column no record
-// owns. Every node clears its own the next time it applies a rank move that
-// finds no duplicate; this is what stops the duty spinning in the meantime.
+// owns.
+//
+// AND THIS IS THE ONLY CLEAR THERE IS, which is worth stating because this
+// comment used to say otherwise ("every node clears its own the next time it
+// applies a rank move that finds no duplicate") and the apply path does no
+// such thing: apply_objects.go sets the flag to 1 on a colliding rank and
+// writes 0 only on a project's first INSERT, never in the upsert that follows.
+// So a peer that probed a duplicate carries the flag until it restarts, and
+// only the node holding this fleet-singleton duty ever writes a 0.
+//
+// That divergence is bounded rather than harmless: the column is deliberately
+// outside the identity claim (see [Domain.ClaimsIdentity]), nothing reads it
+// as a fleet-wide fact, and the duplicate itself is repaired by a published
+// record every node applies. Making the clear deterministic — every applier
+// clearing the flag when it applies the duty's repair, re-probing under this
+// same guard, and this local write going away — is a change to what a record
+// owns, which the apply path's own comment has weighed and declined once
+// before ("a company-wide aggregate on every drag is the per-minute scan no
+// index answers"), so it wants its own change rather than this one.
+//
+// The guard below is also why this clears nothing on the tick that publishes
+// a repair: the repair has not been applied yet, so the NOT EXISTS still
+// sees the duplicates, and it is the NEXT tick that clears.
+//
+// A POOLED TRANSACTION, NOT A PIN, for the reason purgeInbox carries: every
+// pin the replicated estate declares belongs to an applier for the life of
+// the process, so a repair asking for one of its own was refused on every
+// tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
-	w, err := d.deps.DB.Replicated().Writer(ctx)
-	if err != nil {
-		return fmt.Errorf("tracker: take the writer to clear %s's duplicate "+
-			"flag: %w", project, err)
-	}
-	defer func() { _ = w.Close() }()
-	return w.Tx(ctx, func(tx *sql.Tx) error {
+	return d.deps.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tracker_projects SET rank_duplicate_pending = 0
 			WHERE key = ? AND NOT EXISTS (
