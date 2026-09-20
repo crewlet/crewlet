@@ -118,3 +118,4 @@ six false statements by the time anybody checked.
 | [0016](0016-a-protocol-bump-refuses-where-an-envelope-round-trips.md) | A coordination protocol bump refuses where an event envelope round-trips | nothing — declared |
 | [0017](0017-a-turn-id-names-one-run.md) | A turn id names one RUN; the work key names the unit of work | `TestARedeliveredTriggerRunsUnderItsOwnIdentity` |
 | [0018](0018-a-message-is-additive-on-its-channels-subject.md) | A chat message is additive on its channel's subject, and scoped to the channel | `TestTheScopeAlphabetHasNoPerMessageTerm` |
+| [0019](0019-chat-is-a-keyword-corpus-and-takes-no-vectors.md) | Chat is a keyword corpus of its own and takes no vectors | `TestTheVectorCorpusIsPagesAndTasksOnly` |
