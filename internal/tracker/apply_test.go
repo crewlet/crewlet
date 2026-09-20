@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -135,6 +136,61 @@ func (h *applyHarness) value(query string, args ...any) int64 {
 		h.t.Fatalf("read %q: %v", query, err)
 	}
 	return n.Int64
+}
+
+// text reads one string column.
+func (h *applyHarness) text(query string, args ...any) string {
+	h.t.Helper()
+	var out sql.NullString
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(), query, args...).Scan(&out)
+	}); err != nil {
+		h.t.Fatalf("read %q: %v", query, err)
+	}
+	return out.String
+}
+
+// seedChildren fills a root's subtree straight into the tables, for the one
+// case that needs a subtree LARGER than a cap rather than a subtree of a
+// particular shape.
+//
+// WRITTEN AS THE APPLIER WOULD LEAVE IT — the task row with its parent, root
+// and depth, plus the two closure rows (self at distance 0, root at distance
+// 1) — because what the case exercises is the applier REBUILDING this, and a
+// fixture that skipped the closure would be asking it to build rather than to
+// redo. The ids the assertions read are applied through the real path; this is
+// only the bulk in between.
+func (h *applyHarness) seedChildren(root string, n int) {
+	h.t.Helper()
+	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		for i := range n {
+			id := fmt.Sprintf("child-%04d", i)
+			if _, err := tx.ExecContext(h.t.Context(), `
+				INSERT INTO tracker_tasks
+					(id, key, project_key, parent_id, root_id, depth,
+					 type, title, status, status_group, rank, document,
+					 created_at, updated_at, version)
+				VALUES (?,?,'ENG',?,?,1,'task','a task','todo',
+					'not_started','nn','{}',0,0,1)
+				ON CONFLICT (id) DO NOTHING`,
+				id, "ENG-"+id, root, root); err != nil {
+				return err
+			}
+			for _, row := range [][2]any{{id, 0}, {root, 1}} {
+				if _, err := tx.ExecContext(h.t.Context(), `
+					INSERT INTO tracker_task_closure
+						(ancestor_id, descendant_id, distance)
+					VALUES (?,?,?)
+					ON CONFLICT (ancestor_id, descendant_id) DO NOTHING`,
+					row[0], id, row[1]); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		h.t.Fatalf("seed %d children of %s: %v", n, root, err)
+	}
 }
 
 func taskRecord(id string, op tracker.OpKind, payload any, notify *tracker.Notify) tracker.MutationRecord {
@@ -591,3 +647,77 @@ func mustJSON(v any) []byte {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// A RE-PARENT REBUILDS THE WHOLE SUBTREE, not the first thousand of it.
+//
+// `descendantsOf` carried a `LIMIT MaxDescendants` on the claim that the cap
+// bounded the subtree, and nothing enforces that cap where a subtree GROWS:
+// only a move and a removal check it, and a create under a parent never does.
+// So a subtree grown one task at a time past the cap hit that limit INSIDE THE
+// APPLIER, and the tail it cut kept its old root_id, depth and too_deep — for
+// ever, since nothing revisits a task whose own record did not change.
+//
+// Every node computed the same wrong answer identically, so nothing could
+// notice it: a board's `too_deep` flag was derived from a depth that was never
+// updated, and a re-parent left half a subtree filed under the root it came
+// from. A short read in an applier is not a short answer, it is durable wrong
+// state replicated to the fleet.
+func TestAReParentRebuildsEveryDescendantAndNotJustTheFirstThousand(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+
+	// One root with MaxDescendants+2 direct children, which is the cheapest
+	// shape past the bound: a deep chain would hit MaxDepth's own flag and
+	// confuse what this case is about.
+	const root, newHome = "root", "elsewhere"
+	over := tracker.MaxDescendants + 2
+	for _, id := range []string{newHome, root} {
+		if _, err := h.apply(taskRecord(id, tracker.OpCreate, newTask(id), nil), at); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	// SEEDED THROUGH THE APPLIER for the first and last child so the shape
+	// is one a real log produces, and directly for the bulk in between so
+	// the case costs a few statements rather than a thousand records. The
+	// two that matter are the ones the assertions read.
+	first, last := "child-0000", fmt.Sprintf("child-%04d", over-1)
+	for _, id := range []string{first, last} {
+		task := newTask(id)
+		parent := root
+		task.Parent = &parent
+		if _, err := h.apply(taskRecord(id, tracker.OpCreate, task, nil), at); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	h.seedChildren(root, over)
+
+	if got := h.count("tracker_task_closure"); got <= tracker.MaxDescendants {
+		t.Fatalf("the fixture holds %d closure rows, which is inside the bound "+
+			"this case is about", got)
+	}
+
+	// THE ROOT MOVES. Every descendant's ancestry moves with it.
+	into := newHome
+	if _, err := h.apply(taskRecord(root, tracker.OpPatch,
+		tracker.TaskPatch{Parent: &into}, nil), at); err != nil {
+		t.Fatalf("re-parent %s: %v", root, err)
+	}
+
+	for _, id := range []string{first, last} {
+		if got := h.text(
+			`SELECT root_id FROM tracker_tasks WHERE id = ?`, id); got != newHome {
+			t.Errorf("%s is still filed under %q after its root moved to %q — "+
+				"the applier rebuilt only part of the subtree", id, got, newHome)
+		}
+		if got := h.value(
+			`SELECT depth FROM tracker_tasks WHERE id = ?`, id); got != 2 {
+			t.Errorf("%s is at depth %d rather than 2", id, got)
+		}
+		if got := h.value(
+			`SELECT distance FROM tracker_task_closure
+			 WHERE ancestor_id = ? AND descendant_id = ?`, newHome, id); got != 2 {
+			t.Errorf("the closure puts %s %d from the new root", id, got)
+		}
+	}
+}
