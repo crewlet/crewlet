@@ -54,6 +54,27 @@ const (
 
 func (d Decision) String() string { return string(d) }
 
+// ReviewDecisions are the decisions a REVIEWER may submit, which is not every
+// decision this package defines.
+//
+// [Skipped] is deliberately absent: a skip is the ENGINE's own reading of a
+// round nobody was waiting on, taken before the reviewer is called at all, so
+// a reviewer reaching it would mean the turn ran after deciding not to.
+//
+// ONE LIST, TWO READERS, because it was two independent spellings of the same
+// three names: the submission schema's `enum` and the decoder's validation.
+// They are one edit apart from disagreeing in the direction nothing catches —
+// a schema that OFFERS a value the decoder REFUSES bounces a model that did
+// exactly what it was told, and the model cannot see that the two lists
+// differ. The decoder already read the constants rather than their spelling,
+// which is the half that catches a RENAME; this is the half that catches an
+// ADDITION, and only one of the two had ever been the problem.
+func ReviewDecisions() []Decision {
+	// Returned fresh, never a package-level slice: a shared backing array is
+	// one caller's append away from rewriting everybody else's list.
+	return []Decision{Done, SelfIterate, Failed}
+}
+
 // Valid reports whether d is one of the four this package defines.
 //
 // EMPTY IS NOT VALID here, unlike the tool-choice and transport enums: every

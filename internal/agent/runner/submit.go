@@ -173,14 +173,17 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 	if err := structured.Remarshal(args, &r); err != nil {
 		return r, err
 	}
-	// AGAINST THE CONSTANTS, never their spelling. This switch listed
+	// AGAINST PHASE'S OWN LIST, never a spelling of it. This switch listed
 	// "done", "self_iterate" and "failed" as literals, so renaming one of
-	// them left this accepting a value nothing else produces — and phase
-	// owns those names.
+	// them left this accepting a value nothing else produces; then it
+	// listed the constants, which catches a rename but still leaves an
+	// ADDITION refused here while the schema offers it.
+	// [phase.ReviewDecisions] is the list, and the schema's enum is built
+	// from the same call — see [reviewDecisionEnum].
 	//
-	// phase.Skipped is deliberately absent: a skip is the ENGINE's own
-	// reading of a round nobody was waiting on (see [turn.Check]), and a
-	// reviewer reaching it would mean the turn ran after deciding not to.
+	// phase.Skipped is deliberately absent from it: a skip is the ENGINE's
+	// own reading of a round nobody was waiting on (see [turn.Check]), and
+	// a reviewer reaching it would mean the turn ran after deciding not to.
 	switch {
 	case r.Decision == "":
 		// An absent decision is `done`. The alternative — defaulting to
@@ -188,7 +191,7 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 		// simply forgot a field, and the engine still overturns a `done`
 		// that delivered nothing.
 		r.Decision = phase.Done
-	case r.Decision != phase.Done && r.Decision != phase.SelfIterate && r.Decision != phase.Failed:
+	case !slices.Contains(phase.ReviewDecisions(), r.Decision):
 		return r, fmt.Errorf("decision must be one of %s, %s or %s, got %q",
 			phase.Done, phase.SelfIterate, phase.Failed, r.Decision)
 	}

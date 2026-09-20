@@ -11,6 +11,8 @@ package runner
 // The struct tags and these schemas must agree; the tests assert a submission
 // shaped by the schema decodes into the struct.
 
+import "github.com/crewlet/crewlet/internal/agent/phase"
+
 var workSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
@@ -55,12 +57,26 @@ var workSchema = map[string]any{
 	"required": []any{"summary"},
 }
 
+// reviewDecisionEnum is the submission schema's copy of what a reviewer may
+// decide, taken from [phase.ReviewDecisions] rather than spelled again.
+//
+// Spelled again is what it was. A schema offering a value the decoder refuses
+// bounces a model that did exactly what it was told, and nothing in either
+// list can see the other.
+func reviewDecisionEnum() []any {
+	out := make([]any, 0, len(phase.ReviewDecisions()))
+	for _, d := range phase.ReviewDecisions() {
+		out = append(out, d.String())
+	}
+	return out
+}
+
 var reviewSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"decision": map[string]any{
 			"type": "string",
-			"enum": []any{"done", "self_iterate", "failed"},
+			"enum": reviewDecisionEnum(),
 			"description": "done: the work is finished and was actually " +
 				"delivered. self_iterate: it is wrong or incomplete, the answer " +
 				"was never delivered by a tool call, or the executor said it " +
