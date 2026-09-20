@@ -101,7 +101,7 @@ func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 // together.
 func TestALockWaitGetsItsOwnBudgetRatherThanTheSnapshotOne(t *testing.T) {
 	const busy = 5 * time.Second
-	b := pooled(busy)
+	b := budget(busy)
 
 	if got := b.attempts(causeLockTimeout); got != lockAttempts {
 		t.Errorf("a lock timeout gets %d attempts, want %d", got, lockAttempts)
@@ -135,31 +135,29 @@ func TestALockWaitGetsItsOwnBudgetRatherThanTheSnapshotOne(t *testing.T) {
 	}
 }
 
-// AND A PINNED WRITER DOES NOT RETRY A DIRTY CONNECTION, because it has no
-// other to draw.
+// AND A DIRTY CONNECTION IS RETRIED ON EVERY PATH, pinned included, because
+// on every path the next attempt now draws a different connection.
 //
-// On the pool the retry is the fix: the next attempt gets a different
-// connection. [Writer] holds ONE for the life of the handle, so the same
-// retry is eight guaranteed failures against the same dirty connection — and
-// the honest answer is the error, which is what pinned.go's own comment says
-// leaves the domain applying nothing until somebody sees it.
-func TestAPinnedWriterDoesNotRetryADirtyConnection(t *testing.T) {
+// There were two budgets. A [Writer]'s refused this cause outright: the retry
+// is the fix only when the next attempt gets ANOTHER connection, and a pin
+// had one for the life of the handle, so retrying was eight guaranteed
+// failures against the same dirty one. An attempt that leaves its transaction
+// possibly open now retires the connection it ran on and a pinned writer pins
+// a fresh one in its place, so the premise of the second budget is gone — and
+// a budget kept after its reason is a policy nobody can re-derive.
+func TestADirtyConnectionIsRetriedBecauseTheNextAttemptDrawsAnother(t *testing.T) {
 	const busy = 5 * time.Second
-	if got := pinned(busy).attempts(causeDirtyConn); got != 0 {
-		t.Errorf("a pinned writer retries a dirty connection %d times; it has one "+
-			"connection, so every attempt draws the same dirty one", got)
+	if got := budget(busy).attempts(causeDirtyConn); got == 0 {
+		t.Error("a dirty connection is not retried, but the attempt that met it " +
+			"retired it — so the next attempt draws a different one, on the pool " +
+			"and on a pinned writer alike")
 	}
-	if got := pooled(busy).attempts(causeDirtyConn); got == 0 {
-		t.Error("a pooled transaction does not retry a dirty connection, but there " +
-			"the retry IS the fix — the next attempt draws a different one")
-	}
-	// The two budgets differ in exactly one place. A change that made them
-	// differ elsewhere would be a second policy nobody asked for.
-	for _, c := range []txCause{causeStaleSnapshot, causeLockTimeout, causeFatal} {
-		if pinned(busy).attempts(c) != pooled(busy).attempts(c) {
-			t.Errorf("pinned and pooled disagree on %s (%d vs %d); the only "+
-				"structural difference is that a pin has no second connection",
-				causeName(c), pinned(busy).attempts(c), pooled(busy).attempts(c))
-		}
+	// ONE BUDGET, and this is what says so: every transaction in the
+	// package reaches it through the same constructor, so a second policy
+	// cannot appear without appearing here.
+	if got := budget(busy).attempts(causeDirtyConn); got != txAttempts {
+		t.Errorf("a dirty connection gets %d attempts, want %d — it is a failure "+
+			"that returns with no wait of its own, which is the budget %s is "+
+			"measured for", got, txAttempts, causeName(causeStaleSnapshot))
 	}
 }

@@ -122,6 +122,28 @@ func (c *faultConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, 
 	return pc.PrepareContext(ctx, q)
 }
 
+// IsValid forwards the wrapped connection's own verdict, which is how the
+// store RETIRES a connection whose transaction may still be open (see
+// internal/store's begin.go). Hidden here, a fault that leaves one behind
+// would be handed to the next caller and the case would measure the wrong
+// recovery — the same reason every other optional interface is forwarded
+// explicitly above.
+func (c *faultConn) IsValid() bool {
+	v, ok := c.Conn.(driver.Validator)
+	return !ok || v.IsValid()
+}
+
+// RetireSwitch forwards the wrapped connection's retire switch, which the
+// store takes out at the draw. Hidden here, a connection whose
+// transaction did not end would be handed to the next caller.
+func (c *faultConn) RetireSwitch() func() {
+	r, ok := c.Conn.(interface{ RetireSwitch() func() })
+	if !ok {
+		return func() {}
+	}
+	return r.RetireSwitch()
+}
+
 func (c *faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	bt, ok := c.Conn.(driver.ConnBeginTx)
 	if !ok {
@@ -321,6 +343,28 @@ func (c *commitFaultConn) PrepareContext(ctx context.Context, q string) (driver.
 		return c.Conn.Prepare(q)
 	}
 	return pc.PrepareContext(ctx, q)
+}
+
+// IsValid forwards the wrapped connection's own verdict, which is how the
+// store RETIRES a connection whose transaction may still be open (see
+// internal/store's begin.go). Hidden here, a fault that leaves one behind
+// would be handed to the next caller and the case would measure the wrong
+// recovery — the same reason every other optional interface is forwarded
+// explicitly above.
+func (c *commitFaultConn) IsValid() bool {
+	v, ok := c.Conn.(driver.Validator)
+	return !ok || v.IsValid()
+}
+
+// RetireSwitch forwards the wrapped connection's retire switch, which the
+// store takes out at the draw. Hidden here, a connection whose
+// transaction did not end would be handed to the next caller.
+func (c *commitFaultConn) RetireSwitch() func() {
+	r, ok := c.Conn.(interface{ RetireSwitch() func() })
+	if !ok {
+		return func() {}
+	}
+	return r.RetireSwitch()
 }
 
 func (c *commitFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
