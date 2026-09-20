@@ -42,6 +42,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"payload", payloadCases},
 		{"channels", channelCases},
 		{"follows", followCases},
+		{"chat_reads", chatReadCases},
 		{"fires", fireCases},
 		{"sandbox_runs", runCases},
 		{"secrets", secretCases},

@@ -38,6 +38,7 @@ type Fleet struct {
 	budgets      map[string]coord.Usage
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
+	chatReads    map[string]coord.ChatReadState
 	fires        map[string]time.Time
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
@@ -89,6 +90,7 @@ func NewFleet() *Fleet {
 		budgets:      map[string]coord.Usage{},
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
+		chatReads:    map[string]coord.ChatReadState{},
 		fires:        map[string]time.Time{},
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
@@ -841,4 +843,83 @@ func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread str
 	}
 	delete(f.follows, key)
 	return true, nil
+}
+
+// ---- the per-person chat read state ------------------------------------ //
+
+// ChatRead reports one person's read state, the zero state meaning nobody has
+// opened chat as that person yet.
+func (f *Fleet) ChatRead(_ context.Context, handle string) (coord.ChatReadState, error) {
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: read a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return cloneChatRead(f.chatReads[handle]), nil
+}
+
+// AdvanceChatRead merges a flush into one person's record.
+//
+// NO RETRY LOOP HERE and that is not a simplification: the real backend's
+// rounds exist to lose a compare-and-set against another PROCESS, and this
+// twin holds the whole fleet under one mutex. The MERGE is the shared half —
+// [coord.MergeChatRead] — so the twin and the backend cannot disagree about
+// what a flush does, which is the only part a conformance suite can check.
+func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
+	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
+
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: advance a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	merged, err := coord.MergeChatRead(f.chatReads[handle], delta)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	f.chatReads[handle] = merged
+	return cloneChatRead(merged), nil
+}
+
+// ForgetChatRead removes a person's record, reporting whether one was there.
+func (f *Fleet) ForgetChatRead(_ context.Context, handle string) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: forget a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.chatReads[handle]; !ok {
+		return false, nil
+	}
+	delete(f.chatReads, handle)
+	return true, nil
+}
+
+// ChatReaders lists the handles holding read state, in order.
+func (f *Fleet) ChatReaders(_ context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	handles := make([]string, 0, len(f.chatReads))
+	for handle := range f.chatReads {
+		handles = append(handles, handle)
+	}
+	slices.Sort(handles)
+	return handles, nil
+}
+
+// cloneChatRead copies the maps and slices a caller could otherwise mutate
+// under the twin's own lock.
+//
+// The real backend hands back a decoded record that shares nothing with its
+// store; a twin that handed out its live map would let one caller's edit reach
+// another's read, and the suite would be proving a property only the twin has.
+func cloneChatRead(state coord.ChatReadState) coord.ChatReadState {
+	out := state
+	if state.Cursors != nil {
+		out.Cursors = maps.Clone(state.Cursors)
+	}
+	out.Muted = slices.Clone(state.Muted)
+	return out
 }

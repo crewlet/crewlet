@@ -1032,6 +1032,7 @@ type Fleet interface {
 	Plane
 	Channels
 	Follows
+	ChatReads
 	Fires
 	SandboxRuns
 	Secrets
