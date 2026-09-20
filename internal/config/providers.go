@@ -340,6 +340,30 @@ type LLMProvider struct {
 	// on a cli-agent entry, which carries its own.
 	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider."`
 
+	// MaxOutputTokens caps how much ONE call may generate.
+	//
+	// IT MEANS OUTPUT, on both backends, which is the whole reason it is
+	// one field rather than each vendor's own. Anthropic's `max_tokens`
+	// covers thinking AND output, so the provider adds the thinking budget
+	// to whatever is set here before it reaches the wire; OpenAI's caps
+	// output alone and is sent as written. A number set here therefore
+	// buys the same visible answer on either, which is what a company that
+	// lists both in one fallback chain needs.
+	//
+	// ZERO IS "THE BACKEND'S DEFAULT" rather than "no output", and the two
+	// backends answer it differently because their APIs do: Anthropic
+	// REQUIRES the field, so something is always sent (see that package's
+	// DefaultMaxTokens), while OpenAI's is optional and an unset one sends
+	// nothing at all, which is what an openai-compatible endpoint with an
+	// unknown context window needs.
+	//
+	// It is worth setting. A phase that runs out of output stops
+	// mid-sentence, or mid-structured-submission, and arrives as an
+	// ordinary successful response — the engine reports it as
+	// `output_truncated` on the phase record, and this is the field that
+	// answers it.
+	MaxOutputTokens int `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty" js:"min=0" desc:"Cap on the tokens one call may generate. 0 takes the backend's default. Not accepted on a cli-agent provider."`
+
 	// TimeoutSeconds is the HTTP client timeout for one call. Raise it for
 	// slow or large-output models that otherwise time out mid-generation;
 	// lower it to fail fast. The cli-agent backend drives a subprocess
@@ -440,6 +464,20 @@ func (l *LLMProvider) validate(path Path) error {
 					"nothing on a cli-agent provider: the CLI carries its own. "+
 					"Drop it, and point `model` at a stronger model instead")
 		}
+		// THE SAME RULE, and it is the same failure: an output cap is an
+		// HTTP request field, and a coding CLI driven headlessly exposes
+		// no flag for one. Nothing in engine/providers.go passes it to
+		// cliagent.Config, so a value here would validate clean, be read
+		// by nobody, and leave an operator who set it after seeing
+		// `output_truncated` with a knob that does nothing and no way to
+		// tell. The CLI's own answer is its `model`.
+		if l.MaxOutputTokens != 0 {
+			p.add(at(path, "max_output_tokens"), ErrConflict,
+				"max_output_tokens is an HTTP request field and does nothing on a "+
+					"cli-agent provider: the CLI takes no per-call output cap. "+
+					"Drop it, and point `model` at a model that writes shorter "+
+					"answers, or at a stronger one")
+		}
 	}
 	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
 		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
@@ -448,6 +486,16 @@ func (l *LLMProvider) validate(path Path) error {
 	if l.ReasoningBudgetTokens < 0 {
 		p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange,
 			"must not be negative, got %d", l.ReasoningBudgetTokens)
+	}
+	// A NEGATIVE IS NOT "UNSET". Zero already means "take the backend's
+	// default", so a negative has no reading left — and untrapped it would
+	// reach the Anthropic backend, which requires the field and would send
+	// it, turning every call in the company into a 400 whose message names
+	// a field nobody set on purpose.
+	if l.MaxOutputTokens < 0 {
+		p.add(at(path, "max_output_tokens"), ErrOutOfRange,
+			"must be 0 (the backend's own default) or positive, got %d",
+			l.MaxOutputTokens)
 	}
 
 	// Left unbounded, a timeout of 0 or a negative one passes validation

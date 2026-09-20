@@ -501,7 +501,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"TokenBudget": true, "BudgetTokens": true, "SummarizeMaxTokens": true,
 		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
 		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,
-		"SandboxMinBudgetTokens": true,
+		"SandboxMinBudgetTokens": true, "MaxOutputTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,
 		// A path on disk, not the material at it.

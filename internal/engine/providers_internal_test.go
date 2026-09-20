@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"strings"
 
 	"context"
@@ -311,3 +312,118 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 		t.Fatalf("a provider with no credential was refused: %v", err)
 	}
 }
+
+// TestTheConfiguredOutputCapReachesBothWires is the guard for the failure this
+// field exists to end: a knob that validates, documents and does nothing.
+//
+// anthropic.Config.MaxTokens and openai.Config.MaxTokens both existed and
+// buildProvider passed NEITHER, so every Anthropic seat ran under that
+// package's own default and every OpenAI seat under no cap at all — an
+// asymmetry no config could state and no reader could see. Asserting the
+// struct field would not have caught it; what was missing was the assignment,
+// so this asserts the number on the WIRE.
+//
+// It also pins the one place the two wires legitimately differ. Anthropic's
+// max_tokens bounds thinking AND output, so a reasoning entry is sent the cap
+// PLUS the budget and a company reading `max_output_tokens: N` gets N of
+// answer either way.
+func TestTheConfiguredOutputCapReachesBothWires(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		spec     config.LLMProvider
+		reply    string
+		field    string
+		wantCap  float64
+		wantNone bool
+	}{
+		{
+			name: "anthropic sends the cap it was given",
+			spec: config.LLMProvider{
+				Type: config.LLMAnthropic, Model: "claude-test",
+				MaxOutputTokens: 12345,
+			},
+			reply:   anthropicMessage,
+			field:   "max_tokens",
+			wantCap: 12345,
+		},
+		{
+			// THE BUDGET RIDES ON TOP. The wire field covers thinking and
+			// output together, so the configured number is what is left
+			// for the answer only when the budget is added to it.
+			name: "anthropic adds the thinking budget to it",
+			spec: config.LLMProvider{
+				Type: config.LLMAnthropic, Model: "claude-test",
+				MaxOutputTokens: 12345, Reasoning: true,
+				ReasoningBudgetTokens: 5000,
+			},
+			reply:   anthropicMessage,
+			field:   "max_tokens",
+			wantCap: 12345 + 5000,
+		},
+		{
+			name: "openai sends the cap it was given",
+			spec: config.LLMProvider{
+				Type: config.LLMOpenAICompatible, Model: "gpt-test",
+				MaxOutputTokens: 4321,
+			},
+			reply:   chatCompletion,
+			field:   "max_tokens",
+			wantCap: 4321,
+		},
+		{
+			// UNSET IS A REAL ANSWER on this wire and only this one: the
+			// field is optional, so an openai-compatible endpoint whose
+			// context window this engine does not know is sent no cap
+			// rather than a number somebody invented.
+			name: "openai sends nothing when none is set",
+			spec: config.LLMProvider{
+				Type: config.LLMOpenAICompatible, Model: "gpt-test",
+			},
+			reply:    chatCompletion,
+			field:    "max_tokens",
+			wantNone: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.reply)
+			}))
+			defer srv.Close()
+
+			spec := tc.spec
+			spec.BaseURL = srv.URL
+			r := tierB(map[string]string{
+				"ANTHROPIC_API_KEY": "sk-ant-x", "OPENAI_API_KEY": "sk-x",
+			})
+			p, err := buildProvider("entry", spec, r)
+			if err != nil {
+				t.Fatalf("buildProvider: %v", err)
+			}
+			if _, err := p.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			got, present := body[tc.field]
+			switch {
+			case tc.wantNone && present:
+				t.Errorf("%s = %v, want the field absent: an unset cap on this "+
+					"wire means the endpoint decides", tc.field, got)
+			case tc.wantNone:
+			case !present:
+				t.Errorf("%s is absent, want %v — max_output_tokens never "+
+					"reached the backend", tc.field, tc.wantCap)
+			case got != tc.wantCap:
+				t.Errorf("%s = %v, want %v", tc.field, got, tc.wantCap)
+			}
+		})
+	}
+}
+
+const anthropicMessage = `{"id":"msg_1","type":"message","role":"assistant",
+	"model":"claude-test","content":[{"type":"text","text":"ok"}],
+	"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`

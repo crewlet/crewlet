@@ -60,12 +60,32 @@ const KeyEnv = "ANTHROPIC_API_KEY"
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
 	DefaultTimeout         = 120 * time.Second
-	DefaultMaxTokens       = 4096
+	DefaultMaxTokens       = 8192 // see the note below
 	DefaultThinkingBudget  = 10000
 	DefaultTemperature     = 0.7
 	minThinkingBudget      = 1024
 	emptyToolResultContent = "(no output)"
 )
+
+// Why DefaultMaxTokens is 8192.
+//
+// THE FIELD IS REQUIRED, so unlike OpenAI's there is no "send nothing" to fall
+// back to and this number is what every Anthropic seat gets until somebody
+// sets `max_output_tokens`. That makes it a floor rather than a preference: it
+// has to be valid on EVERY model this backend can be pointed at, because a
+// value above a model's own maximum is a 400 on every call — an outage, where
+// a value below it is a long answer cut short.
+//
+// 8 192 is the highest number that clears that bar. It is the output maximum
+// of the least capable Claude model still served, and the current family
+// allows several times it — which is exactly what `max_output_tokens` is for,
+// and what `output_truncated` on a phase record tells an operator to reach
+// for. Raising this constant instead would trade a visible, per-company knob
+// for a silent 400 on whichever deployment points at the older model.
+//
+// It was 4 096, which is the retired Claude 3 family's ceiling: every seat in
+// every company ran under a cap set by a model generation none of them were
+// using, with nothing in the config able to say otherwise.
 
 // Config builds a provider.
 type Config struct {
@@ -89,8 +109,14 @@ type Config struct {
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
 	Cooldowns credential.Policy
 
-	// MaxTokens is the output cap for a request that names none. Zero takes
+	// MaxTokens is the OUTPUT cap for a request that names none. Zero takes
 	// DefaultMaxTokens.
+	//
+	// OUTPUT, not the vendor's field. Anthropic's `max_tokens` bounds
+	// thinking AND output together, so a reasoning entry is sent this plus
+	// ThinkingBudget — see [Provider.params]. Sending it verbatim would
+	// make the same number mean a different amount of visible answer
+	// depending on whether reasoning happened to be on.
 	MaxTokens int
 
 	// Temperature is used for a request that names none (see llm.Request:
@@ -360,11 +386,24 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 	}
 
 	if p.reasoning {
-		// Anthropic requires max_tokens strictly greater than the thinking
-		// budget, and rejects any temperature but 1 while thinking.
-		if maxTokens <= p.budget {
-			maxTokens = p.budget + maxTokens
-		}
+		// THE BUDGET IS ADDED, ALWAYS, and that is a correction: Anthropic's
+		// max_tokens bounds thinking AND output together, so an entry
+		// asking for N output tokens beside a B-token thinking budget needs
+		// N+B on the wire or it gets N-B of answer.
+		//
+		// It used to add only when `maxTokens <= budget`, which is the
+		// vendor's own floor (max_tokens must be strictly greater than the
+		// budget) rather than the question being asked — so the SAME
+		// configured number meant "output" below the budget and "thinking
+		// plus output" above it. At the old 4 096 default against a 10 000
+		// budget that read as 14 096 and was right by accident; an operator
+		// who set 20 000 got 20 000 total and 10 000 of answer, which is
+		// less than they had before they touched it.
+		//
+		// The vendor's floor comes out of the same arithmetic: a sum of a
+		// positive budget and a positive cap is strictly greater than the
+		// budget, so there is nothing left to special-case.
+		maxTokens += p.budget
 		params.Thinking = sdk.ThinkingConfigParamUnion{
 			OfEnabled: &sdk.ThinkingConfigEnabledParam{BudgetTokens: p.budget},
 		}

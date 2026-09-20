@@ -85,6 +85,26 @@ func TestCompanyValidatorRejections(t *testing.T) {
 				"      reasoning_budget_tokens: 10000\n      cli:\n        agent: claude-code\n",
 			"providers.llm.sub.reasoning_budget_tokens", ErrConflict,
 		},
+		// THE SAME RULE, and the same failure: an output cap is an HTTP
+		// request field, and a headless coding CLI exposes no flag for
+		// one. An operator who set it after seeing `output_truncated` on a
+		// phase would get a knob that does nothing and no way to tell.
+		{
+			"max_output_tokens on a cli-agent provider",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: haiku\n" +
+				"      max_output_tokens: 8192\n      cli:\n        agent: claude-code\n",
+			"providers.llm.sub.max_output_tokens", ErrConflict,
+		},
+		{
+			// Zero already means "the backend's own default", so a
+			// negative has no reading left — and untrapped it reaches the
+			// Anthropic backend, which REQUIRES the field and would send
+			// it, turning every call in the company into a 400.
+			"a negative output cap",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: m\n" +
+				"      max_output_tokens: -1\n",
+			"providers.llm.default.max_output_tokens", ErrOutOfRange,
+		},
 		{
 			"cli block on an http provider",
 			"name: Acme\nproviders:\n  llm:\n    default:\n      type: anthropic\n      model: m\n      cli:\n        agent: claude-code\n",
