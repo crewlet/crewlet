@@ -84,13 +84,26 @@ p {
    link inside running prose is distinguished from the text around it by colour
    alone otherwise, which is WCAG 1.4.1. `.prose-link` below is that register,
    and `.prose.md a` (rendered Markdown) and `.int-form-note a` (the sentence
-   under a setup form) are the two containers that get it without asking. */
+   under a setup form) are the two containers that get it without asking.
+
+   AND THE RESET ANSWERS THE BASELINE AT ITS OWN SELECTOR, which is the half
+   that was missing and the reason every link in the product underlined on
+   hover anyway. Dropping the repeat left `a { text-decoration: none }` here
+   against `a:hover { text-decoration: underline }` there — (0,0,1) against
+   (0,1,1) — so the baseline won the only state anybody could see it in, and
+   the comment above described a product nobody was running. A reset is not a
+   value, it is a rule that has to REACH the declaration it undoes: for every
+   selector the baseline decorates an anchor at, this file carries the same
+   selector. `styles/baseline.test.ts` holds that selector for selector
+   against the installed package, so a bump that decorates `a:focus-visible`
+   fails there rather than in somebody's browser. */
 a {
   color: var(--accent-ink);
   text-decoration: none;
 }
 a:hover {
   color: var(--text);
+  text-decoration: none;
 }
 
 /* A LINK INSIDE A SENTENCE, and the one place the rule above does not reach.
@@ -112,8 +125,15 @@ a:hover {
    A CLASS ON THE ANCHOR rather than a rule per container, because the seven
    are in five different containers and the next one will be in a sixth;
    `styles/proselinks.test.ts` is what stops it being forgotten, by refusing an
-   anchor that carries no class at all. */
-.prose-link {
+   anchor that carries no class at all.
+
+   IT STATES ITS HOVER, because the reset above now reaches one. `.prose-link`
+   is (0,1,0) and `a:hover` is (0,1,1), so a class alone would have put the
+   underline back everywhere except under a pointer — which is the one place a
+   PERMANENT mark must not go missing, and exactly the state a reader is in
+   when they are deciding whether the word is a link. */
+.prose-link,
+.prose-link:hover {
   text-decoration: underline;
 }
 

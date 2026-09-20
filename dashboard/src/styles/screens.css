@@ -1518,9 +1518,18 @@
   line-height: var(--lh-normal);
   color: var(--text-muted);
 }
+/* A PERMANENT UNDERLINE, and it says so in both states. This sits in a
+   sentence, so the underline is its only non-colour cue (base.css, WCAG
+   1.4.1) — and `.int-form-note a` is (0,1,1), the same specificity as the
+   `a:hover` reset base.css now carries, so what decides the tie is that this
+   sheet is imported later. Stating the hover keeps the mark a property of the
+   rule rather than of `main.tsx`'s import order. */
+.int-form-note a,
+.int-form-note a:hover {
+  text-decoration: underline;
+}
 .int-form-note a {
   color: inherit;
-  text-decoration: underline;
 }
 .int-form-note a:hover {
   color: var(--text);
@@ -2790,10 +2799,18 @@ a.work-cal-chip {
   border-top: 1px solid var(--border-subtle);
   margin: var(--space-4) 0;
 }
-.prose.md a {
-  color: var(--accent-ink);
+/* Rendered Markdown is running prose by definition, so its links keep the
+   permanent underline base.css describes — through hover too, which the
+   selector has to say now that the reset reaches `a:hover`. (0,2,1) already
+   outranks it, but a rule that survives on arithmetic nobody restates is one
+   the next split of this selector breaks silently.) */
+.prose.md a,
+.prose.md a:hover {
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.prose.md a {
+  color: var(--accent-ink);
 }
 .prose.md img {
   max-width: 100%;
