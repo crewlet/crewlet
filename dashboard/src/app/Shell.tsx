@@ -160,25 +160,33 @@ function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
   // WHAT THIS READER KEPT AND OPENED, appended to whichever tree is shown, so
   // every workspace has them and none of the six implements them.
   const kept = useKeptSections(workspace);
-  switch (workspace) {
-    case "work":
-      return [...work, ...kept];
-    case "company":
-      return [...company, ...kept];
-    case "knowledge":
-      return [...knowledge, ...kept];
-    case "activity":
-      return [...activity, ...kept];
-    case "cost":
-      return [...cost, ...kept];
-    case "admin":
-      return [...admin, ...kept];
-    default:
-      // The Inbox and My work are two-pane screens whose scope lives in the
-      // page itself — a sidebar of filters would be the grammar's first
-      // casualty.
-      return null;
-  }
+  // AND THE ANSWER KEEPS ITS IDENTITY. Every hook above already returns a
+  // memoised array, and the spread here made a fresh one on every render of
+  // the Shell — which is every socket push and every poll tick, several times
+  // a minute at idle. `WorkspaceSidebar` memoises its filtered copy and its
+  // current row on `sections`, so both were defeated by the one line that
+  // composes them and the whole tree re-walked for a list that had not moved.
+  return useMemo(() => {
+    switch (workspace) {
+      case "work":
+        return [...work, ...kept];
+      case "company":
+        return [...company, ...kept];
+      case "knowledge":
+        return [...knowledge, ...kept];
+      case "activity":
+        return [...activity, ...kept];
+      case "cost":
+        return [...cost, ...kept];
+      case "admin":
+        return [...admin, ...kept];
+      default:
+        // The Inbox and My work are two-pane screens whose scope lives in the
+        // page itself — a sidebar of filters would be the grammar's first
+        // casualty.
+        return null;
+    }
+  }, [workspace, work, company, knowledge, activity, cost, admin, kept]);
 }
 
 export function Shell({ children }: { children: ReactNode }) {
