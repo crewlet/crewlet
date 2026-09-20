@@ -576,6 +576,23 @@ func TestAnAmbiguousAnswerCountsOnlyWhatItCounted(t *testing.T) {
 		}
 		r.drain()
 	}
+	// longAsk is a question whose first AskExcerptShown bytes are shared
+	// boilerplate, so only a MARKED excerpt tells it from its neighbours.
+	longAsk := func(n int) {
+		t.Helper()
+		body := strings.Repeat("quick question about the rollout plan. ", 6) +
+			"which region do we start in?"
+		if _, err := r.writer.UpdateTask(t.Context(), fmt.Sprintf("op-ask%d", n),
+			created.ID, "ENG", tracker.NoIfMatch,
+			tracker.TaskPatch{Comment: &tracker.Comment{
+				ID: fmt.Sprintf("cm-%d", n), Task: created.ID, Author: "ana",
+				AuthorKind: tracker.AuthorHuman, Body: body,
+				Ask: "bob", CreatedAt: wednesday, UpdatedAt: wednesday,
+			}}, tracker.ChangeComment, nil); err != nil {
+			t.Fatalf("long ask %d: %v", n, err)
+		}
+		r.drain()
+	}
 	resolve := func() error {
 		t.Helper()
 		_, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{
@@ -587,21 +604,45 @@ func TestAnAmbiguousAnswerCountsOnlyWhatItCounted(t *testing.T) {
 	// Two asks: ambiguous, and both are named, so the count is EXACT.
 	ask(1)
 	ask(2)
+	// A THIRD WHOSE OPENING IS THE SAME, so an unmarked excerpt that
+	// stopped at the boilerplate would render it identically to one of
+	// them — which is the whole reason a candidate list exists.
+	longAsk(3)
 	var ambiguous *tracker.ErrAmbiguousAnswer
 	if err := resolve(); !errors.As(err, &ambiguous) {
 		t.Fatalf("a reply with two open asks gave %v, want an ambiguous refusal", err)
 	}
-	if ambiguous.More || len(ambiguous.Asks) != 2 {
-		t.Fatalf("two asks reported as more=%v over %d candidates",
+	if ambiguous.More || len(ambiguous.Asks) != 3 {
+		t.Fatalf("three asks reported as more=%v over %d candidates",
 			ambiguous.More, len(ambiguous.Asks))
 	}
-	if !strings.Contains(ambiguous.Error(), "2 open questions") {
+	if !strings.Contains(ambiguous.Error(), "3 open questions") {
 		t.Errorf("the refusal reads %q", ambiguous.Error())
+	}
+	// THE EXCERPT IS MARKED WHERE IT CUT. Unmarked it reads as a question
+	// that really ended there, and two sharing an opening clause render
+	// identically — the reader picks one and `askAuthor` stamps it
+	// answered on somebody else's behalf.
+	var cut string
+	for _, candidate := range ambiguous.Asks {
+		if candidate.Comment == "cm-3" {
+			cut = candidate.Excerpt
+		}
+	}
+	if cut == "" {
+		t.Fatal("the long ask is not among the candidates")
+	}
+	if !strings.HasSuffix(cut, "…") {
+		t.Errorf("the excerpt %q stops without saying it was cut", cut)
+	}
+	if len(cut) > tracker.AskExcerptShown {
+		t.Errorf("the excerpt is %d bytes, past the %d it declares",
+			len(cut), tracker.AskExcerptShown)
 	}
 
 	// NOW PAST THE BOUND. The candidate list stops at MaxOpenAsksNamed and
 	// the count says "at least" — never the probe row's number.
-	for n := 3; n <= tracker.MaxOpenAsksNamed+4; n++ {
+	for n := 4; n <= tracker.MaxOpenAsksNamed+4; n++ {
 		ask(n)
 	}
 	if err := resolve(); !errors.As(err, &ambiguous) {

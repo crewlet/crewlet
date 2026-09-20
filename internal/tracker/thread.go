@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // What a comment's routing needs to know about the conversation it lands in.
@@ -216,13 +217,24 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	// parameter could be the empty string as far as it can tell, so
 	// without the literal term the index is skipped and this reads every
 	// comment on the task.
+	// ONE PAST THE EXCERPT, so the cut can be MARKED. `substr` alone just
+	// stops, and this excerpt is the only thing telling two candidates
+	// apart: a model reading two questions whose first hundred and twenty
+	// characters are the same boilerplate ("Quick question about the
+	// rollout plan —") cannot tell them apart and picks one, which
+	// `askAuthor` then stamps as answered on somebody's behalf.
+	//
+	// SQL rather than Go for the read itself, because a comment body runs
+	// to [MaxCommentBody] and five of them is 160 KiB pulled across to
+	// render five lines. The marker is applied here, where the extra
+	// character says whether there was more.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, author, substr(body, 1, 120)
+		SELECT id, author, substr(body, 1, ?)
 		FROM tracker_comments
 		WHERE task_id = ? AND ask = ? AND ask <> '' AND resolved = 0
 		  AND answered_by IS NULL AND removed = 0
 		ORDER BY created_at, id
-		LIMIT ?`, task, author, MaxOpenAsksNamed+1)
+		LIMIT ?`, AskExcerptShown+1, task, author, MaxOpenAsksNamed+1)
 	if err != nil {
 		return "", fmt.Errorf("tracker: read the open asks on %s for %s: %w",
 			task, author, err)
@@ -234,6 +246,10 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 		if err := rows.Scan(&one.Comment, &one.Author, &one.Excerpt); err != nil {
 			return "", err
 		}
+		// MARKED, like every other cut this package renders to a model:
+		// an unmarked excerpt is indistinguishable from a question that
+		// really is that short.
+		one.Excerpt = textcut.Within(one.Excerpt, AskExcerptShown)
 		found = append(found, one)
 	}
 	if err := rows.Err(); err != nil {
@@ -293,6 +309,20 @@ func askAuthor(ctx context.Context, tx *sql.Tx, task, comment, author string) (s
 	}
 	return wrote, nil
 }
+
+// AskExcerptShown is how much of each candidate question a refusal quotes.
+//
+// A HUNDRED AND TWENTY BYTES, which is the opening sentence of a question —
+// enough to tell two apart, which is the entire job of this list. It was an
+// inline SQL literal with no name, no reason and no MARKER, so an excerpt that
+// stopped mid-word read as a question that really ended there, and two
+// questions sharing an opening clause rendered identically. The reader then
+// picks one, and `askAuthor` stamps it answered on somebody's behalf.
+//
+// The whole body is one read away — every candidate carries its comment id,
+// which is the argument the caller is being asked for — so this is a pointer
+// rather than a loss.
+const AskExcerptShown = 120
 
 // MaxOpenAsksNamed is how many candidates an ambiguous-answer refusal lists.
 //
