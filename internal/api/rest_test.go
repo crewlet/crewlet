@@ -320,12 +320,12 @@ func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (stubWorkReader) Projects(context.Context, tracker.ProjectQuery, time.Time) (
+func (stubWorkReader) Projects(context.Context, tracker.ProjectQuery) (
 	tracker.ProjectListing, error) {
 	return tracker.ProjectListing{}, nil
 }
 
-func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery, time.Time) (
+func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery) (
 	tracker.ProjectDetail, error) {
 	return tracker.ProjectDetail{}, nil
 }

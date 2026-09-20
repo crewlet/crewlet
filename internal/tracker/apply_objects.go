@@ -488,20 +488,6 @@ func boolInt(b bool) int {
 	return 0
 }
 
-func nullableInt(v *int) any {
-	if v == nil {
-		return nil
-	}
-	return *v
-}
-
-func nullableString(v string) any {
-	if v == "" {
-		return nil
-	}
-	return v
-}
-
 func nullableTime(t *time.Time) any {
 	if t == nil {
 		return nil

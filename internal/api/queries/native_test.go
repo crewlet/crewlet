@@ -57,15 +57,15 @@ type stubWork struct {
 	err error
 }
 
-func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery,
-	_ time.Time) (tracker.ProjectListing, error) {
+func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery) (
+	tracker.ProjectListing, error) {
 
 	s.projectQuery = q
 	return s.projects, s.err
 }
 
-func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery,
-	_ time.Time) (tracker.ProjectDetail, error) {
+func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery) (
+	tracker.ProjectDetail, error) {
 
 	s.detailQuery = q
 	return s.project, s.err

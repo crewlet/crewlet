@@ -232,15 +232,15 @@ func (f *fakeTracker) Thread(_ context.Context, q tracker.ThreadQuery,
 // The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
 // answers the task questions and not these is a build with no native tracker,
 // and the registration turns on exactly that.
-func (f *fakeTracker) Projects(_ context.Context, q tracker.ProjectQuery,
-	_ time.Time) (tracker.ProjectListing, error) {
+func (f *fakeTracker) Projects(_ context.Context, q tracker.ProjectQuery) (
+	tracker.ProjectListing, error) {
 
 	f.projectQuery = q
 	return f.projects, f.readErr
 }
 
-func (f *fakeTracker) Project(_ context.Context, q tracker.ProjectDetailQuery,
-	_ time.Time) (tracker.ProjectDetail, error) {
+func (f *fakeTracker) Project(_ context.Context, q tracker.ProjectDetailQuery) (
+	tracker.ProjectDetail, error) {
 
 	f.detailQuery = q
 	return f.project, f.readErr

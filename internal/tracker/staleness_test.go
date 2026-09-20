@@ -116,24 +116,24 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 			}},
 		{"work_projects",
 			func() error {
-				_, err := reader.Projects(ctx, tracker.ProjectQuery{Level: stale, MaxLag: time.Second}, now)
+				_, err := reader.Projects(ctx, tracker.ProjectQuery{Level: stale, MaxLag: time.Second})
 				return err
 			},
 			func() error {
-				_, err := reader.Projects(ctx, tracker.ProjectQuery{Level: stale, MaxLagSeq: 1}, now)
+				_, err := reader.Projects(ctx, tracker.ProjectQuery{Level: stale, MaxLagSeq: 1})
 				return err
 			}},
 		{"work_project",
 			func() error {
 				_, err := reader.Project(ctx, tracker.ProjectDetailQuery{
 					Project: "ENG", Level: stale, MaxLag: time.Second,
-				}, now)
+				})
 				return err
 			},
 			func() error {
 				_, err := reader.Project(ctx, tracker.ProjectDetailQuery{
 					Project: "ENG", Level: stale, MaxLagSeq: 1,
-				}, now)
+				})
 				return err
 			}},
 		{"work_activity",
@@ -221,14 +221,14 @@ func TestAReaderWithNoBoundAnswersHoweverFarBehindItIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	ctx, now := t.Context(), time.Now().UTC()
+	ctx := t.Context()
 	if _, err := reader.Goals(ctx, tracker.GoalQuery{Level: statelog.ReadStale}); err != nil {
 		t.Errorf("an unbounded stale read refused: %v — zero accepts anything, "+
 			"which is what makes the bound the caller's decision", err)
 	}
 	if _, err := reader.Projects(ctx, tracker.ProjectQuery{
 		Level: statelog.ReadStale,
-	}, now); err != nil {
+	}); err != nil {
 		t.Errorf("an unbounded stale read refused: %v", err)
 	}
 }

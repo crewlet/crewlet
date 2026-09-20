@@ -106,9 +106,9 @@ type WorkReader interface {
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
-	Projects(ctx context.Context, q tracker.ProjectQuery, now time.Time) (
+	Projects(ctx context.Context, q tracker.ProjectQuery) (
 		tracker.ProjectListing, error)
-	Project(ctx context.Context, q tracker.ProjectDetailQuery, now time.Time) (
+	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 		tracker.ProjectDetail, error)
 	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
 		tracker.WorkloadAnswer, error)
@@ -650,7 +650,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 		// THE CALLER'S OWN — see [freshness].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
@@ -679,7 +679,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	})
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
 		// NOT FOUND, NOT UNAVAILABLE, and the message survives the

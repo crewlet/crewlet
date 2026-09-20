@@ -154,7 +154,7 @@ type ProjectQuery struct {
 }
 
 // Projects answers the company's projects with their maintained counts.
-func (r *Reader) Projects(ctx context.Context, q ProjectQuery, now time.Time) (
+func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 	ProjectListing, error) {
 
 	if q.Level == "" {
@@ -177,7 +177,7 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		rows, total, err := readProjectRows(ctx, tx, q, limit, now)
+		rows, total, err := readProjectRows(ctx, tx, q, limit)
 		if err != nil {
 			return err
 		}
@@ -215,7 +215,7 @@ func projectListScope() statelog.ScopeSet {
 
 // readProjectRows reads the projects a query names.
 func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
-	limit int, now time.Time) ([]ProjectRow, int, error) {
+	limit int) ([]ProjectRow, int, error) {
 
 	where := []string{}
 	var args []any
@@ -374,8 +374,8 @@ type ProjectDetailQuery struct {
 // ONE READ TRANSACTION for the project, both catalogues and its tags — so the
 // fields a form draws and the policy stamp it validates against come from one
 // apply.
-func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery,
-	now time.Time) (ProjectDetail, error) {
+func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery) (
+	ProjectDetail, error) {
 
 	if q.Level == "" {
 		return ProjectDetail{}, fmt.Errorf("tracker: this project read " +
@@ -398,7 +398,7 @@ func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery,
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		return readProjectDetail(ctx, tx, key, q, now, &out)
+		return readProjectDetail(ctx, tx, key, q, &out)
 	})
 	if err != nil {
 		return ProjectDetail{}, err
@@ -427,7 +427,7 @@ func projectDetailScope(project string) statelog.ScopeSet {
 }
 
 func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
-	q ProjectDetailQuery, now time.Time, out *ProjectDetail) error {
+	q ProjectDetailQuery, out *ProjectDetail) error {
 
 	project, found, err := readProject(ctx, tx, key)
 	if err != nil {

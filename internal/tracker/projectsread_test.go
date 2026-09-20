@@ -13,7 +13,7 @@ func (r *roundTrip) projects(q tracker.ProjectQuery) tracker.ProjectListing {
 	if q.Level == "" {
 		q.Level = statelog.ReadStale
 	}
-	listing, err := r.reader.Projects(r.t.Context(), q, wednesday)
+	listing, err := r.reader.Projects(r.t.Context(), q)
 	if err != nil {
 		r.t.Fatalf("Projects(%+v): %v", q, err)
 	}
@@ -25,7 +25,7 @@ func (r *roundTrip) project(q tracker.ProjectDetailQuery) tracker.ProjectDetail 
 	if q.Level == "" {
 		q.Level = statelog.ReadStale
 	}
-	detail, err := r.reader.Project(r.t.Context(), q, wednesday)
+	detail, err := r.reader.Project(r.t.Context(), q)
 	if err != nil {
 		r.t.Fatalf("Project(%+v): %v", q, err)
 	}
@@ -222,7 +222,7 @@ func TestDescribingAnUnknownProjectNamesTheNearest(t *testing.T) {
 
 	_, err := r.reader.Project(t.Context(), tracker.ProjectDetailQuery{
 		Project: "ENH", Level: statelog.ReadStale,
-	}, wednesday)
+	})
 	if err == nil {
 		t.Fatal("describing an unknown project answered — a model that typed " +
 			"a key wrong must learn the right one from the refusal")
@@ -298,7 +298,7 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 	}
 	if _, err := r.reader.Project(t.Context(), tracker.ProjectDetailQuery{
 		Project: "ENG", ForType: "nonesuch", Level: statelog.ReadStale,
-	}, wednesday); err == nil {
+	}); err == nil {
 		t.Fatal("an unknown for_type answered — the refusal lists the types")
 	}
 }

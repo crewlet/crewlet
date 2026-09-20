@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -34,9 +33,9 @@ import (
 
 // ProjectReader is the tracker read side these tools need.
 type ProjectReader interface {
-	Projects(ctx context.Context, q tracker.ProjectQuery, now time.Time) (
+	Projects(ctx context.Context, q tracker.ProjectQuery) (
 		tracker.ProjectListing, error)
-	Project(ctx context.Context, q tracker.ProjectDetailQuery, now time.Time) (
+	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 		tracker.ProjectDetail, error)
 }
 
@@ -105,7 +104,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE SEAT'S OWN LEVEL, like every other read here — see
 		// [seatReadLevel] for why it is a name and not a literal.
 		Level: seatReadLevel,
-	}, t.deps.now())
+	})
 	if err != nil {
 		return failed(readFailure(tracker.ListProjectsTool, err)), nil
 	}
@@ -178,7 +177,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ForType: strings.TrimSpace(argString(args, "for_type")),
 		Units:   t.deps.Units,
 		Level:   seatReadLevel,
-	}, t.deps.now())
+	})
 	if err != nil {
 		return failed(readFailure(tracker.DescribeProjectTool, err)), nil
 	}

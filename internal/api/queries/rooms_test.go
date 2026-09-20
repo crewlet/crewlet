@@ -212,13 +212,13 @@ func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.Cat
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (emptyWork) Projects(context.Context, tracker.ProjectQuery, time.Time) (
+func (emptyWork) Projects(context.Context, tracker.ProjectQuery) (
 	tracker.ProjectListing, error) {
 
 	return tracker.ProjectListing{}, nil
 }
 
-func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery, time.Time) (
+func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery) (
 	tracker.ProjectDetail, error) {
 
 	return tracker.ProjectDetail{}, nil
