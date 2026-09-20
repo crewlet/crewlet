@@ -1436,6 +1436,28 @@ var budgetCases = []fleetCase{{
 			h.t.Fatal("a post-charge with no seat scope still charged the org")
 		}
 	},
+}, {
+	name: "a post-charge of nothing answers zero rather than reading the counters",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 40); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		// NOT A READING OF TWO COUNTERS IT DID NOT CHANGE. The caller
+		// compares this answer with its caps to decide whether to say the
+		// run went over; filled from a live read, that comparison would
+		// turn on spend this call had nothing to do with, and the two
+		// backends would have to agree about a reading neither took.
+		got, err := h.f.PostCharge(h.ctx, testSeat, 0)
+		if err != nil || !got.OK || got.OrgUsed != 0 || got.AgentUsed != 0 {
+			h.t.Fatalf("PostCharge(0) after a charge = (%+v, %v), want OK with "+
+				"both figures at zero", got, err)
+		}
+		// And it wrote nothing: the charge before it is still all there is.
+		if row, listed := h.usage(coord.OrgScope); !listed || row.Used != 40 {
+			h.t.Fatalf("org usage = %+v (listed=%v), want the 40 the real charge "+
+				"made and nothing from the charge of nothing", row, listed)
+		}
+	},
 }}
 
 // ---- the agent-to-agent channels --------------------------------------- //

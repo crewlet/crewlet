@@ -2482,7 +2482,9 @@ two numbers that share a span, and one stamp:
   is what the engine actually enforces against, and it is the same counter the
   [live token meter](#the-live-token-meter) pushes;
 - **`refused_at`** is when that scope last turned a charge away, kept in the
-  same counter and cleared by the scope's next admitted charge.
+  same counter and cleared by the scope's next admitted charge — or by
+  [`POST /budgets/reset`](#post-budgetsreset), which drops the counter and the
+  stamp together, since an operator who zeroes a counter has made room.
 
 What a seat *spent over a window* is not here: that is the per-agent row of the
 [spend breakdown](#get-tokensbreakdown), a different span that must not be

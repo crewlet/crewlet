@@ -276,8 +276,11 @@ type Usage struct {
 	// stamp one node kept in memory would appear and vanish on a dashboard
 	// as the reports of different nodes arrived.
 	//
-	// Cleared by an ADMITTED charge and by nothing weaker. A charge that
-	// was refused overall leaves every other scope's stamp alone, even
+	// Cleared by an ADMITTED charge and by nothing weaker, plus a
+	// [Budgets.Reset], which drops the scope's whole record and this stamp
+	// with it — an operator zeroing a counter has made room, so a scope
+	// still listed as refusing would be one nothing could clear. A charge
+	// that was refused overall leaves every other scope's stamp alone, even
 	// when that scope would have had room, so the answer does not depend
 	// on which scope a backend happens to test first. A [Budgets.PostCharge]
 	// neither stamps nor clears it: it is not a decision about room.
@@ -334,7 +337,10 @@ type Budgets interface {
 
 	// PostCharge adds spend that has ALREADY HAPPENED to the seat's counter
 	// and the org's, and never refuses. The answer is OK with both counters
-	// after the write, for the caller to compare with its caps.
+	// after the write, for the caller to compare with its caps — except for
+	// a charge of nothing, which writes nothing and answers OK with both
+	// figures at zero rather than reading two counters to report what it
+	// did not change.
 	//
 	// Charge is the gate: it decides whether a round may run, before the
 	// round has spent anything. Some spend is only known after it happened
