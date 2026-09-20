@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chat"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/node"
 )
 
@@ -38,5 +39,30 @@ func TestTheBroadcastCapIsTheNodesTurnBudget(t *testing.T) {
 			"why a broadcast's fan-out and a node's turn budget are no longer "+
 			"the same number",
 			chat.MaxCollectiveRecipients, node.DefaultMaxConcurrent)
+	}
+}
+
+// TestTheRailIsBoundedByTheCursorsAPersonCanKeep holds the second pair of
+// constants this package documents as one number.
+//
+// [chat.MaxRailChannels] is how many rooms a person's channel list answers
+// for, and it is [coord.MaxReadCursors] — the cap the read-state record puts
+// on one person's cursors. Past that cap the record has already dropped its
+// stalest cursor to stay inside its own bound, so a room listed beyond it
+// could not carry an unread badge that was ever right: the rail would show a
+// number derived from a cursor nothing is keeping.
+//
+// A RAIL SMALLER than the cursor cap is merely wasteful. A rail LARGER is the
+// defect, and it is silent: the extra rooms render, their badges read zero,
+// and zero is indistinguishable from caught up.
+func TestTheRailIsBoundedByTheCursorsAPersonCanKeep(t *testing.T) {
+	t.Parallel()
+	if chat.MaxRailChannels != coord.MaxReadCursors {
+		t.Fatalf("the channel rail answers for %d rooms while a person keeps "+
+			"%d read cursors. Above the cursor cap a room's badge is derived "+
+			"from a cursor the record has already evicted, and it renders as "+
+			"caught up rather than as unknown. Move both, or write down here "+
+			"why the rail may list a room whose unread count cannot be kept",
+			chat.MaxRailChannels, coord.MaxReadCursors)
 	}
 }
