@@ -22,6 +22,16 @@ on:
     paths:
       - "docs/**"
       - "README.md"
+      # The site does not publish docs/ alone. It copies schema/ and skills/
+      # into its static output verbatim and serves them beside the rendered
+      # pages — the JSON Schemas an editor fetches for `$schema`, and the
+      # agent skill an assistant loads. Without these two lines a change to
+      # either never reaches the site: the docs repo has no scheduled poll,
+      # so its only other triggers are a push to its own default branch and a
+      # manual run. A schema corrected here would keep serving its old bytes
+      # to every editor until something unrelated happened to republish.
+      - "schema/**"
+      - "skills/**"
 
   # A release changes which versions the site publishes, not just the content of
   # one: the newest tag takes the bare URLs and the line it replaces moves to
