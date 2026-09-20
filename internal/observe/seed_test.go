@@ -195,6 +195,60 @@ func TestAnUnreadableHalfIsReportedAndDoesNotCostTheOther(t *testing.T) {
 	}
 }
 
+// A SLOW FEED READ DOES NOT SPEND THE WHOLE BUDGET.
+//
+// The two reads are sequential on the caller's one deadline, which is what
+// bounds the seed so a store that will not answer cannot hold the listener
+// shut. On the failure that budget exists for — a store that is SLOW rather
+// than broken — the feed read used to spend all of it and the spend read was
+// handed an expired context, so one slow half cost both and the doc's promise
+// that each fails on its own held only for an instant failure.
+func TestASlowFeedReadLeavesTheSpendReadItsOwnTime(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+
+	live := livestate.New()
+	history := &slowFeed{}
+	err := observe.Seed(ctx, history, live)
+	if err == nil {
+		t.Fatal("the feed read outran its own half of the budget silently")
+	}
+	if !history.spendAsked {
+		t.Fatal("the spend read was never made: the feed spent the whole budget")
+	}
+	if history.spendCtxErr != nil {
+		t.Errorf("the spend read was handed an expired context (%v), so it "+
+			"returned without touching the store", history.spendCtxErr)
+	}
+	if len(live.SpendRecords()) != 1 {
+		t.Errorf("records = %+v, want the spend half seeded", live.SpendRecords())
+	}
+}
+
+// slowFeed blocks its feed read until the context it was given is done, the
+// way a cold or contended store answers, and records what the spend read saw.
+type slowFeed struct {
+	spendAsked  bool
+	spendCtxErr error
+}
+
+func (h *slowFeed) List(ctx context.Context, _ store.ListQuery) ([]store.EventRecord, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, error) {
+	h.spendAsked, h.spendCtxErr = true, ctx.Err()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return []tokens.Record{{
+		EventID: "p1", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		AgentRole: "Lead", Phase: "execute", TotalTokens: 10,
+	}}, nil
+}
+
 // halfBroken answers one read and fails the other.
 type halfBroken struct{ feed, spend error }
 

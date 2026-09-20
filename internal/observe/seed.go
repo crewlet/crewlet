@@ -54,11 +54,24 @@ type Seeded interface {
 // and either failure is returned for the caller to report, because what it
 // costs is visible nowhere else. The screens still render; they start at
 // this process's boot.
+//
+// INDEPENDENT IN TIME TOO, which one shared deadline could not give. The
+// caller bounds this whole call so a store that will not answer cannot hold
+// the listener shut, and the reads are sequential — so on the failure that
+// budget actually exists for, a store that is SLOW rather than broken, the
+// feed read spent the whole of it and the spend read was handed an expired
+// context and returned without touching the database. One slow half cost
+// both. The feed is given half of what is left and the spend keeps the rest,
+// so neither can starve the other and the caller's ceiling still binds: a
+// feed that runs long is cut at its own half, and a feed that returns in
+// milliseconds leaves the spend almost all of the budget.
 func Seed(ctx context.Context, history EventHistory, live Seeded) error {
 	var h livestate.History
 	var errs []error
 
-	rows, err := history.List(ctx, store.ListQuery{Limit: livestate.EventFeedLimit})
+	feedCtx, cancelFeed := halfTheBudget(ctx)
+	rows, err := history.List(feedCtx, store.ListQuery{Limit: livestate.EventFeedLimit})
+	cancelFeed()
 	if err != nil {
 		errs = append(errs, fmt.Errorf("observe: read the activity feed's history: %w", err))
 	}
@@ -77,4 +90,21 @@ func Seed(ctx context.Context, history EventHistory, live Seeded) error {
 
 	live.Seed(h)
 	return errors.Join(errs...)
+}
+
+// halfTheBudget bounds the first of the two reads by half the time left, so a
+// slow one cannot spend the whole budget the caller set for both.
+//
+// A context with no deadline is handed back untouched: there is nothing to
+// halve, and the two reads are bounded by whatever bounds the caller instead.
+func halfTheBudget(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, left/2)
 }
