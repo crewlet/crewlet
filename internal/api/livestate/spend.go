@@ -22,10 +22,10 @@ import (
 // has aged out.
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	if env.ID != "" {
-		if s.countedPhases.has(env.ID) {
+		if _, counted := s.spendIDs[env.ID]; counted {
 			return false
 		}
-		s.countedPhases.put(env.ID, struct{}{})
+		s.spendIDs[env.ID] = struct{}{}
 	}
 	// The stamp is PARSED ONCE, here, and carried with the record. The
 	// prune below tests every retained record's age on every spend event,
@@ -70,8 +70,10 @@ func (s *LiveState) pruneSpend(nowISO string) {
 		// than the cap in a day. Truncating the OLDEST is what makes a
 		// rollup past the cap cover slightly less than a window rather
 		// than report a wrong total.
+		cut := len(s.spend) - SpendRecordLimit
+		s.forgetSpend(s.spend[:cut])
 		s.spend = append(make([]spendEntry, 0, SpendRecordLimit),
-			s.spend[len(s.spend)-SpendRecordLimit:]...)
+			s.spend[cut:]...)
 	}
 	now := newStamp(nowISO)
 	if !now.valid {
@@ -90,7 +92,23 @@ func (s *LiveState) pruneSpend(nowISO string) {
 	if !slices.ContainsFunc(s.spend, aged) {
 		return
 	}
+	for _, e := range s.spend {
+		if aged(e) {
+			delete(s.spendIDs, e.EventID)
+		}
+	}
 	s.spend = slices.DeleteFunc(s.spend, aged)
+}
+
+// forgetSpend drops the index entries of records leaving the window.
+//
+// The index is only ever as large as the records it tracks BECAUSE of this:
+// an id left behind by a dropped record would make the map the one structure
+// here that grows for the life of the process.
+func (s *LiveState) forgetSpend(leaving []spendEntry) {
+	for _, e := range leaving {
+		delete(s.spendIDs, e.EventID)
+	}
 }
 
 // spendEntry is one record with its timestamp already parsed.

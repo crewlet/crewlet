@@ -59,10 +59,11 @@ const (
 	// rows could never be delivered at all.
 	EventFeedLimit = 400
 
-	// dedupeLimit caps the id sets that stop a seeded phase being counted
-	// again when the same phase also arrives on the live stream. The window
-	// they need to cover is the seeding overlap plus any redelivery:
-	// minutes, not the process lifetime.
+	// dedupeLimit caps the finished-call guard, whose keys are phase
+	// invocations rather than rows of any structure here, so nothing else
+	// bounds them. The window it needs to cover is the gap between a
+	// phase's last progress round and its completion: seconds, not the
+	// process lifetime.
 	dedupeLimit = 8000
 
 	// LiveSpendWindow is what the in-memory rollup covers. Deliberately
@@ -207,9 +208,19 @@ type LiveState struct {
 	// because it tracks the ring and shrinks with it: see trimFeed.
 	feedIDs map[string]struct{}
 
-	// countedPhases is the id set that stops a seeded phase being counted
-	// twice against a streamed one.
-	countedPhases *boundedSet[struct{}]
+	// spendIDs indexes the ids the live window holds, so a phase is counted
+	// ONCE however it arrived: off the stream, out of the store at startup,
+	// or both, in either order.
+	//
+	// EXACT rather than bounded like finishedCalls below, because it tracks
+	// s.spend and shrinks with it — the same shape feedIDs has, and for the
+	// same reason. A bounded set could not do it: its cap was the number of
+	// records the seed reads, and the ids the live stream had already put
+	// there sat at the FRONT of its eviction order, so a full seed evicted
+	// them before its own loop reached the store's copies of those very
+	// phases and counted each of them twice. See pruneSpend, which is where
+	// this shrinks.
+	spendIDs map[string]struct{}
 
 	// finishedCalls maps a phase invocation to the instant its completion
 	// landed.
@@ -251,7 +262,7 @@ func New(opts ...Option) *LiveState {
 		sandboxes:     map[string]*SandboxEntry{},
 		feedLimit:     EventFeedLimit,
 		feedIDs:       map[string]struct{}{},
-		countedPhases: newBoundedSet[struct{}](dedupeLimit),
+		spendIDs:      map[string]struct{}{},
 		finishedCalls: newBoundedSet[stamp](dedupeLimit),
 	}
 	for _, opt := range opts {

@@ -101,10 +101,13 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 		// this one by — so a second seed would add it again and the rollup
 		// would grow on every one. A rollup slightly short is better than a
 		// rollup that climbs on its own.
-		if entry.EventID == "" || s.countedPhases.has(entry.EventID) {
+		if entry.EventID == "" {
 			continue
 		}
-		s.countedPhases.put(entry.EventID, struct{}{})
+		if _, counted := s.spendIDs[entry.EventID]; counted {
+			continue
+		}
+		s.spendIDs[entry.EventID] = struct{}{}
 		s.spend = append(s.spend, entry)
 		counted = true
 	}

@@ -2,6 +2,7 @@ package livestate_test
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,6 +49,66 @@ func feedIDs(rows []livestate.FeedRow) []string {
 // Every screen the projection feeds used to start empty in every process: a
 // restart, a deploy or a node joining a fleet showed an operator a company
 // that had apparently done nothing, beside a store that said otherwise.
+// A FULL SEED DOES NOT COUNT THE LIVE ROWS IT ALREADY HOLDS A SECOND TIME.
+//
+// The seed runs after the broadcast subscription is attached, so phases that
+// complete in between are in the projection AND in the store the seed reads.
+// While the dedupe was a bounded set capped at the number of records the seed
+// reads, those live ids sat at the FRONT of its eviction order: a seed that
+// filled the cap evicted every one of them before its own loop reached the
+// store's copies of those same phases, and each was counted twice. The rollup
+// then over-reported the day by exactly the overlap, which is the figure the
+// company's headroom is read from.
+func TestAFullSeedDoesNotRecountTheLiveRowsItAlreadyHolds(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	base := time.Now().UTC().Add(-12 * time.Hour)
+	newest := base.Add(11 * time.Hour).Format(time.RFC3339Nano)
+
+	// Ten phases land between the subscribe and the read. Five are this
+	// node's own, so its store holds them too; five are peers', so they
+	// reach the projection only off the stream.
+	live := make([]string, 0, 10)
+	for i := range 10 {
+		id := fmt.Sprintf("L%d", i)
+		live = append(live, id)
+		s.Apply(phaseSpend(id, newest, 7))
+	}
+
+	// And the store answers a FULL window, which is what makes the cap bind.
+	recs := make([]tokens.Record, 0, livestate.SpendRecordLimit)
+	for i := range livestate.SpendRecordLimit - 5 {
+		recs = append(recs, tokens.Record{
+			EventID:   fmt.Sprintf("S%d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano),
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 1,
+		})
+	}
+	for i := 0; i < 10; i += 2 {
+		recs = append(recs, tokens.Record{
+			EventID: live[i], Timestamp: newest,
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 7,
+		})
+	}
+	s.Seed(livestate.History{Spend: recs})
+
+	seen := map[string]int{}
+	for _, r := range s.SpendRecords() {
+		seen[r.EventID]++
+	}
+	var twice []string
+	for id, n := range seen {
+		if n > 1 {
+			twice = append(twice, fmt.Sprintf("%s x%d", id, n))
+		}
+	}
+	slices.Sort(twice)
+	if len(twice) > 0 {
+		t.Fatalf("counted more than once: %v; the rollup over-reports the day "+
+			"by every one of them", twice)
+	}
+}
+
 func TestSeedingFillsTheFeedAndTheSpendWindow(t *testing.T) {
 	t.Parallel()
 	s := seededState(t)
