@@ -870,13 +870,15 @@ document carries `.prose.md` beside it.
 
 The same file also **splits a document into its sections without rendering
 anything** — `splitSections` for the flat run, `nestSections` for the outline
-its heading levels describe — for the one surface whose subject is a *record*
-rather than a reading of one: a phase prompt, which the transcript folds on
-its own headings and hands back verbatim (see rule 11 below). That walk lives
-beside the renderer because what a heading is and where a fenced block
-suspends the grammar are decisions the renderer has already made — written
-again next to its caller, the two would drift exactly as `textcut`'s four
-copies and `whsec`'s two did, and the clause that would go first is the fence.
+its heading levels describe — for the one surface that needs a document's
+outline and its source both: a phase prompt, which the transcript folds on its
+own headings, renders one section at a time, and hands back byte for byte on
+the other view (see rule 11 below). A walk that rendered as it split could give
+neither back. It lives beside the renderer because what a heading is and where
+a fenced block suspends the grammar are decisions the renderer has already
+made — written again next to its caller, the two would drift exactly as
+`textcut`'s four copies and `whsec`'s two did, and the clause that would go
+first is the fence.
 
 A page's history shows **what a save changed**, not only what one version
 said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
@@ -961,7 +963,7 @@ wrong.
 ## The transcript is stable, and reads in order
 
 The sharpest complaint about the screen this replaces was that the LLM calls
-jumped around, were hard to follow, and did not say much worth reading. Eleven
+jumped around, were hard to follow, and did not say much worth reading. Twelve
 rules fix it, and each one names a specific mechanism:
 
 1. **One identity.** A phase is keyed `turn_id|phase|iteration`, live and
@@ -1111,17 +1113,31 @@ rules fix it, and each one names a specific mechanism:
    a prompt that grows a section grows a fold and no rename can leave a stale
    name on screen.
 
-   Three properties travel with it. **The bodies stay verbatim** — a prompt is
-   the record an operator reproduces a turn from, so a section shows the
-   source slice rather than this app's rendering of it. **The whole document
-   stays one selection**, as a second view, because an outline that is the
-   only route to the record turns "copy the prompt" into a dozen opens and a
-   dozen select-alls; it is offered only where there are headings to have
-   split on. And **the outline is the document's own shape**, which mostly
-   means flat and sometimes does not: an executor's thirteen sections are
-   thirteen peers, but a ledger writes one `###` per prior turn *inside* its
-   block, and hoisting those would put a turn of somebody's conversation
-   between "Earlier in this conversation" and the ask.
+   Three properties travel with it. **Each view does its whole job.**
+   *Rendered* is for reading — the outline, with every section set as the
+   markdown it is; *Source* is the record — the whole document, one block,
+   byte for byte, one selection, which is what an operator reproduces a turn
+   from and what they diff when a model starts behaving differently. The
+   bodies used to be source slices in code blocks on the rule that a prompt is
+   a record, but that view was never the record: building the outline consumes
+   the heading lines, so a fold showed the bytes with their structure taken
+   out, and the one thing the screen had no other route to was the reading. A
+   seat's identity arrived as `You are **Engineer** at **Acme**` and every
+   `` `submit_work` `` kept its backticks — a reader decoding markdown the
+   model was handed already decoded. What is genuinely record-sensitive
+   survives rendering anyway: a fence comes out as its own block holding the
+   exact text, so a tool schema, a JSON example and a contract template are
+   byte-identical either way, and what the reading view spends is emphasis
+   markers and list bullets.
+
+   **The switch is offered on every document**, headings or none. It used to be
+   gated on having an outline, because without one the two views were the same
+   picture under two names; they are not any more, since one decodes the
+   markdown and one is the bytes. And **the outline is the document's own
+   shape**, which mostly means flat and sometimes does not: an executor's
+   thirteen sections are thirteen peers, but a ledger writes one `###` per
+   prior turn *inside* its block, and hoisting those would put a turn of
+   somebody's conversation between "Earlier in this conversation" and the ask.
 
    Nesting is only correct because **the levels are**, and two of them were
    not. `internal/agent/prompts` carried a single `#` over a run of `##`,
@@ -1139,6 +1155,22 @@ rules fix it, and each one names a specific mechanism:
    heading is and where a fenced block suspends the grammar are decisions that
    file has already made once, and a `# install deps` inside a catalogue's
    shell sample is exactly the drift a second copy starts with.
+12. **A phase card reads in the order the phase happened**: what it was given
+   — the Prompt, then the Tool surface — then what it did, then what it
+   delegated. The transcript came first and both of its inputs sat underneath
+   it, so the question every round raises (*what was this told? what was it
+   allowed to call?*) was answered past the end of the answer, and a phase
+   with forty rounds put a whole scroll between the two. Both inputs are
+   closed folds, so what the order costs a reader who only wants the
+   transcript is two header rows; what it buys is a card that can be read top
+   to bottom as the story of one phase. Their own order is the request's: the
+   prompt is what was sent, and the tool surface is the schema array that went
+   *with* it — one payload described in two folds, so they belong beside each
+   other rather than either side of the transcript.
+
+   The error callout is the one thing that does not wait its turn. It is a
+   banner rather than a section — the reason the reader opened the card at all
+   — so it stays above the inputs.
 
 ## A monitor is not a reader
 
