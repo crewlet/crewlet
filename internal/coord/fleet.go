@@ -356,8 +356,13 @@ type Budgets interface {
 	// nor that it had room for one. A counter it takes past a cap is
 	// refused by the next Charge, which stamps it then.
 	//
-	// All or nothing, as Charge is: an error leaves NEITHER scope recorded,
-	// so a caller that retries does not count the org twice.
+	// All or nothing, as Charge is: an error takes the org's half back, so
+	// a caller that retries does not count the company twice. The
+	// compensation is the same BEST-EFFORT one Charge's is — two keys and
+	// no transaction — and a backend that cannot make it says so in its log
+	// rather than in the answer, because the caller's answer is already
+	// decided. It errs in the one safe direction: the org reads HIGH, so a
+	// cap trips early rather than late.
 	PostCharge(ctx context.Context, agentScope string, tokens int) (Spend, error)
 
 	// Used reports one scope's spend. A scope never charged has spent
