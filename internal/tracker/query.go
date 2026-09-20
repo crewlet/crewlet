@@ -841,9 +841,17 @@ func (q *Query) parseBools(p Params) {
 func (q *Query) parseText(p Params) error {
 	q.Text = strings.TrimSpace(p.String("q"))
 	if len(q.Text) > MaxQueryText {
+		// NEVER "ASK search_knowledge A QUESTION THIS LONG", which is what
+		// this said and what that tool does not offer: its own bound is
+		// [github.com/crewlet/crewlet/internal/agent/builtin] `searchQueryMax`,
+		// the same four hundred bytes, and it refuses past it exactly as this
+		// does. Sending a refused caller to a second refusal is a round spent
+		// learning what the first one could have said.
 		return fmt.Errorf("tracker: the find text is %d bytes and the bound is "+
 			"%d — this is a substring of a key or a title, and a longer one "+
-			"matches nothing; ask search_knowledge a question this long",
+			"matches nothing; search on the distinguishing few words, or ask "+
+			"search_knowledge for the same keywords if the answer is written "+
+			"down rather than filed",
 			len(q.Text), MaxQueryText)
 	}
 	return nil
