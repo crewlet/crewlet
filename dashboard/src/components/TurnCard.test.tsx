@@ -122,6 +122,54 @@ test("a settled row's measurement wins over the phase window", () => {
   expect(screen.queryByText("4m 0s")).toBeNull();
 });
 
+// A TURN THE ENGINE KILLED BETWEEN PHASES IS STILL A FAILED TURN ON THE CARD.
+//
+// `group.failed` is `phases.some(p => p.failed)`, which cannot see a panic
+// recovered outside the turn loop or a detached sandbox run that failed —
+// neither leaves a failed phase record behind. The store's aggregate reads
+// those as failures by their TYPE, so the Turns grid one panel up marked the
+// turn failed while this card, on the same screen and the same data, did not.
+test("the engine's own failure mark shows on a turn with no failed phase", () => {
+  const row = {
+    turn_id: "t1",
+    started_at: "2026-09-13T10:00:00Z",
+    ended_at: "2026-09-13T10:04:35Z",
+    duration_ms: 275_000,
+    complete: false,
+    phases: 2,
+    iterations: 1,
+    failed: true,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  } satisfies TurnRow;
+  // Every phase in the group is clean — the failure is the row's alone.
+  draw(<TurnCard group={turn()} row={row} />);
+  expect(screen.getByText("failed")).toBeTruthy();
+});
+
+// AND THE PHASES STILL SPEAK WHEN THE ROW HAS NOT CAUGHT UP. The row is polled
+// and the phases are pushed, so a phase that failed a moment ago must be red
+// here before the next poll carries it — the union is what makes both true.
+test("a failed phase marks the card before the polled row agrees", () => {
+  const failedPhase = groupTurns([phase({ failed: true })])[0]!;
+  const row = {
+    turn_id: "t1",
+    started_at: "2026-09-13T10:00:00Z",
+    ended_at: "2026-09-13T10:04:35Z",
+    duration_ms: 275_000,
+    complete: false,
+    phases: 1,
+    iterations: 1,
+    failed: false,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  } satisfies TurnRow;
+  draw(<TurnCard group={failedPhase} row={row} />);
+  expect(screen.getByText("failed")).toBeTruthy();
+});
+
 // A LIVE TURN COUNTS FROM THE INSTANT THE TURNS TABLE CALLS STARTED. `started_at`
 // is the turn's first recorded EVENT — its prefetch lands before the first model
 // call — so the table read "started 6m ago" beside a card counting 3m 15s from
