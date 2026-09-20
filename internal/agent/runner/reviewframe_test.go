@@ -56,3 +56,37 @@ func TestTheExecutorIsStillHandedTheTriggerBare(t *testing.T) {
 		t.Errorf("the executor lost the trigger:\n%s", user)
 	}
 }
+
+// The frame does not move between rounds.
+//
+// The review phase re-sends its user message every round and the provider's
+// prefix cache is keyed on those bytes, so a frame that varied per round — a
+// round number in the label, a correction folded in — would cost a cache miss
+// on every round of every turn. That is why this is a plain function of the
+// task and not [Runner.taskFor]'s per-round correction.
+//
+// Driven through two real rounds rather than comparing one call to itself:
+// the property is about what the PHASE sends, and a pure function compared
+// with a pure function is a tautology that cannot fail.
+func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{
+		review: []llm.Completion{
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate","notes":"try again"}`),
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
+		},
+	})
+	w := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "posted it", Text: "posted"}
+	for round := 1; round <= 2; round++ {
+		if _, err := r.Review(context.Background(), round, w, nil); err != nil {
+			t.Fatalf("Review round %d: %v", round, err)
+		}
+	}
+	reqs := prov.requestsFor("review")
+	if len(reqs) != 2 {
+		t.Fatalf("review requests = %d, want 2", len(reqs))
+	}
+	if first, second := reqs[0].Messages[1].Content, reqs[1].Messages[1].Content; first != second {
+		t.Errorf("the frame moved between rounds:\nround 1: %q\nround 2: %q", first, second)
+	}
+}

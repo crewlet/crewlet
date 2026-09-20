@@ -38,17 +38,3 @@ func TestTheReviewerIsToldTheTriggerIsNotANewRequest(t *testing.T) {
 		}
 	}
 }
-
-// The frame is byte-identical across rounds.
-//
-// The review phase re-sends its user message every round, and the provider's
-// prefix cache is keyed on those bytes — so a frame that varied per round
-// would cost a cache miss on every round of every turn, which is the reason
-// this is a plain function and not [Runner.taskFor]'s per-round correction.
-func TestTheReviewFrameIsByteStableAcrossRounds(t *testing.T) {
-	t.Parallel()
-	const trigger = "Summarise yesterday's incident."
-	if reviewTask(trigger) != reviewTask(trigger) {
-		t.Error("the review frame is not stable for one trigger")
-	}
-}
