@@ -93,7 +93,7 @@ func TestSubagentPromptOrdersParentThenSkillsThenCatalogueThenPreamble(t *testin
 		"## Available tools", SubagentPreamble)
 	// No identity section and no policies: a sub-agent is a worker, not a
 	// teammate.
-	excludes(t, p, "# Your Identity", "Company policies", "LONG GITHUB BODY")
+	excludes(t, p, "## Your Identity", "Company policies", "LONG GITHUB BODY")
 }
 
 // -- Phase user message --------------------------------------------------
@@ -103,8 +103,8 @@ func TestSubagentPromptOrdersParentThenSkillsThenCatalogueThenPreamble(t *testin
 func TestPhaseUserMessageWithoutLedgersIsJustTheTask(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ task, want string }{
-		{"do the thing", "Task:\ndo the thing"},
-		{"", "Task:\n(no description)"},
+		{"do the thing", "## Task\ndo the thing"},
+		{"", "## Task\n(no description)"},
 	} {
 		if got := BuildPhaseUserMessage(UserMessage{TaskDescription: tc.task}); got != tc.want {
 			t.Errorf("BuildPhaseUserMessage(%q) = %q, want %q", tc.task, got, tc.want)
@@ -134,7 +134,7 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 		TaskDescription: "post the summary",
 		PriorWork:       "### Iteration 1\nExecute called:\n- post_message(...) → success",
 	})
-	if !strings.HasPrefix(withPrior, "Task:\npost the summary") {
+	if !strings.HasPrefix(withPrior, "## Task\npost the summary") {
 		t.Error("the ask must lead when there is no conversation history")
 	}
 	// The rule that actually prevents the double-post.
@@ -152,7 +152,7 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 		// Across turns this warning is stronger than within one: a read
 		// from last Tuesday is stale by construction.
 		"may be stale", "moved on")
-	if !strings.HasSuffix(strings.TrimRight(withHistory, "\n"), "Task:\nany update?") {
+	if !strings.HasSuffix(strings.TrimRight(withHistory, "\n"), "## Task\nany update?") {
 		t.Error("the ask must sit last when there is no prior work")
 	}
 }

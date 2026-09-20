@@ -197,7 +197,7 @@ carried into that conversation's next turn — is
 [Conversation Sessions](conversation-sessions.md). It inherits this section's
 doctrine wholesale (elide arguments never structure, writes never dropped,
 reads marked so they are re-run rather than trusted) and rides the same user
-message, immediately above `Task:`. The executor receives it; the reviewer does
+message, immediately above `## Task`. The executor receives it; the reviewer does
 not, because the reviewer judges *this* turn's work and the ledger above already
 carries its duplicate-delivery rule.
 

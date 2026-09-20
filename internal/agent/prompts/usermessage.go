@@ -77,11 +77,25 @@ type UserMessage struct {
 	ConversationHistory string
 }
 
+// taskHeader introduces the ask.
+//
+// A HEADING, like the two ledgers it sits between, and that is the whole of
+// the change from the bare "Task:" label it replaces — the word is the same
+// word. The label was the one block of this message that was not a section of
+// it, so under any structural reading of the document the ask belonged to
+// whatever heading preceded it: with a conversation block present, the newest
+// thing anybody said was filed inside "Earlier in this conversation", whose
+// own text points at "the task below" as a sibling. The dashboard's prompt
+// outline reads the same structure and drew the same wrong picture.
+const taskHeader = "## Task"
+
 // BuildPhaseUserMessage renders the executor's user message.
 //
 // The three parts run oldest to newest — earlier turns of this conversation,
 // then the ask, then earlier rounds of THIS turn (which happened after the
 // ask arrived) — so the most recent context sits nearest the model's answer.
+// All three are top-level headings: they are peers, and a reader that nests
+// them gets the ask wrong.
 func BuildPhaseUserMessage(m UserMessage) string {
 	task := m.TaskDescription
 	if task == "" {
@@ -91,7 +105,7 @@ func BuildPhaseUserMessage(m UserMessage) string {
 	if m.ConversationHistory != "" {
 		parts = append(parts, ConversationHistoryHeader+"\n"+m.ConversationHistory)
 	}
-	parts = append(parts, "Task:\n"+task)
+	parts = append(parts, taskHeader+"\n"+task)
 	if m.PriorWork != "" {
 		parts = append(parts, PriorWorkHeader+"\n"+m.PriorWork)
 	}

@@ -22,12 +22,19 @@ import (
 // manager, and direct reports (for delegation decisions). The long-form
 // backstory / guidelines / team goals render in the role-profile and
 // unit-context sections instead.
+//
+// `##`, like every other section of the executor's prompt. It was the one `#`
+// in the document, which under any structural reading made the company's
+// policies, the roster, the turn contract and the tool catalogue parts of the
+// agent's IDENTITY rather than the next things it reads. They are peers — the
+// builders below all emit `##` — and the dashboard's prompt outline reads the
+// same structure. The words are untouched.
 func BuildIdentitySection(s Seat) []string {
 	if !s.ok() {
 		return nil
 	}
 	parts := []string{
-		"# Your Identity",
+		"## Your Identity",
 		"You are **" + s.Role.Name + "** at **" + s.Org.Name + "**.",
 	}
 	unit := s.unit()

@@ -172,12 +172,16 @@ frozen system prefix, alongside the prior-work ledger:
 ## Earlier in this conversation
 …your prior turns, oldest first…
 
-Task:
+## Task
 …the newest thing said…
 
 ## Already done earlier in this turn
 …the within-turn ledger, on iterations after the first…
 ```
+
+All three are headings at the same level, because they are peers: the ask was
+a bare `Task:` label once, and under a structural reading of the message that
+filed the newest thing anybody said *inside* the conversation history above it.
 
 Oldest to newest top to bottom — the ask is the newest thing *said*, and the
 within-turn ledger below it is the newest thing *done*, so the most recent
