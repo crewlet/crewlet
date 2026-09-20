@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -545,5 +546,80 @@ func TestACappedHistoryFeedSaysSo(t *testing.T) {
 	if exact := read(5); exact.HistoryTruncated || len(exact.History) != 5 {
 		t.Errorf("a limit equal to the feed returned %d change(s), truncated=%v",
 			len(exact.History), exact.HistoryTruncated)
+	}
+}
+
+// AN AMBIGUOUS-ANSWER REFUSAL NEVER STATES A COUNT IT DID NOT MAKE.
+//
+// The read takes one row more than it will name so it can tell "five" from "at
+// least five" — and the extra row was left on the candidate list and counted,
+// so a seat with nine open asks was told "6 open questions are addressed to
+// you". That is neither the five the refusal then lists nor the nine that
+// exist. A model has no way to check the number and chooses its next move
+// against it.
+func TestAnAmbiguousAnswerCountsOnlyWhatItCounted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("the rollout")
+
+	ask := func(n int) {
+		t.Helper()
+		if _, err := r.writer.UpdateTask(t.Context(), fmt.Sprintf("op-ask%d", n),
+			created.ID, "ENG", tracker.NoIfMatch,
+			tracker.TaskPatch{Comment: &tracker.Comment{
+				ID: fmt.Sprintf("cm-%d", n), Task: created.ID, Author: "ana",
+				AuthorKind: tracker.AuthorHuman,
+				Body:       fmt.Sprintf("question number %d about the rollout", n),
+				Ask:        "bob", CreatedAt: wednesday, UpdatedAt: wednesday,
+			}}, tracker.ChangeComment, nil); err != nil {
+			t.Fatalf("ask %d: %v", n, err)
+		}
+		r.drain()
+	}
+	resolve := func() error {
+		t.Helper()
+		_, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{
+			Task: created.ID, Author: "bob",
+		}, statelog.Freshness{Level: statelog.ReadStale})
+		return err
+	}
+
+	// Two asks: ambiguous, and both are named, so the count is EXACT.
+	ask(1)
+	ask(2)
+	var ambiguous *tracker.ErrAmbiguousAnswer
+	if err := resolve(); !errors.As(err, &ambiguous) {
+		t.Fatalf("a reply with two open asks gave %v, want an ambiguous refusal", err)
+	}
+	if ambiguous.More || len(ambiguous.Asks) != 2 {
+		t.Fatalf("two asks reported as more=%v over %d candidates",
+			ambiguous.More, len(ambiguous.Asks))
+	}
+	if !strings.Contains(ambiguous.Error(), "2 open questions") {
+		t.Errorf("the refusal reads %q", ambiguous.Error())
+	}
+
+	// NOW PAST THE BOUND. The candidate list stops at MaxOpenAsksNamed and
+	// the count says "at least" — never the probe row's number.
+	for n := 3; n <= tracker.MaxOpenAsksNamed+4; n++ {
+		ask(n)
+	}
+	if err := resolve(); !errors.As(err, &ambiguous) {
+		t.Fatalf("a reply past the bound gave %v, want an ambiguous refusal", err)
+	}
+	if !ambiguous.More {
+		t.Error("nine open asks are not reported as more than were named")
+	}
+	// THE PROBE ROW IS DROPPED: it is evidence, never a candidate.
+	if len(ambiguous.Asks) != tracker.MaxOpenAsksNamed {
+		t.Errorf("the refusal carries %d candidates, want the bound of %d",
+			len(ambiguous.Asks), tracker.MaxOpenAsksNamed)
+	}
+	text := ambiguous.Error()
+	if !strings.Contains(text, "at least 5 open questions") {
+		t.Errorf("the refusal reads %q, want an \"at least\" count", text)
+	}
+	if strings.Contains(text, "6 open questions") {
+		t.Errorf("the refusal states the probe row as a total: %q", text)
 	}
 }
