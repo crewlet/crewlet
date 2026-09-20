@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -126,4 +127,75 @@ func TestTheEnteredInstantIsWhatStatusEnteredSortsOn(t *testing.T) {
 		t.Errorf("sort=-status_entered answered %v, want the task whose status "+
 			"moved last at the front", got)
 	}
+}
+
+// AND THE PUBLISHED FIELD CARRIES IT, not just the column.
+//
+// # The gap this closes
+//
+// `status_entered_at` lives in two places with different producers, and only
+// one of them had one. [Applier.stampStatusEntered] writes the COLUMN, which
+// is what `sort=status_entered` and the date filter read — and those worked.
+// The published field is `Task.StatusEnteredAt`, and a task is served by
+// decoding the stored `document`: `readTaskDocument`'s own comment says the
+// columns are "a CACHE of what the document says".
+//
+// For this one column that is backwards. The applier re-marshals the task into
+// the document BEFORE the stamp runs (the stamp needs the history row, which
+// is written after the upsert), so the document is always written with a zero
+// here, `omitzero` drops it from the JSON, and every reader of the published
+// field got nothing: `GET /work/item`, the operator MCP's `get_work_item`, and
+// the dashboard's "In status since" row, which simply never drew.
+//
+// It is the ONE derived column that is not a cache of the document — every
+// other one is extracted from what the writer wrote — so it is joined on read
+// rather than written into a document no writer authored.
+func TestTheEnteredInstantReachesThePublishedField(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+
+	moved := tracker.StatusInProgress
+	if _, err := r.writer.UpdateTask(t.Context(), "op-move", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &moved},
+		tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("move the status: %v", err)
+	}
+	r.drain()
+
+	detail, err := r.reader.Task(t.Context(), "t-1", tracker.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read the task back: %v", err)
+	}
+	if detail.Task.StatusEnteredAt.IsZero() {
+		t.Fatal("the served task carries no status_entered_at — `omitzero` " +
+			"drops it from the JSON, so GET /work/item, the operator MCP and " +
+			"the dashboard's \"In status since\" row all get nothing, while " +
+			"sort=status_entered orders by a column that IS maintained")
+	}
+
+	// AGAINST THE COLUMN, so the field is not merely non-zero: a field
+	// filled from the record's own clock rather than from the derivation
+	// would pass an IsZero check and disagree with the sort beside it.
+	want := r.strings(
+		`SELECT CAST(status_entered_at AS TEXT) FROM tracker_tasks WHERE id = ?`,
+		"t-1")
+	if len(want) != 1 {
+		t.Fatalf("the task has %d rows", len(want))
+	}
+	if got := detail.Task.StatusEnteredAt.UnixMicro(); got != parseMicros(t, want[0]) {
+		t.Errorf("the published field is %d and the column is %s — the sort "+
+			"key and the field a reader renders must be the same instant",
+			got, want[0])
+	}
+}
+
+func parseMicros(t *testing.T, s string) int64 {
+	t.Helper()
+	var n int64
+	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return n
 }
