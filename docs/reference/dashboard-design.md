@@ -1524,6 +1524,31 @@ Four rules replace it, and each one names what it fixes.
    so a total would be neither the turn's input bill — the tiles above already
    report that — nor any single thing that was ever sent.
 
+   And then that half grew rule 1's own failure back. `turn_id|phase|iteration`
+   is the phase key, and the turn id **is** the work key, so a dispatch that is
+   re-delivered and re-run publishes a second measurement under a key that
+   already has one. Listed flat, a turn that ran five times drew ten
+   byte-identical rows — ONBOARDING, EXECUTE, ONBOARDING, EXECUTE — for two
+   facts and a count, and a repeated row with nothing to explain it reads as a
+   rendering fault rather than as news about the turn. One row per phase key
+   now, carrying the **last** run's figures with an `×N` beside the phase: a
+   mean is a prompt that was never sent, and the run that stands is the one
+   whose frame the phase actually reasoned in. The count's title names the
+   token range when the runs disagreed, because "they all measured the same"
+   and "the first four were bigger" are different facts about one turn, and
+   the range is the only thing the collapsed rows still had to say.
+
+   The figures are **bytes**, and they said characters while carrying `len()`
+   of a Go string. Nothing rounded it back — a byte formatter printed `24 KB`
+   under a tooltip asserting characters — and the two only agree on ASCII, so
+   a roster of non-Latin names or a chat thread with emoji in it silently made
+   "the count" a different quantity per company. The **labels** were what
+   lied, so the labels were fixed; the wire keys stay `system_chars` /
+   `user_chars`, frozen by ADR-0006, because a key is an identifier rather
+   than an assertion and renaming one reads back as `0 B` on every row already
+   in the store. The reader therefore takes one key each and no
+   both-spellings chain. See `PromptSize`.
+
 3. **A healthy turn must be able to say so — and only when it can.** A set
    defined by subtraction (`type !== …`) has no meaningful empty state, so
    "nothing went wrong here" was not a state this screen could reach — and a
@@ -1735,6 +1760,35 @@ always done this) — these are sentences, not fields. **A figure goes at the
 far end of a full-width row**, behind a `.spacer`, with the heading naming the
 unit once rather than every row repeating it — a bare "134 B" beside a label
 says nothing about what was measured.
+
+**And the far end is the ledger's, not the card's.** A `.spacer` puts a figure
+at the end of whatever box it is in, which is right in a rail and wrong in a
+full-bleed panel: the turn's prompt ledger drew a phase tag at x=37 and its
+token count at x=645 on a 1570px screen, most of a panel of nothing between
+them, and a reader tracking a row across that gap arrives at the wrong one. So
+`.num-block` is `width: fit-content` — sized to its own widest row, which
+leaves the spacer nothing to push with and puts the figures where the labels
+end. Not a chosen cap, which is what this was first written as: a cap is a
+number invented to be wider than the content, so it still leaves a gap, and it
+has to be re-invented the day a column is added. `max-width` stays as a
+*ceiling* only — 100% so a phone scrolls the block rather than the page, and
+38rem so labels that grow prose-long cannot quietly restore the gap.
+
+Two things follow, and both were bugs before they were rules:
+
+- **The rows are sized as one box, not one at a time.** A row's own
+  `max-content` is its own tag and its own chips, so once the block is clamped
+  — a phone — every row falls back to a *different* width and the columns
+  splay: 12 KB, 23 KB and 5.3 KB at three x positions under one heading. The
+  width belongs to `.num-rows`, the single box around all of them, and the
+  rows stretch to it. jsdom computes no layout, so what is asserted is the
+  ancestry: every `.num-col` sits inside a `.num-rows` inside a `.num-block`.
+- **A fixed column is sized by its heading, not its figure.** `.num-col` is
+  `7rem` because the widest label these tables carry — APPROX. TOKENS —
+  measures 103px at `--fs-3xs` with `--track-wide`, and at the 5.5rem this
+  started on it wrapped across two lines above values that each sat on one. A
+  column cannot grow for its own heading, so the heading is what sets the
+  width.
 
 `PropertiesRail` keeps the one thing this shape is for on this screen: the
 conversation key, which really is a term and its detail — labelled, with the

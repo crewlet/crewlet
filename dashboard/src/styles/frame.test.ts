@@ -304,10 +304,10 @@ describe("the frame's layout", () => {
 
   // A FIXED-COLUMN FIGURE BLOCK IS REACHABLE.
   //
-  // The turn page's prompt weights are three `.num-col` figures at 5.5rem
-  // under their own headings, beside a phase tag: 370px in the 332px a phone
-  // leaves inside the card, so the tokens column was cut off — and lining the
-  // three up under their headings is the entire reason `.num-col` exists.
+  // The turn page's prompt weights are three `.num-col` figures at 7rem under
+  // their own headings, beside a phase tag: past the 332px a phone leaves
+  // inside the card, so the tokens column was cut off — and lining the three
+  // up under their headings is the entire reason `.num-col` exists.
   //
   // SIDEWAYS HERE, where a grid gets a card. The shapes take opposite answers
   // for a reason: a grid's flexible tracks resolve to zero the moment its wrap
@@ -320,11 +320,50 @@ describe("the frame's layout", () => {
     // `max-content` IS THE HALF THAT MAKES IT WORK: a flex line inside a
     // scrollport is otherwise sized to the port, so its items shrink or
     // overflow and the headings stop lining up with the figures they head.
-    const row = block(css, ".num-block > .row");
-    expect(row).toMatch(/width:\s*max-content/);
+    const rows = block(css, ".num-rows");
+    expect(rows).toMatch(/width:\s*max-content/);
     // And the min-width is what leaves the spacer able to push the figures
     // right on a screen the block already fits in.
-    expect(row).toMatch(/min-width:\s*100%/);
+    expect(rows).toMatch(/min-width:\s*100%/);
+  });
+
+  // ONE BOX FOR EVERY ROW, WHICH IS WHAT KEEPS THE COLUMNS COLUMNS.
+  //
+  // The width above used to sit on `.num-block > .row`, one row at a time, and
+  // a row's own `max-content` is its own phase tag and its own chips. So the
+  // moment the block was clamped — a phone — every row resolved to a DIFFERENT
+  // width and the figures splayed: 12 KB, 23 KB and 5.3 KB at three x
+  // positions under one heading. Sized together they scroll together.
+  //
+  // TWO-SIDED, because putting the width back on the rows is exactly how it
+  // returns and neither half fails on its own: the rows' box has to carry it,
+  // and nothing per-row may.
+  test("the rows of a figure block are sized as one box, not one at a time", () => {
+    const css = sheet("components.css");
+    expect(/\.num-block\s*>\s*\.row\b/.test(css), "a per-row width is the splay this removed").toBe(
+      false,
+    );
+    expect(block(css, ".num-rows")).toMatch(/width:\s*max-content/);
+  });
+
+  // AND THE BLOCK IS SIZED TO ITS ROWS RATHER THAN TO THE PANEL.
+  //
+  // A `.spacer` puts a figure at the end of whatever box it is in, which is
+  // right in a rail and wrong in a full-bleed card: the turn's prompt ledger
+  // drew a phase tag at x=37 and its token count at x=645 on a 1570px screen,
+  // with most of a panel of nothing in between, and a reader tracking a row
+  // across that gap arrives at the wrong one.
+  //
+  // `fit-content`, NOT A CHOSEN CAP — which is what this was first written as.
+  // A cap is a number invented to be wider than the content, so it still
+  // leaves a gap, and it has to be re-invented the day a column is added. The
+  // `max-width` that remains is a ceiling only: 100% so a phone scrolls the
+  // block instead of the page, and a rem bound so prose-long labels cannot
+  // quietly restore the gap.
+  test("a figure block is sized to its own rows, with max-width only a ceiling", () => {
+    const b = block(sheet("components.css"), ".num-block");
+    expect(b).toMatch(/width:\s*fit-content/);
+    expect(b).toMatch(/max-width:\s*min\(100%,\s*\d+(\.\d+)?rem\)/);
   });
 
   // AND A CAPPED CELL DOES NOT PAINT OUTSIDE ITS TRACK.

@@ -785,29 +785,38 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
           </span>
         )}
         {blocks.length > 0 && got.length > 0 ? (
-          <div className="col gap-1">
-            {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
-                The grid's second track starts at 120px, so a byte count sat
+          <div className="num-block">
+            {/* ROWS WITH THE FIGURE AT THE FAR END, not a KeyValue. The
+                grid's second track starts at 120px, so a byte count sat
                 stranded mid-panel with the whole right half empty — and a
                 bare "134 B" beside a label says nothing about what was
                 measured. The heading says it once, and the rows carry the
-                numbers where numbers go. */}
-            <div className="row gap-2">
-              <span className="t-label spacer">Reached the prompt</span>
-              <span className="t-label">Rendered size</span>
-            </div>
-            {got.map((b) => (
-              <div key={b.label} className="row gap-2">
-                <span className="t-cell truncate">{b.label}</span>
-                {b.note && <span className="t-caption truncate">{b.note}</span>}
-                <span className="spacer" />
-                <span className="mono t-num t-caption">{fmtBytes(b.bytes)}</span>
+                numbers where numbers go.
+
+                The far end of the LEDGER, which is not the card's: see
+                `.num-block` for why a figure column that tracks a 1500px
+                panel is a figure nobody reads. The size takes `.num-col`
+                rather than trailing the spacer bare, so the heading and the
+                value under it are one column of the same width — which is
+                what the block is then sized to. */}
+            <div className="col gap-1 num-rows">
+              <div className="row gap-2">
+                <span className="t-label spacer">Reached the prompt</span>
+                <span className="t-label num-col">Rendered size</span>
               </div>
-            ))}
+              {got.map((b) => (
+                <div key={b.label} className="row gap-2">
+                  <span className="t-cell truncate">{b.label}</span>
+                  {b.note && <span className="t-caption truncate">{b.note}</span>}
+                  <span className="spacer" />
+                  <span className="mono t-num t-caption num-col">{fmtBytes(b.bytes)}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
           blocks.length > 0 && (
-            <span className="t-caption">
+            <span className="t-caption measure">
               The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
               alone — no stored context reached it.
             </span>
@@ -821,7 +830,9 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
           </Callout>
         )}
         {empty.length > 0 && (
-          <span className="t-caption">Nothing to add from {list(empty.map((b) => b.label))}.</span>
+          <span className="t-caption measure">
+            Nothing to add from {list(empty.map((b) => b.label))}.
+          </span>
         )}
         {weights.length > 0 && <PromptWeights rows={weights} />}
       </div>
@@ -846,37 +857,72 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * is what the token tiles above already report) nor any single thing that was
  * ever sent. What the number answers is "how big is the frame this phase
  * reasons in", and that is a per-phase question.
+ *
+ * AND ONE ROW PER PHASE KEY, which is the same rule one step further:
+ * [promptWeights] collapses a phase key measured more than once — a turn
+ * re-delivered and re-run under its work key — into the run that stands, and
+ * the row says how many there were. A turn that ran five times drew ten
+ * byte-identical rows before that, which is the flat-list failure this whole
+ * screen was rebuilt to stop repeating.
  */
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
-    <div className="col gap-1 num-block">
-      <div className="row gap-2">
-        <span className="t-label spacer">Prompt sent</span>
-        <span className="t-label num-col">System</span>
-        <span className="t-label num-col">User</span>
-        <span className="t-label num-col">Approx. tokens</span>
-      </div>
-      {rows.map((w, i) => (
-        <div key={`${w.phase}|${w.iteration}|${i}`} className="row gap-2">
-          <PhaseTag phase={w.phase} />
-          {w.iteration > 1 && (
-            <span className="t-caption" title="self-iterate round">
-              iter {w.iteration}
-            </span>
-          )}
-          <span className="spacer" />
-          <span className="mono t-num t-caption num-col" title="characters in the system prompt">
-            {fmtBytes(w.systemChars)}
-          </span>
-          <span className="mono t-num t-caption num-col" title="characters in the user message">
-            {fmtBytes(w.userChars)}
-          </span>
-          <span className="mono t-num t-caption num-col" title="the engine's own approximation">
-            {fmtCount(w.approximateTokens)}
-          </span>
+    <div className="num-block ledger-follows">
+      <div className="col gap-1 num-rows">
+        <div className="row gap-2">
+          <span className="t-label spacer">Prompt sent</span>
+          <span className="t-label num-col">System</span>
+          <span className="t-label num-col">User</span>
+          <span className="t-label num-col">Approx. tokens</span>
         </div>
-      ))}
+        {rows.map((w) => (
+          <div key={`${w.phase}|${w.iteration}`} className="row gap-2">
+            <PhaseTag phase={w.phase} />
+            {w.iteration > 1 && (
+              <span className="t-caption" title="self-iterate round">
+                iter {w.iteration}
+              </span>
+            )}
+            {/* THE COUNT IS THE NEWS. Everything else on this row is the last
+                run's, so without it five identical rows said one thing five
+                times and a reader had no way to tell a re-run turn from a
+                repeating panel. */}
+            {w.runs > 1 && (
+              <span className="count-chip" title={runsTitle(w)}>
+                &times;{w.runs}
+              </span>
+            )}
+            <span className="spacer" />
+            <span className="mono t-num t-caption num-col" title="bytes in the system prompt">
+              {fmtBytes(w.systemBytes)}
+            </span>
+            <span className="mono t-num t-caption num-col" title="bytes in the user message">
+              {fmtBytes(w.userBytes)}
+            </span>
+            <span className="mono t-num t-caption num-col" title="the engine's own approximation">
+              {fmtCount(w.approximateTokens)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
+  );
+}
+
+/**
+ * What a run count means, said in full where the chip cannot.
+ *
+ * It names the RANGE rather than only the count when the runs disagreed,
+ * because that is the one thing the rows this collapses still had to say: the
+ * figures on the row are the last run's, and "they were all the same" and
+ * "the first four were bigger" are different facts about the same turn.
+ */
+function runsTitle(w: PromptWeight): string {
+  const ran = `this phase ran ${w.runs} times in this turn`;
+  if (w.minTokens === w.maxTokens) return `${ran} — every run measured the same`;
+  return (
+    `${ran} — the last is shown; they ranged ` +
+    `~${fmtCount(w.minTokens)}–${fmtCount(w.maxTokens)} tokens`
   );
 }
 

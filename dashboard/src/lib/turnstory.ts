@@ -204,8 +204,28 @@ export interface PromptWeight {
   iteration: number;
   /** The engine's own approximation, off `prompt.size`. */
   approximateTokens: number;
-  systemChars: number;
-  userChars: number;
+  /**
+   * BYTES, which is what the engine measures — `len()` of a Go string — read
+   * off the wire keys `system_chars` / `user_chars`.
+   *
+   * THE NAMES DISAGREE ON PURPOSE. The measurement has always been bytes and
+   * the keys have always said chars, and the panel used to print "24 KB"
+   * under a tooltip claiming it had counted characters; the two units only
+   * agree on ASCII. The label is what was lying, so the label was fixed. The
+   * KEY is a peer contract frozen by ADR-0006 — renaming it would read back
+   * as a rendered 0 on every row already in the store — so it stays, and
+   * `PromptSize` in internal/events/types/turn.go carries the full reason.
+   */
+  systemBytes: number;
+  userBytes: number;
+  /**
+   * How many times this phase key was measured in this turn — 1 for every
+   * phase of a turn that ran once. See [promptWeights].
+   */
+  runs: number;
+  /** The smallest and largest approximation across those runs. */
+  minTokens: number;
+  maxTokens: number;
 }
 
 /**
@@ -219,25 +239,70 @@ export interface PromptWeight {
  * reached the browser and went nowhere. The only way to the number was the
  * raw payload of a row in the residual list.
  *
- * Rows come back in the order they were published — one per phase run, so a
- * self-iterating turn contributes one per round and they read down the page
- * beside the phases they belong to.
+ * ONE ROW PER PHASE KEY, because `turn_id|phase|iteration` IS the phase key —
+ * the same identity `agent_phase_started` and `agent_phase_completed` share,
+ * and the one this screen was rebuilt around. A measurement is published once
+ * per phase RUN, so a second row under one key does not mean a second phase:
+ * it means that phase ran again, which happens when a turn's whole dispatch is
+ * re-delivered and re-run under its work key (the turn id IS the work key —
+ * see `runnerTurn` in internal/engine/telemetry.go).
+ *
+ * Listed flat, those re-runs were the screen's own worst habit back again. A
+ * turn that ran five times drew ten rows — ONBOARDING, EXECUTE, ONBOARDING,
+ * EXECUTE, five times over, byte-identical — for two facts and a count, and
+ * an identical row repeated with nothing to explain it reads as a rendering
+ * fault rather than as news about the turn. The count is the news, so the
+ * count is what is drawn.
+ *
+ * THE LAST RUN'S FIGURES, not the first and not a mean. A mean is a prompt
+ * that was never sent, and the run that stands is the one whose frame the
+ * phase actually reasoned in — the four that preceded it measured a prompt
+ * the turn then threw away. The range rides along so a reader can see that
+ * the earlier ones differed at all, which is the only thing the discarded
+ * rows still had to say.
+ *
+ * Keys come back in the order they were first published, so a self-iterating
+ * turn's rounds read down the page beside the phases they belong to.
  */
 export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
-  const out: PromptWeight[] = [];
+  const byKey = new Map<string, PromptWeight>();
   for (const event of events) {
     if (event.type !== "prompt.size") continue;
     const p = event.payload as Record<string, unknown> | undefined;
     if (!p) continue;
-    out.push({
+    const tokens = Number(p.approximate_tokens ?? 0);
+    const row: PromptWeight = {
       phase: String(p.phase ?? ""),
       iteration: Number(p.iteration ?? 0),
-      approximateTokens: Number(p.approximate_tokens ?? 0),
-      systemChars: Number(p.system_chars ?? 0),
-      userChars: Number(p.user_chars ?? 0),
+      approximateTokens: tokens,
+      // ONE KEY EACH, never a both-spellings chain. The wire key never
+      // moved, so there is no second spelling to accept — and a `??` would
+      // not have rescued one anyway: scalars in the catalogue carry no
+      // omitempty, so a relayed event asserts `0` rather than omitting the
+      // key, and `??` does not fall through on 0.
+      systemBytes: Number(p.system_chars ?? 0),
+      userBytes: Number(p.user_chars ?? 0),
+      runs: 1,
+      minTokens: tokens,
+      maxTokens: tokens,
+    };
+    const key = `${row.phase}|${row.iteration}`;
+    const seen = byKey.get(key);
+    if (!seen) {
+      byKey.set(key, row);
+      continue;
+    }
+    // REPLACED, not merged: every figure on the row is the last run's, and
+    // only the count and the range carry what the earlier ones said. Set
+    // rather than deleted-and-set, so the key keeps its first-seen position.
+    byKey.set(key, {
+      ...row,
+      runs: seen.runs + 1,
+      minTokens: Math.min(seen.minTokens, tokens),
+      maxTokens: Math.max(seen.maxTokens, tokens),
     });
   }
-  return out;
+  return [...byKey.values()];
 }
 
 /** One prefetch block: what it is called, whether it hit, and how big it was. */

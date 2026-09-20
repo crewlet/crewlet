@@ -43,10 +43,20 @@
    figure — the spacer pushes both the header and the value to the same right
    edge — and wrong the moment there is a second: three figures of differing
    widths sit adjacent, and the labels above them sit adjacent at their own
-   widths, so nothing is a column. */
+   widths, so nothing is a column.
+
+   7rem BECAUSE OF THE HEADING, not the figure. A fixed column wraps its own
+   heading rather than growing for it, and the widest one these blocks carry
+   — APPROX. TOKENS — measures 103px at `--fs-3xs` with `--track-wide`, so at
+   the 5.5rem this started on it broke across two lines while every value
+   under it sat on one. A label is what says which number this is, so it is
+   the label that sets the width; 112px clears the measurement with room for
+   the next one. A heading longer than that wraps, visibly, which is the
+   failure worth having — the alternative, `nowrap`, paints it over the
+   column beside it. */
 .num-col {
   flex: none;
-  width: 5.5rem;
+  width: 7rem;
   text-align: right;
 }
 
@@ -63,18 +73,62 @@
    headings — which wrapping them would destroy, since the header row and each
    value row would break at different points.
 
-   `max-content` ON THE ROWS is the half that makes it work: without it a flex
-   line inside a scrollport is still sized to the port, its items shrink or
-   overflow, and the header stops lining up with the values it heads. The
-   `min-width` is what keeps the spacer able to push the figures right on a
-   screen where the block already fits. */
+   `max-content` ON THE ROWS' OWN BOX is the half that makes it work: without
+   it a flex line inside a scrollport is still sized to the port, its items
+   shrink or overflow, and the header stops lining up with the values it
+   heads. ONE box around all of them rather than the width on each row, which
+   is what this was: a row's own `max-content` is its own tag and its own
+   chips, so the moment the port was narrower than the widest row every row
+   fell back to a DIFFERENT width and the columns splayed — a phone drew
+   `12 KB`, `23 KB` and `5.3 KB` at three x positions under one heading.
+   Sized together they scroll together. The `min-width` is what keeps the
+   spacer able to push the figures right on a screen where the block already
+   fits.
+
+   AND IT IS SIZED TO ITS OWN ROWS, because the shape that makes a single
+   figure readable stops working once the panel is wide. A `.spacer` puts the
+   figure at the far end of whatever it is in, which is right in a rail and
+   wrong in a full-bleed card: on a 1570px screen the turn's prompt ledger
+   drew a phase tag at x=37 and its token count at x=645, with most of a
+   panel of nothing between them, and a reader tracking a row across that gap
+   arrives at the wrong one.
+
+   `fit-content` rather than a chosen cap, which is what this was first
+   written as: a cap is a number invented to be wider than the content and
+   therefore still leaves a gap, and it has to be re-invented the day a
+   column is added. Sized to the rows, the spacer has nothing left to push
+   with and the figures sit where the labels end — while the fixed `.num-col`
+   still holds them in columns, and the rows narrower than the widest still
+   right-align to the same edge through their own spacer.
+
+   The `max-width` is a ceiling rather than the layout: 100% so a phone still
+   scrolls the block instead of the page, and 38rem so a block whose labels
+   grow prose-long cannot quietly restore the gap this removed.
+
+   ON THE BLOCK rather than on the card, because the card also carries prose
+   and a callout, and those have a measure of their own that is not this
+   one. */
 .num-block {
   overflow-x: auto;
+  width: fit-content;
+  max-width: min(100%, 38rem);
 }
 
-.num-block > .row {
+.num-rows {
   width: max-content;
   min-width: 100%;
+}
+
+/* A SECOND LEDGER UNDER THE FIRST needs a line between them, which a gap
+   cannot supply: both open with a `.t-label` header row, so stacked at the
+   card's own rhythm the second table's heading reads as another row of the
+   first. It is a hairline rather than a bigger gap because the two ARE one
+   panel — they answer the same question from opposite ends — and spacing them
+   apart far enough to separate them would have read as two. Only when
+   something precedes it: first in the card, there is nothing to divide. */
+.ledger-follows:not(:first-child) {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
 }
 
 /* A count beside a section title. Neutral by design: a coloured count is a

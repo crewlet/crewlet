@@ -75,6 +75,23 @@ function phase(at: string, durationMs: number, over: Record<string, unknown> = {
   });
 }
 
+/**
+ * One `prompt.size` measurement for this turn's executor, at iteration 1.
+ *
+ * Each call gets its own instant, because a re-run turn publishes several of
+ * these under ONE phase key and two events sharing an id is a shape the store
+ * never produces.
+ */
+let measured = 0;
+function promptSize(payload: Record<string, unknown>): EventRecord {
+  measured++;
+  return event({
+    type: "prompt.size",
+    timestamp: `2026-09-13T10:00:${String(measured).padStart(2, "0")}Z`,
+    payload: { turn_id: TURN, phase: "execute", iteration: 1, ...payload },
+  });
+}
+
 /** Mount the screen over one stubbed answer. */
 function mount(answer: Partial<TurnAnswer>) {
   const store = new Store();
@@ -189,23 +206,80 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   mount({
     events: [
       phase("2026-09-13T10:01:30Z", 90_000),
-      event({
-        type: "prompt.size",
-        timestamp: "2026-09-13T10:00:01Z",
-        payload: {
-          turn_id: TURN,
-          phase: "execute",
-          iteration: 1,
-          approximate_tokens: 7400,
-          system_chars: 24000,
-          user_chars: 1200,
-        },
-      }),
+      promptSize({ approximate_tokens: 7400, system_chars: 24000, user_chars: 1200 }),
     ],
   });
   expect(await screen.findByText("Prompt sent")).toBeTruthy();
   expect(screen.getByTitle("the engine's own approximation").textContent).toBe("7,400");
-  expect(screen.getByTitle("characters in the system prompt")).toBeTruthy();
+  expect(screen.getByTitle("bytes in the system prompt")).toBeTruthy();
+});
+
+// A PHASE THAT RAN TWICE IS ONE ROW AND A COUNT.
+//
+// `turn_id|phase|iteration` is the phase key, so a second measurement under
+// one key means the turn's dispatch was re-delivered and that phase ran again
+// — not that there were two phases. Drawn flat, a turn that ran five times
+// put ten byte-identical rows on the page for two facts, which reads as a
+// repeating panel rather than as news about the turn.
+test("a phase measured more than once collapses to one row that says how many", async () => {
+  mount({
+    events: [
+      phase("2026-09-13T10:01:30Z", 90_000),
+      promptSize({ approximate_tokens: 6807, system_chars: 24000, user_chars: 2800 }),
+      promptSize({ approximate_tokens: 6807, system_chars: 24000, user_chars: 2800 }),
+      promptSize({ approximate_tokens: 6616, system_chars: 23000, user_chars: 2800 }),
+    ],
+  });
+  await screen.findByText("Prompt sent");
+  // ONE token cell, not three — the row is the phase, and the count is the
+  // only thing the collapsed ones still say.
+  const tokens = screen.getAllByTitle("the engine's own approximation");
+  expect(tokens).toHaveLength(1);
+  // The LAST run's figures: the two before it measured a prompt this turn
+  // then threw away.
+  expect(tokens[0]!.textContent).toBe("6,616");
+  // And the range rides along on the count, because "they were all the same"
+  // and "the first two were bigger" are different facts about one turn.
+  const count = screen.getByText("×3");
+  expect(count.getAttribute("title")).toContain("ran 3 times");
+  expect(count.getAttribute("title")).toContain("6,616–6,807");
+});
+
+// EVERY FIGURE COLUMN SHARES ONE BOX WITH THE ROWS AROUND IT.
+//
+// `.num-col` is a fixed width and `.num-block` scrolls sideways when the port
+// is narrower than the table. What makes the two work together is that all the
+// rows are sized as ONE box (`.num-rows`): sized per row instead, each row's
+// width is its own tag and its own chips, so the moment the block is clamped
+// every row falls back to a different width and the columns splay — a phone
+// drew 12 KB, 23 KB and 5.3 KB at three x positions under one heading.
+//
+// ASSERTED AS ANCESTRY, because jsdom computes no layout: the splay has no DOM
+// signature, but the structure that prevents it does, and a figure column
+// added outside the shared box is exactly how it comes back.
+test("every figure column sits inside the box the rows are sized as", async () => {
+  mount({
+    events: [
+      phase("2026-09-13T10:01:30Z", 90_000),
+      event({
+        type: "prefetch_summary",
+        timestamp: "2026-09-13T10:00:00Z",
+        payload: { turn_id: TURN, onboarding_hint_hit: true, onboarding_hint_bytes: 1016 },
+      }),
+      promptSize({ approximate_tokens: 7400, system_chars: 24_000, user_chars: 1200 }),
+    ],
+  });
+  // BOTH TABLES, asserted by their own headings first: the prefetch half's
+  // single figure is a column too — it was a bare trailing span — and without
+  // this the loop below passes on a page that renders only the other half.
+  await screen.findByText("Prompt sent");
+  await screen.findByText("Reached the prompt");
+  const columns = document.querySelectorAll(".num-col");
+  expect([...columns].map((c) => c.textContent)).toContain("1016 B");
+  for (const col of columns) {
+    expect(col.closest(".num-rows"), col.textContent ?? "").toBeTruthy();
+    expect(col.closest(".num-block"), col.textContent ?? "").toBeTruthy();
+  }
 });
 
 // A TURN THAT ANSWERED WITH NOTHING IS AN EMPTY STATE, not a blank page — and
