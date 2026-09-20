@@ -8,7 +8,7 @@
  * that the log in front of them is complete.
  */
 
-import { cleanup, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { ReactElement } from "react";
 
@@ -108,6 +108,14 @@ test("a bridged run that genuinely made no calls still shows nothing", () => {
   expect(screen.queryByText("Tool calls")).toBeNull();
 });
 
+// THE ROW MOUNTS ITS BLOCKS ON OPENING, so a case about what a block does has
+// to open it — and it has to open it while `overflowing`'s measurement fake is
+// still installed, or the block measures a box jsdom reports as zero and the
+// branch under test never runs. That is what the callback is for.
+function openFirstCall(container: HTMLElement): void {
+  fireEvent.click(container.querySelector("button")!);
+}
+
 function longLog() {
   return run({
     bridge_calls: [
@@ -131,6 +139,8 @@ test("a tool block long enough to scroll is a named, focusable region", () => {
     <Router>
       <BridgeLog run={longLog()} />
     </Router>,
+    "height",
+    openFirstCall,
   );
   const region = container.querySelector('[role="region"][tabindex="0"]');
   expect(region).not.toBeNull();
@@ -149,6 +159,8 @@ test("a scrolling tool block leaves select-all to the browser", () => {
     <Router>
       <BridgeLog run={longLog()} />
     </Router>,
+    "height",
+    openFirstCall,
   );
   const region = container.querySelector('[role="region"][tabindex="0"]')!;
   const event = new KeyboardEvent("keydown", {
@@ -160,4 +172,30 @@ test("a scrolling tool block leaves select-all to the browser", () => {
   });
   region.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(false);
+});
+
+test("a bridged call's arguments are shown as the JSON document they are", () => {
+  // The engine writes them with a plain `json.Marshal`, so what arrives is the
+  // whole call on one line. Indented rather than re-encoded — lib/jsontext.ts
+  // has the reason — so an id too wide for a double survives the trip.
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "read_file",
+              args: '{"path":"a.go","id":9007199254740993}',
+              output: "package a",
+              at: "2026-06-15T12:01:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  const block = container.querySelector('[aria-label="read_file arguments"]');
+  expect(block?.textContent).toContain('{\n  "path": "a.go",\n  "id": 9007199254740993\n}');
 });
