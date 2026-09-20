@@ -704,7 +704,16 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	// and only when the caller named no instants of their own, since the
 	// projection holds one rolling window and cannot look behind it.
 	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
-		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
+		records, covered := s.State.SpendRecords()
+		// THE SAME RULE THIS COMMENT BLOCK STATES, applied to the live
+		// path too: the projection's record cap binds before its window
+		// and drops the OLDEST, so past the cap the numbers cover less
+		// than the window they were about to be headed with.
+		if at, err := time.Parse(time.RFC3339, covered); covered != "" &&
+			err == nil && at.After(opts.Since) {
+			opts.Since = at
+		}
+		return tokens.Aggregate(records, opts), nil
 	}
 	if s.Events == nil {
 		// A registry wired without the event log (a caller asking only the

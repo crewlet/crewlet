@@ -45,7 +45,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 			for range 100 {
 				s.RecentEvents(50)
 				s.ActiveSandboxes()
-				s.SpendRecords()
+				_, _ = s.SpendRecords()
 				s.Budget()
 				s.AgentOverlay("Seat-0")
 				s.RuntimeIDFor("Seat-1")

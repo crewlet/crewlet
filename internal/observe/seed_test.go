@@ -15,6 +15,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
+// spendRows is the records half of SpendRecords, for the cases here that are
+// about WHAT the seed retained rather than about the window that retention
+// leaves the rollup covering.
+func spendRows(s *livestate.LiveState) []tokens.Record {
+	rows, _ := s.SpendRecords()
+	return rows
+}
+
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "seed.db"), store.Options{})
@@ -79,7 +87,7 @@ func TestSeedingReadsTheFeedAndTheSpendWindowFromTheStore(t *testing.T) {
 	if !ids[recent] || !ids[old] {
 		t.Errorf("feed = %v, want both stored events", ids)
 	}
-	rollup := tokens.Aggregate(live.SpendRecords(), tokens.Options{})
+	rollup := tokens.Aggregate(spendRows(live), tokens.Options{})
 	if rollup.Totals.TotalTokens != 30 || rollup.Totals.Calls != 1 {
 		t.Errorf("rollup = %d tokens over %d calls, want only the phase inside the "+
 			"live window", rollup.Totals.TotalTokens, rollup.Totals.Calls)
@@ -169,8 +177,8 @@ func TestAnUnreadableHalfIsReportedAndDoesNotCostTheOther(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want the store's own cause", err)
 	}
-	if len(live.SpendRecords()) != 1 {
-		t.Errorf("records = %+v, want the half that could be read", live.SpendRecords())
+	if len(spendRows(live)) != 1 {
+		t.Errorf("records = %+v, want the half that could be read", spendRows(live))
 	}
 	if len(live.RecentEvents(0)) != 0 {
 		t.Error("the failing half seeded rows anyway")
@@ -190,7 +198,7 @@ func TestAnUnreadableHalfIsReportedAndDoesNotCostTheOther(t *testing.T) {
 	if len(live.RecentEvents(0)) != 1 {
 		t.Errorf("feed = %+v, want the half that could be read", live.RecentEvents(0))
 	}
-	if len(live.SpendRecords()) != 0 {
+	if len(spendRows(live)) != 0 {
 		t.Error("the failing half seeded records anyway")
 	}
 }
@@ -221,8 +229,8 @@ func TestASlowFeedReadLeavesTheSpendReadItsOwnTime(t *testing.T) {
 		t.Errorf("the spend read was handed an expired context (%v), so it "+
 			"returned without touching the store", history.spendCtxErr)
 	}
-	if len(live.SpendRecords()) != 1 {
-		t.Errorf("records = %+v, want the spend half seeded", live.SpendRecords())
+	if len(spendRows(live)) != 1 {
+		t.Errorf("records = %+v, want the spend half seeded", spendRows(live))
 	}
 }
 
