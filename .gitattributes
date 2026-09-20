@@ -1,0 +1,41 @@
+# static/dashboard is BUILD OUTPUT, and git must never try to merge it.
+#
+# Vite content-hashes the emitted names, so two branches that both rebuild the
+# dashboard write DIFFERENT paths for the same chunk. Git pairs those as two
+# renames of one base blob and three-way merges them — 979 KB of minified
+# JavaScript, on a line-based algorithm. Measured on this tree, one such merge
+# splices nine conflict-marker lines into the committed artefacts: three into
+# each side's entry bundle and three into index.html. Both bundles then fail
+# `node --check`. Anyone who resolves by staging rather than rebuilding
+# commits a dashboard that does not parse.
+#
+# `-merge` is git's binary-merge behaviour: the conflict still happens — the
+# same four paths come back unmerged either way — and git leaves OURS in the
+# working tree instead of writing markers into it. THE RESOLUTION IS THE ONLY
+# ONE THAT IS EVER CORRECT for generated files: rebuild, do not merge.
+#
+#     make dashboard && git add -A -- static/dashboard
+#
+# NOT `binary` and NOT `-diff`, which would also be tempting: `make
+# dashboard-check` is `npm run build` followed by `git diff --exit-code --
+# static/dashboard`, and ci.yml prints that patch under "The diff above is what
+# a rebuild produced". Under `binary` it becomes "Binary files … differ", and
+# `git log -G` over the tree drops from 66 matching commits to none. `-merge`
+# costs neither: the diff is byte-identical to having no attribute at all.
+#
+# `merge=binary` is an exact synonym and says less. A merge DRIVER is the wrong
+# mechanism entirely — `merge.<name>.driver` is git config, cannot be committed,
+# and degrades silently to the marker-writing text merge in every clone where
+# nobody ran `git config`.
+#
+# The whole emitted tree, not just assets/: index.html is generated too and
+# took the third marker injection, and protocol.js is the second build target.
+# Not `static/**` — static/crewlet-icon.svg is a hand-maintained embed the
+# build does not write.
+#
+# static/merge_test.go asserts the EFFECT of this line, via `git check-attr`,
+# because a rule held by prose alone decays (adr/README) — and because this
+# file is one directive needing a paragraph beside it, so the likeliest way to
+# lose it is a `#` in front of it, which no substring check over these bytes
+# would notice.
+static/dashboard/** -merge
