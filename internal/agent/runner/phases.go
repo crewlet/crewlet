@@ -485,7 +485,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	})
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
-		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
+		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
 		rounds: reviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
 		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
@@ -517,11 +517,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 				"executor set out to do against what the tool log says it did, " +
 				"and call " + SubmitReviewTool + ".",
 		}
-		r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
+		r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
+	r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
 		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      payload.Decision,
@@ -529,6 +529,31 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		CompletedWork: payload.CompletedWork,
 		FinalArtifact: payload.FinalArtifact,
 	}, nil
+}
+
+// reviewTask frames the trigger for the reviewer.
+//
+// THE SAME BYTES MEAN DIFFERENT THINGS TO THE TWO PHASES. The executor is
+// HANDED this text as the thing to do, so it reaches that phase bare. The
+// reviewer is asked about a turn that is already underway, and handed the
+// same bytes bare it reads them as a request that has just arrived.
+//
+// Not hypothetical. On a turn whose first round had already posted a
+// clarifying question, reviewers read the unchanged trigger next to an
+// `## Earlier rounds` block showing that question, and the only account that
+// fits both is that the sender asked again — "the founder ... has now
+// re-posted the same vague request". Two consecutive rounds said it, and the
+// second built its correction on it, instructing the next round to act on a
+// message nobody had sent. So the trigger reaches the reviewer as evidence,
+// labelled, rather than as an instruction.
+//
+// The label is CONSTANT, unlike [Runner.taskFor]'s correction: the review
+// phase re-sends this every round, and a per-round frame would move bytes the
+// provider's prefix cache is keyed on.
+func reviewTask(task string) string {
+	return "The trigger this turn is answering, for reference. It is the message " +
+		"the agent was ALREADY working on when the rounds below ran — not a new " +
+		"one that arrived during the turn, and not a repeat of it:\n\n" + task
 }
 
 // reviewRecord builds Review's completed record.

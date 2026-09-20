@@ -44,10 +44,16 @@ func TestReviewHeaderCarriesEveryDecisionRule(t *testing.T) {
 		// failure: the next round can discover and activate it.
 		"Missing-tool rule", "discover and activate it",
 		"I don't have access to the tool needed to deliver this",
-		// Blocked on a colleague routes through self_iterate + outreach;
-		// the colleague replies asynchronously and that re-triggers the
-		// agent, so the reviewer must not wait.
-		"Blocked / needs-a-colleague rule", "reply asynchronously",
+		// Blocked on a colleague splits on whether they have BEEN TOLD,
+		// because that is the half the tool log can settle: not yet is the
+		// next round's outreach, already asked is the end of the turn. The
+		// rule named only `self_iterate` once, while saying in the same
+		// breath that the reply re-triggers the agent — so a seat that had
+		// put a question to its founder was sent back to ask again and
+		// ended on the max-iterations guard. Both halves are pinned: drop
+		// the split and the loop returns, drop the async fact and the
+		// reviewer has no reason to stop waiting.
+		"Blocked / needs-a-colleague rule", "BEEN TOLD", "re-triggers this agent",
 	)
 	// The cross-round half of the duplicate rule is worthless if it can
 	// only see inside one round.

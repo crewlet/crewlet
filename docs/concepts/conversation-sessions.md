@@ -82,6 +82,15 @@ sent re-creates the duplicate-answer bug in a place nothing else can catch.
   line" is something the reader has to notice while "nobody received this" is
   something it has to act on
 - **Reviewer** — `completed_work`, the prose on what already landed
+- **You ended that turn blocked** — what stopped it, taken from the executor's
+  own `evidence` on a `blocked` round and empty on every other outcome. A turn
+  that put a question to somebody and ended there records `done` exactly like one
+  that finished the work, so without this the seat's next turn on the thread
+  cannot tell *"I answered this"* from *"I asked about this and I am waiting"* —
+  and read as the first, a question the seat asked becomes work it believes it
+  delivered. It is also precisely the turn that reads the line: the reply to that
+  question is what wakes the seat, so the message in front of it is usually the
+  answer
 - **Turn ended** — only when the decision was not `done`
 
 The reviewer's *other* field, `turn.Review.Notes`, is deliberately **not**

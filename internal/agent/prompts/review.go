@@ -13,6 +13,27 @@ import "strings"
 // in-thread follow-up the prior-work header explicitly asks for — every
 // corrected turn then looped until it terminated failed.
 //
+// THE BLOCKED RULE IS THE NEWEST, and it had contradicted itself in one
+// breath: it named a single outcome, `self_iterate`, and then said the
+// colleague "reply asynchronously and that re-triggers the agent". Both
+// halves cannot hold — if the reply is what wakes the seat, then no round
+// of THIS turn can produce it, and sending the round back asks a question
+// that has already been asked. A seat that put a clarifying question to its
+// founder in the founder's own thread was returned by the reviewer, asked
+// the same question again two minutes later, and ended on the
+// max-iterations guard: three rounds, a duplicate nag at a person who had
+// answered nothing yet, and a turn that did exactly the right thing
+// recorded as a breach.
+//
+// So the rule splits on the one fact the TOOL LOG holds — has the person
+// been told — rather than on how stuck the agent sounds. What it must never
+// become is a decision of its own: being blocked is the EXECUTOR's word for
+// what happened (see turn.OutcomeBlocked, whose own doc already casts the
+// reviewer's job here as exactly this yes/no), and `done` / `self_iterate`
+// / `failed` are the REVIEWER's for whether that was good enough. A fourth
+// decision spelling "blocked, and rightly so" would copy one axis onto the
+// other, and the next kind of blocked would want a fifth.
+//
 // What the reviewer is NOT asked any more is whether the delivery happened.
 // That question is settled before this prompt is built: the engine checks the
 // executor's own claims against its record of the turn, refuses a bad one
@@ -22,7 +43,8 @@ import "strings"
 const ReviewHeader = "\n## REVIEW phase" +
 	"\nJudge the work below. Submit exactly one `submit_review` call with " +
 	"one decision:" +
-	"\n- **done** — it meets the ask; return the artifact." +
+	"\n- **done** — this turn is over: the work meets the ask, or it is " +
+	"honestly blocked on somebody already told. Return the artifact." +
 	"\n- **self_iterate** — incomplete or wrong; send it back with notes " +
 	"saying what the next round must do differently." +
 	"\n- **failed** — it cannot be completed at all, and another round " +
@@ -60,14 +82,17 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"(e.g. \"I don't have access to the tool needed to deliver this\"), " +
 	"choose `self_iterate` and name the tool in `notes` — the next round " +
 	"can discover and activate it." +
-	"\n**Blocked / needs-a-colleague rule:** if the turn can't finish " +
-	"without a manager or peer — a capability gap needing someone else's " +
-	"identity / credentials, or a decision above the agent's authority — " +
-	"choose `self_iterate` and say so in `notes`. The next round reaches " +
-	"the colleague directly with its own colleague-surface tools — a chat " +
-	"mention, an issue comment, a doc comment, or `a2a_ask` — wherever " +
-	"the work lives. They reply asynchronously and that re-triggers the " +
-	"agent. Never leave a direct request unanswered."
+	"\n**Blocked / needs-a-colleague rule — has the person BEEN TOLD?** " +
+	"The tool log answers that, not the agent's prose. Not yet → " +
+	"`self_iterate`, naming who to reach in `notes`; the next round " +
+	"reaches them with its own tools — a chat mention, an issue comment, " +
+	"a doc comment, `a2a_ask` — wherever the work lives. Already asked → " +
+	"`done`: their reply is what re-triggers this agent, so no round of " +
+	"THIS turn can produce it and sending it back only asks twice. " +
+	"Nothing anyone replies would finish it → `failed`. Never leave a " +
+	"direct request unanswered: whoever triggered this turn is owed a " +
+	"reply where they asked, even one that only says who you are waiting " +
+	"on."
 
 // ReviewInput is the evidence the reviewer judges against.
 //

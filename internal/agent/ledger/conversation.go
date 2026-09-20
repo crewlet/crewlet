@@ -79,6 +79,29 @@ type Session struct {
 	// went. What actually happened survives without it: the failed calls are
 	// in Calls and the outcome is in Decision.
 	CompletedWork string `json:"completed_work,omitempty"`
+
+	// BlockedOn is what stopped the turn, from a blocked round's own
+	// account of what it tried and what it ran into.
+	//
+	// TWO AXES, AND [Session.Decision] ONLY CARRIES ONE. That field is the
+	// REVIEWER's word for whether the round was good enough; this is the
+	// EXECUTOR's for what actually happened. Without it a turn that put a
+	// question to somebody and ended there recorded identically to one that
+	// finished the work — both `done`, both with whatever prose was in hand
+	// — and the seat's next turn on this thread could not tell "I answered
+	// this" from "I asked about this and I am waiting".
+	//
+	// Which is exactly the turn that reads it. The reply to that question is
+	// what wakes the seat again, so the entry the next turn opens on is this
+	// one, and the message in front of it is very often the answer.
+	//
+	// THE CALLER DECIDES whether a round was blocked, for the same reason it
+	// decides [SessionInput.Delivered]: the outcome vocabulary belongs to
+	// [github.com/crewlet/crewlet/internal/agent/turn], and that package
+	// imports this one. A string here that is empty on every other outcome
+	// keeps the dependency pointing one way instead of spelling `blocked` in
+	// a second place for a comparison this package has no business making.
+	BlockedOn string `json:"blocked_on,omitempty"`
 }
 
 // SessionInput is what the engine has in hand at turn end. BuildSession
@@ -94,6 +117,11 @@ type SessionInput struct {
 	Reply         string
 	Decision      string
 	CompletedWork string
+
+	// BlockedOn is the blocked round's evidence, and empty on every other
+	// outcome. See [Session.BlockedOn] for why the caller and not this
+	// package decides that.
+	BlockedOn string
 
 	// Delivered says which of [Session.Reply] and [Session.Unsent] the
 	// Reply value belongs in. The caller knows; this package cannot.
@@ -117,6 +145,7 @@ func BuildSession(in SessionInput) Session {
 		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
 		Decision:      in.Decision,
 		CompletedWork: in.CompletedWork,
+		BlockedOn:     in.BlockedOn,
 	}
 	// ONE VALUE, TWO FIELDS, and the branch is the record. Writing it to
 	// both would make the undelivered case indistinguishable from the
@@ -239,6 +268,18 @@ func renderSession(e Session) string {
 	}
 	if e.CompletedWork != "" {
 		lines = append(lines, "Reviewer, on what landed: "+e.CompletedWork)
+	}
+	// SECOND PERSON and forward-looking, like every other line here. The
+	// reader is this seat's own next turn, and where the last one ended on
+	// something it could not get past, the thing it most needs to know is
+	// that the message now in front of it may well be the answer.
+	//
+	// Rendered whatever the decision. A blocked round that ended the turn
+	// and one the reviewer sent back are different facts, but the reader
+	// needs the same thing from both — what the obstacle was — and the
+	// decision line below supplies the rest.
+	if e.BlockedOn != "" {
+		lines = append(lines, "You ended that turn blocked: "+e.BlockedOn)
 	}
 	// "done" is the unremarkable ending and saying so on every entry trains
 	// the reader to skip the line — which is the line that says a turn
