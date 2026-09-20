@@ -3,6 +3,7 @@ package memsync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -470,5 +471,94 @@ func TestIdentityTellsTheFourCasesApart(t *testing.T) {
 				t.Fatalf("IdentityOf = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// overCountsJS is a JetStream whose consumers claim more is pending than the
+// stream will ever deliver.
+//
+// Embedded like countFailsJS beside it, and for the same reason: the real
+// thing satisfies everything except the one answer under test.
+type overCountsJS struct {
+	jetstream.JetStream
+}
+
+func (j overCountsJS) CreateConsumer(ctx context.Context, stream string,
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	consumer, err := j.JetStream.CreateConsumer(ctx, stream, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return overCountsConsumer{consumer}, nil
+}
+
+type overCountsConsumer struct {
+	jetstream.Consumer
+}
+
+func (c overCountsConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+	info, err := c.Consumer.Info(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// More than the stream holds, which is what a replay meets when a
+	// message is removed between the count and the fetch, or when the
+	// broker's own accounting is ahead of what it will serve.
+	info.NumPending += 5
+	return info, nil
+}
+
+// A SHORT REPLAY REFUSES THE SEAT rather than admitting it half-remembered.
+//
+// The stream says there is more and delivers none. Stopping is right — it is
+// the only thing that makes the replay loop terminate — but it used to break
+// into SUCCESS, writing a `memory_hydrated` line naming only what arrived. So
+// a seat was admitted with a fraction of its diary and nothing anywhere said
+// why.
+//
+// It is the failure TestMemoryChangelogRecreationIsDetected refuses, one degree
+// weaker: that guard exists because an empty changelog reads as "a seat with
+// nothing to carry" and reports success, and a short pull is the same claim
+// about a seat that does have memory. Hydrate's own doc already states the
+// answer — a failure refuses the seat, because a peer that takes it instead may
+// have the memory.
+func TestAShortReplayRefusesTheSeatRatherThanHalfHydratingIt(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	db := openStore(t)
+	seedMemory(t, db)
+	if _, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	newOwner := openStore(t)
+	syncer, err := New(newOwner, conn, func(string) string { return seat.AgentID })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	syncer.js = overCountsJS{syncer.js}
+
+	carried, err := syncer.Hydrate(ctx, seat.Handle)
+	if err == nil {
+		t.Fatalf("a replay that could not deliver what it promised reported "+
+			"success with %d rows, so the seat is admitted half-remembered",
+			carried)
+	}
+	// NAMES THE SHORTFALL. An operator reading this has to be able to tell
+	// it from a broker that was simply unreachable.
+	for _, want := range []string{"pending", "incomplete"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+	// AND REPORTS WHAT IT DID CARRY, which is what the caller's own log
+	// line prints: the rows are in the store, and the seat is refused
+	// because they are not all of them.
+	if carried == 0 {
+		t.Error("the refusal reports nothing carried, so a reader cannot tell " +
+			"a partial replay from one that never started")
 	}
 }
