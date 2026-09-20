@@ -268,9 +268,12 @@ against is this limit. Unset, the broker sizes itself from the free space on
 which is right when it is the volume's only tenant and wrong the moment it is
 not, because free space bounds the *sum* of the engines on a disk rather than
 each of them. Two engines each taking what they can see over-commit the volume;
-three over-commit it by half again. The failure is not a disk-full message: it
-is `insufficient storage resources available` on whichever stream that node
-happened to provision last, which reads as a problem with that subsystem. So on
+three over-commit it by half again. The failure is not a disk-full message: on
+a single node it is `insufficient storage resources available`, and on a fleet
+— where the limit is applied by the metadata leader placing the stream rather
+than by the member creating it — it is `no suitable peers for placement,
+insufficient storage`. Either way it names whichever stream that node happened
+to provision last, which reads as a problem with that subsystem. So on
 a host running N engines against one filesystem — a test runner, a
 multi-tenant box, several companies on one machine — give each of them its own
 share:
@@ -287,7 +290,11 @@ restarted. Half of whatever is in force is what the state logs' derived
 ceilings may reserve between them; the other half is for the streams that
 reserve nothing and simply grow against it — the seats' mailboxes, the event
 log, the dead-letter stream, the memory changelog and every coordination
-bucket. A refusal names the limit, what was already spoken for, and this field.
+bucket. A refusal names the ceiling that did not fit and the Tier A field
+that sets it on either topology; it adds the limit in force and what is already
+reserved only where this node can read them, which is the standalone one. On a
+fleet the room that refused is another member's disk, and no member can read
+another's.
 
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**

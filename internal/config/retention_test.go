@@ -333,8 +333,9 @@ func TestTheSnapshotDirectoryResolvesAgainstTheStore(t *testing.T) {
 // This field is the number every stream ceiling on this node's broker is
 // compared against, and the failure it prevents is the one that has no
 // symptom of its own: a create refused with `insufficient storage resources
-// available`, on whichever stream a bring-up happened to reach last rather
-// than on the one that is too big.
+// available` — or, on a clustered member, `no suitable peers for placement,
+// insufficient storage` — on whichever stream a bring-up happened to reach
+// last rather than on the one that is too big.
 //
 // So a limit smaller than the operator's OWN ceilings cannot be honoured by
 // anybody, and both numbers are on the same page of the same file — the

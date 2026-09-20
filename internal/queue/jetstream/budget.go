@@ -125,21 +125,48 @@ func (q *Queue) GrowthBudget(ctx context.Context) (StorageBudget, error) {
 // budget is the account's stated limit and, when withServer says the embedded
 // server's own cap is this node's to hold a request to, that cap as well,
 // whichever a reservation meets first.
+//
+// # The server half is read FIRST, and it is what survives a broker that will
+// not answer
+//
+// That server is in this process, and its configuration is a struct field
+// rather than a request — it cannot fail to answer because the broker is busy.
+// The account half is a round trip, and on an embedded broker it states no
+// limit at all in the ordinary case, because nothing here sets one. Failing
+// the whole read on it therefore threw away the one number this node
+// definitely had, for the one that is usually absent: [internal/engine] reads
+// a failure here as "no limit" and sizes its state logs from FREE DISK
+// instead, which is both looser than the cap that just went unread and the
+// arithmetic the cap exists to replace.
+//
+// So the account half degrades to what it states when nobody can read it —
+// nothing — and the SOURCE says which limit is bounding the answer, so a
+// refusal names the one an operator can raise. Where no server half is stated
+// (an external broker) the account's limit is the only thing readable, and a
+// failure there is a failure: there is nothing left to hold a ceiling to.
 func (q *Queue) budget(ctx context.Context, withServer bool) (StorageBudget, error) {
 	memory := q.storage() == jetstream.MemoryStorage
+	var server StorageBudget
+	if withServer {
+		var err error
+		if server, err = q.embedded.budget(memory); err != nil {
+			return StorageBudget{}, err
+		}
+	}
 	info, err := q.js.AccountInfo(ctx)
-	if err != nil {
+	switch {
+	case err != nil && !withServer:
 		return StorageBudget{}, fmt.Errorf("jetstream: read the account's storage limits: %w", err)
+	case err != nil:
+		q.log.WarnContext(ctx, "jetstream_account_limits_unread", "error", err.Error(),
+			"detail", "the embedded server's own cap bounds this node's "+
+				"reservations instead; an account limit set on top of it is "+
+				"not held against them")
+		return server, nil
+	case !withServer:
+		return accountBudget(info, max(q.cfg.Replicas, 1), memory), nil
 	}
-	budget := accountBudget(info, max(q.cfg.Replicas, 1), memory)
-	if !withServer {
-		return budget, nil
-	}
-	server, err := q.embedded.budget(memory)
-	if err != nil {
-		return StorageBudget{}, err
-	}
-	return tighter(budget, server), nil
+	return tighter(accountBudget(info, max(q.cfg.Replicas, 1), memory), server), nil
 }
 
 // tighter is whichever of two budgets a reservation meets first: the one with

@@ -619,6 +619,17 @@ func TestTheProvisioningPredicatesAreDisjoint(t *testing.T) {
 	}{
 		{"placement refusal", &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400},
 			[3]bool{true, false, false}},
+		// A STORAGE CLAUSE INSIDE THE SAME CODE IS STILL PLACEMENT —
+		// see [TestAPlacementRefusalIsWaitedOutWhateverItsReason] for
+		// why the prose does not reclassify it.
+		{"placement refusal naming storage", &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400,
+			Description: "no suitable peers for placement, insufficient storage"},
+			[3]bool{true, false, false}},
+		// AND A RESERVATION THE BROKER REFUSED IS NONE OF THE THREE: it
+		// is terminal, and [OutOfCapacity] is the predicate for it.
+		{"refused reservation", &jetstream.APIError{ErrorCode: errCodeOutOfStore, Code: 500,
+			Description: "insufficient storage resources available"},
+			[3]bool{false, false, false}},
 		{"stream not found", jetstream.ErrStreamNotFound, [3]bool{false, true, false}},
 		{"bucket not found", jetstream.ErrBucketNotFound, [3]bool{false, true, false}},
 		{"consumer not found", jetstream.ErrConsumerNotFound, [3]bool{false, true, false}},
@@ -981,5 +992,104 @@ func TestAReadBacksAttemptIsBoundedWellInsideItsWindow(t *testing.T) {
 	if PlacementRetry*10 > ReadBack {
 		t.Errorf("a %v read-back holds fewer than ten %v polls",
 			ReadBack, PlacementRetry)
+	}
+}
+
+// A CEILING THAT DOES NOT FIT IS TERMINAL AND IS NOT A CLUSTER STILL FORMING.
+//
+// The two are both create refusals from the same call, and waiting is the
+// answer to exactly one of them: a forming cluster gains members, and a
+// storage limit gains nothing by anybody waiting. Confusing them costs the
+// whole provisioning budget and ends with the same message — and a read-back
+// after it appends a not-found for an object nobody made, which is how the
+// measured failure came to name `CREWLET_PAGES_LOG` twice for a limit the
+// other two logs had already spent.
+//
+// BOTH CODES, because which one a broker answers with is decided by where its
+// streams live rather than by what went wrong, so an assertion naming one
+// certifies half the rule.
+func TestACeilingThatDoesNotFitIsTerminal(t *testing.T) {
+	t.Parallel()
+	for name, refusal := range map[string]*jetstream.APIError{
+		"a file-backed broker": {
+			ErrorCode: errCodeOutOfStore, Code: 500,
+			Description: "insufficient storage resources available",
+		},
+		"a memory-backed broker": {
+			ErrorCode: errCodeOutOfMemory, Code: 500,
+			Description: "insufficient memory resources available",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if !OutOfCapacity(refusal) {
+				t.Fatal("the refusal is not recognised, so a limit that will " +
+					"never change is waited out for the whole provisioning " +
+					"budget and then reported as a cluster that never formed")
+			}
+			// WRAPPED, because that is how it arrives: the caller adds
+			// the stream or bucket name before anything sees it.
+			if !OutOfCapacity(errors.Join(
+				errors.New("ensure stream CREWLET_PAGES_LOG"), refusal)) {
+				t.Fatal("a wrapped refusal is not recognised")
+			}
+			if Unplaceable(refusal) {
+				t.Fatal("it was also read as a cluster still forming; the two " +
+					"predicates are disjoint and no caller orders them")
+			}
+		})
+	}
+}
+
+// AND A PLACEMENT REFUSAL IS NOT, WHATEVER REASON IT CARRIES.
+//
+// [errCodeNoPeers] is one code over every reason the metadata leader's peer
+// selection accumulated, flattened into prose across candidate peers — and the
+// room it weighed is another member's disk, which this node cannot read. So a
+// storage clause there is not this node's ceiling refused: an offline peer may
+// still arrive, a member whose tags do not match may still be starting, and a
+// terminal message could only quote a budget that is not the one that refused.
+// The unknown direction is the one that matters — a new upstream reason read
+// as terminal would fail a boot that used to succeed on the retry.
+func TestAPlacementRefusalIsWaitedOutWhateverItsReason(t *testing.T) {
+	t.Parallel()
+	for name, description := range map[string]string{
+		"nothing but the prefix":  "no suitable peers for placement",
+		"a peer with no room":     "no suitable peers for placement, insufficient storage",
+		"a peer that may return":  "no suitable peers for placement, peer offline, insufficient storage",
+		"tags that may be fixed":  "no suitable peers for placement, insufficient storage, tags not matched ['eu']",
+		"a reason nobody has met": "no suitable peers for placement, some future reason",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			refusal := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400,
+				Description: description}
+			if OutOfCapacity(refusal) {
+				t.Errorf("%q was declared terminal, so a condition that clears "+
+					"by waiting fails the boot instead", description)
+			}
+			if !Unplaceable(refusal) {
+				t.Errorf("%q is no longer waited out", description)
+			}
+		})
+	}
+}
+
+// AND NEITHER PREDICATE FIRES ON AN ERROR THAT IS NOT THE BROKER'S ANSWER.
+func TestNeitherRefusalPredicateFiresOnAnOrdinaryError(t *testing.T) {
+	t.Parallel()
+	for _, err := range []error{
+		errors.New("insufficient storage resources available"),
+		context.DeadlineExceeded,
+		nats.ErrNoResponders,
+		&jetstream.APIError{ErrorCode: 10023, Code: 503,
+			Description: "insufficient resources"},
+	} {
+		if OutOfCapacity(err) {
+			t.Errorf("%v was read as a ceiling the broker refused", err)
+		}
+		if Unplaceable(err) {
+			t.Errorf("%v was read as a cluster still forming", err)
+		}
 	}
 }

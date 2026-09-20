@@ -816,8 +816,10 @@ type Stream struct {
 	// because the disk bounds their SUM and not each of them. Two engines
 	// on one filesystem each believed they might have half of the same free
 	// space; three over-committed it by half again, and the symptom was
-	// `insufficient storage resources available` naming whichever stream
-	// happened to be provisioned last.
+	// `insufficient storage resources available` — `no suitable peers for
+	// placement, insufficient storage` on a clustered member, where the
+	// limit is applied by the metadata leader placing the stream — naming
+	// whichever stream happened to be provisioned last.
 	//
 	// SO N ENGINES ON ONE FILESYSTEM DIVIDE IT. Give each of them its own
 	// share — the whole point of the field — and each one's ceilings are

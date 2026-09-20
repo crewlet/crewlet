@@ -633,6 +633,11 @@ const PlacementRetry = 250 * time.Millisecond
 // A NUMBER rather than a description match, because nats.go names only a
 // handful of its codes and this is not one of them — and matching the text
 // would break the moment the server reworded it.
+//
+// It is ONE code over several unrelated facts, which is why the description is
+// read below after all: the server flattens every reason its peer selection
+// accumulated into this code's `{err}` slot (server/jetstream_errors_generated.go,
+// JSClusterNoPeersErrF).
 const errCodeNoPeers jetstream.ErrorCode = 10005
 
 // Unplaceable reports the transient "the cluster is still forming" error, and
@@ -641,9 +646,87 @@ const errCodeNoPeers jetstream.ErrorCode = 10005
 // Every other create failure — a bad TTL, a conflicting replica count, an auth
 // failure — clears by nobody waiting, so retrying it would turn a
 // configuration mistake into a two-minute hang ending in the same message.
+//
+// A STORAGE CLAUSE INSIDE THIS CODE IS STILL WAITED OUT, which is what keeps
+// it disjoint from [OutOfCapacity] rather than overlapping it. A clustered
+// create that no member can place reports this one code with every reason its
+// peer selection accumulated flattened into the description, and the room it
+// weighed is somebody else's disk — a figure this node cannot read and so
+// cannot name in a terminal message. Reading that as terminal would also make
+// a peer that is merely starting, or one an operator is about to give room to,
+// fail a boot the retry would have carried.
 func Unplaceable(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == errCodeNoPeers
+}
+
+// The broker's codes for a create it refused because the reservation would not
+// fit inside the storage limit in force.
+//
+// BOTH, because which one a broker answers with is decided by where its
+// streams live rather than by what went wrong: a file-backed server reports
+// the first and a memory-backed one the second, for the identical event.
+// Naming only one leaves the other as the silent half nobody notices is
+// missing.
+//
+// A NUMBER rather than a description match, for [errCodeNoPeers]'s reason:
+// nats.go names neither, and the text is the server's to reword.
+const (
+	errCodeOutOfStore  jetstream.ErrorCode = 10047
+	errCodeOutOfMemory jetstream.ErrorCode = 10028
+)
+
+// OutOfCapacity reports a create the broker refused because the byte ceiling
+// asked for does not fit inside the storage limit in force.
+//
+// # Why this is named here rather than beside either caller
+//
+// Two subsystems provision replicated objects and both meet this refusal —
+// [internal/queue/jetstream] creating streams and [internal/coord/kv] creating
+// buckets, a bucket BEING a stream — which is the same reason [Unplaceable],
+// [Budget] and [ReadBack] live here. Written twice the two spellings drift,
+// exactly as this package's own doc records for every other rule it holds.
+//
+// # Why PLACEMENT is deliberately not one of these codes
+//
+// A clustered create that no member can place reports [errCodeNoPeers], whose
+// code is shared by every placement failure and whose storage clause is prose
+// accumulated across candidate peers. What it weighed is another member's
+// disk, which this node cannot read — so a message calling it terminal could
+// only quote a budget that is not the one that refused, and an offline peer or
+// one an operator is about to give room to clears by being waited for. It
+// stays [Unplaceable]. `insufficient resources` (10023) is excluded for the
+// opposite reason: the server answers a publish, a catch-up or a consumer's
+// placement with it, never a stream's create, so naming it here would read
+// some other failure as a ceiling nobody reserved.
+//
+// Like [Unplaceable] it is TERMINAL — nothing frees a limit by being waited
+// for — and, like Unplaceable, a caller must not read back afterwards: nothing
+// was placed, and a not-found appended to the message only obscures what is
+// actually wrong.
+func OutOfCapacity(err error) bool {
+	apiErr, ok := apiError(err)
+	if !ok {
+		return false
+	}
+	switch apiErr.ErrorCode {
+	case errCodeOutOfStore, errCodeOutOfMemory:
+		return true
+	}
+	return false
+}
+
+// apiError unwraps the broker's own answer out of whatever a caller wrapped it
+// in, which is how both predicates above are asked the question.
+func apiError(err error) (*jetstream.APIError, bool) {
+	// TWO STATEMENTS, because `return apiErr, errors.As(err, &apiErr)` reads
+	// a variable the call it sits beside WRITES, and Go orders the function
+	// call against the other operand's evaluation for nobody.
 	var apiErr *jetstream.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode == errCodeNoPeers
+	if !errors.As(err, &apiErr) {
+		return nil, false
+	}
+	return apiErr, true
 }
 
 // NotYetVisible reports a create that landed at the metadata layer but is not

@@ -155,10 +155,23 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// observe, and no round trip spent observing it.
 		return bucket, nil
 	}
-	if jsprovision.Unplaceable(createErr) {
-		// STILL FORMING and it stayed that way for the whole budget,
-		// which createKeyValue has already waited out. Nothing was
-		// placed, so there is nothing to read back.
+	if jsprovision.OutOfCapacity(createErr) || jsprovision.Unplaceable(createErr) {
+		// NOTHING WAS PLACED, so there is nothing to read back, and
+		// both of these say so: a cluster that stayed unformed for the
+		// whole budget (which createKeyValue has already waited out),
+		// and a broker whose storage limit is already spent.
+		//
+		// THE SECOND IS NOT A CEILING OF THIS BUCKET'S OWN — a bucket
+		// declares none. The create carries its zero into the limit
+		// check, which refuses outright once the reservations already
+		// held exceed the limit, whatever is being added
+		// (server/jetstream.go, checkBytesLimits), so the bucket that
+		// cannot be made is simply the next object the boot reached.
+		// Without this arm the refusal fell through to the read-back
+		// below and came back as a bucket that is "not there", which is
+		// the one reading that sends an operator to the wrong
+		// subsystem: the streams the state logs reserved are where the
+		// limit actually went.
 		return nil, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this

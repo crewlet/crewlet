@@ -418,7 +418,9 @@ stream:
                                     #   engines each sizing themselves from what
                                     #   they can see over-commit it, and the
                                     #   failure is `insufficient storage
-                                    #   resources available` naming whichever
+                                    #   resources available` — or, on a fleet,
+                                    #   `no suitable peers for placement,
+                                    #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
                                     #   4 GiB..64 TiB, and it must not be smaller
                                     #   than the ceilings declared inside it.
