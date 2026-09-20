@@ -104,7 +104,7 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 		if entry.EventID == "" {
 			continue
 		}
-		if _, counted := s.spendIDs[entry.EventID]; counted {
+		if _, held := s.spendIDs[entry.EventID]; held {
 			continue
 		}
 		s.spendIDs[entry.EventID] = struct{}{}
