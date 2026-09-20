@@ -1045,7 +1045,9 @@ func TestACeilingThatDoesNotFitIsTerminal(t *testing.T) {
 // AND A PLACEMENT REFUSAL IS NOT, WHATEVER REASON IT CARRIES.
 //
 // [errCodeNoPeers] is one code over every reason the metadata leader's peer
-// selection accumulated, flattened into prose across candidate peers — and the
+// selection accumulated, flattened into prose across the peers the group HAS
+// (never a member that has not joined, which is what makes a bring-up's
+// storage-only verdict one peer speaking for the rest) — and the
 // room it weighed is another member's disk, which this node cannot read. So a
 // storage clause there is not this node's ceiling refused: an offline peer may
 // still arrive, a member whose tags do not match may still be starting, and a

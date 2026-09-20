@@ -653,9 +653,17 @@ const errCodeNoPeers jetstream.ErrorCode = 10005
 // create that no member can place reports this one code with every reason its
 // peer selection accumulated flattened into the description, and the room it
 // weighed is somebody else's disk — a figure this node cannot read and so
-// cannot name in a terminal message. Reading that as terminal would also make
-// a peer that is merely starting, or one an operator is about to give room to,
-// fail a boot the retry would have carried.
+// cannot name in a terminal message.
+//
+// AND THE REASONS ARE THE GROUP'S CURRENT MEMBERS' ONLY. selectPeerGroup walks
+// the metadata group's peers, sets one shared flag for each member it discards
+// for want of room, and never sees a member that has not joined at all — so
+// during a bring-up, which is the one moment this whole package exists to be
+// patient through, a refusal whose every reason is storage can be the verdict
+// of the single member that has come up so far. Waiting is right for that, and
+// for a peer an operator is about to give room to; the cost is that a cluster
+// which really has no room says so when the budget runs out rather than at
+// once.
 func Unplaceable(err error) bool {
 	apiErr, ok := apiError(err)
 	return ok && apiErr.ErrorCode == errCodeNoPeers
@@ -782,11 +790,13 @@ func NoApplicableLimitDetail(replicas int) string {
 //
 // A clustered create that no member can place reports [errCodeNoPeers], whose
 // code is shared by every placement failure and whose storage clause is prose
-// accumulated across candidate peers. What it weighed is another member's
-// disk, which this node cannot read — so a message calling it terminal could
-// only quote a budget that is not the one that refused, and an offline peer or
-// one an operator is about to give room to clears by being waited for. It
-// stays [Unplaceable]. `insufficient resources` (10023) is excluded for the
+// accumulated across the peers the metadata group HAS. What it weighed is
+// another member's disk, which this node cannot read — so a message calling it
+// terminal could only quote a budget that is not the one that refused. And the
+// accumulation is over the group's CURRENT membership rather than over the
+// fleet, so during a bring-up that verdict can be the single member that has
+// come up so far speaking for peers still starting: read as terminal it would
+// refuse a boot on a cluster where nothing is wrong. It stays [Unplaceable]. `insufficient resources` (10023) is excluded for the
 // opposite reason: the server answers a publish, a catch-up or a consumer's
 // placement with it, never a stream's create, so naming it here would read
 // some other failure as a ceiling nobody reserved.
