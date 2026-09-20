@@ -156,7 +156,7 @@ func TestRecordsInsideTheWindowAreKept(t *testing.T) {
 	s.Apply(phaseSpend("p1", "2026-06-14T12:00:00Z", 10))
 	s.Apply(phaseSpend("p2", "2026-06-14T13:00:00Z", 20))
 
-	records := s.SpendRecords()
+	records, _ := s.SpendRecords()
 	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2", len(records))
 	}
@@ -175,7 +175,7 @@ func TestARedeliveredPhaseIsNotCountedTwice(t *testing.T) {
 	if s.Apply(spend).Tokens {
 		t.Error("a redelivered phase counted again")
 	}
-	if got := len(s.SpendRecords()); got != 1 {
+	if got := spendCount(s); got != 1 {
 		t.Errorf("records = %d, want 1", got)
 	}
 }
@@ -186,7 +186,7 @@ func TestRecordsOlderThanTheWindowAreDropped(t *testing.T) {
 	s.Apply(phaseSpend("old", "2026-06-13T00:00:00Z", 10))
 	s.Apply(phaseSpend("new", "2026-06-14T12:00:00Z", 20))
 
-	records := s.SpendRecords()
+	records, _ := s.SpendRecords()
 	if len(records) != 1 || records[0].EventID != "new" {
 		t.Errorf("records = %+v, want only the recent one", records)
 	}
@@ -205,7 +205,7 @@ func TestPruningSurvivesAnOutOfOrderHead(t *testing.T) {
 	s.Apply(phaseSpend("late-old", "2026-06-12T00:00:00Z", 20))
 	s.Apply(phaseSpend("trigger", "2026-06-14T12:30:00Z", 5))
 
-	for _, record := range s.SpendRecords() {
+	for _, record := range spendRows(s) {
 		if record.EventID == "late-old" {
 			t.Error("a record behind a recent head was never pruned")
 		}
@@ -220,7 +220,7 @@ func TestAnUnparseableTimestampDoesNotPruneTheWindow(t *testing.T) {
 	s.Apply(phaseSpend("p1", "2026-06-14T12:00:00Z", 10))
 	s.Apply(phaseSpend("p2", "not-a-timestamp", 20))
 
-	if got := len(s.SpendRecords()); got != 2 {
+	if got := spendCount(s); got != 2 {
 		t.Errorf("records = %d, want both kept", got)
 	}
 }
@@ -229,7 +229,7 @@ func TestSpendRecordsDoNotAliasTheProjection(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(phaseSpend("p1", "2026-06-14T12:00:00Z", 10))
-	held := s.SpendRecords()
+	held, _ := s.SpendRecords()
 	s.Apply(phaseSpend("p2", "2026-06-14T12:05:00Z", 20))
 	if len(held) != 1 {
 		t.Errorf("a snapshot taken earlier grew to %d records", len(held))
@@ -284,7 +284,7 @@ func TestASpendRecordWithNoUsableTimestampIsKept(t *testing.T) {
 	s.Apply(phaseSpend("recent", "2026-06-14T12:00:00Z", 20))
 
 	var ids []string
-	for _, record := range s.SpendRecords() {
+	for _, record := range spendRows(s) {
 		ids = append(ids, record.EventID)
 	}
 	if len(ids) != 2 {
@@ -316,7 +316,7 @@ func TestSpendRecordsAreCappedByCount(t *testing.T) {
 		ts := time.Date(2026, 6, 14, 12, 0, 0, i*1000, time.UTC).Format(time.RFC3339Nano)
 		s.Apply(phaseSpend(fmt.Sprintf("p%05d", i), ts, 1))
 	}
-	records := s.SpendRecords()
+	records, _ := s.SpendRecords()
 	if len(records) > 8_000 {
 		t.Errorf("records = %d, want the cap to bind", len(records))
 	}
@@ -355,8 +355,8 @@ func TestTheSeedFillsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
 		rec("h1", now.Add(-2*time.Hour), 10),
 		rec("h2", now.Add(-time.Hour), 20),
 	}})
-	if !change.Tokens || len(s.SpendRecords()) != 2 {
-		t.Fatalf("seeded tokens=%v, holding %d; want both records", change.Tokens, len(s.SpendRecords()))
+	if !change.Tokens || spendCount(s) != 2 {
+		t.Fatalf("seeded tokens=%v, holding %d; want both records", change.Tokens, spendCount(s))
 	}
 
 	// DEDUPED AGAINST WHAT IS ALREADY HERE, in both directions, which is
@@ -368,7 +368,7 @@ func TestTheSeedFillsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
 			"that grows on every reload is worse than one that is slightly short")
 	}
 	s.Apply(phaseSpend("h2", now.Add(-time.Hour).Format(time.RFC3339Nano), 20))
-	if held := len(s.SpendRecords()); held != 2 {
+	if held := spendCount(s); held != 2 {
 		t.Errorf("holding %d records after the stream redelivered a seeded "+
 			"one; want the same 2", held)
 	}
@@ -383,7 +383,7 @@ func TestTheSeedFillsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
 	// pruned rather than seeded in, so a seed cannot widen the window the
 	// rollup claims to cover.
 	s.Seed(livestate.History{Spend: []tokens.Record{rec("old", now.Add(-livestate.LiveSpendWindow-3*time.Hour), 99)}})
-	for _, r := range s.SpendRecords() {
+	for _, r := range spendRows(s) {
 		if r.EventID == "old" {
 			t.Error("a record from outside the live window survived the seed")
 		}
@@ -470,5 +470,73 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
 	if got := overlayOf(t, s, "Lead").State; got != "idle" {
 		t.Errorf("state after a spawn = %q, want idle", got)
+	}
+}
+
+// spendRows and spendCount are the records half of SpendRecords, for the
+// cases that are about WHAT is retained rather than about the window the
+// retention leaves the rollup covering.
+func spendRows(s *livestate.LiveState) []tokens.Record {
+	rows, _ := s.SpendRecords()
+	return rows
+}
+
+func spendCount(s *livestate.LiveState) int { return len(spendRows(s)) }
+
+// A CAPPED SPEND WINDOW REPORTS WHAT IT ACTUALLY COVERS.
+//
+// The record cap binds before the window for a company emitting more than it
+// in a day, and the prune drops the OLDEST — so past the cap the retained
+// records cover less than the window the rollup is headed with. The doc
+// called that "slightly less than a window rather than a wrong total", but a
+// total over eighteen hours under a heading that says twenty-four IS a wrong
+// total; it is only invisibly wrong, which on a money figure is worse.
+//
+// It is the rule the store path already states for itself: labelled with what
+// it will actually cover, never with what was asked for, because "a request
+// for a year answered over thirty days and headed 'a year' is a lie about the
+// numbers beside it".
+func TestACappedSpendWindowReportsWhatItCovers(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+
+	// UNDER THE CAP: nothing was dropped, so the caller keeps the window's
+	// own `since` and an ordinary company's heading does not change.
+	base := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	if _, covered := s.SpendRecords(); covered != "" {
+		t.Errorf("an empty projection claims coverage from %q", covered)
+	}
+	s.Apply(phaseSpend("p-1", base.Format(time.RFC3339), 10))
+	if _, covered := s.SpendRecords(); covered != "" {
+		t.Errorf("a projection inside the cap claims coverage from %q", covered)
+	}
+
+	// PAST THE CAP: the oldest are gone, and the earliest retained record
+	// is what the rollup may be headed with.
+	for i := range livestate.SpendRecordLimit + 10 {
+		s.Apply(phaseSpend(fmt.Sprintf("p-%05d", i),
+			base.Add(time.Duration(i)*time.Second).Format(time.RFC3339), 10))
+	}
+	rows, covered := s.SpendRecords()
+	if covered == "" {
+		t.Fatalf("%d records were dropped and the projection reports no "+
+			"coverage, so the rollup is headed with a window it does not have",
+			livestate.SpendRecordLimit+11-len(rows))
+	}
+	if covered <= base.Format(time.RFC3339) {
+		t.Errorf("coverage starts at %q, which is at or before the record the "+
+			"cap dropped", covered)
+	}
+	// THE EARLIEST RETAINED, computed over the whole slice: hydration can
+	// append behind a live record, so a first-element read would be right
+	// only while the slice happened to be ordered.
+	earliest := ""
+	for _, r := range rows {
+		if earliest == "" || r.Timestamp < earliest {
+			earliest = r.Timestamp
+		}
+	}
+	if covered != earliest {
+		t.Errorf("coverage = %q, want the earliest retained %q", covered, earliest)
 	}
 }

@@ -93,7 +93,7 @@ func TestAFullSeedDoesNotRecountTheLiveRowsItAlreadyHolds(t *testing.T) {
 	s.Seed(livestate.History{Spend: recs})
 
 	seen := map[string]int{}
-	for _, r := range s.SpendRecords() {
+	for _, r := range spendRows(s) {
 		seen[r.EventID]++
 	}
 	var twice []string
@@ -129,7 +129,7 @@ func TestSeedingFillsTheFeedAndTheSpendWindow(t *testing.T) {
 	if got := feedIDs(s.RecentEvents(0)); len(got) != 2 || got[0] != "e2" {
 		t.Errorf("feed = %v, want the stored rows newest first", got)
 	}
-	rollup := tokens.Aggregate(s.SpendRecords(), tokens.Options{})
+	rollup := tokens.Aggregate(spendRows(s), tokens.Options{})
 	if rollup.Totals.TotalTokens != 30 || rollup.Totals.Calls != 2 {
 		t.Errorf("rollup = %d tokens over %d calls, want 30 over 2",
 			rollup.Totals.TotalTokens, rollup.Totals.Calls)
@@ -172,7 +172,7 @@ func TestSeedingDoesNotCountWhatTheStreamAlreadyApplied(t *testing.T) {
 		t.Errorf("the row that arrived live and was also stored appears %d times in %v",
 			seen, feedIDs(s.RecentEvents(0)))
 	}
-	rollup := tokens.Aggregate(s.SpendRecords(), tokens.Options{})
+	rollup := tokens.Aggregate(spendRows(s), tokens.Options{})
 	if rollup.Totals.TotalTokens != 50 || rollup.Totals.Calls != 2 {
 		t.Errorf("rollup = %d tokens over %d calls, want 50 over 2: a record was counted twice",
 			rollup.Totals.TotalTokens, rollup.Totals.Calls)
@@ -203,7 +203,7 @@ func TestAnEventTheSeedAlreadyListedIsListedOnceWhenItStreams(t *testing.T) {
 	if !change.Events {
 		t.Error("the streamed event was not pushed, and its envelope is the only frame carrying its payload")
 	}
-	rollup := tokens.Aggregate(s.SpendRecords(), tokens.Options{})
+	rollup := tokens.Aggregate(spendRows(s), tokens.Options{})
 	if rollup.Totals.TotalTokens != 40 || rollup.Totals.Calls != 1 {
 		t.Errorf("rollup = %d tokens over %d calls, want 40 over 1: the seeded phase was counted again",
 			rollup.Totals.TotalTokens, rollup.Totals.Calls)
@@ -256,7 +256,7 @@ func TestSeedingRespectsTheRingAndTheWindow(t *testing.T) {
 	if got := feedIDs(s.RecentEvents(0)); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("feed = %v, want the newest %v", got, want)
 	}
-	records := s.SpendRecords()
+	records := spendRows(s)
 	if len(records) != 1 || records[0].EventID != "inside" {
 		t.Errorf("records = %+v, want only the one inside the window", records)
 	}

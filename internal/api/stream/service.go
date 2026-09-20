@@ -362,9 +362,21 @@ func (s *Service) TokenRollup() tokens.Rollup {
 	// the wrong window is worse than an unlabelled one. The projection
 	// evicts on a rolling window, so its top edge is this instant.
 	now := time.Now()
-	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
+	records, covered := s.state.SpendRecords()
+	since := now.Add(-livestate.LiveSpendWindow)
+	// LABELLED WITH WHAT IT ACTUALLY COVERS. The projection's record cap
+	// binds before its window for a company emitting more than the cap in a
+	// day, and it drops the OLDEST — so past the cap these numbers cover
+	// less than the window, and heading them with the window is the lie
+	// the store path beside this one already refuses to tell.
+	if covered != "" {
+		if at, err := time.Parse(time.RFC3339, covered); err == nil && at.After(since) {
+			since = at
+		}
+	}
+	return tokens.Aggregate(records, tokens.Options{
 		Handles: s.handles(),
-		Since:   now.Add(-livestate.LiveSpendWindow),
+		Since:   since,
 		Until:   now,
 	})
 }

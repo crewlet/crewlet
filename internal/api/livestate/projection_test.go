@@ -33,7 +33,7 @@ func TestATurnCompletionCarriesNoSecondSpendTotal(t *testing.T) {
 			t.Errorf("the merged seat row carries %s = %v, a total no rollup agrees with", key, v)
 		}
 	}
-	if got := s.SpendRecords(); len(got) != 0 {
+	if got := spendRows(s); len(got) != 0 {
 		t.Errorf("a turn completion became %d spend records; spend is folded from phases", len(got))
 	}
 }
@@ -385,7 +385,7 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 	s := livestate.New()
 	s.Apply(&e)
 
-	records := s.SpendRecords()
+	records := spendRows(s)
 	if len(records) != 1 || records[0].InputTokens != 12 || records[0].TotalTokens != 15 {
 		t.Errorf("records = %+v, want one at 12/15 off the wire", records)
 	}
@@ -400,7 +400,7 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 	s.Apply(env("agent_phase_completed", map[string]any{
 		"role": "Lead", "turn_id": "tn-1", "phase": "execute", "total_tokens": "lots",
 	}))
-	if got := s.SpendRecords(); len(got) != 1 || got[0].TotalTokens != 0 {
+	if got := spendRows(s); len(got) != 1 || got[0].TotalTokens != 0 {
 		t.Errorf("records = %+v, want one at 0 tokens", got)
 	}
 }

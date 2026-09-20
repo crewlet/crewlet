@@ -70,8 +70,12 @@ func (s *LiveState) pruneSpend(nowISO string) {
 		// The count cap binds before the window for an org emitting more
 		// than the cap in a day. Truncating the OLDEST is what makes a
 		// rollup past the cap cover slightly less than a window rather
-		// than report a wrong total.
+		// than report a wrong total — but only once the heading says so,
+		// which is what this flag is for: see [LiveState.SpendRecords].
+		// It LATCHES, because a rollup's window is a fact about what was
+		// dropped rather than about what is held now.
 		cut := len(s.spend) - SpendRecordLimit
+		s.spendCapped = true
 		s.forgetSpend(s.spend[:cut])
 		s.spend = append(make([]spendEntry, 0, SpendRecordLimit),
 			s.spend[cut:]...)
@@ -122,15 +126,48 @@ type spendEntry struct {
 	at stamp
 }
 
-// SpendRecords returns the records inside the live window.
-func (s *LiveState) SpendRecords() []tokens.Record {
+// SpendRecords returns the records inside the live window, and the EARLIEST
+// instant they actually cover.
+//
+// THE SECOND RETURN IS WHAT KEEPS THE HEADING HONEST. The window is the real
+// bound, but [SpendRecordLimit] binds first for a company emitting more than
+// the cap in a day — and the pruning drops the OLDEST, so what is left covers
+// less than the window the rollup is labelled with. A total over eighteen
+// hours under a heading that says twenty-four is a wrong total; it is only
+// invisibly wrong, which on a MONEY figure is the worse kind.
+//
+// It is the rule the store path beside it already states in as many words:
+// labelled with what it will actually cover, never with what was asked for,
+// because "a request for a year answered over thirty days and headed 'a year'
+// is a lie about the numbers beside it".
+//
+// EMPTY WHERE NOTHING WAS DROPPED, which is the common case: the caller then
+// keeps the window's own `since`, and nothing about an ordinary company's
+// heading changes.
+func (s *LiveState) SpendRecords() ([]tokens.Record, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]tokens.Record, len(s.spend))
 	for i, e := range s.spend {
 		out[i] = e.Record
 	}
-	return out
+	if !s.spendCapped {
+		return out, ""
+	}
+	// THE EARLIEST RETAINED, computed rather than remembered: hydration can
+	// append behind a live record, so the slice is not reliably ordered —
+	// the same reason `pruneSpend` sweeps rather than popping from the
+	// front.
+	earliest := ""
+	for _, e := range s.spend {
+		if !e.at.valid {
+			continue
+		}
+		if earliest == "" || e.Record.Timestamp < earliest {
+			earliest = e.Record.Timestamp
+		}
+	}
+	return out, earliest
 }
 
 // LiveSpendWindowDays is the live window expressed as the `since_days` a
