@@ -68,23 +68,41 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // which acts and the other of which is refused with it), the config and
 // credential writes, the setup pass, the operator writes and the operator MCP
 // surface.
-var startsWork = []struct{ method, path string }{
-	{http.MethodPost, "/webhooks/github"},
-	{http.MethodPost, "/webhooks/slack/ceo"},
-	{http.MethodGet, "/webhooks/github-app?code=c&state=s"},
-	{http.MethodGet, "/webhooks/slack-oauth?code=c"},
-	{http.MethodPut, "/config"},
-	{http.MethodPatch, "/config"},
-	{http.MethodPost, "/config/reload"},
-	{http.MethodPost, "/config/revisions/r1/revert"},
-	{http.MethodPut, "/secrets/GITHUB_TOKEN"},
-	{http.MethodDelete, "/secrets/GITHUB_TOKEN"},
-	{http.MethodPost, "/setup/integrations/github/provision"},
-	{http.MethodPost, "/budgets/reset"},
-	{http.MethodPost, "/backup"},
-	{http.MethodPost, "/work/retention/ack"},
-	{http.MethodPost, "/work/ENG-1/purge"},
-	{http.MethodPost, "/operator/mcp"},
+//
+// WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
+// middleware and runs BEFORE the mux: it refuses on path and method alone, so
+// a refusal proves the rule whether or not a handler exists behind it. That is
+// what makes the refusal case above meaningful for all sixteen — and it is
+// also what would let an entry naming a path nothing serves sit here for ever
+// looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
+// holds the declaration in BOTH directions for that reason, in the idiom
+// [solo]'s roster guard uses: a mounted entry that starts answering 404 has
+// drifted from the routes, and an unmounted one that stops is a fixture that
+// grew a surface and left its declaration behind.
+//
+// [drainingApp] is a node with no store, no coordination store and no company,
+// so the three surfaces that need one (/config, /secrets, /setup) and the two
+// that need a tracker (/work/{id}/purge, /operator/mcp) are not mounted on it.
+var startsWork = []struct {
+	method, path string
+	mounted      bool
+}{
+	{http.MethodPost, "/webhooks/github", true},
+	{http.MethodPost, "/webhooks/slack/ceo", true},
+	{http.MethodGet, "/webhooks/github-app?code=c&state=s", true},
+	{http.MethodGet, "/webhooks/slack-oauth?code=c", true},
+	{http.MethodPut, "/config", false},
+	{http.MethodPatch, "/config", false},
+	{http.MethodPost, "/config/reload", false},
+	{http.MethodPost, "/config/revisions/r1/revert", false},
+	{http.MethodPut, "/secrets/GITHUB_TOKEN", false},
+	{http.MethodDelete, "/secrets/GITHUB_TOKEN", false},
+	{http.MethodPost, "/setup/integrations/github/provision", false},
+	{http.MethodPost, "/budgets/reset", true},
+	{http.MethodPost, "/backup", true},
+	{http.MethodPost, "/work/retention/ack", true},
+	{http.MethodPost, "/work/ENG-1/purge", false},
+	{http.MethodPost, "/operator/mcp", false},
 }
 
 func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
@@ -108,15 +126,36 @@ func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
 
 func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 	t.Parallel()
-	// The counterfactual. Every request above reaches its own handler on a
-	// node that is not draining, whatever that handler then says: the gate
-	// is the drain's, and a gate shut all the time would pass the case
-	// above.
+	// The counterfactual. Nothing above is refused for draining on a node
+	// that is not draining: the gate is the drain's, and a gate shut all
+	// the time would pass the case above.
+	//
+	// And the declaration is held in both directions, so neither half of
+	// that can go quiet. A route this fixture mounts must reach its handler
+	// — whatever the handler then says — because an entry that silently
+	// started answering 404 would pass this case and the refusal case
+	// alike, the gate being middleware that never consults the mux. An
+	// entry declared unmounted must still be unmounted, so a fixture that
+	// grows a surface cannot leave a stale `false` behind saying the route
+	// is untested when it is not.
 	a := drainingApp(t, false)
 	for _, req := range startsWork {
-		if rec := send(t, a, req.method, req.path); refusedForDraining(t, rec) {
+		rec := send(t, a, req.method, req.path)
+		if refusedForDraining(t, rec) {
 			t.Errorf("%s %s was refused for draining on a node that is not draining",
 				req.method, req.path)
+			continue
+		}
+		switch routed := rec.Code != http.StatusNotFound; {
+		case req.mounted && !routed:
+			t.Errorf("%s %s answered 404 on a serving node: this entry is "+
+				"declared mounted, so either the route moved or the fixture "+
+				"stopped mounting it, and the refusal case would not notice "+
+				"either", req.method, req.path)
+		case !req.mounted && routed:
+			t.Errorf("%s %s now reaches a handler (%d): flip its `mounted` to "+
+				"true, so this case starts holding the route rather than "+
+				"reporting it untested", req.method, req.path, rec.Code)
 		}
 	}
 }
