@@ -15,15 +15,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import {
-  ActivityFeed,
-  Board,
-  CalendarView,
-  ProjectHead,
-  Work,
-  WorkspaceHead,
-  patchedHref,
-} from "./Work.tsx";
+import { Work } from "./Work.tsx";
+import { patchedHref } from "./ItemsView.tsx";
+import { ActivityFeed } from "./feed.tsx";
+import { Board } from "./shapes/Board.tsx";
+import { CalendarView } from "./shapes/Calendar.tsx";
 import { BoardCard, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -210,7 +206,7 @@ test("a patched address keeps the path it is on and the filters it is under", ()
       new URLSearchParams("assignee=ada&scope=open"),
       filterPatchForGroup("status", "todo"),
     ),
-  ).toBe("#/work/ENG?assignee=ada&scope=open&view=list&group_by=status&group=todo");
+  ).toBe("#/work/ENG?assignee=ada&scope=open&shape=list&group_by=status&group=todo");
   // AN EMPTY VALUE IS THE KEY'S ABSENCE, matching `useParam`: a control that
   // clears the grouping must drop the key rather than write `group_by=`.
   expect(patchedHref(["work"], new URLSearchParams("group_by=status"), { group_by: "" })).toBe(
@@ -342,103 +338,6 @@ test("a crowded day folds the rest into a count", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The heads
-// ---------------------------------------------------------------------------
-
-const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
-  key: "ENG",
-  name: "Engineering",
-  unit: { key: "platform", name: "Platform", resolved: true },
-  lead: { handle: "ada", kind: "agent" },
-  task_counts: { open: 12, done: 40, closed: 3 },
-  version: 1,
-  statuses: [],
-  types: [],
-  fields: [],
-  policy_stamp: 1,
-  complete: true,
-  ...over,
-});
-
-// A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS, and the bar carries
-// its own legend: an unlabelled stack of three colours is three colours.
-test("the census bar is drawn with its legend, and only where there is work", () => {
-  // THE CENSUS IS DRAWN OUT OF THE DESIGN SYSTEM'S OWN PARTS NOW, so the two
-  // selectors are theirs: `.stackbar`/`.legend` were our recipes' classes and
-  // no longer exist. What is asserted is unchanged — a bar, and a key beside
-  // it — and the legend is a real `role="list"` over there, which is what the
-  // second selector could have been written against instead.
-  const { container } = render(<ProjectHead detail={project()} />);
-  expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy();
-  expect(container.querySelector(".crewlet-legend")).toBeTruthy();
-  cleanup();
-  const fresh = render(
-    <ProjectHead detail={project({ task_counts: { open: 0, done: 0, closed: 0 } })} />,
-  );
-  expect(fresh.container.querySelector(".crewlet-stacked-bar")).toBeNull();
-});
-
-// THE WORKSPACE RANKS ITS PROJECTS BY OPEN WORK, in ONE hue: a hue per project
-// would be identity colouring by row — rename the project and its colour
-// changes — and the label already says which project it is.
-test("the workspace chart ranks projects by open work in a single hue", () => {
-  const projects: WorkProjectRow[] = [
-    {
-      key: "OPS",
-      name: "Operations",
-      unit: { resolved: true },
-      lead: {},
-      task_counts: { open: 3, done: 1, closed: 0 },
-      version: 1,
-    },
-    {
-      key: "ENG",
-      name: "Engineering",
-      unit: { resolved: true },
-      lead: {},
-      task_counts: { open: 11, done: 4, closed: 2 },
-      version: 1,
-    },
-  ];
-  const { container } = render(<WorkspaceHead projects={projects} />);
-  const labels = [...container.querySelectorAll(".key-mark")].map((el) => el.textContent);
-  expect(labels).toEqual(["ENG", "OPS"]);
-  // ONE HUE STILL, read where their `BarList` puts it: the bar's colour is a
-  // custom property on the fill rather than a `background` on a child div, so
-  // the selector and the read both move to theirs. `.meter-track > div` was
-  // our own chart's markup and is gone with it.
-  const fills = [...container.querySelectorAll(".crewlet-bar-list__bar")].map((el) =>
-    (el as HTMLElement).style.getPropertyValue("--crewlet-bar-list-bar-color"),
-  );
-  expect(fills.length).toBe(2);
-  expect(new Set(fills).size).toBe(1);
-});
-
-// A ONE-BAR CHART IS A NUMBER, so a company with one project gets the facts
-// and no chart at all.
-test("a single project draws its facts and no comparison", () => {
-  const { container } = render(
-    <WorkspaceHead
-      projects={[
-        {
-          key: "ENG",
-          name: "Engineering",
-          unit: { resolved: true },
-          lead: {},
-          task_counts: { open: 2, done: 0, closed: 0 },
-          version: 1,
-        },
-      ]}
-    />,
-  );
-  // NO CHART AT ALL, asserted against their bar list rather than against our
-  // old track class — a company with one project gets the facts and nothing
-  // to compare them with.
-  expect(container.querySelector(".crewlet-bar-list")).toBeNull();
-  expect(screen.getByText("Projects")).toBeTruthy();
-});
-
-// ---------------------------------------------------------------------------
 // The row
 // ---------------------------------------------------------------------------
 
@@ -486,7 +385,10 @@ test("a row with nothing to say in a column still keeps the column", () => {
   const cells = (el: Element) =>
     [...el.querySelectorAll(".work-row > .work-cell")].map((c) => c.className);
   expect(cells(bare)).toEqual(cells(full));
-  expect(cells(bare)).toHaveLength(4);
+  // FIVE: the priority that opens the row, the status, and the three trailing
+  // facts — due, type and who holds it. The key and the title are the row's own
+  // elastic tracks rather than cells, because neither is ever absent.
+  expect(cells(bare)).toHaveLength(5);
 });
 
 // A DATE COLUMN DROPS THE YEAR IT SHARES WITH THE READER. Repeating "2031"
@@ -623,9 +525,9 @@ test("a saved view's grouping heads the list's columns by name", async () => {
     },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-group-head")).toBeTruthy());
-  expect(container.querySelector(".work-group-head")?.textContent).toContain("Ada Okonkwo");
-  expect(container.querySelector(".work-group-head")?.textContent).not.toContain("ada");
+  await waitFor(() => expect(container.querySelector(".work-band")).toBeTruthy());
+  expect(container.querySelector(".work-band")?.textContent).toContain("Ada Okonkwo");
+  expect(container.querySelector(".work-band")?.textContent).not.toContain("ada");
 });
 
 // ---------------------------------------------------------------------------
@@ -879,40 +781,145 @@ test("the activity feed draws a markdown excerpt as prose, not as its source", (
 // THE BAR IS A TOOLBAR, and `toolbar` is not a synonym for "the row of
 // controls at the top": `.screen:has(.toolbar)` is what publishes
 // `--sticky-top`, which is the offset every other sticky band in the same
-// scroller starts at — the grid's column heads among them. Hand-rolled here,
-// `.work-filters` restated every one of `.toolbar`'s declarations and omitted
-// the class, so the property stayed at its 0px default and the table's own
-// header parked underneath an opaque band. See styles/sticky.test.ts for the
-// other half of this; a class name is the only part of it the DOM can see.
-test("the filter bar declares itself the screen's toolbar", async () => {
+// scroller starts at — the grid's column heads and a list's group bands among
+// them. Hand-rolled, this bar restated every one of `.toolbar`'s declarations
+// and omitted the class, so the property stayed at its 0px default and the
+// table's own header parked underneath an opaque band. See
+// styles/sticky.test.ts for the other half of this; a class name is the only
+// part of it the DOM can see.
+test("the bar declares itself the screen's toolbar", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-filters")).toBeTruthy());
-  expect(container.querySelector(".work-filters")?.classList.contains("toolbar")).toBe(true);
+  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+  expect(container.querySelector(".work-bar")?.classList.contains("toolbar")).toBe(true);
 });
 
-// AND ITS CONTROLS TRAVEL IN GROUPS. What the bar draws varies by shape — the
-// type, group-by and sort pickers each appear on some tabs and not
-// others — and as one flat wrapping row that put the scope control at x≈345 on
-// List, x≈1338 on Board and x≈1155 on Calendar, with the Overdue chip wrapping
-// to a line of its own ~1,200px from the count. A group is the wrap unit, so a
-// break falls between the question and the switches and never inside either.
-test("the scope control and the chips are one group, not loose children of the bar", async () => {
+// THREE CONTROLS, NOT ELEVEN. The bar carried a search box, five selects, a
+// three-way switch, two chips, a Clear button and the count — and which of
+// them appeared depended on the shape, so the scope switch sat at x≈345 on
+// List, x≈1338 on Board and x≈1155 on Calendar. What is left is the Filter
+// menu, the substring mark, the scope switch and the Display menu, so there is
+// no arrangement left for a wrap to disturb.
+test("the bar is two menus, a switch and a mark", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-filters-switches")).toBeTruthy());
-  const switches = container.querySelector(".work-filters-switches") as HTMLElement;
-  // The scope segments and both chips, in one box.
-  for (const label of ["Open", "Closed", "All", "Blocked", "Overdue"]) {
-    expect(within(switches).getByText(label), `${label} is not in the switch group`).toBeTruthy();
+  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+  const bar = container.querySelector(".work-bar") as HTMLElement;
+  expect(within(bar).getByText("Filter")).toBeTruthy();
+  // The Display button SAYS WHAT IS ON, so the arrangement is readable without
+  // opening anything — which is what the strip of shape tabs used to do.
+  expect(within(bar).getByText("Board · Status")).toBeTruthy();
+  for (const label of ["Open", "Closed", "All"]) {
+    expect(within(bar).getByText(label), `${label} is not in the bar`).toBeTruthy();
   }
-  // And the search field is NOT — it belongs to the question, which is the
-  // group that takes the bar's slack.
-  const ask = container.querySelector(".work-filters-ask") as HTMLElement;
-  expect(ask.querySelector(".work-filters-search")).toBeTruthy();
-  expect(switches.querySelector(".work-filters-search")).toBeNull();
-  // Both groups are children of the bar itself, which is what makes them the
-  // wrap unit — nested one inside the other they would wrap as one.
-  expect(ask.parentElement).toBe(container.querySelector(".work-filters"));
-  expect(switches.parentElement).toBe(container.querySelector(".work-filters"));
+  // AND THE PICKERS ARE GONE FROM IT. A control per field is what a menu
+  // replaces, and one left behind would be a second way to set the same key.
+  expect(within(bar).queryByLabelText("Status")).toBeNull();
+  expect(within(bar).queryByLabelText("Priority")).toBeNull();
+  expect(within(bar).queryByLabelText("Assignee")).toBeNull();
+});
+
+// A CHIP IS DRAWN ONLY WHERE A FILTER IS APPLIED, so an unfiltered list has no
+// chip row at all — which is the whole difference from a bar of controls that
+// were all drawn whether or not they were set.
+test("an unfiltered list draws no chips, and a filtered one says the whole narrowing", async () => {
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const bare = mountWork();
+  await waitFor(() => expect(bare.container.querySelector(".work-bar")).toBeTruthy());
+  expect(bare.container.querySelector(".work-chips")).toBeNull();
+  cleanup();
+
+  location.hash = "#/work?assignee=ada&blocked=true";
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const filtered = mountWork();
+  await waitFor(() => expect(filtered.container.querySelector(".work-chips")).toBeTruthy());
+  const chips = filtered.container.querySelector(".work-chips") as HTMLElement;
+  // The company's own word for the person, not the handle the URL carries.
+  expect(within(chips).getByText("Ada Okonkwo")).toBeTruthy();
+  expect(within(chips).getByText("Blocked")).toBeTruthy();
+  // And one control that takes them all off.
+  expect(within(chips).getByText("Clear")).toBeTruthy();
+});
+
+// TAKING A CHIP OFF CLEARS THE ONE KEY IT NAMES and nothing else, which is
+// what makes a chip removable without a table of removers beside the table of
+// chips.
+test("removing a chip clears its own key and leaves the rest", async () => {
+  location.hash = "#/work?assignee=ada&priority=high";
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());
+  const chips = container.querySelector(".work-chips") as HTMLElement;
+  fireEvent.click(within(chips).getByLabelText("Remove the Assignee is Ada Okonkwo filter"));
+  await waitFor(() => expect(location.hash).not.toContain("assignee=ada"));
+  expect(location.hash).toContain("priority=high");
+});
+
+// THE SAVED VIEWS ARE THE STRIP AND THE SHAPES ARE NOT. A saved view is a
+// QUERY somebody arranged; a shape is how any query is drawn. Mixed into one
+// strip they read as the same kind of thing, and a company with four saved
+// views had a strip of nine.
+test("the strip holds what somebody saved, never the five shapes", async () => {
+  serving({
+    work_views: {
+      views: [
+        ...["list", "board", "table"].map((key) => ({
+          id: "",
+          key,
+          name: key[0]!.toUpperCase() + key.slice(1),
+          type: key,
+          container: { kind: "workspace", id: "" },
+          builtin: true,
+          default: key === "board",
+          params: {},
+        })),
+        {
+          id: "v-1",
+          key: "overdue-by-owner",
+          name: "Overdue, by owner",
+          type: "list",
+          container: { kind: "workspace", id: "" },
+          builtin: false,
+          params: { group_by: "assignee" },
+        },
+      ],
+      complete: true,
+    },
+    work_items: { items: [], groups: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Overdue, by owner")).toBeTruthy());
+  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
+  expect(tabs).toEqual(["All work", "Overdue, by owner"]);
+});
+
+// AND THE SHAPE IS ITS OWN KEY, so switching a saved view to another drawing
+// keeps the view. They were one key, so a reader who wanted their saved board
+// as a list lost the filters that made it theirs.
+test("the shape is a key beside the view rather than the same one", async () => {
+  location.hash = "#/work?view=overdue-by-owner&shape=list";
+  const query = serving({
+    work_views: {
+      views: [
+        {
+          id: "v-1",
+          key: "overdue-by-owner",
+          name: "Overdue, by owner",
+          type: "board",
+          container: { kind: "workspace", id: "" },
+          builtin: false,
+          params: { assignee: "ada" },
+        },
+      ],
+      complete: true,
+    },
+    work_items: { items: [], groups: [], complete: true },
+  });
+  mountWork();
+  // THE VIEW'S OWN FILTER SURVIVED the shape override, which is the whole
+  // point of the two keys.
+  await waitFor(() => expect(asked(query).assignee).toBe("ada"));
+  // And a list is a paged question rather than a set of columns.
+  expect(asked(query).limit).toBe(100);
+  expect(asked(query).group_by).toBeUndefined();
 });

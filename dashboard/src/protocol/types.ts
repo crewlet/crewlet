@@ -1992,6 +1992,24 @@ export interface WorkTaskCounts {
   closed: number;
 }
 
+/** When a project's work last changed, and who changed it.
+ *
+ *  MAINTAINED beside the counts, by the apply that writes the project's own
+ *  history row — so this is the head of that project's activity feed and never
+ *  disagrees with it. A turn's spend, a board re-order and an edit to the
+ *  project's own settings do not move it: none of them is the work changing.
+ *
+ *  `actor_kind` is which of the four kinds the handle belongs to, because
+ *  `ana` the person and `ana` the seat are different answers; an `operator` is
+ *  a token acting for the company and belongs to no seat. Either field may be
+ *  empty — a commit can name nobody — and the instant is what says the answer
+ *  exists at all. */
+export interface WorkLastChange {
+  at: string;
+  actor?: string;
+  actor_kind?: "agent" | "human" | "operator" | "system";
+}
+
 export interface WorkProjectRow {
   key: string;
   name: string;
@@ -2000,6 +2018,10 @@ export interface WorkProjectRow {
   lead: WorkLeadRef;
   default_assignee?: string;
   task_counts: WorkTaskCounts;
+  /** ABSENT for a project no work has ever been filed into, which is a
+   *  different fact from a project whose work is old — see
+   *  {@link WorkLastChange}. */
+  last_change?: WorkLastChange;
   archived?: boolean;
   version: number;
 }

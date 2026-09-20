@@ -359,3 +359,72 @@ export function useTimeRange(now: number, offer: Offer, align = true): TimeRange
     };
   }, [key, settled, anchor, step, bucket, setRaw]);
 }
+
+/**
+ * A histogram's bars over a window, bucketed from instants this client holds.
+ *
+ * WHO NEEDS THIS AND WHO DOES NOT. The event log and the spend chart ask the
+ * ENGINE for their series, over the whole window, and that is the better
+ * answer wherever it exists: a client can only bucket what it was sent. The
+ * tracker's change log has no such read — `work_activity` answers with rows —
+ * so its axis is over the page the screen is holding, and the screen drawing
+ * it says so rather than implying the engine counted.
+ *
+ * EVERY BUCKET IN THE WINDOW, including the empty ones. A series built only
+ * from the buckets that have something in them draws a quiet week as a solid
+ * run of bars, which is the opposite of what the chart is for; `Histogram`
+ * gives a zero its own floor in pixels precisely so an empty bucket is
+ * visible as one.
+ *
+ * ALIGNED TO THE BUCKET, from `since` forward. The caller's window is already
+ * aligned by `useTimeRange` for a chart, so the first bar starts where the
+ * window does and the last one is the bucket in progress.
+ *
+ * BOUNDED, because a window and a bucket are two independent values and a
+ * hand-edited address can pair a custom interval of a year with an hourly
+ * bucket: 8,760 bars is a chart nobody can read and a loop that builds it is
+ * one nobody asked for. The cap is [MAX_BARS] and what it drops is the
+ * OLDEST, so the newest end — which is the end a log is read from — is always
+ * drawn.
+ */
+export function barsOver(
+  at: readonly string[],
+  since: string,
+  until: string,
+  bucket: Bucket,
+): { at: string; count: number }[] {
+  const start = Date.parse(since);
+  const end = Date.parse(until);
+  const step = BUCKET_MS[bucket];
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+
+  const whole = Math.ceil((end - start) / step);
+  const cells = Math.min(whole, MAX_BARS);
+  // THE NEWEST END IS THE ONE KEPT: a log is read from its most recent row, so
+  // a window too wide for the bucket loses its oldest bars rather than its
+  // latest.
+  const first = start + (whole - cells) * step;
+
+  const counts = new Array<number>(cells).fill(0);
+  for (const instant of at) {
+    const ms = Date.parse(instant);
+    if (!Number.isFinite(ms) || ms < first || ms >= end) continue;
+    const index = Math.min(Math.floor((ms - first) / step), cells - 1);
+    // A ROW EXACTLY ON THE FINAL EDGE lands one past the last bucket, which is
+    // the same off-by-one every bucketing has: clamped rather than dropped,
+    // because a change made in the second the window closed is still in the
+    // answer the rows came from.
+    counts[index] = (counts[index] ?? 0) + 1;
+  }
+  return counts.map((count, i) => ({ at: new Date(first + i * step).toISOString(), count }));
+}
+
+/**
+ * How many bars one chart draws at most.
+ *
+ * NINETY, which is the widest ordinary window this product offers at its own
+ * bucket: `90d` at a daily bucket. A chart wider than that is a column per
+ * pixel, where a bar has no hover target and the axis has no labels a reader
+ * can place.
+ */
+export const MAX_BARS = 90;

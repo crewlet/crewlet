@@ -16,6 +16,10 @@ import {
   TYPE_ICON,
   totalHint,
   anyFilter,
+  axisLabel,
+  bandsByDue,
+  dueBucket,
+  filterChips,
   bucketByDay,
   buildItemsParams,
   calendarWeeks,
@@ -403,21 +407,24 @@ const build = (over: Partial<Parameters<typeof buildItemsParams>[0]> = {}) =>
     ...over,
   });
 
-// THE SCREEN'S OWN VOCABULARY NEVER REACHES THE WIRE. `scope` and `overdue`
-// are words this dashboard uses for two of its controls, and the engine's
-// grammar has neither — it asks for a status GROUP and for `due=overdue`.
+// THE SCREEN'S OWN VOCABULARY NEVER REACHES THE WIRE. `scope` is the word this
+// dashboard uses for a control the engine's grammar does not have — it asks for
+// a status GROUP.
 // The engine REFUSES a parameter it does not read rather than ignoring one,
 // which is right and which makes a leaked key fail the WHOLE read: the
 // answer is then empty, indistinguishable from an empty container. That is
 // exactly how an item page's subtask panel came to draw nothing at all.
 test("a control's own name is translated rather than sent", () => {
   const params = build({
-    filters: { ...NO_FILTERS, scope: "closed", overdue: true },
+    filters: { ...NO_FILTERS, scope: "closed", due: "overdue" },
   });
   expect(Object.keys(params)).not.toContain("scope");
-  expect(Object.keys(params)).not.toContain("overdue");
   // The questions are still asked, in the engine's own words.
   expect(params.status_group).toBe("done,closed");
+  // AND `due` IS ALREADY THE GRAMMAR'S OWN KEY, which is why the Overdue switch
+  // this screen used to carry is one VALUE of it rather than a second key: the
+  // grammar has exactly one `due`, and the calendar's window spends the same
+  // one.
   expect(params.due).toBe("overdue");
 });
 
@@ -529,12 +536,27 @@ test("no sort is sent unless somebody chose one", () => {
 
 test("the quick filters map onto the grammar's own keys", () => {
   expect(build({ filters: { ...NO_FILTERS, blocked: true } }).blocked).toBe(true);
-  expect(build({ filters: { ...NO_FILTERS, overdue: true } }).due).toBe("overdue");
+  expect(build({ filters: { ...NO_FILTERS, due: "overdue" } }).due).toBe("overdue");
+  // THE TRASH IS A FILTER, which is what the engine says it is — and it carries
+  // `show_closed` with it, because a removed task is very often a finished one
+  // and the group predicate is ANDed unconditionally otherwise.
+  const trash = build({ filters: { ...NO_FILTERS, removed: true, scope: "all" } });
+  expect(trash.removed).toBe("true");
+  expect(trash.show_closed).toBe("true");
+  // AND THE COMPANY'S OWN FIELDS GO THROUGH VERBATIM: the grammar for one is
+  // the engine's, and a client that re-spelled it would be a second copy of a
+  // table the engine refuses against.
+  const fields = build({ filters: { ...NO_FILTERS, fields: { "f.area": "any:api,ui" } } });
+  expect(fields["f.area"]).toBe("any:api,ui");
 });
 
+// `shape`, NEVER `view`. The two are different keys — a view is the saved query
+// and the shape is how it is drawn — and writing `view=list` here threw away
+// whichever saved view the reader was on, so following "52 more" out of a saved
+// board landed them on the container's default filters.
 test("a column's overflow lands on the list, narrowed to that column", () => {
   expect(filterPatchForGroup("assignee", "ada")).toEqual({
-    view: "list",
+    shape: "list",
     group_by: "assignee",
     group: "ada",
   });
@@ -542,15 +564,33 @@ test("a column's overflow lands on the list, narrowed to that column", () => {
 
 test("a clear control appears only once something is narrowing the rows", () => {
   expect(anyFilter(NO_FILTERS)).toBe(false);
-  expect(anyFilter({ ...NO_FILTERS, scope: "" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, scope: "all" })).toBe(true);
   expect(anyFilter({ ...NO_FILTERS, assignee: "ada" })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, removed: true })).toBe(true);
+  expect(anyFilter({ ...NO_FILTERS, fields: { "f.area": "api" } })).toBe(true);
+  // THE ARRANGEMENT IS NOT A NARROWING. Group by, then by and the order decide
+  // how the same answer is DRAWN — they are the Display menu's — and counting
+  // them here put a Clear control over a board nobody had filtered which, once
+  // pressed, flattened the arrangement the reader had chosen and removed
+  // nothing.
+  expect(anyFilter({ ...NO_FILTERS, groupBy: "assignee" })).toBe(false);
+  expect(anyFilter({ ...NO_FILTERS, groupBy2: "type" })).toBe(false);
+  expect(anyFilter({ ...NO_FILTERS, sort: "due" })).toBe(false);
+  // Narrowing a board to ONE of its columns narrows the whole query, totals
+  // included, so that one stays.
+  expect(anyFilter({ ...NO_FILTERS, group: "ada" })).toBe(true);
 });
 
 test("a view's status groups map back onto the three segments", () => {
   expect(scopeOf("not_started,active")).toBe("open");
   expect(scopeOf("done,closed")).toBe("closed");
-  expect(scopeOf("active")).toBe("");
-  expect(scopeOf(undefined)).toBe("");
+  // AND THE THIRD SEGMENT HAS A NAME. It was the empty string, and a scope is a
+  // URL key: the router's own writer DELETES a key set to `""`, so choosing All
+  // wrote nothing, the parameter read back as its fallback — `open` on almost
+  // every container — and the segment snapped back on the next render. The one
+  // segment whose whole job is to show finished work could not be selected.
+  expect(scopeOf("active")).toBe("all");
+  expect(scopeOf(undefined)).toBe("all");
 });
 
 // AND THE ROUND TRIP IS WHAT THE SEGMENT IS SEEDED FROM.
@@ -611,7 +651,7 @@ test("a view that asked for finished work is not re-narrowed to open", () => {
   for (const widened of ["true", "recent:168h"]) {
     const view = { removed: "true", show_closed: widened };
     const scope = seededScope(view);
-    expect(scope, widened).toBe("");
+    expect(scope, widened).toBe("all");
     const params = build({ view, filters: { ...NO_FILTERS, scope } });
     expect(params.status_group, widened).toBeUndefined();
     // AND THE VIEW'S OWN VALUE STANDS: the empty segment supplies the key
@@ -640,7 +680,7 @@ test("a view that asked for finished work is not re-narrowed to open", () => {
 // screen produces for no group at all: it certified a reading the product does
 // not have, over an input only a deliberate click on All can reach.
 test("a group outside the three segments opens wider, and says which", () => {
-  expect(scopeOf("active")).toBe("");
+  expect(scopeOf("active")).toBe("all");
   const scope = seededScope({ status_group: "active" });
   expect(scope).toBe("open");
   const params = build({
@@ -844,14 +884,16 @@ test("a count over a windowed question says which window it counted", () => {
 });
 
 // THE GRAMMAR HAS ONE `due` KEY, and the calendar's own axis is already spending
-// it — so the Overdue chip could be pressed and narrow nothing at all.
+// it — so a due filter set on another shape could survive into this one and
+// narrow nothing at all, which is how a reader concludes their filter matched
+// everything. The Filter menu does not offer one here for the same reason.
 test("the calendar's window wins the one due key, and never leaves it unset", () => {
   const range = { from: "2031-03-31", to: "2031-05-05" };
   const pressed = buildItemsParams({
     container: "project:ENG",
     shape: "calendar",
     view: {},
-    filters: { ...NO_FILTERS, overdue: true },
+    filters: { ...NO_FILTERS, due: "overdue" },
     range,
   });
   expect(pressed.due).toBe("range:2031-03-31..2031-05-05");
@@ -862,7 +904,7 @@ test("the calendar's window wins the one due key, and never leaves it unset", ()
     container: "project:ENG",
     shape: "calendar",
     view: {},
-    filters: { ...NO_FILTERS, overdue: true },
+    filters: { ...NO_FILTERS, due: "overdue" },
   });
   expect(unwindowed.due).toBeUndefined();
 });
@@ -917,4 +959,195 @@ test("a page that is the whole set says nothing at all", () => {
 test("a capped page names what it is the newest of, agreeing with its noun", () => {
   expect(pageNote(20, true, "change")).toBe("The newest 20 changes; there are more.");
   expect(pageNote(1, true, "change")).toBe("The newest 1 change; there are more.");
+});
+
+// ---------------------------------------------------------------------------
+// The chips
+// ---------------------------------------------------------------------------
+
+// A CHIP IS ONE URL KEY, which is what makes it removable without a table of
+// removers beside the table of chips — the screen clears the key the chip
+// names. Asserted over the PARAMS rather than over the words, because the
+// words are a company's own and the keys are the grammar's.
+test("every applied filter is one chip, naming the key it clears", () => {
+  const chips = filterChips({
+    ...NO_FILTERS,
+    q: "auth",
+    status: "in_progress",
+    type: "bug",
+    priority: "high",
+    assignee: "ada",
+    tag: "api",
+    due: "overdue",
+    blocked: true,
+    removed: true,
+    fields: { "f.area": "any:api,ui" },
+  });
+  expect(chips.map((c) => c.param)).toEqual([
+    "q",
+    "status",
+    "type",
+    "priority",
+    "assignee",
+    "tag",
+    "due",
+    "blocked",
+    "removed",
+    "f.area",
+  ]);
+});
+
+// NOTHING IS ON, SO THERE IS NO ROW. An unfiltered list draws no chips at all,
+// which is the whole difference from the bar of eleven controls this replaced:
+// the two that were narrowing looked exactly like the nine that were not.
+test("an unfiltered list has no chips", () => {
+  expect(filterChips(NO_FILTERS)).toEqual([]);
+  // AND THE SCOPE IS NEVER ONE. It is a three-valued switch that is always set
+  // to something, drawn in the bar beside them: as a chip it would either be
+  // permanently present or absent on its default, which hides the one segment
+  // that decides whether finished work is on screen.
+  expect(filterChips({ ...NO_FILTERS, scope: "all" })).toEqual([]);
+});
+
+// IN THE COMPANY'S OWN WORDS, resolved through the same context a column head
+// uses — so a board narrowed to one column is headed and chipped with one word
+// rather than with a name and a slug.
+test("a chip says what the company calls the value", () => {
+  const ctx: LabelContext = {
+    statuses: [{ status: "in_progress", label: "Doing", group: "active", description: "" }],
+    types: [{ slug: "bug", name: "Defect" }],
+    tags: [{ slug: "api", label: "API" }],
+    seatName: (handle) => (handle === "ada" ? "Ada Okonkwo" : handle),
+    fields: [{ id: "f1", slug: "area", name: "Area", type: "labels" }],
+  };
+  const chips = filterChips(
+    {
+      ...NO_FILTERS,
+      status: "in_progress",
+      type: "bug",
+      tag: "api",
+      assignee: "ada",
+      fields: { "f.area": "not_null" },
+    },
+    ctx,
+  );
+  const value = (param: string) => chips.find((c) => c.param === param)?.value;
+  expect(value("status")).toBe("Doing");
+  expect(value("type")).toBe("Defect");
+  expect(value("tag")).toBe("API");
+  expect(value("assignee")).toBe("Ada Okonkwo");
+  // `null` AND `not_null` ARE QUESTIONS ABOUT THE ROW rather than about a
+  // value, and printed raw they read as "nothing" and "anything".
+  expect(chips.find((c) => c.param === "f.area")?.label).toBe("Area");
+  expect(value("f.area")).toBe("set");
+  expect(
+    filterChips({ ...NO_FILTERS, fields: { "f.area": "null" } }, ctx).find(
+      (c) => c.param === "f.area",
+    )?.value,
+  ).toBe("not set");
+});
+
+// UNASSIGNED IS A VALUE the grammar spells `none` — the one a lead opens a
+// board to ask for — and printed raw it reads as a filter that failed to
+// resolve somebody's name.
+test("the unassigned filter is a word rather than the grammar's token", () => {
+  expect(filterChips({ ...NO_FILTERS, assignee: "none" })[0]?.value).toBe("Unassigned");
+});
+
+// THE COLUMN A BOARD WAS NARROWED TO is named by its own AXIS, which is the
+// same resolver the column head uses.
+test("a board narrowed to one column is chipped by that column's axis", () => {
+  const chip = filterChips(
+    { ...NO_FILTERS, groupBy: "assignee", group: "ada" },
+    { seatName: () => "Ada Okonkwo" },
+  )[0];
+  expect(chip?.label).toBe("Assignee");
+  expect(chip?.value).toBe("Ada Okonkwo");
+});
+
+// ONE VALUE OF ONE AXIS, split out of `groupLabel` because two surfaces ask it
+// and only one of them holds a group: a column head has the answer the engine
+// returned, and a chip has nothing but the key out of the URL.
+test("an axis names its own empty key", () => {
+  expect(axisLabel("assignee", "")).toBe("Unassigned");
+  expect(axisLabel("tag", "")).toBe("Untagged");
+  expect(axisLabel("status", "")).toBe("No status");
+});
+
+// ---------------------------------------------------------------------------
+// The due bands
+// ---------------------------------------------------------------------------
+
+/** A row with just the fields a band is decided from. */
+function due(fields: Partial<WorkSummary>): WorkSummary {
+  return {
+    id: fields.key ?? "x",
+    key: fields.key ?? "ENG-1",
+    project: "ENG",
+    title: "t",
+    type: "task",
+    status: "todo",
+    updated: "2026-03-10T00:00:00Z",
+    version: 1,
+    ...fields,
+  } as WorkSummary;
+}
+
+// OVERDUE IS THE ROW'S OWN FLAG, never a comparison of ours: the engine derives
+// it against the COMPANY's day start, and a browser re-deriving it from its own
+// midnight is how one screen shows a task as overdue and another does not.
+test("the overdue band is the engine's flag, not a date comparison", () => {
+  const now = Date.parse("2026-03-10T12:00:00Z");
+  // Dated in the FUTURE and flagged overdue is not a state the engine produces;
+  // it is the test that the flag is what decides, rather than the date.
+  expect(dueBucket(due({ due: "2026-03-20T00:00:00Z", overdue: true }), now)).toBe("overdue");
+});
+
+// WHICH IS WHY THERE IS A SIXTH BAND. `overdue` means open AND past its date,
+// so a task finished late is past its date and not overdue — and calling it
+// Overdue would be a false claim about work somebody delivered, while calling
+// it Today would invent a date nobody set.
+test("a past date that is not overdue is its own band", () => {
+  const now = Date.parse("2026-03-10T12:00:00Z");
+  expect(dueBucket(due({ due: "2026-03-01T00:00:00Z" }), now)).toBe("earlier");
+});
+
+test("a day with no date is not put on today", () => {
+  const now = Date.parse("2026-03-10T12:00:00Z");
+  expect(dueBucket(due({}), now)).toBe("none");
+});
+
+// THE WEEK IS THE COMPANY'S WEEK. `internal/tracker/dates.go` starts one on
+// Monday and the calendar draws it the same way, so "this week" here is the
+// week a saved view's `eow` means.
+test("today, this week and later are cut on the company's own week", () => {
+  // Tuesday 10 March 2026, local noon — built through the browser's own
+  // calendar because that is what the bands are read in.
+  const now = new Date(2026, 2, 10, 12, 0, 0).getTime();
+  const on = (y: number, m: number, d: number) =>
+    dueBucket(due({ due: new Date(y, m, d, 9, 0, 0).toISOString() }), now);
+  expect(on(2026, 2, 10)).toBe("today");
+  // Wednesday and Sunday are inside the same Monday-first week.
+  expect(on(2026, 2, 11)).toBe("week");
+  expect(on(2026, 2, 15)).toBe("week");
+  // Monday is the next one.
+  expect(on(2026, 2, 16)).toBe("later");
+});
+
+// EMPTY BANDS ARE DROPPED, in the order a day is read. A band per bucket
+// whether or not anything is in it would put five headings over a person
+// holding one task.
+test("the bands are the ones that hold something, in the day's own order", () => {
+  const now = new Date(2026, 2, 10, 12, 0, 0).getTime();
+  const bands = bandsByDue(
+    [
+      due({ key: "A", due: new Date(2026, 2, 20, 9).toISOString() }),
+      due({ key: "B", overdue: true, due: new Date(2026, 2, 2, 9).toISOString() }),
+      due({ key: "C", due: new Date(2026, 2, 10, 9).toISOString() }),
+      due({ key: "D" }),
+    ],
+    now,
+  );
+  expect(bands.map((b) => b.key)).toEqual(["overdue", "today", "later", "none"]);
+  expect(bands.map((b) => b.rows.map((r) => r.key))).toEqual([["B"], ["C"], ["A"], ["D"]]);
 });

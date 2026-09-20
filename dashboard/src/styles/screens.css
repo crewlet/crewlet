@@ -1919,98 +1919,35 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 0;
 }
 
-/* The head's facts sit in a fixed order at a fixed size, so moving between
-   two projects does not move the numbers — the same rule the phase header
-   keeps, and the reason a reader can scan a column instead of hunting. */
-.work-facts {
-  display: flex;
-  align-items: stretch;
-  flex-wrap: wrap;
-  gap: var(--space-4) var(--space-6);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-1), var(--inset-hairline);
-  min-width: 0;
-}
-.work-fact {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.work-fact-label {
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.work-fact-value {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--heading);
-  font-variant-numeric: tabular-nums;
-  min-width: 0;
-}
-
-/* ---- The filter bar ----------------------------------------------------- */
+/* ---- The bar, the chips and the two menus ------------------------------- */
 
 /* EVERYTHING THIS BAR IS, IT IS BECAUSE IT CARRIES `.toolbar` — sticky, at
-   `--z-sticky`, opaque, wrapping, and a `--toolbar-h` floor. This rule used to
-   restate all of that and omit the class, which cost the one thing the class
-   is for: `.screen:has(.toolbar)` publishes `--sticky-top`, so with the copy
-   the property stayed at its `0px` default and `.grid-head` — which offsets
-   itself by it — parked underneath this band. What is left here is only what
-   is genuinely the work bar's own.
+   `--z-sticky`, opaque, wrapping, and a `--toolbar-h` floor. `.screen:has(
+   .toolbar)` publishes `--sticky-top`, so every other thing that sticks in the
+   scroller offsets itself by it; a copy of the toolbar's declarations under
+   another class name is what left the grid's column heads parked underneath an
+   opaque band.
 
-   A COLUMN GAP WIDER THAN THE ROW GAP, because the children are GROUPS now and
-   the space between two groups has to read as a boundary against the
-   `--space-2` between the controls inside one. */
-.work-filters {
-  column-gap: var(--space-4);
+   IT HOLDS FOUR THINGS NOW rather than eleven controls in three groups: the
+   Filter menu, the substring mark, the scope switch and the Display menu, with
+   the count at the edge. So the wrap rules the three groups needed are gone —
+   there is nothing left to wrap. */
+.work-bar {
+  column-gap: var(--space-3);
 }
-/* THE GROUPS ARE THE WRAP UNIT. A single wrapping row broke between any two
-   controls, and since what the bar draws varies by shape — type, group-by
-   and sort each appear on some tabs and not others — the scope
-   control landed at x≈345 on List, x≈1338 on Board and x≈1155 on Calendar.
-   Grouped, a break falls between the question and the switches, and the
-   switches sit against the count rather than against six conditional
-   pickers. */
-.work-filters-ask,
-.work-filters-switches {
+/* SEARCH IS THE ONE CONTROL A PERSON TYPES INTO, so it takes the slack when it
+   is open and nothing at all when it is not — which is most of the time, and is
+   the whole reason it collapses to a mark. */
+.work-bar-find {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  min-width: 0;
-}
-/* THE QUESTION TAKES THE SLACK, which is what positions the switches from the
-   RIGHT edge. `margin-left: auto` on the count alone could not: an auto margin
-   is measured against the line the item lands on, so when the Overdue chip
-   wrapped the chip sat at x≈345 with ~1,200px of nothing beside it. */
-.work-filters-ask {
-  flex: 1 1 auto;
-}
-.work-filters-switches {
-  flex: 0 0 auto;
-}
-/* SEARCH IS THE WIDEST CONTROL IN THE BAR, because it is the one a person
-   types into: the selects beside it hold a word each and never grow. */
-.work-filters-search {
-  flex: 2 1 240px;
+  gap: var(--space-1);
+  flex: 1 1 220px;
   max-width: 380px;
   min-width: 160px;
 }
-/* The coverage cluster ends the bar, so how fresh and how complete an answer
-   is sits beside the count it qualifies rather than above the rows. It keeps
-   the auto margin for the one case the groups above do not cover: a bar whose
-   question and switches both fit on one line still has slack after them, and
-   the count belongs at the edge rather than trailing the last chip. */
+/* The coverage cluster ends the bar, so how fresh and how complete an answer is
+   sits beside the count it qualifies rather than above the rows. */
 .work-summary {
   margin-left: auto;
   flex: 0 0 auto;
@@ -2026,6 +1963,194 @@ details > summary.int-summary::-webkit-details-marker {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+/* ---- The chips ---------------------------------------------------------- */
+
+/* ONE ROW, AND IT EXISTS ONLY WHEN A FILTER DOES. An unfiltered list has no
+   chip row at all, so the rows start directly under the bar; a filtered one
+   states the whole narrowing in a line. It is NOT sticky: what is narrowing the
+   list is read once, where the bar is reached for constantly. */
+.work-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  min-width: 0;
+}
+/* THREE PARTS, THREE REGISTERS: the field is what it is about, the verb is the
+   relation, and the value is the answer — so the value is the only one at full
+   ink. A chip set in one register reads as a label rather than as a sentence. */
+.work-chip-field {
+  color: var(--text-secondary);
+}
+.work-chip-verb {
+  color: var(--text-muted);
+}
+.work-chip-value {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+
+/* ---- The two menus ------------------------------------------------------ */
+
+/* A PANEL, not a page: bounded in both axes, scrolling its own list. The width
+   is the widest thing it holds — a field name beside the URL key it writes —
+   and the height stops short of the viewport so the trigger stays visible under
+   it. */
+.work-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 260px;
+  max-width: min(360px, 92vw);
+}
+.work-menu-find,
+.work-menu-head {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.work-menu-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: min(52dvh, 420px);
+  padding: var(--space-1);
+}
+.work-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--size-target-min);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.work-menu-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+/* THE ANSWER THAT IS CURRENT, as the accent — which is what the accent is for:
+   where the reader is. A pressed row is the one value of this field that is on,
+   and pressing it again takes it off, which is what the state promises. */
+.work-menu-row[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+/* A FIXED SLOT WHETHER OR NOT THERE IS A MARK IN IT, which is the rule
+   `.side-mark` states for the rail: every row at one depth starts its text on
+   ONE vertical line, or the list combs in and out as answers are chosen. */
+.work-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex: none;
+  color: var(--accent-ink);
+}
+/* THE KEY IT WRITES, at the quietest step: this product's address bar is a
+   surface people read, and a reader who has seen `assignee=` in a URL can then
+   write one. It is decoration in the contrast sense — never the only carrier of
+   anything — so `--text-muted` is the step it is allowed. */
+.work-menu-key {
+  margin-left: auto;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.work-menu-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+.work-menu-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.work-menu-empty {
+  padding: var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+/* The Display panel is a form rather than a list, so it is padded as one. */
+.work-display {
+  gap: var(--space-3);
+  padding: var(--space-3);
+  min-width: 300px;
+}
+/* THE SHAPES ARE A ROW OF FIVE, each a mark over its own name: a shape is
+   identity, and identity is carried by a name, a mark and a position. */
+.work-display-shapes {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+.work-display-shape {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: var(--space-2) 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-3xs);
+  cursor: pointer;
+}
+.work-display-shape:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.work-display-shape[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.work-display-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.work-display-label {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.work-display-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1) var(--space-3);
+}
+.work-display-col {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--size-target-min);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.work-display-foot {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* ---- The body, and the peek beside it ----------------------------------- */
@@ -2271,7 +2396,13 @@ details > summary.int-summary::-webkit-details-marker {
    is its own list, which is right: a grouped column is a table per group. */
 .work-rows {
   display: grid;
-  grid-template-columns: 16px 74px minmax(0, 1fr) auto auto auto auto auto;
+  /* PRIORITY, KEY, STATUS, TITLE, then the trailing facts. The three that
+     open a row are the three a reader scans DOWN — how urgent, which item,
+     what state — and each is a fixed or content width, so the title always
+     starts at one x. It used to open with the type icon and put the status
+     after the title, which is the one arrangement where the state of a task
+     moves with the length of its name. */
+  grid-template-columns: 16px 74px auto minmax(0, 1fr) auto auto auto auto;
   /* THE GUTTER BELONGS TO WHOEVER OWNS THE TRACKS. On a subgridded axis a
      row's own `column-gap` is ignored and the parent's is used — so declared
      on the row it silently became zero, and a type icon sat on top of the
@@ -2301,10 +2432,15 @@ details > summary.int-summary::-webkit-details-marker {
 /* The four are named so the narrow breakpoint can drop them by what they
    ARE rather than by where they sit — a positional selector over a row
    whose cells move is the rule that silently starts hiding the wrong one. */
-.work-cell-prio,
 .work-cell-due,
+.work-cell-type,
 .work-cell-who {
   justify-content: flex-end;
+}
+/* THE PRIORITY OPENS THE ROW, so it reads from the row's own left edge — the
+   same rule the status pill one column over follows. */
+.work-cell-prio {
+  justify-content: flex-start;
 }
 /* THE STATUS PILL READS FROM ITS LEFT EDGE, which is where its dot is —
    right-aligned, the dot moved with the word's length and a reader scanning
@@ -2335,32 +2471,162 @@ details > summary.int-summary::-webkit-details-marker {
   font-variant-numeric: tabular-nums;
 }
 
-.work-group-head {
+/* A BAND IS A HEADING ON THE LIST, not a card around each group. Every group
+   used to be a `Card` with its own border, radius, shadow and padding, so a
+   list cut six ways was six panels down the page and the rows inside them
+   started 24px in from the rows of the group above. One continuous run of rows,
+   one left edge, and the group's name STICKY above its own rows is what makes a
+   grouped list scannable as one list rather than as six.
+
+   IT STICKS UNDER THE TOOLBAR, at `--sticky-top` — the height the toolbar
+   publishes — which is the same offset the grid's own column heads take. */
+.work-band {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   background: var(--surface-raised);
-  border-bottom: 1px solid var(--border-subtle);
+  border-block: 1px solid var(--border-subtle);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
   color: var(--text-secondary);
-  position: sticky;
-  /* NOT 0: the filter bar is sticky at the top of this same scroller, opaque
-     and at `--z-sticky`, so a head that stopped at 0 would stop underneath it
-     — and at `z-index: 1` it loses that overlap every time. `--sticky-top` is
-     what the bar publishes for exactly this, and it is `0px` on a screen with
-     no toolbar rather than a band of empty page above every head. */
-  top: var(--sticky-top);
-  z-index: 1;
+  min-width: 0;
 }
-.work-group-foot {
-  padding: var(--space-2) var(--space-3);
+.work-band .count-chip {
+  margin-left: auto;
+}
+/* THE SECOND AXIS IS A BAND INSIDE A BAND, and the indent is what says which
+   is which: a sub-band at the same inset as its parent reads as a sibling, so a
+   list cut two ways would look like one cut once with twice as many groups. */
+.work-band-sub {
+  padding-left: calc(var(--row-inline) + var(--space-4));
+  background: var(--surface-panel);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+}
+/* A BAND'S OWN COLOUR IS ITS STATE where the band IS a state — which is only
+   true of the due bands on somebody's day, where "overdue" is the one thing a
+   person has to see before anything else. Every other axis is identity and
+   stays neutral. */
+.work-band[data-band="overdue"] {
+  color: var(--critical-ink);
+}
+.work-band[data-band="today"] {
+  color: var(--info-ink);
+}
+.work-list {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  min-width: 0;
+}
+.work-band-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.work-band-foot {
+  padding: var(--space-2) var(--row-inline);
   font-size: var(--fs-2xs);
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-subtle);
+}
+.work-band-foot a {
+  color: var(--accent-ink);
+}
+.work-band-foot a:hover {
+  color: var(--text);
+}
+
+/* ---- The census, and a meter in a cell ---------------------------------- */
+
+/* The bar under a project's header: the fact line says how much, and this says
+   the proportion. */
+.work-census {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 560px;
+}
+/* IN A CELL IT IS THE BAR ALONE — the legend is drawn once under the grid,
+   because forty legends is not forty facts. */
+.work-meter {
+  display: block;
+  width: 120px;
+}
+
+/* ---- The change log ------------------------------------------------------ */
+
+/* ONE GRID, so a run of changes scans down its columns: when, which item, what
+   moved, and who moved it. The delta takes the elastic track because it is the
+   only one that is prose.
+
+   `log` RATHER THAN `hist`, which is the work ITEM's own history and has been
+   since it was written: two screens drawing a change under one class name is
+   one screen's padding silently becoming the other's. */
+.work-log {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  min-width: 0;
+}
+.work-log-row {
+  display: grid;
+  grid-template-columns: 84px 92px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--row-inline);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--row-h);
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+.work-log-row:last-child {
+  border-bottom: none;
+}
+.work-log-row:hover {
+  background: var(--surface-hover);
+}
+.work-log-when {
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.work-log-key {
+  font-size: var(--fs-3xs);
+  white-space: nowrap;
+}
+/* THE DELTA WRAPS RATHER THAN ELLIPSING. It is the one cell here that is
+   prose — a field name, a value it left and a value it reached — and an
+   ellipsis on it cuts the half that says where the value WENT. The same rule
+   the work item's own history entry keeps one screen over. */
+.work-log-what {
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.work-log-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  min-width: 0;
 }
 
 /* ---- The calendar ------------------------------------------------------- */

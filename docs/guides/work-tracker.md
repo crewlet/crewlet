@@ -670,9 +670,25 @@ work sits in projects that unit owns.
 
 ## What a person can do
 
-**The dashboard** renders the board, the list, the calendar, the timeline, the
-table and the trash over the same queries a seat's tools use, against this
-node's own copy. Every answer says how far behind that copy is.
+**The dashboard** renders the same queries a seat's tools use, against this
+node's own copy, and every answer says how far behind that copy is. It is four
+screens rather than one:
+
+- **All work** (`#/work`) is the list. Two menus decide what is on it and how
+  it is drawn — **Filter** adds a narrowing, and each one is a removable chip
+  under the bar; **Display** holds the shape (list, board, table, calendar,
+  timeline), the grouping, the order and, on a table, the columns. The trash is
+  a filter here rather than a tab, which is what the engine says it is: a
+  listing carrying `removed=true`. The strip above the bar holds the views
+  somebody SAVED, never the five shapes.
+- **Projects** (`#/work/projects`) is the directory: every project with its
+  lead, the unit that owns it, its three maintained counts, how far along it is
+  and when its work last changed.
+- **History** (`#/work/history`) is the change log over a window you choose,
+  with the kinds and the authors on this page as facets.
+- **A project** (`#/work/{KEY}`) opens on its work, with an **Overview** lens
+  for what the container itself declares — its statuses, its types, its labels
+  and its fields — and a **History** lens narrowed to it.
 
 **Your own AI assistant** can reach the same tracker over MCP, at
 `/operator/mcp`. It serves the same work tools above, eleven more no seat is
@@ -936,9 +952,14 @@ screen: the notices `work_inbox` returns, each labelled with the one reason of
 twenty that routed it, beside what is waiting on a decision. Which person is
 decided by the API token — it is matched against every seat's
 `contact.crewlet_operator_id`, so the queue is theirs rather than the
-alphabetically first seat's — and `#/me` is that same person's own work, their
-priorities, asks and checklists. See [Humans in the
-org](../concepts/humans-in-the-org.md) for the binding.
+alphabetically first seat's — and `#/me` is that same person's own work: seven
+tabs, one per claim on their attention, each carrying its count on the strip so
+an unanswered question is visible without opening it. The **Assigned** tab is
+the tracker's own question rather than a bounded block, so it pages and counts
+like any other list, and it is banded by WHEN the work is due — overdue,
+today, this week, later, no date — because that is what somebody opens their
+own day to ask. See [Humans in the org](../concepts/humans-in-the-org.md) for
+the binding.
 
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the

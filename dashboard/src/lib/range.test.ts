@@ -15,6 +15,8 @@ import {
   windowEdges,
   windowLabel,
   windowParam,
+  barsOver,
+  MAX_BARS,
 } from "./range.ts";
 import type { Offer } from "./range.ts";
 
@@ -313,5 +315,79 @@ describe("cutting a window into columns", () => {
   it("is a strip of one rather than of none for a window under a minute", () => {
     expect(cutInto(30_000, 60)).toEqual({ cell: 60_000, cells: 1 });
     expect(cutInto(0, 60)).toEqual({ cell: 60_000, cells: 1 });
+  });
+});
+
+describe("bars over a window this client holds", () => {
+  // ---------------------------------------------------------------------------
+  // Bars over a window this client holds
+  // ---------------------------------------------------------------------------
+
+  // EVERY BUCKET IN THE WINDOW, including the empty ones. A series built only
+  // from the buckets that have something in them draws a quiet week as a solid
+  // run of bars, which is the opposite of what a chart is for — and `Histogram`
+  // gives a zero its own floor in pixels precisely so an empty bucket is visible
+  // as one.
+  it("a window is covered bucket by bucket, empty ones included", () => {
+    const bars = barsOver(
+      ["2026-03-10T01:30:00Z", "2026-03-10T01:45:00Z", "2026-03-10T03:10:00Z"],
+      "2026-03-10T00:00:00Z",
+      "2026-03-10T04:00:00Z",
+      "hour",
+    );
+    expect(bars.map((b) => b.count)).toEqual([0, 2, 0, 1]);
+    expect(bars[0]?.at).toBe("2026-03-10T00:00:00.000Z");
+  });
+
+  // A ROW OUTSIDE THE WINDOW IS NOT DRAWN AT ALL rather than folded into the
+  // nearest bar: a chart whose first column silently held everything older than
+  // it would be a chart that lies about when the work happened.
+  it("instants outside the window are left out", () => {
+    const bars = barsOver(
+      ["2026-03-09T23:00:00Z", "2026-03-10T05:00:00Z"],
+      "2026-03-10T00:00:00Z",
+      "2026-03-10T02:00:00Z",
+      "hour",
+    );
+    expect(bars.map((b) => b.count)).toEqual([0, 0]);
+  });
+
+  // THE FINAL EDGE IS THE ONE OFF-BY-ONE EVERY BUCKETING HAS, and an instant
+  // exactly on it is clamped rather than dropped: a change made in the second the
+  // window closed is still in the answer the rows came from.
+  it("an instant on the final edge lands in the last bucket", () => {
+    const bars = barsOver(
+      ["2026-03-10T01:59:59.999Z"],
+      "2026-03-10T00:00:00Z",
+      "2026-03-10T02:00:00Z",
+      "hour",
+    );
+    expect(bars.map((b) => b.count)).toEqual([0, 1]);
+  });
+
+  // BOUNDED, because a window and a bucket are two independent values and a
+  // hand-edited address can pair a year with an hourly bucket: 8,760 bars is a
+  // chart nobody can read. What is dropped is the OLDEST end, because a log is
+  // read from its most recent row.
+  it("a window too wide for its bucket keeps the newest bars", () => {
+    const bars = barsOver(
+      ["2026-03-10T00:30:00Z"],
+      "2026-01-01T00:00:00Z",
+      "2026-03-10T02:00:00Z",
+      "hour",
+    );
+    expect(bars).toHaveLength(MAX_BARS);
+    // The kept window ends where the caller's does, so the newest bar is the one
+    // in progress rather than one ninety hours ago.
+    expect(bars[bars.length - 1]?.at).toBe("2026-03-10T01:00:00.000Z");
+    expect(bars.reduce((sum, b) => sum + b.count, 0)).toBe(1);
+  });
+
+  // A WINDOW THAT IS NOT ONE draws nothing rather than looping: an interval whose
+  // end is before its start, or either edge unparseable, is an address somebody
+  // hand-edited.
+  it("a window that is not one draws no bars", () => {
+    expect(barsOver([], "2026-03-10T02:00:00Z", "2026-03-10T01:00:00Z", "hour")).toEqual([]);
+    expect(barsOver([], "not a date", "2026-03-10T01:00:00Z", "hour")).toEqual([]);
   });
 });

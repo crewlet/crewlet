@@ -47,7 +47,13 @@ import { ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
 import { DataGrid, type GridBand, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
-import { DueMark, PriorityMark, StatusBadge, TypeIcon, type RowChrome } from "./work.tsx";
+import {
+  DueMark,
+  PriorityMark,
+  StatusBadge,
+  TypeIcon,
+  type RowChrome,
+} from "~/components/work.tsx";
 import { groupLabel } from "~/lib/work.ts";
 import { fmtCount, fmtDuration } from "~/lib/format.ts";
 import { callText } from "~/lib/toolcall.ts";
@@ -124,6 +130,192 @@ export function removalsOf(records: WorkActivityRecord[], kind = "removed"): Rem
   return out;
 }
 
+/**
+ * Every column this table can draw, in the order it draws them.
+ *
+ * MODULE LEVEL, so the DISPLAY MENU can offer the same set. The menu renders a
+ * checkbox per column and writes `cols=`, which this grid reads — and a menu
+ * holding its own list of column names would be a second declaration of them,
+ * wrong the first time a column is added and looking exactly like a correct
+ * one. `tableColumnChoices` below is derived from this call rather than written
+ * beside it, so the two cannot disagree.
+ */
+function buildColumns({
+  chrome,
+  detail,
+  now,
+  workspace,
+  removals,
+}: {
+  chrome: RowChrome;
+  detail?: WorkProjectDetail | null;
+  now: number;
+  workspace: boolean;
+  removals?: Removals;
+}): GridColumn<WorkSummary>[] {
+  const out: GridColumn<WorkSummary>[] = [
+    {
+      key: "key",
+      header: "Key",
+      shrink: true,
+      // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
+      // over it; the nearest thing is `created`, which is a different
+      // claim and is not on the row at all.
+      cell: (row) => <KeyCell value={row.key} />,
+    },
+    {
+      key: "type",
+      header: "",
+      label: "Type",
+      shrink: true,
+      cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
+    },
+    sorted("title", {
+      header: "Title",
+      sortValue: (row) => row.title,
+      cell: (row) => <span className="truncate">{row.title}</span>,
+    }),
+    {
+      key: "status",
+      header: "Status",
+      shrink: true,
+      // NOT SORTABLE, deliberately. The engine's nearest key is
+      // `status_entered` — how long a task has been in the status it is
+      // in — which is a different claim, and there is no ordering over
+      // the status words themselves: they are a company's own vocabulary
+      // and alphabetical order over them means nothing. `group_by=status`
+      // is what a reader asking this actually wants, and the filter bar
+      // already offers it.
+      cell: (row) => <StatusBadge status={row.status} defs={detail?.statuses} />,
+    },
+    sorted("priority", {
+      header: "Priority",
+      shrink: true,
+      sortValue: (row) => row.priority ?? "",
+      cell: (row) => <PriorityMark priority={row.priority} word />,
+    }),
+    {
+      key: "assignee",
+      header: "Assignee",
+      shrink: true,
+      cell: (row) =>
+        row.assignee ? (
+          <SeatCell handle={row.assignee} name={chrome.seatName?.(row.assignee)} />
+        ) : (
+          <EmptyValue label="Nobody holds this" />
+        ),
+    },
+  ];
+  if (workspace) {
+    out.push({
+      key: "project",
+      header: "Project",
+      shrink: true,
+      cell: (row) => <span className="mono">{row.project}</span>,
+    });
+  }
+  out.push(
+    sorted("due", {
+      header: "Due",
+      shrink: true,
+      sortValue: (row) => row.due ?? "",
+      // THE LIST'S OWN MARK, not a second rendering of a due date: the
+      // overdue tint is `DueMark`'s and two spellings of it is two rules
+      // as soon as one screen's changes.
+      cell: (row) =>
+        row.due ? (
+          <DueMark due={row.due} overdue={row.overdue} now={now} />
+        ) : (
+          <EmptyValue label="No date" />
+        ),
+    }),
+    sorted("start", {
+      header: "Start",
+      shrink: true,
+      optional: true,
+      sortValue: (row) => row.start ?? "",
+      cell: (row) =>
+        row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
+    }),
+    // TWO MEASURES, TWO COLUMNS. A company sizes in points or in minutes
+    // per PROJECT, and the engine orders by one or the other — so a single
+    // "Size" column falling back from one to the other would sort by a
+    // number half its cells were not showing.
+    sorted("points", {
+      header: "Points",
+      shrink: true,
+      align: "right",
+      optional: true,
+      sortValue: (row) => row.points ?? 0,
+      cell: (row) =>
+        row.points ? (
+          <span className="t-num">{row.points}</span>
+        ) : (
+          <EmptyValue label="Unestimated" />
+        ),
+    }),
+    sorted("estimate", {
+      header: "Estimate",
+      shrink: true,
+      align: "right",
+      optional: true,
+      sortValue: (row) => row.estimate_min ?? 0,
+      cell: (row) =>
+        row.estimate_min ? (
+          <span className="t-num">{fmtDuration(row.estimate_min * 60_000)}</span>
+        ) : (
+          <EmptyValue label="Unestimated" />
+        ),
+    }),
+    sorted("updated", {
+      header: "Updated",
+      shrink: true,
+      sortValue: (row) => row.updated ?? "",
+      cell: (row) => <DateCell at={row.updated} now={now} />,
+    }),
+  );
+  if (!removals) return out;
+  return out.concat(trashColumns(removals, chrome, now));
+}
+
+/** One column a reader may turn on or off, as the Display menu offers it. */
+export interface TableColumnChoice {
+  key: string;
+  label: string;
+  /** Off until `cols=` names it. */
+  optional?: boolean;
+}
+
+/**
+ * The columns a reader can choose between, DERIVED from the ones drawn.
+ *
+ * A menu that held its own list would be a second declaration of the table's
+ * columns — wrong the first time one is added, and indistinguishable from a
+ * correct one. This calls the builder and takes the three facts a chooser
+ * needs, so a column added above appears in the menu with no second edit.
+ *
+ * THE CELL RENDERERS ARE NEVER CALLED, which is what makes the stub context
+ * honest rather than a fake: a name and a flag are properties of the COLUMN,
+ * and nothing here touches a row.
+ *
+ * `workspace` decides whether the Project column exists at all, because it
+ * does not inside a project — offering it there would be a checkbox for a
+ * column the grid never draws.
+ */
+export function tableColumnChoices(workspace: boolean): TableColumnChoice[] {
+  return buildColumns({ chrome: {}, detail: null, now: 0, workspace }).map((column) => ({
+    key: column.key,
+    // THE HEAD, OR THE NAME IT CARRIES FOR WHERE THE HEAD IS A GLYPH — which
+    // is exactly what `GridColumn.label` is for on the card layout a narrow
+    // grid takes.
+    label:
+      typeof column.header === "string" && column.header
+        ? column.header
+        : (column.label ?? column.key),
+    optional: column.optional,
+  }));
+}
+
 export function TableView({
   rows,
   groups,
@@ -151,131 +343,10 @@ export function TableView({
   /** Present only on a trash listing; see the header. */
   removals?: Removals;
 }) {
-  const columns = useMemo<GridColumn<WorkSummary>[]>(() => {
-    const out: GridColumn<WorkSummary>[] = [
-      {
-        key: "key",
-        header: "Key",
-        shrink: true,
-        // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
-        // over it; the nearest thing is `created`, which is a different
-        // claim and is not on the row at all.
-        cell: (row) => <KeyCell value={row.key} />,
-      },
-      {
-        key: "type",
-        header: "",
-        label: "Type",
-        shrink: true,
-        cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
-      },
-      sorted("title", {
-        header: "Title",
-        sortValue: (row) => row.title,
-        cell: (row) => <span className="truncate">{row.title}</span>,
-      }),
-      {
-        key: "status",
-        header: "Status",
-        shrink: true,
-        // NOT SORTABLE, deliberately. The engine's nearest key is
-        // `status_entered` — how long a task has been in the status it is
-        // in — which is a different claim, and there is no ordering over
-        // the status words themselves: they are a company's own vocabulary
-        // and alphabetical order over them means nothing. `group_by=status`
-        // is what a reader asking this actually wants, and the filter bar
-        // already offers it.
-        cell: (row) => <StatusBadge status={row.status} defs={detail?.statuses} />,
-      },
-      sorted("priority", {
-        header: "Priority",
-        shrink: true,
-        sortValue: (row) => row.priority ?? "",
-        cell: (row) => <PriorityMark priority={row.priority} word />,
-      }),
-      {
-        key: "assignee",
-        header: "Assignee",
-        shrink: true,
-        cell: (row) =>
-          row.assignee ? (
-            <SeatCell handle={row.assignee} name={chrome.seatName?.(row.assignee)} />
-          ) : (
-            <EmptyValue label="Nobody holds this" />
-          ),
-      },
-    ];
-    if (workspace) {
-      out.push({
-        key: "project",
-        header: "Project",
-        shrink: true,
-        cell: (row) => <span className="mono">{row.project}</span>,
-      });
-    }
-    out.push(
-      sorted("due", {
-        header: "Due",
-        shrink: true,
-        sortValue: (row) => row.due ?? "",
-        // THE LIST'S OWN MARK, not a second rendering of a due date: the
-        // overdue tint is `DueMark`'s and two spellings of it is two rules
-        // as soon as one screen's changes.
-        cell: (row) =>
-          row.due ? (
-            <DueMark due={row.due} overdue={row.overdue} now={now} />
-          ) : (
-            <EmptyValue label="No date" />
-          ),
-      }),
-      sorted("start", {
-        header: "Start",
-        shrink: true,
-        optional: true,
-        sortValue: (row) => row.start ?? "",
-        cell: (row) =>
-          row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
-      }),
-      // TWO MEASURES, TWO COLUMNS. A company sizes in points or in minutes
-      // per PROJECT, and the engine orders by one or the other — so a single
-      // "Size" column falling back from one to the other would sort by a
-      // number half its cells were not showing.
-      sorted("points", {
-        header: "Points",
-        shrink: true,
-        align: "right",
-        optional: true,
-        sortValue: (row) => row.points ?? 0,
-        cell: (row) =>
-          row.points ? (
-            <span className="t-num">{row.points}</span>
-          ) : (
-            <EmptyValue label="Unestimated" />
-          ),
-      }),
-      sorted("estimate", {
-        header: "Estimate",
-        shrink: true,
-        align: "right",
-        optional: true,
-        sortValue: (row) => row.estimate_min ?? 0,
-        cell: (row) =>
-          row.estimate_min ? (
-            <span className="t-num">{fmtDuration(row.estimate_min * 60_000)}</span>
-          ) : (
-            <EmptyValue label="Unestimated" />
-          ),
-      }),
-      sorted("updated", {
-        header: "Updated",
-        shrink: true,
-        sortValue: (row) => row.updated ?? "",
-        cell: (row) => <DateCell at={row.updated} now={now} />,
-      }),
-    );
-    if (!removals) return out;
-    return out.concat(trashColumns(removals, chrome, now));
-  }, [chrome, detail, now, workspace, removals]);
+  const columns = useMemo<GridColumn<WorkSummary>[]>(
+    () => buildColumns({ chrome, detail, now, workspace, removals }),
+    [chrome, detail, now, workspace, removals],
+  );
 
   const bands = useMemo<GridBand<WorkSummary>[] | undefined>(() => {
     if (groups.length === 0) return undefined;

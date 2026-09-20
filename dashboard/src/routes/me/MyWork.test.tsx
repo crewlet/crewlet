@@ -1,14 +1,25 @@
 /**
- * Whose day this screen is showing, and how it says so.
+ * Whose day this screen is showing, how it says so, and what a tab promises.
+ *
+ * # Whose day
  *
  * The screen is read two ways — a person reading their own day, and an
- * operator reading a report's — and one wording cannot serve both. "Nothing
- * has reached them" on your own inbox reads as a screen describing somebody
+ * operator reading a report's — and one wording cannot serve both. "Nothing is
+ * waiting on them" on your own screen reads as a page describing somebody
  * else, which is precisely the confusion the `viewer` question exists to end.
  *
  * It matters more here than anywhere: this screen used to fall back to the
  * ALPHABETICALLY FIRST SEAT, so a page titled "My work" showed every reader a
  * stranger's day with no indication that it had guessed.
+ *
+ * # What a tab promises
+ *
+ * The seven claims were stacked cards, each ABSENT when empty, so the page's
+ * shape changed with the day and a person with two hundred assignments never
+ * saw their asks. The promise that no claim can crowd out another is kept by
+ * the STRIP now — every tab carries its count, always — so these cases are
+ * about the counts being there, being honest about what they count, and a tab
+ * with nothing in it still saying its own name.
  */
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -17,7 +28,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { MyWork } from "./MyWork.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName, WorkInboxNotice } from "~/protocol/index.ts";
+import type { QueryName, WorkSummary } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -58,7 +69,31 @@ const emptyDay = {
   complete: true,
 };
 
-const emptyInbox = { handle: "ada", notices: [], primary_reasons: [], unread: 0, primary: 0 };
+/** The assignments, which are the tracker's own question rather than a block. */
+const noWork = { items: [], groups: [], total_hint: 0, complete: true };
+
+const ada = {
+  operator_id: "ops-1",
+  operator: true,
+  handle: "ada",
+  name: "Ada Okonkwo",
+  kind: "human",
+};
+
+/** One task with the fields a row and a band are decided from. */
+function task(over: Partial<WorkSummary> = {}): WorkSummary {
+  return {
+    id: over.key ?? "t1",
+    key: over.key ?? "ENG-1",
+    project: "ENG",
+    title: "Ship the thing",
+    type: "task",
+    status: "todo",
+    updated: "2031-04-16T09:00:00Z",
+    version: 1,
+    ...over,
+  } as WorkSummary;
+}
 
 function mount() {
   return render(
@@ -68,27 +103,26 @@ function mount() {
   );
 }
 
+/** One tab's own label, as the strip draws it. */
+function tabNamed(word: string): HTMLElement | undefined {
+  return screen.getAllByRole("tab").find((el) => (el.textContent ?? "").startsWith(word));
+}
+
+// ---------------------------------------------------------------------------
+// Whose day
+// ---------------------------------------------------------------------------
+
 // THE VIEWER DECIDES WHOSE DAY IT IS, with no handle in the URL. Before the
 // `viewer` question existed there was nothing for this to resolve from, and
 // the screen picked the first seat in the roster.
 test("with no handle it shows the viewer's own day, and says it is theirs", async () => {
-  serving({
-    viewer: {
-      operator_id: "ops-1",
-      operator: true,
-      handle: "ada",
-      name: "Ada Okonkwo",
-      kind: "human",
-    },
-    work_my_work: emptyDay,
-    work_inbox: emptyInbox,
-  });
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount();
   await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
   // SECOND PERSON on your own day. Awaited separately: the viewer resolves
   // first and the day is a second round trip, so the badge is on screen a
   // render before the panels are.
-  await waitFor(() => expect(screen.getByText("Nothing has reached you")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
 });
 
 // AN OPERATOR READING SOMEBODY ELSE'S DAY is a real thing to do, and the
@@ -96,20 +130,10 @@ test("with no handle it shows the viewer's own day, and says it is theirs", asyn
 // naming them is how a reader acts on work that is not theirs.
 test("an explicit handle names whose day it is, in the third person", async () => {
   location.hash = "#/me?handle=rui";
-  serving({
-    viewer: {
-      operator_id: "ops-1",
-      operator: true,
-      handle: "ada",
-      name: "Ada Okonkwo",
-      kind: "human",
-    },
-    work_my_work: { ...emptyDay, handle: "rui" },
-    work_inbox: { ...emptyInbox, handle: "rui" },
-  });
+  serving({ viewer: ada, work_my_work: { ...emptyDay, handle: "rui" }, work_items: noWork });
   mount();
   await waitFor(() => expect(screen.getByText("Rui Santos’s day")).toBeTruthy());
-  await waitFor(() => expect(screen.getByText("Nothing has reached them")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Nothing is assigned to them")).toBeTruthy());
   expect(screen.queryByText("yours")).toBeNull();
 });
 
@@ -133,42 +157,10 @@ test("no credential at all is a different sentence from an unbound one", async (
   expect(screen.queryByText(/not bound to a person/)).toBeNull();
 });
 
-/** One notice, with everything a row draws. */
-function notice(over: Partial<WorkInboxNotice> = {}): WorkInboxNotice {
-  return {
-    record_id: "r1",
-    log_seq: 1,
-    log_stream: "CREWLET_WORK_LOG",
-    log_generation: 1,
-    at: "2031-04-16T09:00:00Z",
-    reason: "assignee",
-    primary: true,
-    addressed: false,
-    kind: "task_assigned",
-    subject_id: "s1",
-    subject_key: "ENG-1",
-    excerpt: "Ship the thing",
-    read: true,
-    ...over,
-  };
-}
-
-const ada = {
-  operator_id: "ops-1",
-  operator: true,
-  handle: "ada",
-  name: "Ada Okonkwo",
-  kind: "human",
-};
-
 /** The page bar's whose-day pill, as it is drawn for one reader. */
 async function whoseTagClass(hash: string, day: string, label: string): Promise<string> {
   location.hash = hash;
-  serving({
-    viewer: ada,
-    work_my_work: { ...emptyDay, handle: day },
-    work_inbox: { ...emptyInbox, handle: day },
-  });
+  serving({ viewer: ada, work_my_work: { ...emptyDay, handle: day }, work_items: noWork });
   mount();
   const pill = (await screen.findByText(label)).closest(".crewlet-tag");
   const drawn = pill?.className ?? "";
@@ -193,49 +185,85 @@ test("the whose-day pill is drawn the same for both, so only the words differ", 
   expect(theirs).toBe(own);
 });
 
-/** The count pill on the card with this title, as a reader meets it. */
-function pillOn(title: string): Element | null | undefined {
-  return screen.getByText(title).closest(".crewlet-card")?.querySelector(".crewlet-count");
-}
+// ---------------------------------------------------------------------------
+// The strip
+// ---------------------------------------------------------------------------
 
-// THE PILL IS THE ROWS UNDER IT, AND IT SAYS WHAT IT COUNTS.
-//
-// The header drew the unread tally in the count pill and opened its subtitle
-// with the row count: two page-scoped numbers, neither labelled, and on a quiet
-// day both of them `0`. `Card.Header`'s slot passes no `label` to `Count`, so
-// the number had no accessible name either.
-test("the inbox pill counts the notices it drew, and names what it counts", async () => {
+// EVERY CLAIM IS A TAB AND EVERY TAB CARRIES ITS COUNT. This is what replaces
+// the stacking: an unanswered question is visible as a number on a tab nobody
+// has opened, where a card that vanished when empty took its own name with it.
+test("every claim is a tab, and its count is on the strip unopened", async () => {
   serving({
     viewer: ada,
-    work_my_work: emptyDay,
-    work_inbox: {
-      ...emptyInbox,
-      unread: 1,
-      primary_reasons: ["assignee"],
-      notices: [
-        notice({ record_id: "r1", read: false }),
-        notice({ record_id: "r2" }),
-        notice({ record_id: "r3" }),
+    work_items: { ...noWork, total_hint: 7 },
+    work_my_work: {
+      ...emptyDay,
+      asked_of_me: [
+        {
+          key: "ENG-9",
+          title: "t",
+          comment: "c1",
+          asked_by: "rui",
+          asked_at: "2031-04-16T09:00:00Z",
+          body: "why?",
+          answer_with: "answer_work_question(...)",
+        },
       ],
+      watching_recent: [task({ key: "ENG-3" }), task({ key: "ENG-4" })],
     },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("Reached you")).toBeTruthy());
-  const pill = pillOn("Reached you");
-  // The rows, not the one unread.
-  expect(pill?.querySelector("[aria-hidden]")?.textContent).toBe("3");
-  // And it is not a bare digit.
-  expect(pill?.textContent).toContain("notices on this page");
-  // The other number, worded.
-  expect(screen.getByText("1 unread · the 20 most recent")).toBeTruthy();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
+  expect(tabs).toEqual([
+    "Assigned 7",
+    "Priorities 0",
+    "Asks 1",
+    "Unblocked 0",
+    "Collaborating 0",
+    "Watching 2",
+    "Checklist 0",
+  ]);
 });
 
-// NOTHING IS CLAIMED ABOUT THE INBOX UNTIL THE INBOX ANSWERS. The card is gated
-// on `work_my_work`, a different query, so the header rendered while
-// `work_inbox` was still in flight and `?? notices.length` resolved to `0`.
-test("the header claims no count while the inbox is still in flight", async () => {
+// A BOUNDED BLOCK'S COUNT IS THE CEILING, NOT THE COMPANY'S. `work_my_work`
+// answers twenty rows per claim, so a bare length says `20` on a person holding
+// a hundred and thirty — which is the page size drawn as a fact about their
+// day. `pageCount` is this product's own idiom for that.
+test("a claim at the engine's bound says so rather than reporting the bound", async () => {
+  serving({
+    viewer: ada,
+    work_items: { ...noWork, total_hint: 0 },
+    work_my_work: {
+      ...emptyDay,
+      collaborating: Array.from({ length: 20 }, (_, i) => task({ key: `ENG-${i}` })),
+    },
+  });
+  mount();
+  await waitFor(() => expect(tabNamed("Collaborating")).toBeTruthy());
+  expect(tabNamed("Collaborating")?.textContent).toBe("Collaborating 20+");
+});
+
+// AND ASSIGNED ESCAPES IT, by asking the tracker's own question: `total_hint`
+// is a count over the matching set rather than over a page, so the tab says
+// what the person actually holds.
+test("the assignments are the tracker's count, not a block's page", async () => {
+  serving({
+    viewer: ada,
+    work_my_work: { ...emptyDay, assigned: [task()] },
+    work_items: { ...noWork, items: [task()], total_hint: 137 },
+  });
+  mount();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  expect(tabNamed("Assigned")?.textContent).toBe("Assigned 137");
+});
+
+// NOTHING IS CLAIMED WHILE THE READ IS IN FLIGHT. A zero on the tab a reader
+// lands on is "your day is empty", which is a claim — and it is a false one for
+// as long as the answer has not arrived.
+test("the assigned tab claims no count until the tracker answers", async () => {
   const query = vi.fn(async (what: string) =>
-    what === "work_inbox"
+    what === "work_items"
       ? new Promise(() => {})
       : what === "viewer"
         ? ada
@@ -250,68 +278,132 @@ test("the header claims no count while the inbox is still in flight", async () =
     roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "human" }],
   } as never);
   mount();
-  await waitFor(() => expect(screen.getByText("Reached you")).toBeTruthy());
-  expect(pillOn("Reached you")).toBeNull();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  expect(tabNamed("Assigned")?.textContent).toBe("Assigned ");
 });
 
-// A COLLEAGUE'S DAY IS NOT WRITTEN IN THE SECOND PERSON.
-test("a report's day says the wake reasons in the third person", async () => {
-  location.hash = "#/me?handle=rui";
-  serving({
-    viewer: ada,
-    work_my_work: { ...emptyDay, handle: "rui" },
-    work_inbox: {
-      ...emptyInbox,
-      handle: "rui",
-      notices: [notice()],
-      primary_reasons: ["assignee"],
-    },
-  });
-  mount();
-  await waitFor(() => expect(screen.getByText("Reached them")).toBeTruthy());
-  expect(screen.getByText("assignee")).toBeTruthy();
-  expect(screen.queryByText("assigned to you")).toBeNull();
-  expect(screen.getByText(/count as primary for them/)).toBeTruthy();
-});
+// ---------------------------------------------------------------------------
+// What a tab draws
+// ---------------------------------------------------------------------------
 
-// AND THE OTHER DIRECTION, so the fix cannot be "third person everywhere": that
-// is a screen telling you about somebody, on the page that is yours.
-test("your own day keeps the second person", async () => {
+// A DAY IS READ BY WHEN, not by status: every task somebody holds is in
+// progress or about to be, so a status grouping answers a question nobody
+// asked. The bands come from the ROW'S OWN overdue flag and its date.
+test("the assignments are banded by when they are due", async () => {
+  const today = new Date();
+  const later = new Date(today.getFullYear() + 1, 0, 15, 9, 0, 0);
   serving({
     viewer: ada,
     work_my_work: emptyDay,
-    work_inbox: { ...emptyInbox, notices: [notice()], primary_reasons: ["assignee"] },
+    work_items: {
+      ...noWork,
+      total_hint: 3,
+      items: [
+        task({ key: "ENG-1", overdue: true, due: "2020-01-01T09:00:00Z" }),
+        task({ key: "ENG-2", due: later.toISOString() }),
+        task({ key: "ENG-3" }),
+      ],
+    },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("Reached you")).toBeTruthy());
-  expect(screen.getByText("assigned to you")).toBeTruthy();
-  expect(screen.queryByText("assignee")).toBeNull();
-  expect(screen.getByText(/count as primary for you\./)).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("Overdue")).toBeTruthy());
+  expect(screen.getByText("Later")).toBeTruthy();
+  expect(screen.getByText("No date")).toBeTruthy();
+  // AND A BAND NOTHING IS IN IS NOT DRAWN: five headings over a person holding
+  // three tasks is the page of empty panels this screen was rebuilt to stop.
+  expect(screen.queryByText("This week")).toBeNull();
 });
 
-// THE BLOCK OF QUESTIONS IS NOT ADDRESSED TO WHOEVER IS LOOKING.
-test("questions put to somebody else are not titled as the reader's", async () => {
-  location.hash = "#/me?handle=rui";
+// A TAB WITH NOTHING IN IT STILL SAYS ITS OWN NAME. A card that vanished took
+// its name with it, so a reader could not tell "nothing here" from "this
+// product does not have that" — which a strip cannot do, because the tab is
+// still on it.
+test("an empty claim says what would be in it", async () => {
+  location.hash = "#/me?tab=unblocked";
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount();
+  await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
+  expect(screen.getByText(/has become workable for you/)).toBeTruthy();
+});
+
+// THE QUESTIONS PUT TO SOMEBODY ELSE ARE NOT WRITTEN AS THE READER'S. This is
+// the one tab where somebody else is blocked on this person rather than the
+// other way round, and it is read on a report's day as often as on your own.
+test("questions put to somebody else are not addressed to the reader", async () => {
+  location.hash = "#/me?handle=rui&tab=asks";
   serving({
     viewer: ada,
-    work_inbox: { ...emptyInbox, handle: "rui" },
+    work_items: noWork,
+    work_my_work: { ...emptyDay, handle: "rui" },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Nothing is waiting on them")).toBeTruthy());
+  expect(screen.queryByText("Nothing is waiting on you")).toBeNull();
+});
+
+// AND THE CALL THAT ANSWERS ONE IS OFFERED VERBATIM. The dashboard writes
+// nothing, so what it can offer is the gesture somebody's own assistant makes
+// on their behalf — and a model handed a comment id still has to compose the
+// call, where every one it composes differently is a round spent being refused.
+test("an ask carries the call that answers it", async () => {
+  location.hash = "#/me?tab=asks";
+  serving({
+    viewer: ada,
+    work_items: noWork,
     work_my_work: {
       ...emptyDay,
-      handle: "rui",
       asked_of_me: [
         {
           key: "ENG-9",
-          title: "t",
+          title: "Which reader?",
           comment: "c1",
-          asked_by: "ada",
+          asked_by: "rui",
           asked_at: "2031-04-16T09:00:00Z",
-          body: "why?",
-          answer_with: "x",
+          body: "parent or replies?",
+          answer_with: 'answer_work_question(task: "ENG-9", comment: "c1", body: "…")',
         },
       ],
     },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("Asked of them")).toBeTruthy());
-  expect(screen.queryByText("Asked of you")).toBeNull();
+  await waitFor(() => expect(screen.getByText("Which reader?")).toBeTruthy());
+  expect(screen.getByText(/answer_work_question\(task: "ENG-9"/)).toBeTruthy();
+});
+
+// A QUEUE SOMEBODY ELSE ORDERED IS STAMPED, and the stamp is the one thing on
+// this screen that asks for an acknowledgement: a person who starts the day on
+// work they did not choose can see who chose it.
+test("a queue a lead ordered says who ordered it", async () => {
+  location.hash = "#/me?tab=priorities";
+  serving({
+    viewer: ada,
+    work_items: noWork,
+    work_my_work: { ...emptyDay, priorities: [task({ key: "ENG-5" })] },
+    work_person: {
+      handle: "ada",
+      priorities_set_by: "rui",
+      priorities_set_at: "2031-04-16T09:00:00Z",
+      version: 1,
+      held: true,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
+  expect(screen.getByText(/Rui Santos/)).toBeTruthy();
+});
+
+// THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different
+// question from what is ON them, and it is the landing screen of this product:
+// the card that drew it here was the inbox in a narrower column with a smaller
+// bound, so a reader met the same notices twice and neither copy was the one
+// with the reason facets.
+test("what reached somebody is the Inbox, and is not drawn here", async () => {
+  const query = serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount();
+  await waitFor(() => expect(tabNamed("Assigned")).toBeTruthy());
+  expect(screen.queryByText("Reached you")).toBeNull();
+  expect(query.mock.calls.map((c) => c[0])).not.toContain("work_inbox");
+  // And the way to it is a link rather than a copy.
+  expect(screen.getByText("Inbox →")).toBeTruthy();
 });

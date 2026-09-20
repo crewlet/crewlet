@@ -19,9 +19,9 @@ import {
 // screens pick the density — and a per-seat list that drew its own columns is
 // exactly how the board came to know a task could be blocked while the
 // personal page did not.
-import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
+import { Coverage, RowList, TaskBlock, type RowChrome } from "~/components/work.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
-import { Asks, Checklist, TaskBlock } from "~/routes/me/MyWork.tsx";
+import { Asks, Checklist } from "~/routes/me/MyWork.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
@@ -1438,6 +1438,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={mine.data?.priorities ?? []}
                   now={now}
                   chrome={chrome}
+                  hrefOf={(row) => href(["work", row.key])}
                 />
                 <TaskBlock
                   title="Collaborating"
@@ -1445,6 +1446,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={mine.data?.collaborating ?? []}
                   now={now}
                   chrome={chrome}
+                  hrefOf={(row) => href(["work", row.key])}
                 />
                 <Checklist rows={mine.data?.checklist_items ?? []} />
               </>
