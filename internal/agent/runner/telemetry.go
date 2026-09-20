@@ -1036,11 +1036,18 @@ func (e emitter) publish(ctx context.Context, ev *events.Event) {
 // recording one more thing must not need every reader recompiled before that
 // thing can be seen.
 //
-// Arguments go out as a JSON STRING. The dashboard accepts either and
-// stringifies an object itself, but the string is what survives a round trip
-// through a store that keeps the payload as text: a map re-decoded there comes
-// back with its key order gone, and the ledger's own elision depends on that
-// order (the discriminator is usually the shortest value).
+// Arguments go out as a JSON STRING, and it is the string rather than the map
+// because the payload rides a store and a socket that keep it as text: a map
+// decoded and re-encoded there loses the one thing a transcript cannot make
+// up, which is a number too wide for a float64. The provider layer decodes a
+// model's arguments through json.Number precisely so that an id survives, and
+// a second pass through the default decoder is where it stops surviving.
+//
+// It is NOT about key order, which two earlier readings of this comment took
+// it for: `encodeArgs` marshals a Go map, and encoding/json sorts those, so
+// the order the model emitted is already gone before the string is formed.
+// The ledger's elision does not depend on it either — `ledger.fitArguments`
+// admits by serialised cost and breaks ties by name, and says so.
 func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	if len(execs) == 0 {
 		return nil
@@ -1165,15 +1172,21 @@ func tail(text string) string {
 // rather than to a Go-syntax dump: an argument map that will not marshal is
 // one no consumer could have parsed either way, and "%v" of it would put an
 // unquoted credential-shaped value on a screen that expects JSON.
+//
+// The encoding itself is [tools.RecordArgs], shared with the bridged-run log
+// because the two are one rule; what stays here is the EMPTY spelling. `{}`
+// rather than "" because a phase event records a call that took no arguments,
+// which is a real call, and the transcript shows the document it was made
+// with.
 func encodeArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return "{}"
 	}
-	raw, err := json.Marshal(args)
+	raw, err := tools.RecordArgs(args)
 	if err != nil {
 		return "{}"
 	}
-	return string(raw)
+	return raw
 }
 
 // traceFor is the trace an event this emitter publishes belongs to.
