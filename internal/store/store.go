@@ -954,11 +954,17 @@ func budget(busy time.Duration) txBudget {
 	return txBudget{
 		attempts: func(c txCause) int {
 			switch c {
-			case causeStaleSnapshot, causeDirtyConn:
+			case causeDirtyConn:
 				return txAttempts
 			case causeLockTimeout:
 				return lockAttempts
 			default:
+				// causeStaleSnapshot AMONG THEM, and see its own
+				// comment: no transaction this package begins can
+				// meet one any more, and the one way left to
+				// reach it is a body that writes inside a read —
+				// where re-running it repeats a write its caller
+				// declared to be a read.
 				return 0
 			}
 		},
@@ -1004,14 +1010,26 @@ func lockRetryBeat(busy time.Duration) time.Duration {
 	return time.Duration(rand.N(int64(busy / 10)))
 }
 
-// txAttempts is how many times a conflicted transaction is retried.
+// txAttempts is how many times a transaction that drew a dirty connection is
+// retried.
 //
-// Eight, and the number is measured rather than chosen: four goroutines each
-// incrementing one row twelve times — the sharpest contention this store
-// sees, since every one of them reads and writes the SAME row — still lost an
-// update at three attempts even with a jittered pause. What fails at a budget
-// this size is contention no retry loop should absorb silently anyway, and
-// the caller gets the error rather than a lost write.
+// Eight, and the anchor moved with the reason. It was measured against four
+// goroutines each incrementing one row twelve times — the sharpest contention
+// this store sees — which still lost an update at three attempts even with a
+// jittered pause. That race cannot happen now: a write transaction takes the
+// lock at BEGIN and queues for it, so the four serialise and each body runs
+// once (TestWriterAndTxShareOneWritePath asserts exactly that), and a number
+// justified by a measurement of something that no longer occurs is a number
+// nobody can re-derive.
+//
+// What it governs is [causeDirtyConn], and the bound is the POOL: each
+// attempt RETIRES the connection it drew, so the worst case is drawing every
+// dirty connection the pool can be holding before reaching a clean one. That
+// is [defaultReaderConns] plus the pins a node declares — four plus three
+// state-log domains today — and eight is the first round number above it.
+// Every attempt of it costs a reconnect and no wait, so the budget is spent
+// in milliseconds rather than in seconds; it is [lockAttempts] that bounds
+// the seconds.
 const txAttempts = 8
 
 // txRetryBeat is the jittered, WIDENING pause between attempts.
@@ -1051,8 +1069,16 @@ const (
 	causeFatal txCause = iota
 	// causeStaleSnapshot is the driver's read-then-write conflict — a
 	// commit landed in the file between this transaction's read and its
-	// write. Since [beginModeDriver] it can only reach a DEFERRED begin,
-	// which is [DB.Read]'s.
+	// write.
+	//
+	// NAMED BUT NOT RETRIED. Since [beginModeDriver] it can only reach a
+	// DEFERRED begin, which is [DB.Read]'s, and a read that only reads
+	// never upgrades its snapshot and so never meets one. The single way
+	// left to produce it is a body that WRITES inside [DB.Read], and
+	// re-running that repeats a write its caller declared to be a read —
+	// a silent double effect where the error is an accurate report of a
+	// caller's own mistake. It keeps its name so the log line says which
+	// of the four it was rather than "fatal".
 	causeStaleSnapshot
 	// causeLockTimeout is the busy timeout expiring on the write lock.
 	causeLockTimeout

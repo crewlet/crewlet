@@ -83,9 +83,9 @@ type Applier struct {
 // NewApplier builds the knowledge base's applier for one node.
 //
 // onSkillChange is called after a committed batch that touched a tool-skill
-// page. AFTER THE COMMIT, never inside the transaction: the store's
-// transactions are optimistic and a conflicted one re-runs its body, so a
-// callback inside Apply would fire twice for one record.
+// page. AFTER THE COMMIT, never inside the transaction: the store re-runs the
+// body of an attempt that failed transiently, so a callback inside Apply would
+// fire twice for one record.
 func NewApplier(nodeID string, skills SkillDetector, onSkillChange func()) *Applier {
 	return &Applier{NodeID: nodeID, skills: skills, touched: onSkillChange}
 }

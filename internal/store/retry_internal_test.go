@@ -86,35 +86,53 @@ func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 }
 
 // A LOCK WAIT IS NOT RETRIED EIGHT TIMES, which is the whole point of the
-// causes above being three facts rather than one bool.
+// causes above being four facts rather than one bool.
 //
 // The arithmetic is what matters and it is not subtle: this error is only
 // produced AFTER the full busy timeout has elapsed, so every attempt costs
-// seconds rather than microseconds. At the stale-snapshot budget that is eight
-// waits of five seconds — forty seconds of stall, with eight full replays of
-// whatever the transaction had done — and it was measured at 40.7s by a test
-// that forced the contention before this split existed.
+// seconds rather than microseconds. At the dirty-connection budget that is
+// eight waits of five seconds — forty seconds of stall, with eight full
+// replays of whatever the transaction had done — and it was measured at 40.7s
+// by a test that forced the contention before this split existed.
 //
 // The pause is asserted too, and for the same reason: a widening microsecond
 // backoff between two multi-second waits is noise, while a pause anchored to
 // the configured timeout is what de-synchronises two writers that lost
 // together.
-func TestALockWaitGetsItsOwnBudgetRatherThanTheSnapshotOne(t *testing.T) {
+func TestALockWaitGetsItsOwnBudgetRatherThanTheOtherCauses(t *testing.T) {
 	const busy = 5 * time.Second
 	b := budget(busy)
 
 	if got := b.attempts(causeLockTimeout); got != lockAttempts {
 		t.Errorf("a lock timeout gets %d attempts, want %d", got, lockAttempts)
 	}
-	if got := b.attempts(causeStaleSnapshot); got != txAttempts {
-		t.Errorf("a stale snapshot gets %d attempts, want %d — its budget is "+
-			"measured for a conflict that returns with no wait of its own", got, txAttempts)
+	if got := b.attempts(causeDirtyConn); got != txAttempts {
+		t.Errorf("a dirty connection gets %d attempts, want %d — its budget is "+
+			"bounded by the pool, and each of its attempts is a reconnect with "+
+			"no wait of its own", got, txAttempts)
 	}
-	if b.attempts(causeLockTimeout) >= b.attempts(causeStaleSnapshot) {
-		t.Errorf("a lock timeout is budgeted at least as generously as a stale "+
-			"snapshot (%d vs %d); each of its attempts costs a full busy timeout, "+
+	if b.attempts(causeLockTimeout) >= b.attempts(causeDirtyConn) {
+		t.Errorf("a lock timeout is budgeted at least as generously as a dirty "+
+			"connection (%d vs %d); each of its attempts costs a full busy timeout, "+
 			"so that is the forty-second stall this split exists to remove",
-			b.attempts(causeLockTimeout), b.attempts(causeStaleSnapshot))
+			b.attempts(causeLockTimeout), b.attempts(causeDirtyConn))
+	}
+
+	// AND A STALE SNAPSHOT IS NOT RETRIED AT ALL, which is not the same
+	// statement as it being fatal: it keeps its own name so the log line
+	// says which of the four it was. No transaction this package begins
+	// can meet one — a write holds the lock from its BEGIN and a read
+	// never upgrades — so the single way to produce it is a body that
+	// writes inside DB.Read, and re-running that repeats a write its
+	// caller declared to be a read.
+	if got := b.attempts(causeStaleSnapshot); got != 0 {
+		t.Errorf("a stale snapshot is retried %d times; the only body that can "+
+			"produce one is a write inside a read, and running it again is the "+
+			"silent double effect rather than the recovery", got)
+	}
+	if causeName(causeStaleSnapshot) == causeName(causeFatal) {
+		t.Error("a stale snapshot reports as fatal; it gets no attempts, but an " +
+			"operator still has to be able to tell the two apart in the log")
 	}
 	// The worst case a caller can be made to wait on the lock, stated as
 	// the number rather than left to be derived: one retry means the
