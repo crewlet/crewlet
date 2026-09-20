@@ -185,7 +185,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// query back every few seconds for ever.
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	out := map[string]any{
 		"items": answer.Rows,
@@ -271,7 +271,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return detail, nil
 }
@@ -326,7 +326,7 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	out := map[string]any{
 		"views": listing.Views, "read_level": listing.Level,
@@ -392,7 +392,7 @@ func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	out := map[string]any{
 		"goals": listing.Goals, "read_level": listing.Level,
@@ -427,7 +427,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return answer, nil
 }
@@ -463,7 +463,7 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return state, nil
 }
@@ -511,7 +511,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	}
 	list, err := s.Pages.List(ctx, f, fresh)
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return map[string]any{
 		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
@@ -534,7 +534,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
 	case err != nil:
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return detail, nil
 }
@@ -546,7 +546,7 @@ func (s Sources) containers(ctx context.Context, p Params) (any, error) {
 	}
 	list, err := s.Pages.Containers(ctx, fresh)
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return map[string]any{"containers": list}, nil
 }
@@ -595,29 +595,6 @@ func badParams(field, got string, allowed []string) error {
 		ErrBadParams, field, got, strings.Join(allowed, ", "))
 }
 
-// unavailableIfBehind turns a read this node could not serve YET into
-// [ErrUnavailable], leaving every other failure alone.
-//
-// THE CLASSIFICATION IS THE STATE LOG'S OWN — [statelog.ReadRefusal.Retryable]
-// — rather than a second list here. It is exactly the question the two differ
-// on: a node that is behind will catch up, and a node holding a record it
-// cannot decode will not, however long a caller waits.
-//
-// Without this every refusal reached the surface as a plain failure and was
-// rendered as `query_failed` / 500 — telling a client to give up on a screen
-// that would have worked in a few seconds, which is the one thing the 503 and
-// its Retry-After exist to avoid. The reference documented the 503 the whole
-// time; nothing produced it.
-func unavailableIfBehind(err error) error {
-	var refused *statelog.Refused
-	if !errors.As(err, &refused) || !refused.Code.Retryable() {
-		return err
-	}
-	// WRAPPED, NOT REPLACED, so the refusal's own code, detail and derived
-	// hint survive for [RetryAfter] and for the log.
-	return fmt.Errorf("%w: %w", ErrUnavailable, err)
-}
-
 // RetryAfter is how long a caller should wait before asking again, or zero
 // when nothing here can say.
 //
@@ -652,7 +629,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return listing, nil
 }
@@ -687,7 +664,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		// what a caller who typed one wrong needs.
 		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
 	case err != nil:
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return detail, nil
 }
@@ -709,7 +686,7 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return out, nil
 }
@@ -824,7 +801,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		case errors.Is(err, tracker.ErrNoTask):
 			return nil, ErrNotFound
 		case errors.Is(err, statelog.ErrUnavailable):
-			return nil, unavailableIfBehind(err)
+			return nil, err
 		}
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller
 		// asked a question this surface will not run, and the message
@@ -857,7 +834,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return out, nil
 }

@@ -43,9 +43,12 @@ const (
 	GuardStall GuardKind = "stall"
 	// GuardMaxIter means the loop exhausted its iteration cap without finishing.
 	GuardMaxIter GuardKind = "max_iter"
-	// GuardUnhandledException means an uncaught failure escaped the turn body.
-	// The breach is published before that failure propagates, so the record
-	// survives even when the turn does not.
+	// GuardUnhandledException means the turn panicked: in a phase, where the
+	// turn loop recovers it, or around one, where the dispatcher or the
+	// sandbox resume does. The trigger is recorded and acknowledged rather
+	// than redelivered, because a redelivery runs the same defect on the same
+	// input. Detail carries the panic's value and never its stack, which
+	// stays in the log.
 	GuardUnhandledException GuardKind = "unhandled_exception"
 	// GuardScheduledTimeout means a scheduled turn exceeded its wall-clock cap.
 	GuardScheduledTimeout GuardKind = "scheduled_timeout"

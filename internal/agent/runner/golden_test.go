@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -260,7 +261,7 @@ func TestGoldenAStalledTurnFailsRatherThanSpinning(t *testing.T) {
 	if res.Decision != phase.Failed {
 		t.Fatalf("decision = %s", res.Decision)
 	}
-	if res.Breach == nil || res.Breach.Kind != turn.BreachStall {
+	if res.Breach == nil || res.Breach.Kind != types.GuardStall {
 		t.Fatalf("breach = %+v, want a stall", res.Breach)
 	}
 	if res.Rounds >= settings().MaxIterations {

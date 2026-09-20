@@ -102,7 +102,7 @@ type Options struct {
 	// from CONFIGURATION rather than from anything that has happened.
 	//
 	// The projection cannot answer any of them: it holds what a seat is
-	// DOING, so it can say a seat is mid-Plan and not that the seat
+	// DOING, so it can say a seat is mid-phase and not that the seat
 	// exists. Snapshot used to ask it for the agent list anyway, merging
 	// the live overlay onto a static roster of nil — an empty list, every
 	// connect, for ever on a company whose model was not answering.

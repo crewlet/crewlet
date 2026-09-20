@@ -432,6 +432,76 @@ func TestUnknownTypeSurvivesIntact(t *testing.T) {
 	}
 }
 
+// retiredTypes are wire types an earlier build registered and this one does
+// not. Each one had no publisher and was removed from the registry, and every
+// one of them can still be on the wire: a node of that build publishes it
+// during a rolling upgrade, and a row an older build wrote is read back from
+// the store for as long as retention keeps it.
+var retiredTypes = []string{
+	"agent_reassigned", "role_updated",
+	"task_created", "task_started", "task_completed", "task_failed", "task_delegated",
+	"message_sent", "a2a_message_delivered",
+	"document_created", "document_updated",
+}
+
+// A RETIRED TYPE IS AN UNKNOWN TYPE, AND STAYS A LOSSLESS ONE.
+//
+// Removing a type from the registry is only safe because the envelope treats a
+// type this build does not know as data rather than as an error, which is the
+// invariant [TestUnknownTypeSurvivesIntact] pins with an invented name. This
+// pins it for the names that actually left, and pins the other half of the
+// retirement: none of them may come back registered or placed under a
+// category. A name reused for a different payload would try to decode every
+// row the old build wrote into a shape it never had.
+func TestARetiredTypeStillSurvivesAPeerThatStillPublishesIt(t *testing.T) {
+	t.Parallel()
+	for _, retired := range retiredTypes {
+		t.Run(retired, func(t *testing.T) {
+			t.Parallel()
+			if _, ok := events.PayloadFor(retired); ok {
+				t.Fatalf("%q is registered again: rows an older build wrote under "+
+					"it would decode into a payload they were never written as", retired)
+			}
+			if category, ok := events.Category(retired); ok {
+				t.Errorf("%q is placed under %q, so a filter offers a value nothing "+
+					"in this build publishes", retired, category)
+			}
+			raw := []byte(`{
+				"id":"6f1c3d2e-0000-4000-8000-0000000000aa",
+				"type":"` + retired + `",
+				"timestamp":"2026-08-01T09:08:07.654321Z",
+				"source":"engine",
+				"trace_id":"aaaa1111aaaa1111aaaa1111aaaa1111",
+				"span_id":"bbbb2222bbbb2222","parent_span_id":"",
+				"delegation_depth":0,"parent_turn_id":"",
+				"task_id":"T-1","agent_id":"a-1","role":"Engineer",
+				"detail":{"reason":"written by the build that published it"}
+			}`)
+			var event events.Event
+			if err := json.Unmarshal(raw, &event); err != nil {
+				t.Fatalf("a retired type failed to decode, so a mixed fleet drops it: %v", err)
+			}
+			if event.Data != nil || event.Type != retired {
+				t.Fatalf("decoded %q with a typed body %#v, want the envelope alone", event.Type, event.Data)
+			}
+			out, err := json.Marshal(&event)
+			if err != nil {
+				t.Fatalf("re-marshal: %v", err)
+			}
+			var before, after map[string]any
+			if err := json.Unmarshal(raw, &before); err != nil {
+				t.Fatalf("decode source: %v", err)
+			}
+			if err := json.Unmarshal(out, &after); err != nil {
+				t.Fatalf("decode result: %v", err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Errorf("re-publishing %q was lossy\n got: %v\nwant: %v", retired, after, before)
+			}
+		})
+	}
+}
+
 func TestFailed(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

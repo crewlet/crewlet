@@ -110,6 +110,20 @@ type Dispatcher struct {
 	// care about the policy wants.
 	Conversation func() config.ConversationSession
 
+	// Identify names the seat a handle is, as the role name and agent id
+	// every seat-addressed event carries.
+	//
+	// FOR ONE RECORD ONLY: the guard breach a panic that escaped a turn's
+	// own frames publishes. The live projection keys a seat by ROLE, so a
+	// breach addressed by handle alone would move no seat to AFK, and the
+	// turn's own telemetry, which does know the role, is exactly what did
+	// not run.
+	//
+	// Nil publishes no breach, which is the honest answer for a dispatcher
+	// that cannot say which seat it is: the panic is still logged, the
+	// trigger still recorded and the delivery still settled.
+	Identify func(handle string) (role, agentID string)
+
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
 }
@@ -219,7 +233,48 @@ func (r Request) Ask() []*events.Event {
 //     that is a different question from "did it fail", and why answering it
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
-func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) queue.Result {
+//
+// NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
+// loop and comes back as an ordinary broken turn; anything else that panics
+// between the broker and the loop, in the stages below or in the turn's own
+// set-up and tear-down, is recovered here. Letting it through handed it to the
+// queue backend's handler guard, which NAKs a panic, so a defect was run again
+// up to the whole delivery budget. See [Dispatcher.recoverPanic].
+func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) (result queue.Result) {
+	held := holding{events: evs}
+	defer func() {
+		if panicked := turn.Recovered(recover()); panicked != nil {
+			result = d.recoverPanic(ctx, handle, held.events, panicked)
+		}
+	}()
+	return d.dispatch(ctx, handle, evs, &held)
+}
+
+// holding is what one delivery is still answerable for, narrowed as the stages
+// of [Dispatcher.dispatch] settle events or hand them back to the queue.
+//
+// A RECOVERED PANIC SETTLES THIS, NOT THE DELIVERY. Recording a constituent
+// as worked is what stops its copies ever running, so recording the whole
+// delivery would be wrong in three directions. The tail of a partition that
+// would not merge is requeued before its head runs, and a panic in the head's
+// turn would mark the tail worked while its copies sat on the queue waiting to
+// be: the exact loss [inbox.Degraded] keys the head apart to prevent. A park
+// hands the WHOLE delivery back the same way. And a constituent the completion
+// ledger had already dropped would be put on the record a second time, as
+// panicked, beside the record saying it had already been worked.
+//
+// EVERY NARROWING HAPPENS BEFORE THE REQUEUE IT DESCRIBES, never after. A
+// requeue publishes one event at a time, so a panic inside one leaves some
+// copies on the queue and the rest unpublished; narrowed afterwards, this
+// would still be claiming the published ones at the moment they stopped being
+// its to claim.
+type holding struct{ events []*events.Event }
+
+// dispatch is [Dispatcher.Dispatch]'s body, separated so the recovery around
+// it is one deferred call rather than a frame every return has to pass. It
+// narrows held at each point where the delivery stops being answerable for an
+// event.
+func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.Event, held *holding) queue.Result {
 	screening := inbox.Screen(d.conditions(handle), evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
@@ -237,7 +292,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 				return queue.Nak(fmt.Errorf("engine: pause %s: %w", handle, err))
 			}
 		}
-		return d.park(ctx, handle, screening)
+		return d.park(ctx, handle, screening, held)
 	case inbox.ActionPark:
 		if screening.AwaitingSandbox && d.answered(ctx, handle, screening.Events) {
 			// The delivery WAS the answer, and the resume it triggered has
@@ -245,7 +300,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 			// the question it just answered.
 			return queue.Ack()
 		}
-		return d.park(ctx, handle, screening)
+		return d.park(ctx, handle, screening, held)
 	}
 
 	surviving := d.dropWorked(ctx, handle, screening.Events)
@@ -260,6 +315,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	// arrivals and one turn, and nothing at all distinguishes "the agent
 	// never answered" from "the agent already answered". Emitted here
 	// because here is the only frame that holds both lists.
+	// The dropped constituents were settled by the turn that worked them.
+	held.events = surviving
 	d.noteSkipped(ctx, handle, screening.Events, surviving)
 	if len(surviving) == 0 {
 		return queue.Ack()
@@ -297,6 +354,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 				return queue.Nak(fmt.Errorf(
 					"engine: %s: no requeue path for a partition that would not merge", handle))
 			}
+			// The tail's copies are the queue's the moment they are
+			// published, and they are published one at a time: narrowed
+			// AFTER the call, a panic part-way through it would record a
+			// tail whose copies are already waiting to run. Only the head
+			// is ever this delivery's to settle.
+			held.events = head
 			if err := d.Park(ctx, handle, tail); err != nil {
 				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
@@ -370,21 +433,37 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {
-		// A broken phase, not a failed turn — but WHICH broken phase
-		// decides what to do with the delivery, and `err != nil` does not
-		// say. See [Abandon].
-		if !result.Acted {
+		// A broken phase, not a failed turn. WHICH broken phase decides
+		// what to do with the delivery, and `err != nil` does not say:
+		// [turn.Abandon] is the one rule, shared with the sandbox resume.
+		reason, abandon := turn.Abandon(result, err)
+		if !abandon {
 			// THE SAME CONDITION THE SCREENING ABOVE REFUSES, detected a
 			// phase later: the seat's grant moved while the turn was
 			// running and its fence closed. That is a healthy delivery a
 			// successor is already entitled to, not a broken turn, so it
-			// gets the disposition the screening gives it — deferred,
-			// which hands it on at zero accrued redeliveries and quiesces
-			// this attachment, rather than naked, which spends one of the
-			// trigger's twenty-five deliveries on a node that has nothing
-			// to do with the seat any more. Detected in two places because
-			// the window is open the whole length of a turn; answered in
-			// one way, because it is one condition.
+			// gets the disposition the screening gives it, deferred
+			// rather than naked. Detected in two places because the
+			// window is open the whole length of a turn; answered in one
+			// way, because it is one condition.
+			//
+			// WHAT THE DEFERRAL BUYS IS SPEED AND SILENCE, NOT A FREE
+			// DELIVERY. On the shipped backend it IS a Nak and spends one
+			// of the trigger's twenty-five exactly as a failure does,
+			// which is why that budget is 25 rather than the ~10 a broker
+			// with a free handoff would need; only the in-memory twin
+			// hands a deferral back uncounted, and [queue.OutcomeDefer]
+			// states the difference rather than pretending there is none.
+			// What it does buy is a return in about a millisecond instead
+			// of the failure path's backoff, so the seat's new owner sees
+			// the delivery now rather than waiting out a delay this node
+			// earned, and a quiesced attachment, so this process stops
+			// fetching further work it has equally lost the right to do.
+			//
+			// BELOW [turn.Abandon] rather than above it: a turn that
+			// panicked or that proved an outward write must not be run
+			// again wherever the seat now lives, and handing it on would
+			// do exactly that.
 			if errors.Is(err, seat.ErrSeatMoved) {
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
@@ -394,83 +473,151 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 				return queue.Defer("the seat moved to another node mid-turn")
 			}
 			// Nothing this turn did can be proven to have left the
-			// engine, so a redelivery really does run it cleanly. This
-			// is the sentence the old comment claimed for every failure.
+			// engine, and nothing about the failure says it will recur,
+			// so a redelivery really does run it cleanly.
 			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
-		return d.abandon(ctx, handle, req, err)
+		return d.abandon(ctx, handle, req, err, reason)
 	}
 	d.recordWorked(ctx, handle, req, result)
 	return queue.Ack()
 }
 
-// abandon stops redelivering a trigger whose turn broke AFTER it had already
-// reached outside the engine.
+// abandon stops redelivering a trigger whose turn must not run again.
 //
 // THE REDELIVERY IS THE HARM HERE, not the failure. A broken phase used to NAK
-// unconditionally, on the premise — written into the comment this replaces —
-// that "nothing was recorded, so a redelivery runs it cleanly". That premise
-// holds for the two writes [workkey] guards and for nothing else: every MCP
-// write, every chat post, every `a2a_ask` (a fresh channel per call) and every
-// `run_sandbox` is keyed on nothing at all. A deterministic mid-turn failure
-// therefore replayed round one's external effects up to the broker's whole
-// delivery budget — 25 attempts a second apart — and the seat's own colleagues,
-// issue trackers and billed boxes wore every one of them.
+// unconditionally, on the premise that "nothing was recorded, so a redelivery
+// runs it cleanly". That premise holds for the two writes [workkey] guards and
+// for nothing else: every MCP write, every chat post, every `a2a_ask` (a fresh
+// channel per call) and every `run_sandbox` is keyed on nothing at all. A
+// deterministic mid-turn failure therefore replayed round one's external
+// effects up to the broker's whole delivery budget: twenty-five attempts spaced
+// by a backoff that doubles from a second to thirty, so about ten minutes of
+// them, and the seat's own colleagues, issue trackers and billed boxes wore
+// every one.
 //
 // So the trigger is recorded and acked. That LOSES the rest of the turn, which
-// is the honest price and the reason this needs proof rather than suspicion:
-// the record is [turn.Acted], which counts only calls a tool's own annotations
-// prove reached outside. Everything else — a provider that never answered, a
-// runner that could not be built, a refused budget — proves nothing and keeps
-// its retry. A seat handed to another node mid-turn keeps its retry too, but
-// as a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence]
-// for what detects it.
+// is the honest price and the reason it needs a reason rather than suspicion:
+// [turn.Abandon] gives one only for a turn whose record proves it reached
+// outside, or for a panic, which runs the same defect again however many times
+// it is delivered. Everything else (a provider that never answered, a runner
+// that could not be built, a refused budget) proves nothing and keeps its
+// retry. A seat handed to another node mid-turn keeps its retry too, but as a
+// DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
+// what detects it.
 //
-// It is not silent. The turn has already published its own completion marked
-// failed (see [Engine.publishTurnCompleted], which fires on the error path),
-// and this adds the half that record cannot carry: that the trigger behind it
-// will not come back. Both halves name the same seat and the same work key.
-func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, cause error) queue.Result {
+// It is not silent. A turn that ran has already published its own completion
+// marked failed (see [Engine.publishTurnCompleted], which fires on the error
+// path), and this adds the half that record cannot carry: that the trigger
+// behind it will not come back, and why. Both halves name the same seat and the
+// same work key.
+func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, cause error, reason string) queue.Result {
 	// BOTH IDENTITIES. This record is paired with the turn's own completion
 	// event (see [Engine.publishTurnCompleted]) and the two are joined by a
 	// reader: the completion names the RUN, so a line carrying only the work
 	// key stopped joining it the moment the two stopped being one value.
-	log.ErrorContext(ctx, "turn_abandoned_after_acting", "seat", handle,
-		"run_id", req.RunID, "work_key", req.WorkKey, "error", cause.Error(),
-		"detail", "the turn broke after it had already written outside the engine, "+
-			"so its trigger is recorded rather than redelivered — a retry would "+
-			"repeat those writes and cannot take them back")
+	log.ErrorContext(ctx, "turn_abandoned", "seat", handle,
+		"run_id", req.RunID, "work_key", req.WorkKey, "reason", reason,
+		"error", cause.Error(),
+		"detail", "the trigger is recorded rather than redelivered")
 
 	// The completion rows ONLY, never RecordSession. A broken turn has no
 	// reply to file: its artifact is whichever round closed last, and
 	// writing that to the thread as this turn's answer is the bug
 	// [Dispatcher.RecordSession]'s own doc commemorates for the suspended
-	// case — the next turn reads it back as what this one did.
+	// case, because the next turn reads it back as what this one did.
 	if d.Completions != nil {
 		for _, ev := range req.Events {
-			if !d.ledgered(ev.Type) {
+			if ev == nil || !d.ledgered(ev.Type) {
 				continue
 			}
 			key := workkey.Derive([]string{ev.ID.String()})
 			if err := d.Completions.Record(ctx, handle, key, "", d.now()); err != nil {
 				log.WarnContext(ctx, "abandoned_trigger_not_recorded", "seat", handle,
 					"error", err, "detail", "the trigger may be redelivered and "+
-						"repeat this turn's outward writes")
+						"repeat this turn's work")
 			}
 		}
 	}
-	d.noteAbandoned(ctx, handle, req.Events, cause)
+	d.noteAbandoned(ctx, handle, req.Events, cause, reason)
 	return queue.Ack()
+}
+
+// recoverPanic settles a delivery whose handling panicked outside the turn
+// loop.
+//
+// ACKED AND RECORDED, never NAKed and never deferred, for the reason
+// [turn.Abandon] gives for every panic: a redelivery runs the same defect on
+// the same input, and a defer would only hand that defect to a peer running the
+// same build. What the panic cost is put on the record instead: the stack in
+// the log, the unhandled-exception guard on the seat, so it renders AFK with a
+// cause rather than as whatever it was last doing, and a skipped-trigger record
+// per event saying it will not come back.
+//
+// evs is what the delivery still held when it panicked (see [holding]), not
+// everything it arrived with. The work key is recomputed from it, because the
+// panic may have happened before the frame that derives it ran; it is the same
+// derivation, so the breach and the skipped records name the key a completed
+// turn would have carried.
+func (d *Dispatcher) recoverPanic(ctx context.Context, handle string, evs []*events.Event,
+	panicked *turn.PanicError,
+) queue.Result {
+	log.ErrorContext(ctx, "dispatch_panicked", "seat", handle, "events", len(evs),
+		"panic", panicked.Value, "stack", panicked.Stack)
+	req := Request{Handle: handle, Events: evs, WorkKey: inbox.WorkKeyFor(evs, d.ledgered)}
+	d.noteBreach(ctx, handle, req, panicked)
+	return d.abandon(ctx, handle, req, panicked, turn.AbandonedPanicked)
+}
+
+// noteBreach publishes the unhandled-exception guard for a panic that no
+// turn's own telemetry reported.
+func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request, panicked *turn.PanicError) {
+	if d.Observe == nil || d.Identify == nil {
+		return
+	}
+	role, agentID := d.Identify(handle)
+	if rec := panicBreach(role, agentID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
+		d.Observe(ctx, rec)
+	}
+}
+
+// panicBreach is the unhandled-exception guard for a panic no turn's own
+// telemetry reported, or nil when there is no seat to address it to.
+//
+// One builder for the two frames that need it, the dispatcher and the sandbox
+// resume, so a breach reads the same whichever path the panic took.
+func panicBreach(role, agentID, turnID string, trace events.TraceContext,
+	panicked *turn.PanicError,
+) *events.Event {
+	if role == "" {
+		// A handle this company does not name has no seat to put AFK, and
+		// a breach addressed to nobody moves nothing.
+		return nil
+	}
+	rec := events.New(types.TurnGuardBreach{
+		Agent:    agentID,
+		RoleName: role,
+		Kind:     types.GuardUnhandledException,
+		Detail:   events.ClipDiagnostic(panicked.Error()),
+		TurnID:   turnID,
+	}, trace)
+	// SOURCED AS THE SEAT, as every turn-level event is (see
+	// [Engine.publishEvent]): a consumer with no other attribution renders
+	// an unsourced event as "system", and this one is about the seat.
+	rec.Source = role
+	return rec
 }
 
 // noteAbandoned puts each abandoned constituent on the record.
 //
 // [types.TurnTriggerSkipped] rather than a type of its own: it already means
 // "this trigger will not be worked, and here is why", and its Reason is the
-// field that says which why. The FAILURE is already red in the feed — the
-// turn's own completion carries it — and a second failure event for one turn
-// would double-count it in every projection that reads them.
-func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*events.Event, cause error) {
+// field that says which why. The FAILURE is already red in the feed, carried by
+// the turn's own completion or by the guard breach, and a second failure event
+// for one turn would double-count it in every projection that reads them.
+func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*events.Event,
+	cause error, reason string,
+) {
 	if d.Observe == nil {
 		return
 	}
@@ -482,8 +629,8 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 			AgentHandle: handle,
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
-			Reason: "the turn broke after writing outside the engine, so it was " +
-				"not redelivered: " + textcut.Ellipsis(cause.Error(), 200),
+			Reason: reason + ", so it was not redelivered: " +
+				textcut.Ellipsis(cause.Error(), 200),
 		}, triggerTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
@@ -528,7 +675,14 @@ func first(evs []*events.Event) *events.Event {
 	return nil
 }
 
-func (d *Dispatcher) park(ctx context.Context, handle string, s inbox.Screening) queue.Result {
+func (d *Dispatcher) park(ctx context.Context, handle string, s inbox.Screening, held *holding) queue.Result {
+	// NARROWED BEFORE THE REQUEUE, not after it. [Engine.park] publishes one
+	// event at a time, so a panic inside it leaves some copies on the queue
+	// and the rest unpublished — and recording the delivery would then mark
+	// the published ones worked, which is the one thing that stops them ever
+	// running. The unpublished ones are lost to the ack either way; the
+	// published ones are only lost if this frame claims them.
+	held.events = nil
 	if d.Park == nil {
 		// No park path wired. Acking would drop the work; NAK returns it
 		// to the broker, which is the only honest answer.
@@ -981,7 +1135,7 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 //
 // DERIVED FROM THE TRIGGER, before the turn starts and from nothing the model
 // says. It is the half of the delivery question a model cannot get wrong: the
-// old engine asked the planner to declare its own intent, and a turn that
+// old engine asked the model to declare its own intent, and a turn that
 // declared `skip` on a direct @mention read to the person who sent it exactly
 // like the message never arriving.
 //

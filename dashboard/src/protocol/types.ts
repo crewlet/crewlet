@@ -3459,10 +3459,12 @@ export type QueryErrorCode =
    *  the engine's — retrying sends the same bad request again. */
   | "bad_params"
   | "not_found"
-  /** This node understood the question and cannot answer it YET — a
-   *  projection still catching up after a restart or a fresh join. A screen
-   *  says "ask again in a moment", never "there is nothing": the second is an
-   *  answer a person acts on. */
+  /** This node understood the question and cannot answer it YET: a
+   *  projection still catching up after a restart or a fresh join, or a
+   *  coordination store it could not reach. A screen asks again in a moment
+   *  (`useQuery` does so itself), and never says "there is nothing": the
+   *  second is an answer a person acts on. A source this node does not have
+   *  at all is `unknown_query`, which waiting never changes. */
   | "unavailable"
   | "timeout"
   | "closed";

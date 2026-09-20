@@ -192,8 +192,8 @@ func TestAConfiguredScopeNarrowsTheQuery(t *testing.T) {
 	}
 }
 
-// AN AUTO-DRAFTED SKILL MUST NOT REACH A PLANNER during its review window,
-// and the exclusion has TWO tests because the first can silently stop
+// AN AUTO-DRAFTED SKILL MUST NOT REACH A SEAT'S SEARCH during its review
+// window, and the exclusion has TWO tests because the first can silently stop
 // matching.
 func TestAutoDraftsAreHiddenByAncestorAndByTitle(t *testing.T) {
 	t.Parallel()
@@ -220,12 +220,13 @@ func TestAutoDraftsAreHiddenByAncestorAndByTitle(t *testing.T) {
 		Text: "deploy", Org: o, Seat: &org.Role{Name: "SWE"},
 	})
 	if len(hits) != 1 || hits[0].Title != "Real page" {
-		t.Fatalf("an unreviewed draft reached the planner: %+v", hits)
+		t.Fatalf("an unreviewed draft reached a seat's search: %+v", hits)
 	}
 }
 
-// THE SKILLS SPACE IS MACHINERY, not knowledge: a planner told to read a
-// tool skill would follow an instruction written for a different phase.
+// THE SKILLS SPACE IS MACHINERY, not knowledge: a tool skill is injected into
+// a phase by the engine, and a seat handed one as a search hit would follow it
+// as an instruction.
 func TestTheSkillsSpaceIsNotKnowledge(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t, func(string) (int, string) {

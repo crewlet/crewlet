@@ -42,13 +42,13 @@ type Searcher struct {
 	forSeat SeatClient
 
 	// skillsSpace holds the tool-skill pages. They are machinery rather
-	// than knowledge, and a planner told to read one would follow an
+	// than knowledge, and an agent told to read one would follow an
 	// instruction written for a different phase.
 	skillsSpace string
 
 	// siteURL is the human base for the links on a hit. Empty omits them:
 	// a Cloud gateway address is not somewhere a browser goes, and a link
-	// that 404s costs a planner a round to discover.
+	// that 404s costs an agent a round to discover.
 	siteURL string
 }
 
@@ -115,7 +115,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
-			"detail", "the Plan phase gets an empty knowledge block for this turn")
+			"detail", "the turn gets an empty knowledge block")
 		return nil
 	}
 	return s.hits(pages, q)

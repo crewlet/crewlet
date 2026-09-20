@@ -2012,7 +2012,11 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
   saying which. `bad_params` is the one that names the SCREEN as the fault: the
   engine understood the question and refused it, so retrying sends the same bad
-  request again.
+  request again. `unavailable` is the opposite: the node will answer in a
+  moment, so `useQuery` asks again on its own rather than leaving a person to
+  reload. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  code added to the union without a sentence here is a compile error, and a Go
+  test in `internal/api/stream` pins that union to the codes the engine sends.
 - **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
   are three-valued, and a count this node could not read comes back `null`,
   never `0`; `inbound` is a plain count whose unknown-ness rides on the

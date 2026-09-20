@@ -34,7 +34,7 @@ func (Prompt) Source() string { return Backend }
 //
 // A COMMENT IS NOT IN HERE, and that is the distinction the set encodes: a
 // note's body IS what was said, so the trigger is the context and the
-// Plan-phase filters have something real to filter against.
+// turn-start filters have something real to filter against.
 var reconEvents = map[string]bool{
 	MRReview:       true,
 	MRAssigned:     true,

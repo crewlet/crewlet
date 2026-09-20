@@ -18,8 +18,8 @@ import (
 
 // BuildIdentitySection renders the professional identity for the executor.
 //
-// Plan needs enough to decide *what* to do: role, company, unit, goal,
-// manager, and direct reports (for delegation decisions). The long-form
+// The executor needs enough to decide *what* to do: role, company, unit,
+// goal, manager, and direct reports (for delegation decisions). The long-form
 // backstory / guidelines / team goals render in the role-profile and
 // unit-context sections instead.
 //
@@ -54,12 +54,13 @@ func BuildIdentitySection(s Seat) []string {
 	return parts
 }
 
-// BuildIdentityLine is the ultra-compact one-line identity for the Execute,
-// Review and Onboarding phases.
+// BuildIdentityLine is the ultra-compact one-line identity for the review and
+// onboarding phases.
 //
-// Those phases already carry the plan (and, for Review, Execute's artifact)
-// in the user message, so the full reporting line and unit context are not
-// needed. One sentence is enough to ground the model in "who is writing this".
+// Both carry what they are about in the user message (for review, the round's
+// own account and the executor's artifact), so the full reporting line and
+// unit context are not needed. One sentence is enough to ground the model in
+// "who is writing this".
 func BuildIdentityLine(s Seat) string {
 	if !s.ok() {
 		return ""
@@ -82,8 +83,8 @@ func seatLabel(r *org.Role) string {
 
 // managerLabel and reportsLabel keep both identity renderings answering the
 // same way for a top-level seat — "None (top-level)", never a bare "none".
-// An executor that read its own chart differently from its planner would be a
-// difference no assertion in a phase test is looking for.
+// An executor that read its own chart differently from its reviewer would be
+// a difference no assertion in a phase test is looking for.
 
 func managerLabel(manager *org.Role) string {
 	if manager == nil {
@@ -248,7 +249,7 @@ func BuildHumanColleaguesNote(s Seat) []string {
 // BuildOrgMissionVisionSection renders org-wide mission + vision, when set.
 //
 // Both fields are short by convention (a sentence or two each); inlining is a
-// token-cheap way to keep them in front of the planner without a knowledge
+// token-cheap way to keep them in front of the executor without a knowledge
 // round-trip.
 func BuildOrgMissionVisionSection(s Seat) []string {
 	if !s.ok() || (s.Org.Mission == "" && s.Org.Vision == "") {
@@ -267,7 +268,7 @@ func BuildOrgMissionVisionSection(s Seat) []string {
 // BuildPoliciesSection inlines the full company-policy text.
 //
 // Policies are short by convention — a couple of sentences each — so the full
-// text is inlined rather than truncated to one-liners, keeping the planner's
+// text is inlined rather than truncated to one-liners, keeping the executor's
 // context complete.
 func BuildPoliciesSection(s Seat) []string {
 	if !s.ok() || len(s.Org.Policies) == 0 {

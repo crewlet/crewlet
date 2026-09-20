@@ -303,10 +303,10 @@ func summarise(brief string) string {
 // and the hint together, so the agent does not spend rounds rediscovering
 // that git auth is already wired.
 //
-// There is no success-criteria section any more. It came from the planner's
-// declared criteria, and with one loop there is no separate plan to declare
-// them: what "done" means is the executor's own brief, written by the frame
-// that will read the answer.
+// There is no success-criteria section any more. It came from the planning
+// phase's declared criteria, and with one phase deciding and acting there is
+// no separate plan to declare them: what "done" means is the executor's own
+// brief, written by the frame that will read the answer.
 func buildBrief(req LaunchRequest) string {
 	var b strings.Builder
 	b.WriteString(req.Brief)

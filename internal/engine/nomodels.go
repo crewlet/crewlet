@@ -48,9 +48,11 @@ import (
 //
 // A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
 // two subsystems gating one inbox cannot release each other's hold, which
-// means the pause and the release must spell it identically. Deriving it from
-// the human-readable reason would make an edit to a log message silently
-// strand every seat that was parked under the old wording.
+// means the pause and the release must spell it identically. It is the one
+// reason the engine takes today: a seat parked on a sandbox run holds nothing,
+// because the dispatcher requeues its deliveries instead. Deriving it from the
+// human-readable reason would make an edit to a log message silently strand
+// every seat that was parked under the old wording.
 const pauseReasonNoTurnEngine = "no_turn_engine"
 
 // modelHolds records the seat inboxes this client paused for want of a model.

@@ -115,8 +115,8 @@ func TestADeletedIssueIsToldToStop(t *testing.T) {
 
 // THE RECON FLAG AND THE FETCH BLOCK ANSWER ON ONE CONDITION.
 //
-// The flag tells the Plan phase not to bother filtering against a pointer,
-// and the block is what makes the pointer followable. A flag set without the
+// The flag tells the turn-start prefetch not to bother filtering against a
+// pointer, and the block is what makes the pointer followable. A flag set without the
 // block sends a seat looking with nothing to look for.
 func TestReconAndTheFetchBlockAgree(t *testing.T) {
 	t.Parallel()

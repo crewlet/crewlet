@@ -237,7 +237,7 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	if !strings.Contains(n.Body, "How to triage") || !strings.Contains(n.Body, "please look") {
 		t.Fatalf("the rendered trigger is %q", n.Body)
 	}
-	// A webhook naming a thing-that-changed is a POINTER: the Plan-phase
+	// A webhook naming a thing-that-changed is a POINTER: the turn-start
 	// relevance filters skip their auxiliary model call, because filtering
 	// against a bare pointer is near-guaranteed to be worth nothing.
 	if !n.ContextRequiresRecon {

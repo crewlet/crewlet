@@ -18,8 +18,8 @@
 // # What it is not
 //
 // It is not a search engine. There is no phrase query, no proximity, no
-// fielded query language and no spelling correction, because the caller is a
-// planner writing a keyword line and a person typing into a box — and every
+// fielded query language and no spelling correction, because the caller is an
+// agent writing a keyword line and a person typing into a box, and every
 // one of those features is a promise about a query grammar this seam
 // deliberately does not have (see [knowledge.Query]: plain text, never a
 // backend fragment). What it does have is the part that decides whether a
@@ -270,7 +270,7 @@ func Score(idf float64, p Posting, c Corpus) float64 {
 // Snippet is the best window of body text for a hit, cut to limit bytes.
 //
 // It centres on the first query term the body actually contains, because the
-// alternative — the document's opening — shows a planner the page's preamble
+// alternative (the document's opening) shows an agent the page's preamble
 // rather than the sentence that made it a hit, and a snippet that does not
 // contain the search term reads as a wrong result even when the ranking is
 // right.

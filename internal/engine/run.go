@@ -338,8 +338,8 @@ type Engine struct {
 	seatTools map[string]*tools.Registry
 
 	// embeddings is the company's vector backend, swapped on apply. An
-	// atomic pointer rather than a mutex because it is read on the Plan
-	// phase's hot path and written only by an apply: the read must not
+	// atomic pointer rather than a mutex because it is read on the turn's
+	// prefetch hot path and written only by an apply: the read must not
 	// queue behind anything, and there is nothing else to hold a lock
 	// across.
 	embeddings atomic.Pointer[embeddings.Embedder]
@@ -1001,6 +1001,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}
+	if d.Identify == nil {
+		// Read off the LIVE epoch at the moment of the panic, like the
+		// policies above: the dispatcher is built once and an apply can
+		// rename or remove the seat after it.
+		d.Identify = func(handle string) (string, string) {
+			return seatIdentity(e.Company(), handle)
+		}
+	}
 	// THE TWO LEDGERS COME FROM DIFFERENT PLACES, and the split is the
 	// point. Completions must be agreed across the FLEET — a redelivery
 	// that lands on a peer has to find the record, or the turn runs twice
@@ -1512,10 +1520,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		return turn.Result{}, err
 	}
 
-	// BEFORE Plan, on its own budget. A seat's first ever turn used to run
-	// onboarding inside Plan and could spend the whole plan budget reading
-	// pages — the turn most likely to produce no plan at all was the one
-	// where a seat had never planned before.
+	// BEFORE THE EXECUTOR, on its own budget. A seat's first ever turn used
+	// to onboard inside the phase that decides what to do, and could spend
+	// that phase's whole budget reading pages: the turn least likely to get
+	// any work done was the one where a seat had never worked before.
 	//
 	// A failure here does NOT fail the turn: the seat is un-onboarded, which
 	// is the state it was already in, and refusing to work over it would

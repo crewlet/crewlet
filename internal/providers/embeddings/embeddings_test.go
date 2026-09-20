@@ -454,7 +454,7 @@ func TestTheFakeIgnoresCase(t *testing.T) {
 // NOTHING RETRIES HERE. The SDK's defaults fire on the whole 429/5xx set,
 // and this caller's answer to a failure is "no similarity search" — cheaper
 // than any retry, and it belongs to the caller rather than being spent on
-// its behalf inside a Plan-phase prefetch a person is waiting on.
+// its behalf inside a turn-start prefetch a person is waiting on.
 func TestAFailedCallIsNotRetried(t *testing.T) {
 	t.Parallel()
 	s := fakeAPI(t, 8)

@@ -13,8 +13,8 @@
 // which schedules became due since the previous tick, resolves each due fire's
 // runner seats, CLAIMS the fire in the dispatch ledger, and publishes an
 // ordinary TaskAssigned into the runner's inbox. Nothing about the agent
-// runtime path differs from work that arrived any other way — a scheduled turn
-// runs Plan → Execute → Review like any other, and the whole learning loop
+// runtime path differs from work that arrived any other way: a scheduled turn
+// runs its executor and reviewer like any other, and the whole learning loop
 // runs on it. Periodic work is more worth learning from, not less.
 //
 // # The three things that carry the correctness

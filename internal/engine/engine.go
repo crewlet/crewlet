@@ -26,10 +26,10 @@ import (
 //
 // EVERYTHING A TURN READS COMES FROM ONE OF THESE, taken by value at the top
 // of the turn. Reading each setting from a live cell on every access lets a
-// hot reload landing mid-turn change the round cap between Plan and Execute —
-// and then needs a context-local "pin" to paper over it. An epoch that
-// is replaced rather than mutated makes that unrepresentable: an in-flight turn
-// holds the one it started under until it ends.
+// hot reload landing mid-turn change the round cap between the executor and
+// the reviewer, and then needs a context-local "pin" to paper over it. An
+// epoch that is replaced rather than mutated makes that unrepresentable: an
+// in-flight turn holds the one it started under until it ends.
 type Company struct {
 	Config *config.Company
 	Org    *org.Organization
@@ -281,10 +281,11 @@ type RunnerInput struct {
 	// turn's trigger and frozen before the runner is built.
 	//
 	// There is no re-fetch seam beside it any more. One existed for the
-	// thin-trigger case — a pointer the turn-start search could not use,
-	// re-searched between Plan and Execute on the plan summary — and with
-	// one loop there is nothing between the phases to hang it on. The
-	// executor asks instead, with search_knowledge, over the same seam.
+	// thin-trigger case: a pointer the turn-start search could not use,
+	// re-searched between the planning and acting phases on the plan the
+	// first had written. With one phase deciding and acting there is
+	// nothing between them to hang it on, and the executor asks instead,
+	// with search_knowledge, over the same seam.
 	Context prefetch.Blocks
 
 	// Reply says who is waiting for this turn, derived from the trigger

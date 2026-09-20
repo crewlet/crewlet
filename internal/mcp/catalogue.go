@@ -9,11 +9,11 @@ import "strings"
 // meta-tools — MetaTool, ListServerTools, ActivateTool and their helpers,
 // some 280 lines. Nothing outside this package ever called them: the live
 // pair is internal/agent/runner's listMCPTools and activateTool, which the
-// runner registers on the Plan and Execute surfaces. Two implementations of
-// one contract, only one of them reachable, is indistinguishable to the next
-// reader from a caller nobody found — and the dead half had drifted, cutting
-// every tool description to its first line long after the live one was
-// expected not to.
+// runner registers on the onboarding and executor surfaces. Two
+// implementations of one contract, only one of them reachable, is
+// indistinguishable to the next reader from a caller nobody found, and the
+// dead half had drifted: it cut every tool description to its first line long
+// after the live one was expected not to.
 
 // CatalogueLine renders one "- name: description" catalogue entry with the
 // description WHOLE.

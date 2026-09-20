@@ -176,7 +176,7 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 // that names no limit.
 //
 // A FLOOR, NOT A POLICY. Every production caller passes an explicit limit —
-// the Plan-phase prefetch its own recency budget, the dashboard its page size,
+// the turn-start prefetch its own recency budget, the dashboard its page size,
 // the memory tool a clamped tool argument — so this answers only a caller that
 // asked for nothing, and it answers with a screenful rather than a page: the
 // value of an unbounded default here is a seat's entire diary rendered into a
@@ -343,7 +343,7 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 // But they cannot be unbounded either: recall scans every embedded row a seat
 // owns, once per turn, at 7.5 µs a row (the same measurement the episode
 // threshold is set from, re-measured at the pin). Five hundred is that
-// threshold's budget — about 3.9 ms on the Plan phase of every turn — and a
+// threshold's budget (about 3.9 ms at the start of every turn), and a
 // seat holding five hundred durable facts about its own work is already far
 // past what a person would.
 //

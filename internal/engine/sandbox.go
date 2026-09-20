@@ -275,7 +275,21 @@ type resumer struct{ engine *Engine }
 
 var _ sandbox.Resumer = (*resumer)(nil)
 
+// Resume re-enters the suspended turn a completion or an answer names.
+//
+// NO PANIC LEAVES THIS FRAME, for the reason [Dispatcher.Dispatch] gives on the
+// other path. A phase that panics is recovered inside the turn loop; anything
+// else that panics while re-entering a turn is recovered here and abandoned.
+// Unrecovered, it skipped the coordinator's revert as well as its settle, so
+// the run row was stranded in resumed while the queue redelivered a completion
+// the claim then refused.
 func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
+	return r.engine.guardResume(ctx, req.Run, func() error { return r.resume(ctx, req) })
+}
+
+// resume is [resumer.Resume]'s body, separated so the recovery around it is
+// one deferred call.
+func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	state, ok, err := execstate.Decode(req.Run.ExecuteState)
 	if err != nil {
 		// A state this build cannot read is a ROUTING failure, not a run
@@ -294,6 +308,13 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	// found could be gone from it, which fails the run with "not an agent seat"
 	// instead of routing the completion to a node that has the seat.
 	company := r.engine.Company()
+	if company == nil {
+		// A node with no applied revision has no seat to resume into, and
+		// a peer that has one can. Read through a nil company this was a
+		// nil dereference.
+		return fmt.Errorf("%w: this node has no applied company to resume run %s into",
+			sandbox.ErrResumeUnavailable, req.Run.TurnID)
+	}
 	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
 		// The seat is gone from this epoch — decommissioned, or this node
@@ -321,6 +342,40 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		CostUSD:       req.CostUSD,
 		DeliveredRefs: req.DeliveredRefs,
 	})
+}
+
+// guardResume runs one resume, abandoning it if it panics.
+//
+// It publishes the unhandled-exception guard itself because the frame that
+// would have, the resumed turn's own telemetry, is what did not run: without
+// it the seat renders as whatever it was last doing rather than AFK. The run's
+// own row names the seat, and the live epoch is preferred where it still does,
+// so a seat renamed since the run detached is addressed as it is now.
+func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
+	defer func() {
+		if panicked := turn.Recovered(recover()); panicked != nil {
+			err = e.resumePanicked(ctx, run, panicked)
+		}
+	}()
+	return resume()
+}
+
+// resumePanicked is [Engine.guardResume]'s recovery.
+func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, panicked *turn.PanicError) error {
+	log.ErrorContext(ctx, "sandbox_resume_panicked", "turn_id", run.TurnID,
+		"seat", run.AgentHandle, "panic", panicked.Value, "stack", panicked.Stack)
+	role, agentID := run.Role, run.AgentID
+	if live, id := seatIdentity(e.Company(), run.AgentHandle); live != "" {
+		role = live
+		if id != "" {
+			agentID = id
+		}
+	}
+	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
+	if breach := panicBreach(role, agentID, run.TurnID, trace, panicked); breach != nil {
+		e.observe(ctx, breach)
+	}
+	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
 }
 
 // resumeInput is one re-entry, assembled.
@@ -383,6 +438,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	defer span.End()
 
 	company := in.Company
+	if company == nil {
+		// Not a second read of the epoch, which is the one thing this
+		// must not do (see [resumeInput.Company]). Handed back rather
+		// than settled: a caller that assembled a resume without its
+		// epoch is a defect here, and a peer can still resume the run.
+		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
+			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
+	}
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
 		return err
@@ -471,19 +534,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	})
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	if err != nil {
-		if res.Acted {
+		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
-			// (see (*Dispatcher).abandon), taken here in this
-			// subsystem's own vocabulary: the coordinator reads the
-			// sentinel and leaves the claim taken, so the completion is
-			// not redelivered into a conversation whose writes landed.
+			// (see (*Dispatcher).abandon), from the same rule, taken here
+			// in this subsystem's own vocabulary: the coordinator reads
+			// the sentinel and leaves the claim taken, so the completion
+			// is not redelivered into a conversation a retry must not
+			// re-enter.
 			//
 			// A resumed turn is the one most likely to qualify. It
 			// re-enters the executor's suspended loop with the whole
 			// pre-suspend conversation, and the round that called
-			// run_sandbox was never closed — so its writes are in no
+			// run_sandbox was never closed, so its writes are in no
 			// ledger and a replay would repeat every one of them.
-			return fmt.Errorf("%w: %w", sandbox.ErrResumeActed, err)
+			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
 		return err
 	}

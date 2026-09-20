@@ -669,8 +669,8 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         {<Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>}
       </PageActions>
       <PageNote>
-        What the models can actually call. A planner sees only the server names; the tool names
-        below are discovered and activated during a turn.
+        What the models can actually call. An executor is shown the built-in tools and each MCP
+        server by name; a server's own tools are discovered and activated during a turn.
       </PageNote>
 
       {/* THE TOOL THIS PATH NAMES, ABOVE the catalogue rather than under it.

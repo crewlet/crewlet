@@ -26,11 +26,11 @@ const ReflectGroup = "reflect-engine"
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
-// It is a Plan-phase-only builtin, so a call lands in
-// [types.TurnCompleted.PlanToolSequence] and never in the Execute-scoped
-// ToolSequence — [Turn.SelfPersisted] reads both anyway, so moving the tool to
-// another phase cannot quietly turn the check into a no-op that
-// double-persists every turn.
+// It is an executor builtin, so a call lands in the executor-scoped
+// [types.TurnCompleted.ToolSequence]. [Turn.SelfPersisted] reads
+// [types.TurnCompleted.PlanToolSequence] too, which this build never writes: an
+// older build recorded its planning phase's calls there, and a turn one of its
+// nodes completed during a rolling upgrade must not be persisted twice.
 const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
