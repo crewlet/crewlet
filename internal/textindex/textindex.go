@@ -314,22 +314,22 @@ func IDF(corpusDocs, termDocs int) float64 {
 // caller that never chose a tuning, and ranking it with a default would hide
 // that behind a result list nobody can tell from a tuned one. Nothing ranks,
 // which the caller's own tests see immediately.
-func (prof Profile) Score(idf float64, p Posting, c Corpus) float64 {
-	k1, b, ok := prof.params()
-	if !ok || p.Freq <= 0 || idf <= 0 {
+func (p Profile) Score(idf float64, posting Posting, c Corpus) float64 {
+	k1, b, ok := p.params()
+	if !ok || posting.Freq <= 0 || idf <= 0 {
 		return 0
 	}
 	avg := c.AvgLength
 	if avg <= 0 {
 		avg = 1
 	}
-	length := float64(p.Length)
+	length := float64(posting.Length)
 	if length <= 0 {
 		// A document with no recorded length: score it as average rather
 		// than as infinitely short, which would rank it above everything.
 		length = avg
 	}
-	tf := float64(p.Freq)
+	tf := float64(posting.Freq)
 	norm := k1 * (1 - b + b*length/avg)
 	return idf * (tf * (k1 + 1)) / (tf + norm)
 }

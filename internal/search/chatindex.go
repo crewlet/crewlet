@@ -135,11 +135,13 @@ func (x *ChatIndexer) advance(ctx context.Context, now time.Time) (int, error) {
 			// blanked — so leaving it indexed would answer a search
 			// with a message whose text the company removed.
 			if doc.deleted {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				if err := x.removeDoc(ctx, tx, doc.id); err != nil {
 					return err
 				}
 				continue
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := x.writeDoc(ctx, tx, doc, now); err != nil {
 				return err
 			}

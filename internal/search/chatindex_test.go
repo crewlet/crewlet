@@ -28,7 +28,7 @@ func TestTheChatIndexNeverReWalksHistory(t *testing.T) {
 	indexer := search.NewChatIndexer(db)
 
 	writeMessages(t, db, 0, 40, "c1", "deploy pipeline notes")
-	first := sweepAll(t, ctx, indexer)
+	first := sweepAll(ctx, t, indexer)
 	if first != 40 {
 		t.Fatalf("a first sweep indexed %d of 40 messages", first)
 	}
@@ -46,7 +46,7 @@ func TestTheChatIndexNeverReWalksHistory(t *testing.T) {
 	}
 
 	writeMessages(t, db, 40, 3, "c1", "one more thing")
-	third := sweepAll(t, ctx, indexer)
+	third := sweepAll(ctx, t, indexer)
 	if third != 3 {
 		t.Fatalf("three new messages indexed %d documents", third)
 	}
@@ -66,27 +66,27 @@ func TestAnEditReIndexesAndATombstoneDropsTheDocument(t *testing.T) {
 	indexer := search.NewChatIndexer(db)
 
 	writeMessages(t, db, 0, 1, "c1", "the original wording")
-	sweepAll(t, ctx, indexer)
-	if hits := searchChat(t, ctx, indexer, "original", "c1"); len(hits) != 1 {
+	sweepAll(ctx, t, indexer)
+	if hits := searchChat(ctx, t, indexer, "original", "c1"); len(hits) != 1 {
 		t.Fatalf("the original wording matched %d messages", len(hits))
 	}
 
 	execReplicated(t, db, `UPDATE chat_messages SET body = ?, version = ? WHERE id = ?`,
 		"a completely different sentence", 5000, "m0")
-	sweepAll(t, ctx, indexer)
-	if hits := searchChat(t, ctx, indexer, "original", "c1"); len(hits) != 0 {
+	sweepAll(ctx, t, indexer)
+	if hits := searchChat(ctx, t, indexer, "original", "c1"); len(hits) != 0 {
 		t.Fatalf("a term the edit removed still matches %d messages — a merge "+
 			"that never deletes leaves every old word matching for ever", len(hits))
 	}
-	if hits := searchChat(t, ctx, indexer, "different", "c1"); len(hits) != 1 {
+	if hits := searchChat(ctx, t, indexer, "different", "c1"); len(hits) != 1 {
 		t.Fatalf("the edited wording matched %d messages", len(hits))
 	}
 
 	execReplicated(t, db,
 		`UPDATE chat_messages SET body = '', deleted_at = 1, version = ? WHERE id = ?`,
 		6000, "m0")
-	sweepAll(t, ctx, indexer)
-	if hits := searchChat(t, ctx, indexer, "different", "c1"); len(hits) != 0 {
+	sweepAll(ctx, t, indexer)
+	if hits := searchChat(ctx, t, indexer, "different", "c1"); len(hits) != 0 {
 		t.Fatalf("a tombstoned message still answers a search with %d hits — "+
 			"the body is blank in the transcript and the index is the only "+
 			"place its text survives", len(hits))
@@ -102,15 +102,15 @@ func TestThePruneIsFollowedByTheSameRange(t *testing.T) {
 	indexer := search.NewChatIndexer(db)
 
 	writeMessages(t, db, 0, 10, "c1", "quarterly planning")
-	sweepAll(t, ctx, indexer)
-	if hits := searchChat(t, ctx, indexer, "planning", "c1"); len(hits) == 0 {
+	sweepAll(ctx, t, indexer)
+	if hits := searchChat(ctx, t, indexer, "planning", "c1"); len(hits) == 0 {
 		t.Fatal("nothing was indexed to prune")
 	}
 
 	// The retention prune's own effect: a range delete below a cutoff.
 	execReplicated(t, db, `DELETE FROM chat_messages WHERE channel_id = ? AND created_at <= ?`,
 		"c1", 1005)
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 
 	corpus, err := indexer.Corpus(ctx)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestThePruneIsFollowedByTheSameRange(t *testing.T) {
 			"a forward walk cannot see a row that vanished, so the prune has "+
 			"to be followed explicitly", corpus.Docs)
 	}
-	for _, hit := range searchChat(t, ctx, indexer, "planning", "c1") {
+	for _, hit := range searchChat(ctx, t, indexer, "planning", "c1") {
 		if hit.CreatedAt <= 1005 {
 			t.Fatalf("a pruned message at %d still answers searches", hit.CreatedAt)
 		}
@@ -138,15 +138,15 @@ func TestAnErasedMessageLeavesTheIndex(t *testing.T) {
 	indexer := search.NewChatIndexer(db)
 
 	writeMessages(t, db, 0, 3, "c1", "sensitive credential material")
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 
 	execReplicated(t, db, `DELETE FROM chat_messages WHERE id = ?`, "m1")
 	execReplicated(t, db,
 		`INSERT INTO chat_deletions (message_id, channel_id, erased_at, op_id, by)
 		 VALUES (?, ?, ?, ?, ?)`, "m1", "c1", 9000, "op-1", "founder")
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 
-	for _, hit := range searchChat(t, ctx, indexer, "credential", "c1") {
+	for _, hit := range searchChat(ctx, t, indexer, "credential", "c1") {
 		if hit.MessageID == "m1" {
 			t.Fatal("an erased message still answers a search; the compliance " +
 				"gesture destroyed the row and the index kept its text")
@@ -165,7 +165,7 @@ func TestAChatSearchWithoutAViewerIsRefused(t *testing.T) {
 	ctx := t.Context()
 	indexer := search.NewChatIndexer(db)
 	writeMessages(t, db, 0, 2, "private", "the acquisition terms")
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 
 	_, err := indexer.SearchMessages(ctx, search.ChatQuery{Text: "acquisition"})
 	if !errors.Is(err, search.ErrNoViewer) {
@@ -183,9 +183,9 @@ func TestAChatSearchIsScopedToTheViewersChannels(t *testing.T) {
 	indexer := search.NewChatIndexer(db)
 	writeMessages(t, db, 0, 2, "open", "the shipping schedule")
 	writeMessages(t, db, 10, 2, "closed", "the shipping schedule")
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 
-	for _, hit := range searchChat(t, ctx, indexer, "shipping", "open") {
+	for _, hit := range searchChat(ctx, t, indexer, "shipping", "open") {
 		if hit.ChannelID != "open" {
 			t.Fatalf("a search scoped to one room answered with a message in %s",
 				hit.ChannelID)
@@ -206,7 +206,7 @@ func TestTheCorpusStatisticsSurviveAnEdit(t *testing.T) {
 	indexer := search.NewChatIndexer(db)
 
 	writeMessages(t, db, 0, 5, "c1", "one two three")
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 	before, err := indexer.Corpus(ctx)
 	if err != nil {
 		t.Fatalf("Corpus: %v", err)
@@ -217,7 +217,7 @@ func TestTheCorpusStatisticsSurviveAnEdit(t *testing.T) {
 
 	execReplicated(t, db, `UPDATE chat_messages SET body = ?, version = ? WHERE id = ?`,
 		"one two three four five six seven eight", 7000, "m0")
-	sweepAll(t, ctx, indexer)
+	sweepAll(ctx, t, indexer)
 	after, err := indexer.Corpus(ctx)
 	if err != nil {
 		t.Fatalf("Corpus: %v", err)
@@ -262,7 +262,7 @@ func execReplicated(t *testing.T, db *store.DB, query string, args ...any) {
 }
 
 // sweepAll runs the indexer to exhaustion and reports what it wrote.
-func sweepAll(t *testing.T, ctx context.Context, indexer *search.ChatIndexer) int {
+func sweepAll(ctx context.Context, t *testing.T, indexer *search.ChatIndexer) int {
 	t.Helper()
 	total := 0
 	for range 100 {
@@ -279,7 +279,7 @@ func sweepAll(t *testing.T, ctx context.Context, indexer *search.ChatIndexer) in
 	return total
 }
 
-func searchChat(t *testing.T, ctx context.Context, indexer *search.ChatIndexer,
+func searchChat(ctx context.Context, t *testing.T, indexer *search.ChatIndexer,
 	text string, channels ...string) []search.ChatHit {
 
 	t.Helper()
