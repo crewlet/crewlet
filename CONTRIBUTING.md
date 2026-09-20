@@ -114,6 +114,21 @@ directive cannot run a bundler — so a bundle that has drifted from its source
 compiles, embeds, serves and passes every Go test while running code nobody
 wrote. Rebuilding and diffing is the only thing that can tell you.
 
+**And when two branches have both rebuilt it, REBUILD — never merge.** The
+emitted names are content-hashed, so each side writes a different path for the
+same chunk; git reads that as a rename/rename and three-way merges a megabyte
+of minified JavaScript. Left to itself it splices conflict markers into both
+bundles *and* into `index.html`, and the result does not parse — so staging the
+conflict instead of resolving it commits a dashboard that fails to load.
+`.gitattributes` marks the tree `-merge` so git leaves your side alone rather
+than corrupting it (the conflict still happens; only the damage stops), and
+`static/merge_test.go` holds that. The resolution is always the same two
+commands, whether you are merging or rebasing:
+
+```bash
+make dashboard && git add -A -- static/dashboard
+```
+
 `go mod tidy -diff` gates the half of tidiness nothing else notices. An
 *under*-tidy module already fails loudly — a missing requirement or `go.sum`
 entry stops `go build ./...` in every job — but the opposite direction is
