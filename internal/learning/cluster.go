@@ -257,7 +257,7 @@ func clusterEpisodes(eps []Episode, minTools int, threshold float64,
 		if ep.EndedAt.Before(since) {
 			continue
 		}
-		if ep.ReviewOutcome != "done" && ep.ReviewOutcome != "failed" {
+		if !Settled(ep.ReviewOutcome) {
 			continue
 		}
 		joined := false

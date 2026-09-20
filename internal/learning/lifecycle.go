@@ -358,19 +358,36 @@ func NewLifecycle(db *store.DB, s Summarizer, o Options) *Lifecycle {
 // Options returns the knobs in force, defaults applied.
 func (l *Lifecycle) Options() Options { return l.opts }
 
-// terminalOutcomes are the Review decisions that END a turn, as a SQL tuple.
+// terminalOutcomes is [SettledOutcomes] as a SQL tuple.
 //
-// ONE definition used twice, in complementary directions: a compaction
-// candidate must be in it, and the mid-state sweep drops everything that is
-// not. Two hand-written lists is how a row ends up being neither: a sweep
-// naming 'self_iterate' explicitly while the candidate query takes only
-// ('done','failed') leaves any other value undroppable AND uncompactable, and
-// it stays in the seat's memory forever.
+// Used twice here, in complementary directions: a compaction candidate must be
+// in it, and the mid-state sweep drops everything that is not. Two hand-written
+// lists is how a row ends up being neither — a sweep naming 'self_iterate'
+// explicitly while the candidate query takes only ('done','failed') leaves any
+// other value undroppable AND uncompactable, and it stays in the seat's memory
+// forever. That was written when this was a literal, and it was already wrong
+// by one: cluster.go held a third copy it could not see.
 //
-// Spelled inline rather than bound: these are compile-time constants of this
-// package and never caller input, exactly like the state names in
-// ListOptions.filter.
-const terminalOutcomes = `('done', 'failed')`
+// Spelled into the query rather than bound: these are compile-time constants
+// of this package and never caller input, exactly like the state names in
+// ListOptions.filter. The day one stops being a bare identifier, the tuple
+// this builds would need quoting rules it does not have — which is why a test
+// holds every value to that shape rather than trusting the next editor to
+// remember it.
+var terminalOutcomes = sqlTuple(SettledOutcomes())
+
+// sqlTuple renders values as a SQL tuple literal.
+//
+// No escaping, deliberately: see [terminalOutcomes] for why nothing here is
+// ever caller input, and why the constraint that keeps it that way is a test
+// rather than a quoting pass that would imply otherwise.
+func sqlTuple(vals []string) string {
+	quoted := make([]string, 0, len(vals))
+	for _, v := range vals {
+		quoted = append(quoted, "'"+v+"'")
+	}
+	return "(" + strings.Join(quoted, ", ") + ")"
+}
 
 // RawCount reports how many raw rows a seat holds, and whether that is past
 // the threshold.
