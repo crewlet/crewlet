@@ -487,6 +487,36 @@ describe("the frame's layout", () => {
     ).toEqual([]);
   });
 
+  // A ROW LIST LINES UP WITH ITS OWN HEADING.
+  //
+  // A row list usually sits in a `Card`, and `Card.Header` pads `--space-4`.
+  // Every row class in the tree wrote `--space-3` instead, so on the turn page
+  // four panels drew their content four pixels inside their own titles while
+  // the panels between them did not, and the screen read as though two people
+  // had built it. It is one token now, which is the only shape under which
+  // seven classes in two files can be said to agree.
+  test("every row in the product takes the one inset", () => {
+    const ROWS = [
+      [".list-row", "components.css"],
+      [".turn-row", "screens.css"],
+      [".feed-row", "screens.css"],
+      [".work-row", "screens.css"],
+      [".wl-row", "screens.css"],
+      [".attention-row", "screens.css"],
+      [".thread-entry", "screens.css"],
+    ] as const;
+    for (const [row, file] of ROWS) {
+      expect(block(sheet(file), row), `${row} writes its own inset`).toMatch(
+        /padding:[^;]*var\(--row-inline\)/,
+      );
+    }
+    // AND THE TOKEN IS THE HEADING'S OWN STEP. `Card.Header` is the design
+    // system's and pads `--spacing-4`, which `uilet.css` aliases as
+    // `--space-4`; a row list that took any other step would be back to the
+    // misalignment with one place to change it instead of seven.
+    expect(block(sheet("tokens.css"), ":root")).toMatch(/--row-inline:\s*var\(--space-4\)/);
+  });
+
   // A DISCLOSURE HEAD WRAPS, which is rule 15 of the design doc.
   //
   // A phase's head is up to fifteen items — the phase tag, the iteration, a

@@ -20,13 +20,13 @@
  * retained history".
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
 import { CloseGlyph, SearchGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
-import { eventHistoryLabel, newestFirst, plural, tsKey } from "~/lib/format.ts";
+import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -400,16 +400,24 @@ export function Activity() {
         {rows.length ? (
           <div className="list">
             {rows.map((ev, i) => (
-              // THE DATE, once per day. A list that pages back a month
-              // rendered every row as a bare wall clock, so 09:14 on the
+              // THE DATE, once per day, AS A BAND. A list that pages back a
+              // month rendered every row as a bare wall clock, so 09:14 on the
               // fourteenth and 09:14 three weeks earlier were the same string
-              // in the same column. `EventRow` has always taken this prop and
-              // one screen passed it.
-              <EventRow
-                key={ev.id}
-                event={ev}
-                showDate={i === 0 || !sameDay(rows[i - 1]!.timestamp, ev.timestamp)}
-              />
+              // in the same column — which is what `EventRow`'s `showDate`
+              // was for, and it answered it in the wrong place. The prop put
+              // a full `fmtDateTime` in the 62px track a wall clock is sized
+              // for, so one row per day wrapped to three lines and the feed
+              // read as a rendering fault rather than as a date marker. A
+              // date is a property of the ROWS UNDER IT rather than of the
+              // first of them, so it is a heading between days: the column
+              // stays right for the ninety-nine per cent, and the one row
+              // that has something extra to say says it at full width.
+              <Fragment key={ev.id}>
+                {(i === 0 || !sameDay(rows[i - 1]!.timestamp, ev.timestamp)) && (
+                  <div className="list-day">{fmtDate(ev.timestamp)}</div>
+                )}
+                <EventRow event={ev} />
+              </Fragment>
             ))}
           </div>
         ) : (

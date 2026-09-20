@@ -338,7 +338,7 @@
   align-items: flex-start;
   gap: var(--space-3);
   width: 100%;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   min-width: 0;
@@ -732,7 +732,7 @@
   gap: var(--space-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   font-size: var(--fs-xs);
@@ -753,7 +753,7 @@
   gap: var(--space-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   font-size: var(--fs-xs);
@@ -849,7 +849,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   min-width: 0;
 }
@@ -2275,7 +2275,7 @@ details > summary.int-summary::-webkit-details-marker {
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
   align-items: center;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   min-height: var(--row-h);
   font-size: var(--fs-xs);
@@ -3248,7 +3248,7 @@ a.work-cal-chip {
   grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1.6fr) minmax(120px, 2fr) 5rem 6rem;
   gap: var(--space-3);
   align-items: center;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
 }
 .wl-head {
   font-size: var(--fs-xs);

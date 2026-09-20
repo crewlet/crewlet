@@ -571,6 +571,30 @@ rounded up to the same visible sliver.
 which is the gesture every log tool has and the reason the axis is worth having:
 "what happened in that spike" is the question the spike creates.
 
+**A date is a band, not a wider cell.** A row's time column is sized for a wall
+clock, which is right for every row in a log but the first of each day — and
+that one used to render the full instant in the same 62 px track, so it wrapped
+to three lines and the feed read as a rendering fault rather than as a date
+marker. A date is a property of the rows *under* it rather than of the first of
+them, so it is a heading between days, at the list's own inset, parked at
+`--sticky-top` like every other band so the day a reader is inside stays named
+while they scroll it.
+
+**And a repeat is drawn once, counted.** Where a log is about one object — a
+turn's bands — a consecutive run of rows a reader cannot tell apart collapses
+into one carrying the count and the span of its first and last instants. It is
+counted rather than dropped: a chain that fell through eight times is a
+different fact from one that fell through once, and the heading above still
+counts what went wrong rather than what the list draws. Consecutive only,
+because the axis is time and a merge across an intervening row would either lie
+about when or reorder the band to make the lie true.
+
+**Every row in the product takes one inset**, `--row-inline`, and it is the
+step `Card.Header` pads by — because a row list usually sits in a card, and
+seven row classes each writing their own literal is how four panels on the turn
+page came to draw their content four pixels inside their own titles while the
+panels between them did not.
+
 **`FacetRail`** is the other half — one dimension of the list, as chips that
 narrow it. Two screens had two of these and they disagreed about the one thing
 that matters: whether a count is over what is **loaded** or over what **exists**.

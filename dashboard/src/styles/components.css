@@ -275,11 +275,37 @@ a.seat-chip:hover {
   display: flex;
   flex-direction: column;
 }
+
+/* WHICH DAY THE ROWS UNDER IT ARE FROM.
+   A band rather than a wider cell in the time column: the column is sized for
+   a wall clock, which is right for every row but the first of each day, and
+   putting a full instant in it wrapped that one row to three lines. The band
+   takes the list's own inset so its text starts where every row's does, and
+   the micro-label register is `.t-label`'s — it is a heading over rows, not a
+   row. Sticky so the day a reader is inside stays named while they scroll
+   past it, which is the other half of what a date marker is for — parked at
+   `--sticky-top`, like every other band in the product, because a screen's
+   toolbar owns the top of the scroller and a band at zero stops UNDERNEATH
+   it and is simply gone. Above the rows, which are `position: relative` for
+   their own link and would otherwise paint over it in document order. */
+.list-day {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  padding: var(--space-2) var(--row-inline) var(--space-1);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
 .list-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--row-inline);
   border-bottom: 1px solid var(--border-subtle);
   min-height: var(--row-h);
   min-width: 0;
