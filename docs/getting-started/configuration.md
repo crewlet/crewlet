@@ -260,6 +260,21 @@ providers:
                                         #   On `openai` / `anthropic` it is genuinely optional and
                                         #   points the vendor's own wire format at a gateway or
                                         #   proxy instead of the vendor host
+      max_output_tokens: 8192           # optional — cap on what ONE call may generate, in tokens.
+                                        #   0 (the default) takes the backend's own: Anthropic REQUIRES the
+                                        #   field so 8192 is sent, OpenAI's is optional so nothing is.
+                                        #   It always means OUTPUT — Anthropic's wire field covers thinking
+                                        #   AND output, so the engine adds reasoning_budget_tokens to this
+                                        #   before sending, and the same number buys the same amount of
+                                        #   answer on either backend of one fallback chain.
+                                        #   Raise it when a phase record shows `output_truncated`: that is a
+                                        #   seat whose answer stopped mid-sentence because it ran out of
+                                        #   output, which arrives as an ordinary successful response.
+                                        #   The ceiling is the MODEL's own maximum — a value above it is
+                                        #   rejected by the vendor on every call, so raise it to what the
+                                        #   model you named allows and no further.
+                                        #   REFUSED on a cli-agent entry: a headless coding CLI takes no
+                                        #   per-call output cap
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)

@@ -732,9 +732,13 @@ as an answer of nothing rather than dressing it as an outage:
   names an empty answer as such rather than reporting `it said: ""`.
 
 If you see it repeatedly, the entry's **`model`** is the field to change.
-`reasoning_effort` and `reasoning_budget_tokens` are refused on a
-cli-agent entry precisely so nobody spends an afternoon on them: they are
-per-call API parameters and a headless coding CLI takes neither.
+`reasoning_effort`, `reasoning_budget_tokens` and `max_output_tokens` are
+refused on a cli-agent entry precisely so nobody spends an afternoon on
+them: all three are per-call API parameters and a headless coding CLI
+takes none of them. The third matters for the same reason as the other
+two — a phase record showing `output_truncated` sends an operator looking
+for an output cap, and on this backend there is none to set. What bounds
+a CLI's answer is the CLI's own configuration and the model behind it.
 
 ### Token accounting
 

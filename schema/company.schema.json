@@ -747,6 +747,11 @@
         "cooldowns": {
           "$ref": "#/$defs/CredentialCooldowns"
         },
+        "max_output_tokens": {
+          "description": "Cap on the tokens one call may generate. 0 takes the backend's default. Not accepted on a cli-agent provider.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "model": {
           "description": "Model id this provider serves.",
           "type": "string"

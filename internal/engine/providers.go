@@ -140,6 +140,12 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 			Model: model, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ThinkingBudget: spec.ReasoningBudgetTokens,
+			// OUTPUT tokens on both backends. The Anthropic wire field
+			// bounds thinking and output together, and that package adds
+			// the budget itself — so the number an operator writes means
+			// the same amount of visible answer whichever entry of a
+			// fallback chain served the call.
+			MaxTokens: spec.MaxOutputTokens,
 			// The conventional-key fallback — ANTHROPIC_API_KEY, taken when
 			// the entry names no api_keys — reads a VARIABLE rather than
 			// expanding a reference, so it needs the resolver itself.
@@ -161,6 +167,10 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 			Model: model, Name: name, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
+			// Zero sends no cap, which is the honest unset here: the field
+			// is optional on this wire and an openai-compatible endpoint's
+			// context window is not something this engine knows.
+			MaxTokens: spec.MaxOutputTokens,
 			LookupEnv: r.Lookup,
 		})
 	case config.LLMCLIAgent:

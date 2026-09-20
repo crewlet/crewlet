@@ -509,12 +509,16 @@ reported rather than raised, because whether a cut answer can stand is the
 phase's question — a round that emitted whole tool calls before it ran out
 has done real work.
 
-> **The two backends do not agree on what that cap is.** An Anthropic
-> entry is capped at the provider's own `DefaultMaxTokens` — the vendor's
-> API requires the field, so something must be sent — while an OpenAI
-> entry sends no output cap at all. Neither is settable from the company
-> config today, so `output_truncated` on an Anthropic phase is the signal
-> that a seat wanted to write more than that default allows.
+> **The cap is `providers.llm.<entry>.max_output_tokens`**, and
+> `output_truncated` is what tells you to raise it. It always means
+> OUTPUT: Anthropic's `max_tokens` bounds thinking *and* output together,
+> so the engine adds `reasoning_budget_tokens` to it before sending, and
+> the same number buys the same amount of answer whichever entry of a
+> fallback chain served the call. Unset, each backend takes its own
+> default — Anthropic's API requires the field so 8 192 is sent, and
+> OpenAI's is optional so nothing is. The ceiling is the model's own
+> maximum, which the vendor rejects a call for exceeding, so raise it to
+> what the model you named allows and no further.
 
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would

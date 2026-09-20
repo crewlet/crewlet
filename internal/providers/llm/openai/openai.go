@@ -83,9 +83,15 @@ type Config struct {
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
 	Cooldowns credential.Policy
 
-	// MaxTokens caps the output for a request that names none. Zero sends
+	// MaxTokens caps the OUTPUT for a request that names none. Zero sends
 	// no cap, which is what an openai-compatible endpoint with an unknown
 	// context window needs.
+	//
+	// UNSET IS A REAL ANSWER HERE, unlike the Anthropic backend's: this
+	// field is optional on the wire, so nothing has to be invented for an
+	// entry that names none. That asymmetry is the API's rather than this
+	// engine's, and it is why `max_output_tokens` reads as "the backend's
+	// own default" rather than as a number with a value written down.
 	MaxTokens int
 
 	// Temperature is used for a request that names none (see llm.Request:

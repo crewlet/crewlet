@@ -894,6 +894,92 @@ func TestReasoningSendsAThinkingBudgetAndPinsTemperature(t *testing.T) {
 	}
 }
 
+// THE CONFIGURED CAP MEANS OUTPUT, AT EVERY SIZE.
+//
+// Anthropic's max_tokens bounds thinking AND output together, so an entry
+// asking for N output tokens beside a B-token budget needs N+B on the wire.
+// The sum used to be applied only when the cap was at or below the budget —
+// the vendor's own floor rather than the question — so the same number meant
+// "output" under the budget and "thinking plus output" over it. An operator
+// who raised the cap to 20 000 against a 10 000 budget got 10 000 of answer:
+// less than the 4 096-default entry they were trying to improve on.
+// THE DEFAULT IS A FLOOR, NOT A PREFERENCE, and this pins the number rather
+// than the mechanism.
+//
+// Anthropic REQUIRES max_tokens, so unlike the OpenAI backend there is no
+// "send nothing" to fall back to: this value is what every Anthropic seat runs
+// under until somebody sets `max_output_tokens`. A value above a model's own
+// output maximum is a 400 on every call — an outage — where one below it is
+// an answer cut short, so the default has to clear the LEAST capable model
+// this backend can be pointed at, and the knob is what buys the rest.
+//
+// 8 192 is that bar. It was 4 096, the retired Claude 3 family's ceiling, so
+// every seat in every company ran under a cap set by a model generation none
+// of them were using and no config field could say otherwise.
+//
+// If this fails because the constant was raised: the raise is only safe once
+// no served model has a lower maximum. Raising it to suit the newest family
+// trades a per-company knob for a silent 400 on whoever points at the oldest.
+func TestTheDefaultOutputCapClearsTheOldestServedModel(t *testing.T) {
+	t.Parallel()
+
+	// The lowest output maximum among Claude models still served.
+	const leastCapableModelMax = 8192
+
+	if DefaultMaxTokens > leastCapableModelMax {
+		t.Errorf("DefaultMaxTokens is %d, past the %d a still-served model "+
+			"allows: every call on such a model would 400 rather than answer "+
+			"short. Raise `max_output_tokens` per company instead",
+			DefaultMaxTokens, leastCapableModelMax)
+	}
+	if DefaultMaxTokens < leastCapableModelMax {
+		t.Errorf("DefaultMaxTokens is %d and %d is safe everywhere: the "+
+			"difference is answer this engine is refusing to let a seat write, "+
+			"for nothing", DefaultMaxTokens, leastCapableModelMax)
+	}
+}
+
+func TestTheThinkingBudgetIsAddedToTheCapAtEverySize(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		budget, cap_ int
+	}{
+		{"the cap is under the budget", 10000, 4096},
+		{"the cap is over the budget", 10000, 20000},
+		{"the cap equals the budget", 10000, 10000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, okMessage("ok"))
+			})
+			p := newProvider(t, url, func(c *Config) {
+				c.Reasoning = true
+				c.ThinkingBudget = tc.budget
+				c.MaxTokens = tc.cap_
+			})
+			if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			body := api.seen()[0].body
+			if want := float64(tc.budget + tc.cap_); body["max_tokens"] != want {
+				t.Errorf("max_tokens = %v, want %v — the wire field covers "+
+					"thinking and output, so a cap of %d buys %d of answer "+
+					"only when the budget rides on top of it",
+					body["max_tokens"], want, tc.cap_, tc.cap_)
+			}
+			// AND THE VENDOR'S FLOOR STILL HOLDS, which is what the old
+			// conditional was for: max_tokens must be strictly greater
+			// than the budget, and a sum of two positives always is.
+			if body["max_tokens"].(float64) <= float64(tc.budget) {
+				t.Errorf("max_tokens = %v is not above the %d budget, which "+
+					"Anthropic refuses", body["max_tokens"], tc.budget)
+			}
+		})
+	}
+}
+
 func TestThinkingBudgetIsRaisedToTheVendorMinimum(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
