@@ -119,9 +119,14 @@ func Failed(eventType string, payloadFailed, tagFailed bool) bool {
 // internal/store's turn aggregate reaching into the map the doc asked it not
 // to.
 //
-// SORTED, so the statement a caller builds is byte-stable: Go randomises map
-// iteration, so ranging it produced a different SQL string on every process
-// start — one that works, and one no two runs of a test could compare.
+// SORTED, and the reason is the ARGUMENTS rather than the statement. The SQL a
+// caller builds is placeholder-count-driven and so is identical either way; it
+// is the values bound into those placeholders that follow this order, and Go
+// randomises map iteration. Unordered, a caller that reads the set twice — as
+// the turn aggregate does, once for a column and once for a filter — binds two
+// different orders into one statement, which is a query that answers the wrong
+// rows rather than one that fails. Sorting is also what lets a test name an
+// expected order at all.
 //
 // A COPY, so a caller that sorts, appends to or trims what it is handed cannot
 // reach the catalogue through the slice header.
