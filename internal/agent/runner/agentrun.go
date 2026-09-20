@@ -106,7 +106,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 			func() []ledger.Call { return calls(surface) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, round, history, snapshot, submit,
 		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -187,7 +187,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 			func() []ledger.Call { return bridged },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, state.Iterations, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

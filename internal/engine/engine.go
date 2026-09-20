@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
@@ -355,9 +356,17 @@ func (c *Company) TurnSettings(wallClock int) turn.Settings {
 
 // MetaToolNames are the tools the ledger filters out.
 //
-// A meta-tool is never a delivery, so in a record whose only job is "what
-// already happened that matters" it is pure noise. Named here rather than in
-// the ledger because the ledger imports nothing from crewlet, deliberately.
+// A meta-tool acts on the TURN rather than on the world — it widens the
+// surface, lists a server's catalogue, or re-reads the engine's own record —
+// so it is never a delivery, and in a record whose only job is "what already
+// happened that matters" it is pure noise. Named here rather than in the
+// ledger because the ledger imports nothing from crewlet, deliberately.
+//
+// recall_iteration is one for a second reason on top of that: it READS the
+// very block it would appear in, so leaving it out would put a line per recall
+// into every later round AND spend one of [ledger.MaxReadCalls] on it — a read
+// budget that exists for the recon a round does, crowded out by the agent
+// looking up what it already did.
 func MetaToolNames() []string {
-	return []string{"activate_tool", "list_mcp_server_tools"}
+	return []string{"activate_tool", "list_mcp_server_tools", builtin.RecallIterationTool}
 }

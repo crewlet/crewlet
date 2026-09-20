@@ -86,7 +86,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 			func() []ledger.Call { return resumedCalls(surface, state) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, history, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

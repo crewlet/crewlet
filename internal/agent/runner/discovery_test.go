@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -187,20 +188,30 @@ func TestOneSurfacesActivationDoesNotLeakIntoAnother(t *testing.T) {
 	}
 }
 
-func TestTheEngineSkipsExactlyTheDiscoveryTools(t *testing.T) {
+func TestTheEngineSkipsExactlyTheMetaTools(t *testing.T) {
 	t.Parallel()
-	// A meta-tool is never a delivery, so in a record whose only job is
-	// "what already happened that matters" it is pure noise — and the
-	// engine names the skip list while this package names the tools. Two
-	// places, one fact: renaming a tool here without touching the engine
-	// would leave discovery calls in every ledger block, and a reader would
-	// see a phase that "did" four things when it delivered one.
-	want := []string{runner.ActivateTool, runner.ListMCPToolsTool}
+	// A meta-tool acts on the TURN rather than on the world, so it is never
+	// a delivery, and in a record whose only job is "what already happened
+	// that matters" it is pure noise — and the engine names the skip list
+	// while the packages below name the tools. Two places, one fact:
+	// renaming a tool without touching the engine would leave meta calls in
+	// every ledger block, and a reader would see a phase that "did" four
+	// things when it delivered one.
+	//
+	// EXACTLY, in both directions. The discovery pair widens the surface;
+	// recall_iteration READS the very block it would otherwise appear in, so
+	// leaving it out would put a line per recall into every later round and
+	// spend one of the ledger's read slots on the agent looking up its own
+	// work. A fourth member arriving unnoticed is the other half — the skip
+	// list is what stops a call being evidence, so nothing joins it quietly.
+	want := []string{
+		runner.ActivateTool, runner.ListMCPToolsTool, builtin.RecallIterationTool,
+	}
 	got := slices.Clone(engine.MetaToolNames())
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("the engine skips %v, want exactly the discovery pair %v", got, want)
+		t.Errorf("the engine skips %v, want exactly the meta-tools %v", got, want)
 	}
 }
 

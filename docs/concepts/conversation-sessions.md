@@ -110,6 +110,18 @@ copy. How much of it a later turn is *shown* is a read-side decision — see
 `ledger.HistoryOptions`, which drops whole entries oldest-first and says how
 many — and answering that display question at write time destroyed the data.
 
+**No `recall_iteration` here, and the asymmetry is the doctrine rather than an
+omission.** Within a turn every cut has a
+[floor](turn-engine.md#every-cut-has-a-floor-recall_iteration): the record keeps
+the arguments whole and only the render shortens them, so the full value is one
+tool call away. Across turns the arguments are rendered **once, at write time**,
+on purpose — it fixes what the arguments were, so a later reader cannot restate
+history against a surface that has since changed, and it means no reader needs
+the raw executions at all. What survives is the discriminator, which is what a
+cross-turn reader is asking for: *did I already answer this thread?* The detail
+of what was said is in the thread itself, which is re-readable — unlike a
+within-turn round, which is not.
+
 ### Reads stay marked, never merged
 
 Inherited wholesale from the within-turn ledger, and **stronger** here: a read
