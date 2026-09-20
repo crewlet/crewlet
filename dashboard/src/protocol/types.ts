@@ -78,6 +78,17 @@ export interface EventRecord {
    * how a turn could render red in the feed and clean on its own page.
    */
   failed?: boolean;
+  /**
+   * The unit of work this row's run was an attempt at — see `adr/0017`.
+   *
+   * OFF THE PROMOTED COLUMN server-side, and it is the one promoted value that
+   * is not a copy of a tag: migration `0029` backfilled the column from
+   * `turn_id`, which is where the work key lived before the split, and
+   * deliberately left the stored payloads and tags blobs alone. So a reader
+   * going through `payload.work_key` answers nothing for every turn written
+   * before the split, while this field answers for all of them.
+   */
+  work_key?: string;
 }
 
 export interface EventsPage {

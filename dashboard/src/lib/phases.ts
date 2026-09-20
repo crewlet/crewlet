@@ -413,7 +413,15 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   return {
     key: phaseKey(turnId, phase, iteration, taskId),
     turnId,
-    workKey: String(p.work_key ?? ""),
+    // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
+    // carries. The stored column is backfilled across the split
+    // (migration 0029) and the payload is not, so a payload-only read
+    // reports no unit of work for every turn older than the split.
+    // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
+    // carries. The stored column is backfilled across the split
+    // (migration 0029) and the payload is not, so a payload-only read
+    // reports no unit of work for every turn older than the split.
+    workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
     role: String(p.role ?? ev.actor ?? ""),

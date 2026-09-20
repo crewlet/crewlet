@@ -780,3 +780,26 @@ describe("a decision carries its own tone", () => {
     expect(decisionTone("Execute", "blocked")).toBe("caution");
   });
 });
+
+describe("a pre-split phase record's unit of work", () => {
+  // schema/0029 backfilled the `work_key` COLUMN from `turn_id` — which is
+  // where the work key lived before ADR-0017 split the two — and deliberately
+  // left the stored payloads alone: they record what that build published, and
+  // it published no such field. So a parser reading `payload.work_key` alone
+  // reports no unit of work for every turn older than the split, while the
+  // server answers the same question off the column for all of them. One
+  // authority, and it is the row's own field.
+  test("comes off the row's column, which the payload does not carry", () => {
+    const rec: EventRecord = { ...phaseEvent(), work_key: "wk-backfilled" };
+    const done = fromPhaseEvent(rec)!;
+    expect(done.workKey).toBe("wk-backfilled");
+  });
+
+  // AND A LIVE FRAME STILL WORKS: a phase event pushed on the socket carries
+  // its work key in the payload and no promoted column, because nothing has
+  // stored it yet.
+  test("falls back to the payload for a frame nothing has stored", () => {
+    const done = fromPhaseEvent(phaseEvent({ work_key: "wk-live" }))!;
+    expect(done.workKey).toBe("wk-live");
+  });
+});
