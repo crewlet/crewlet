@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -36,6 +36,14 @@ type confluenceParts struct {
 	// the same degradation the searcher takes: a company whose read token
 	// lapsed keeps routing and stops learning.
 	pages *confluence.Client
+
+	// base and skillsSpace are the instance and the skills space this
+	// wiring was built for: the identity of the skills source, read by
+	// [Engine.skillSource]. Held with the parts rather than re-derived from
+	// the epoch because a revision whose Confluence block is broken keeps
+	// the PREVIOUS wiring running, and the skills have to follow the wiring
+	// that is actually running rather than the one that failed to build.
+	base, skillsSpace string
 }
 
 // startConfluence builds the knowledge base's parser and searcher.
@@ -88,7 +96,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 			// point: the skills space's own events are excluded from
 			// routing, so an indexer that only saw routable events would
 			// never see a skill change at all.
-			OnPage: e.reindexConfluenceSkill(skillsSpace),
+			OnPage: e.noteConfluencePage,
 			// A TYPED NIL WOULD NOT BE NIL. confluenceWatchers returns a
 			// *pageWatchers, and assigning one straight into an interface
 			// field makes a non-nil interface holding a nil pointer — so
@@ -96,7 +104,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 			// call would go through a nil receiver.
 			Watchers: watchersFor(e.confluenceWatchers()),
 		}),
-		pages: orgClient,
+		pages: orgClient, base: base, skillsSpace: skillsSpace,
 	}
 	if orgClient != nil {
 		parts.searcher = confluence.NewSearcher(confluence.SearcherOptions{
@@ -224,73 +232,21 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 	}
 }
 
-// reindexConfluenceSkill re-reads one page into the skill registry.
+// noteConfluencePage hands a page change the parser heard to the skill sync.
 //
-// PER PAGE rather than a whole re-walk, because a wiki edit is one page and
-// walking a space on every save would spend a request per page per edit. A
-// page that is not a skill decodes to nothing and is dropped by the
-// registry's own admission, which is what makes this safe to call for every
-// change in the space.
-func (e *Engine) reindexConfluenceSkill(space string) func(context.Context, string, string) error {
-	if space == "" {
-		return nil
-	}
-	return func(ctx context.Context, eventType, pageID string) error {
-		e.notify.mu.Lock()
-		client := e.notify.confluence.pages
-		e.notify.mu.Unlock()
-		if client == nil || pageID == "" {
-			return nil
-		}
-		company := e.Company()
-		if company == nil {
-			return nil
-		}
-		// A DELETED PAGE CANNOT BE READ, so the whole space is re-walked
-		// instead — which is the only way to notice a removal, since the
-		// registry replace is wholesale and a page that is simply absent
-		// from the next walk is how a skill goes away.
-		if strings.HasSuffix(eventType, "_removed") || strings.HasSuffix(eventType, "_trashed") {
-			e.syncSkillsFrom(ctx, company, func(ctx context.Context, space string) ([]skills.Page, error) {
-				return confluence.SkillPages(ctx, client, space)
-			})
-			return nil
-		}
-		page, err := client.PageByID(ctx, pageID)
-		if err != nil {
-			return err
-		}
-		if !strings.EqualFold(page.Space, space) {
-			return nil
-		}
-		e.syncSkillsFrom(ctx, company, func(ctx context.Context, space string) ([]skills.Page, error) {
-			return confluence.SkillPages(ctx, client, space)
-		})
-		return nil
-	}
+// CALLED FOR EVERY PAGE CHANGE IN EVERY SPACE, and the sync decides whether it
+// concerns the registry: a page that left the skills space is announced from
+// the space it moved to, and only the registry knows it held a skill. The
+// read, when there is one, happens on the sync's own loop rather than on the
+// delivery's goroutine, so a slow wiki never holds the inbound consumer.
+func (e *Engine) noteConfluencePage(ctx context.Context, change confluence.PageChange) error {
+	return e.skillSync.PageChanged(ctx, skillsync.Change{
+		Backend: confluence.Backend, Container: change.Space, PageID: change.PageID,
+	})
 }
 
 // confluencePrompt is the knowledge base's trigger builder.
 func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
-
-// startConfluenceSkillSync walks the skills space once, in the background.
-//
-// IN THE BACKGROUND, because it is a network walk on the boot path and a
-// company must not wait on its wiki to start taking work: seats come up with
-// an empty catalogue and gain it moments later, which is strictly better
-// than a boot that blocks on an instance that is down.
-func (e *Engine) startConfluenceSkillSync(ctx context.Context, c *Company) {
-	space := e.SkillsContainer(c)
-	e.notify.mu.Lock()
-	client := e.notify.confluence.pages
-	e.notify.mu.Unlock()
-	if space == "" || client == nil {
-		return
-	}
-	go e.syncSkillsFrom(ctx, c, func(ctx context.Context, space string) ([]skills.Page, error) {
-		return confluence.SkillPages(ctx, client, space)
-	})
-}
 
 // Knowledge is the company's knowledge-base searcher, or nil.
 //

@@ -79,6 +79,37 @@ var contentEvents = map[string]bool{
 	"comment_updated": true,
 }
 
+// pageChanges are the events that can change what a page SAYS, or whether it
+// is there at all.
+//
+// The skill index's own set, narrower than [contentEvents]: a comment or a
+// blog post never changes a page's text, and reading the page again for one
+// would spend a request on every comment in the wiki to learn nothing.
+var pageChanges = map[string]bool{
+	"page_created": true,
+	"page_updated": true,
+	"page_trashed": true,
+	"page_removed": true,
+}
+
+// PageChange is one page whose content may have moved, as the skill index
+// hears about it.
+//
+// IT DOES NOT SAY WHETHER THE PAGE IS GONE, although a trash or a delete
+// arrives under its own event name. The index reads the page back whatever
+// the event was, and the wiki's answer (a 404 for a page in the trash) is what
+// drops it: a delivery is a report of what happened at some moment, and a
+// removal acted on without that read would drop a skill the wiki serves again
+// after a restore, which no subscribed event announces.
+type PageChange struct {
+	// PageID is the page's own id.
+	PageID string
+	// Space is the space the delivery named the page in, which for a page
+	// that just moved is the space it moved TO. Empty when the payload did
+	// not say.
+	Space string
+}
+
 // edits are the events that constitute a claim on a page, as opposed to a
 // remark about one. Only these subscribe their author — see the subscribe
 // call in [Parser.Parse].
@@ -105,9 +136,12 @@ type ParserOptions struct {
 	SkillsSpace string
 
 	// OnPage re-indexes a changed page. It runs BEFORE every routing
-	// filter, because the skill registry cares about every change —
-	// including one in the space routing excludes.
-	OnPage func(ctx context.Context, eventType, pageID string) error
+	// filter, because the skill registry cares about every page change,
+	// including one in the space routing excludes, and it is called for
+	// every space: a page moving out of the skills space is announced from
+	// the space it moved to, so only the index can tell whether a page
+	// concerns it.
+	OnPage func(ctx context.Context, change PageChange) error
 
 	// Watchers is the engine's own page-subscription list. Nil routes by
 	// mentions and space leads alone, which is the single-node case with
@@ -148,7 +182,7 @@ type Parser struct {
 	siteURL     string
 	leads       map[string]string
 	skillsSpace string
-	onPage      func(ctx context.Context, eventType, pageID string) error
+	onPage      func(ctx context.Context, change PageChange) error
 	watchers    Watchers
 	now         func() time.Time
 }
@@ -214,18 +248,18 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	if pageID == "" {
 		pageID = pageIDFromSelf(str(comment, "self"))
 	}
+	space := strings.ToUpper(spaceOf(page, comment, w.Body))
+
 	// THE INDEXER RUNS FIRST, before every filter below. The tool-skill
-	// registry is rebuilt from page content and cares about EVERY change —
+	// registry is read from page content and cares about every page change,
 	// including one in the space routing excludes and one a seat made
-	// itself — so indexing must never be a casualty of a routing rule.
-	if p.onPage != nil && pageID != "" {
-		if err := p.onPage(ctx, event, pageID); err != nil {
+	// itself, so indexing must never be a casualty of a routing rule.
+	if pageChanges[event] && p.onPage != nil && pageID != "" {
+		if err := p.onPage(ctx, PageChange{PageID: pageID, Space: space}); err != nil {
 			log.WarnContext(ctx, "confluence_page_index_failed", "page", pageID,
 				"event_type", event, "error", err.Error())
 		}
 	}
-
-	space := strings.ToUpper(spaceOf(page, comment, w.Body))
 	if p.skillsSpace != "" && space == p.skillsSpace {
 		// Machinery, not knowledge. A seat woken because its own
 		// company's prompt fragment changed has nothing to do about it.

@@ -1,6 +1,9 @@
 package skills_test
 
 import (
+	"fmt"
+	"maps"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -9,23 +12,39 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 )
 
+// skill is a skill read from a page named after its key, which is what every
+// case here needs unless it is about the page itself.
 func skill(key string, trigger skills.Trigger, required bool) skills.Skill {
+	return onPage(key+"-page", key, trigger, required)
+}
+
+// onPage is a skill read from a named page.
+func onPage(page, key string, trigger skills.Trigger, required bool) skills.Skill {
 	return skills.Skill{
 		Key: key, Title: strings.ToUpper(key[:1]) + key[1:],
-		Summary: "how to use " + key, Body: "the body of " + key,
-		Trigger: trigger, Required: required,
+		Summary: "how to use " + key, Body: "the body of " + key + " from " + page,
+		Trigger: trigger, Required: required, SourcePageID: page,
 	}
 }
 
+// registry is a registry after one complete walk over these skills.
 func registry(t *testing.T, in ...skills.Skill) *skills.Registry {
 	t.Helper()
 	r := skills.NewRegistry()
-	for _, s := range in {
-		if err := r.Upsert(s); err != nil {
-			t.Fatalf("Upsert %s: %v", s.Key, err)
-		}
+	r.Replace(in)
+	if r.Len() != len(in) {
+		t.Fatalf("a walk over %d skills registered %d", len(in), r.Len())
 	}
 	return r
+}
+
+// servedFrom is the page a key is served from, or "" when nothing serves it.
+func servedFrom(r *skills.Registry, key string) string {
+	s, ok := r.Get(key)
+	if !ok {
+		return ""
+	}
+	return s.SourcePageID
 }
 
 func keysOf(in []skills.Skill) []string {
@@ -91,17 +110,21 @@ func TestPhaseScopingIsOptOut(t *testing.T) {
 	}
 }
 
-// AN UPSERT REPLACES rather than merges: a page IS the skill, so an edit
-// that removed a trigger leaf must remove it here, and a merge would keep
-// the skill matching a surface its author just stopped claiming.
+// A PAGE WRITE REPLACES rather than merges: a page IS the skill, so an edit
+// that removed a trigger leaf must remove it here, and a merge would keep the
+// skill matching a surface its author just stopped claiming.
 func TestAnEditReplacesTheSkillWholesale(t *testing.T) {
 	t.Parallel()
 	r := registry(t, skill("chat", skills.Trigger{AnyOf: []skills.Trigger{
 		{MCPServer: "mattermost"}, {MCPServer: "slack"}}}, true))
 
 	narrowed := skill("chat", skills.Trigger{MCPServer: "mattermost"}, true)
-	if err := r.Upsert(narrowed); err != nil {
-		t.Fatalf("Upsert: %v", err)
+	change, err := r.PutPage(narrowed)
+	if err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	if change.Changed() || change.Before != "chat" || change.After != "chat" {
+		t.Fatalf("an edit that kept its key reported %+v", change)
 	}
 	if got := r.Matching(prompts.PhaseExecute,
 		prompts.Surface{MCPServers: []string{"slack"}}); len(got) != 0 {
@@ -112,17 +135,173 @@ func TestAnEditReplacesTheSkillWholesale(t *testing.T) {
 	}
 }
 
-// Evict reports whether it removed anything, which is what lets a sync
-// worker tell "a skill page was deleted" from "a page that was never a skill
-// was deleted" — it evicts on every removal and only one is worth a line.
-func TestEvictReportsWhetherItRemovedAnything(t *testing.T) {
+// A PAGE WHOSE KEY WAS EDITED LEAVES NOTHING BEHIND. This is the case a
+// key-addressed registry could not see: the change names the page, the page
+// no longer says what key it used to hold, and the old key would be served
+// for ever.
+func TestAPageWhoseKeyWasEditedLeavesNothingBehind(t *testing.T) {
+	t.Parallel()
+	r := registry(t, onPage("p1", "old-name", skills.Trigger{Tool: "t"}, true))
+
+	change, err := r.PutPage(onPage("p1", "new-name", skills.Trigger{Tool: "t"}, true))
+	if err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	if !change.Changed() || change.Before != "old-name" || change.After != "new-name" {
+		t.Fatalf("a renamed key reported %+v", change)
+	}
+	if _, ok := r.Get("old-name"); ok {
+		t.Fatal("the key the page no longer declares is still served")
+	}
+	if servedFrom(r, "new-name") != "p1" || r.Len() != 1 {
+		t.Fatalf("the renamed skill is not the one thing registered (%d)", r.Len())
+	}
+}
+
+// DROPPING A PAGE REPORTS WHAT IT HELD, which is what lets a sync tell "a
+// skill page was deleted" from "a page that was never a skill was deleted":
+// it drops on every removal it hears of, and only one is worth a line.
+func TestDroppingAPageReportsWhatItHeld(t *testing.T) {
 	t.Parallel()
 	r := registry(t, skill("chat", skills.Trigger{Tool: "t"}, true))
-	if !r.Evict("chat") {
-		t.Fatal("evicting a registered skill reported nothing removed")
+	if change := r.DropPage("chat-page"); change.Before != "chat" || change.After != "" {
+		t.Fatalf("dropping a skill page reported %+v", change)
 	}
-	if r.Evict("chat") || r.Evict("never-existed") {
-		t.Fatal("evicting an absent skill reported a removal")
+	if r.Len() != 0 || r.HoldsPage("chat-page") {
+		t.Fatal("the dropped page is still registered")
+	}
+	if change := r.DropPage("chat-page"); change.Changed() {
+		t.Fatalf("dropping an absent page reported %+v", change)
+	}
+}
+
+// A DUPLICATED KEY IS SERVED FROM THE SAME PAGE ON EVERY NODE, whatever order
+// its walks and updates came in. Two nodes that each served the page they
+// happened to hear about last would give one seat two different conventions
+// depending on where it ran.
+func TestADuplicatedKeyIsServedFromTheOlderPageInAnyOrder(t *testing.T) {
+	t.Parallel()
+	older := onPage("9", "chat", skills.Trigger{Tool: "t"}, true)
+	newer := onPage("10", "chat", skills.Trigger{Tool: "t"}, true)
+
+	walked := skills.NewRegistry()
+	walked.Replace([]skills.Skill{newer, older})
+	if got := servedFrom(walked, "chat"); got != "9" {
+		t.Fatalf("a walk served page %q, want the older page 9", got)
+	}
+
+	for _, order := range [][]skills.Skill{{older, newer}, {newer, older}} {
+		r := skills.NewRegistry()
+		var last skills.PageChange
+		for _, s := range order {
+			change, err := r.PutPage(s)
+			if err != nil {
+				t.Fatalf("PutPage: %v", err)
+			}
+			last = change
+		}
+		if got := servedFrom(r, "chat"); got != "9" {
+			t.Fatalf("writing %s then %s served page %q, want 9",
+				order[0].SourcePageID, order[1].SourcePageID, got)
+		}
+		if shadowed := order[1].SourcePageID == "10"; last.Shadowed != shadowed {
+			t.Errorf("the last write reported shadowed=%v, want %v", last.Shadowed, shadowed)
+		}
+	}
+}
+
+// A SHADOWED DUPLICATE TAKES THE KEY THE MOMENT IT IS FREE. Kept by key, the
+// loser would have been discarded and only the next walk could bring it back.
+func TestAShadowedDuplicateTakesTheKeyWhenItIsFreed(t *testing.T) {
+	t.Parallel()
+	r := registry(t, onPage("1", "chat", skills.Trigger{Tool: "t"}, true))
+	if _, err := r.PutPage(onPage("2", "chat", skills.Trigger{Tool: "t"}, true)); err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	if !r.HoldsPage("2") {
+		t.Fatal("the shadowed duplicate was not kept")
+	}
+
+	if _, err := r.PutPage(onPage("1", "renamed", skills.Trigger{Tool: "t"}, true)); err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	if got := servedFrom(r, "chat"); got != "2" {
+		t.Fatalf("after the winner moved to another key, chat is served from %q", got)
+	}
+
+	r.DropPage("1")
+	r.DropPage("2")
+	if r.Len() != 0 {
+		t.Fatalf("%d skills survived dropping both pages", r.Len())
+	}
+}
+
+// ANY SEQUENCE OF PAGE UPDATES ENDS WHERE A WALK OF THE SAME PAGES WOULD. This
+// is the property a fleet converges on: a node that heard every change one
+// page at a time and a node that walked the container afterwards must serve
+// the same thing, or the periodic walk would keep moving guidance under seats
+// that had already read it.
+func TestPageUpdatesEndWhereAWalkOfTheSamePagesWould(t *testing.T) {
+	t.Parallel()
+	rng := rand.New(rand.NewPCG(7, 11))
+	pages := []string{"1", "2", "3", "10", "11"}
+	keys := []string{"chat", "code", "deploy"}
+
+	for round := range 200 {
+		r := skills.NewRegistry()
+		final := map[string]skills.Skill{}
+		for step := range 12 {
+			page := pages[rng.IntN(len(pages))]
+			if rng.IntN(3) == 0 {
+				r.DropPage(page)
+				delete(final, page)
+				continue
+			}
+			s := onPage(page, keys[rng.IntN(len(keys))], skills.Trigger{Tool: "t"}, true)
+			s.Body = fmt.Sprintf("revision %d.%d of page %s", round, step, page)
+			if _, err := r.PutPage(s); err != nil {
+				t.Fatalf("PutPage: %v", err)
+			}
+			final[page] = s
+		}
+
+		walked := skills.NewRegistry()
+		walked.Replace(slices.Collect(maps.Values(final)))
+		for _, key := range keys {
+			got, gotOK := r.Get(key)
+			want, wantOK := walked.Get(key)
+			if gotOK != wantOK || got.SourcePageID != want.SourcePageID || got.Body != want.Body {
+				t.Fatalf("round %d: %q is %+v after page updates and %+v after a walk",
+					round, key, got, want)
+			}
+		}
+		for _, page := range pages {
+			_, held := final[page]
+			if r.HoldsPage(page) != held || walked.HoldsPage(page) != held {
+				t.Fatalf("round %d: page %s held=%v after updates, %v after a walk, want %v",
+					round, page, r.HoldsPage(page), walked.HoldsPage(page), held)
+			}
+		}
+	}
+}
+
+// A SKILL THAT NAMES NO PAGE HAS NO IDENTITY a later change could reach: a
+// deletion names a page, and nothing could ever remove it.
+func TestASkillThatNamesNoPageIsRefused(t *testing.T) {
+	t.Parallel()
+	orphan := skill("chat", skills.Trigger{Tool: "t"}, true)
+	orphan.SourcePageID = ""
+
+	r := skills.NewRegistry()
+	if _, err := r.PutPage(orphan); err == nil {
+		t.Fatal("a skill with no source page was stored")
+	}
+	r.Replace([]skills.Skill{orphan, skill("code", skills.Trigger{Tool: "t"}, true)})
+	if _, ok := r.Get("chat"); ok {
+		t.Fatal("a walk stored a skill with no source page")
+	}
+	if _, ok := r.Get("code"); !ok {
+		t.Fatal("refusing one skill cost the walk the other")
 	}
 }
 
@@ -135,6 +314,9 @@ func TestAWalkSwapsTheWholeSetAndRefusesWhatIsInvalid(t *testing.T) {
 	broken := skill("broken", skills.Trigger{}, true)
 
 	r.Replace([]skills.Skill{skill("fresh", skills.Trigger{Tool: "t"}, true), broken})
+	if r.HoldsPage("old-page") {
+		t.Fatal("a walk kept a page it did not carry")
+	}
 	if _, ok := r.Get("old"); ok {
 		t.Fatal("a walk left the previous set behind")
 	}
@@ -165,9 +347,13 @@ func TestASkillThatCannotBeOfferedIsRefused(t *testing.T) {
 			Trigger: skills.Trigger{Tool: "t"},
 			Body:    strings.Repeat("x", skills.MaxBodyBytes+1)}},
 	} {
-		if err := r.Upsert(tc.in); err == nil {
+		tc.in.SourcePageID = "p1"
+		if _, err := r.PutPage(tc.in); err == nil {
 			t.Fatalf("%s was accepted", tc.name)
 		}
+	}
+	if r.Len() != 0 {
+		t.Fatalf("%d refused skills were registered", r.Len())
 	}
 }
 
@@ -179,7 +365,7 @@ func TestTheCatalogueRendersOperatorVariables(t *testing.T) {
 		Key: "chat", Title: "Chat on ${tenant}",
 		Summary: "post to ${tenant}.example.com",
 		Body:    "the ${tenant} workspace",
-		Trigger: skills.Trigger{Tool: "t"},
+		Trigger: skills.Trigger{Tool: "t"}, SourcePageID: "chat-page",
 	})
 	r.SetVariables(map[string]string{"tenant": "nimbus"})
 
@@ -235,9 +421,13 @@ func TestANilRegistryAnswersEmpty(t *testing.T) {
 	if got := r.Render("${tenant}"); got != "${tenant}" {
 		t.Fatalf("Render = %q", got)
 	}
-	if r.Len() != 0 || r.Evict("chat") {
+	if r.Len() != 0 || r.HoldsPage("chat-page") || r.DropPage("chat-page").Changed() {
 		t.Fatal("a nil registry reported content")
 	}
+	if _, err := r.PutPage(skill("chat", skills.Trigger{Tool: "t"}, true)); err != nil {
+		t.Fatalf("a nil registry refused a write: %v", err)
+	}
+	r.Replace([]skills.Skill{skill("chat", skills.Trigger{Tool: "t"}, true)})
 	r.SetVariables(map[string]string{"a": "b"})
 	r.Audit(nil, nil)
 }

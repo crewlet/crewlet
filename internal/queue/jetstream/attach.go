@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"runtime/debug"
 	"slices"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -108,27 +110,15 @@ func (q *Queue) nakCeiling() time.Duration {
 //
 // The first failure waits [Queue.nakDelay] and each one after that waits
 // twice as long, up to [Queue.nakCeiling]. failures is how many times THIS
-// MESSAGE HAS FAILED, so the first is 1 — see [attachment.failures] for why
+// MESSAGE HAS FAILED, so the first is 1. See [attachment.failures] for why
 // that is not JetStream's delivery count.
+//
+// The arithmetic is [backoff.Doubling]'s, which is what keeps a count off the
+// wire from overflowing into a negative wait. The count is clamped to an int
+// before it gets there, because a uint64 past the int range would convert to
+// a negative attempt and read as the first failure rather than the latest.
 func (q *Queue) nakBackoff(failures uint64) time.Duration {
-	delay, ceiling := q.nakDelay(), q.nakCeiling()
-	if delay >= ceiling {
-		return ceiling
-	}
-	// SHIFTED, NOT MULTIPLIED IN A LOOP, and bounded before the shift: a
-	// delivery count is a number off the wire, and shifting a duration by
-	// 64 is undefined rather than large.
-	steps := failures
-	if steps > 0 {
-		steps--
-	}
-	if steps > 32 {
-		return ceiling
-	}
-	if backoff := delay << steps; backoff < ceiling && backoff > 0 {
-		return backoff
-	}
-	return ceiling
+	return backoff.Doubling(int(min(failures, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
 
 // attachment is ONE consumer this process runs for a (topic, group) pair.

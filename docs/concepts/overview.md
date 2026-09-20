@@ -183,7 +183,9 @@ internal/
 │                         #   wake it twice), ledger/ (iteration, conversation
 │                         #   and budget ledgers), structured/ (how a phase
 │                         #   gives a typed answer), prefetch/, prompts/,
-│                         #   skills/, builtin/, subagent/ (workers)
+│                         #   skills/, skillsync/ (keeps every node's
+│                         #   skill registry current), builtin/,
+│                         #   subagent/ (workers)
 ├── queue/                # The EventQueue contract + the jetstream backend
 │                         #   and the in-memory twin, both certified by one
 │                         #   suite
@@ -268,7 +270,8 @@ internal/
 ├── clientsource/         # Holds a constant the dashboard declares against the
 │                         #   engine's own
 ├── e2e/                  # The end-to-end company, and the dashboard replay
-└── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
+└── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
+                          #   grammars
 
 dashboard/                # The dashboard's SOURCE — React + TypeScript, built
                           #   by Vite. Its output is committed to

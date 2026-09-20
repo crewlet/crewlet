@@ -3,8 +3,8 @@
 - **Status:** accepted
 - **Authority:** `internal/httpx`
 - **Enforced-by:** `internal/httpx.TestNoClientSitsOnTheProcessGlobalPool`, `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, `internal/schedule.TestOnlyOneClockReadsTheWallTime`, `internal/queue/jetstream.TestOnlyOnePlaceWritesARunningStreamsConfiguration`
-- **Measured:** eleven packages in this tree exist for no other reason. `internal/httpx` states the pattern outright: written down and checked by nobody, its rule had four prose copies and seven packages violating it.
-- **Cost-when-tried:** every one of them is the forensic record. `internal/textcut` replaced four helpers that were four copies of one rule, already disagreeing on the easy half — two appended `…` and two appended `...` — while the hard half, that a plain `s[:n]` is invalid UTF-8 whenever a multi-byte rune straddles the cut, was got wrong by all four. `internal/whsec`'s rule, written twice, accepted a 16-byte key as a `${VAR}` reference and refused the identical key as a literal. `internal/jsprovision`'s five decisions were spelled separately, "each doc comment asserting it matched the other with nothing enforcing that it did".
+- **Measured:** twelve packages in this tree exist for no other reason. `internal/httpx` states the pattern outright: written down and checked by nobody, its rule had four prose copies and seven packages violating it.
+- **Cost-when-tried:** every one of them is the forensic record. `internal/textcut` replaced four helpers that were four copies of one rule, already disagreeing on the easy half — two appended `…` and two appended `...` — while the hard half, that a plain `s[:n]` is invalid UTF-8 whenever a multi-byte rune straddles the cut, was got wrong by all four. `internal/whsec`'s rule, written twice, accepted a 16-byte key as a `${VAR}` reference and refused the identical key as a literal. `internal/jsprovision`'s five decisions were spelled separately, "each doc comment asserting it matched the other with nothing enforcing that it did". `internal/backoff`'s four copies of one doubling delay agreed on the answer and disagreed on how they reached it — a loop that exits at the ceiling, a shift by a count read off the wire, and two hand-spread intervals — which is the stage at which the fifth copy is the one that gets the overflow wrong.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -14,11 +14,11 @@ in one package**, and the other callers import it. Not a shared doc comment
 asserting two copies agree; not a helper in each package with a comment
 pointing at the other.
 
-Eleven packages in this tree exist for exactly this reason and nothing else:
+Twelve packages in this tree exist for exactly this reason and nothing else:
 `textcut`, `whsec`, `jsprovision`, `httpx`, `api/httpjson`, `tokens`,
-`procgroup`, `clientsource`, `runtoken`, `hostbox`, `solo`. Each of their doc
-comments names the duplication as its reason for existing, and several name
-what the divergence cost.
+`procgroup`, `clientsource`, `runtoken`, `hostbox`, `solo`, `backoff`. Each of
+their doc comments names the duplication as its reason for existing, and
+several name what the divergence cost.
 
 Where a second implementation genuinely cannot be removed — the dashboard is a
 separate build in a separate language and cannot import a Go identifier — the

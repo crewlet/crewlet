@@ -412,6 +412,18 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("pages: read %s before purging it at %s: %w",
 			id, at.position, err)
 	}
+	// A PURGED SKILL PAGE IS A DEPARTURE THE REGISTRY HAS TO HEAR ABOUT, and
+	// the flag is read before the delete below takes it. Every other write
+	// reports a skill page through [Applier.writeSkillRow]; a purge writes no
+	// head, so without this the registry went on serving a page that no longer
+	// exists anywhere until something else made it read the container again.
+	var skill int
+	err = tx.QueryRowContext(ctx,
+		`SELECT skill FROM pages_skills WHERE page_id = ?`, id).Scan(&skill)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("pages: read %s's skill flag before purging it at %s: %w",
+			id, at.position, err)
+	}
 
 	rows := 0
 	// EVERY CHILD ROW IS NAMED, because a cascade is a delete nobody
@@ -455,6 +467,9 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 			id, at.position, err)
 	}
 	n, _ = res.RowsAffected()
+	if skill == 1 {
+		a.skillMoved = true
+	}
 	return rows + int(n), nil
 }
 

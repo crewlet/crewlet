@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -301,6 +302,13 @@ type Engine struct {
 	// and leave seats running without their company's guidance until the
 	// next sync walk — which on a webhook-driven sync could be never.
 	skills *skills.Registry
+
+	// skillSync is the one loop that keeps [Engine.skills] current: the
+	// source each apply names, the page changes this node and its peers
+	// heard, a periodic walk and a bounded retry. On the ENGINE for the
+	// registry's own reason, and because it is a loop this process runs.
+	// See skillsync.go.
+	skillSync *skillsync.Syncer
 
 	// mcp supervises every MCP child this NODE runs — the company's shared
 	// servers and the per-role children of the seats it holds. One per
@@ -617,6 +625,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 				"itself are closed")
 	}()
 
+	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
+	// projection nudges it from a post-commit hook: a nudge with nothing to
+	// land on would be lost. Building it starts nothing.
+	if err = e.newSkillSync(nodeID); err != nil {
+		return nil, fmt.Errorf("engine: tool skills: %w", err)
+	}
+
 	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
 	// epoch resolves every ${VAR} it holds as it is built — the provider
 	// keys, the integration tokens, the per-role MCP env. Loading the
@@ -900,9 +915,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// edge the service consumes: started after, the changes committed in
 	// the window between would reach the record and wake nobody.
 	e.startNativeFeeds(ctx)
+	// BEFORE notifications, because the Confluence parser hands it every
+	// page change it hears; see [Engine.startSkillSync].
+	e.startSkillSync(ctx)
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
+	// AND THE SOURCE AFTER THEM, because the Confluence source is read off
+	// the wiring startNotifications just built. This is the boot walk: an
+	// apply calls the same thing for every later epoch.
+	e.reconcileSkills(e.Company())
 	booted = true
 	return e, nil
 }
@@ -1222,6 +1244,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// tick of this node runs once a peer can take the duty.
 	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
+	// BEFORE the native backends, whose page projection its walk reads, and
+	// before backends.Close, which closes the broker its nudge listens on.
+	e.stopSkillSync(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the

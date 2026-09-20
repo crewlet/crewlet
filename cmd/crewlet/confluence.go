@@ -140,16 +140,18 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 	printNotes(w, res.Notes)
 }
 
-// `crewlet confluence resync` — the knowledge base's read-only diagnostic.
+// `crewlet confluence resync`: the knowledge base's read-only diagnostic.
 //
-// It exists because the tool-skill registry is populated by a full walk of
-// one space at boot, and a skill that does not load is INVISIBLE — the only
-// symptom is guidance that never appears in a Plan prompt. This runs the engine's own
-// walk against a THROWAWAY registry and prints what it found, so an operator
-// can see what the next boot will see without restarting anything.
+// It exists because a skill that does not load is INVISIBLE: the only symptom
+// is guidance that never appears in an executor prompt. This runs the engine's
+// own walk against a THROWAWAY registry and prints what it found, so an
+// operator can see what a running node's next walk will see without waiting
+// for it and without a running engine to ask.
 //
-// It deliberately does NOT reach into a running engine. Applying a change
-// there is the engine's own job, on the next boot or the next webhook.
+// It deliberately does NOT reach into a running engine, and a running engine
+// does not need it to: every node applies a page webhook as it arrives (and
+// tells the rest of the fleet), and walks its skills space on a timer behind
+// that, so a change reaches every registry without anything being pushed.
 //
 // SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
 // at query time and never loaded into a registry, so for them there is

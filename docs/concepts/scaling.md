@@ -173,9 +173,14 @@ has dropped — alive to its peers, deaf to its work. One connection makes
 - **A seat's MCP subprocesses.** They are children of the node that claimed the
   seat, and they die with the release.
 - **The tool-skill registry.** It warms a local cache rather than producing
-  shared state, so every node runs the boot walk — a node that skipped it would
-  have agents with no tool skills at all. The test for whether periodic work is
-  a [singleton duty](seat-ownership.md#singleton-duties) is exactly this: shared
+  shared state, so every node runs its own skill sync: the boot walk, the
+  periodic walk, and a read of each changed page. A node that skipped it would
+  have agents with no tool skills at all. What IS shared is the news that a page
+  changed: a webhook reaches one node, which broadcasts
+  `tool_skill_page_changed` so every other node re-reads the page (see
+  [Keeping every node current](tool-skills.md#keeping-every-node-current)). The
+  test for whether periodic work is a
+  [singleton duty](seat-ownership.md#singleton-duties) is exactly this: shared
   state, or a local cache?
 - **The dashboard's live-state projection.** Each ingress node builds its own
   from the event stream, so any node can answer without a fan-out.
