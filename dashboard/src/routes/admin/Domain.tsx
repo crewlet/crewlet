@@ -273,7 +273,10 @@ export function DomainScreen({ name }: { name: string }) {
                     {(data.domains ?? []).map((d, i) => (
                       <span key={d.domain}>
                         {i > 0 && ", "}
-                        <a className="t-link" href={href(["admin", "fleet", "domains", d.domain])}>
+                        <a
+                          className="t-link prose-link"
+                          href={href(["admin", "fleet", "domains", d.domain])}
+                        >
                           <InlineCode>{d.domain}</InlineCode>
                         </a>
                       </span>

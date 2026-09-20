@@ -1312,6 +1312,32 @@ Four more controls that looked like something they were not:
   sat in running sentences in five other files with no cue but colour. No scan
   can decide whether an anchor is inside a sentence, so `proselinks.test.ts`
   refuses the shape where nobody asked, an `<a>` carrying no class at all.
+
+  **And then fifteen more, classified WRONG rather than not at all.** A chrome
+  class on an anchor that is a word in a line passes that scan silently, which
+  is what `.t-link` on every "…so it has no channel to set. **Open
+  Integrations**" was. The baseline's hover underline had been standing in for
+  the mark — a cue no keyboard or touch reader ever saw, so it never satisfied
+  1.4.1 — and resetting it is what made the gap visible rather than what opened
+  it. Eleven of them go through one component, so that is where the fix lives:
+  `ScreenLink` carries `.prose-link` BY DEFAULT and takes `standalone` for the
+  three call sites that really are a call to action on a line of their own. A
+  default that is the common case is what makes the next call site right
+  without anybody deciding.
+
+  The scan gained a second question for the rest, and it is decidable rather
+  than a guess: JSX collapses whitespace around a newline, so an author who
+  wants a space between running text and the tag after it has to write `{" "}`.
+  Text, then `{" "}`, then an anchor, means the anchor continues a line of
+  prose — sixteen hits over this tree, no false positives. It does NOT catch an
+  anchor separated by a literal space on the same line, where the space is
+  ordinary text and the shape cannot be told from a caption followed by a chip;
+  two of the fifteen were that, and were found by reading. A gate exactly right
+  about a subset beats one that guesses about everything. The scan skips a bare
+  `<ScreenLink>` on the strength of that default, which is a premise about a
+  component and not something a source scan can hold — deleting the default left
+  the scan green and all eleven links unmarked — so `dialogParts.test.tsx`
+  renders it and checks what comes out.
 - **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
   gesture, so on a screen whose point is one JSON record — a turn's record,
   the active configuration — it took the nav, the stat row and every phase

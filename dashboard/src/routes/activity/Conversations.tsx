@@ -171,7 +171,10 @@ function Exchange({
       <span className="t-caption">
         The words themselves are not in the channel record: both halves travel over the seat inbox
         and are published as events.{" "}
-        <a className="t-link" href={href(["activity"], { category: "a2a", q: channel.id })}>
+        <a
+          className="t-link prose-link"
+          href={href(["activity"], { category: "a2a", q: channel.id })}
+        >
           Read this channel's events ↗
         </a>
       </span>
