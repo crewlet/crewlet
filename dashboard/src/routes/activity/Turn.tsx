@@ -901,7 +901,9 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
 
                 The far end of the LEDGER, which is not the card's: see
                 `.num-block` for why a figure column that tracks a 1500px
-                panel is a figure nobody reads. The size takes `.num-col`
+                panel is a figure nobody reads — and why the ledger's own
+                width is now its rows and the container alone, with the clamp
+                moved onto the prose beside them. The size takes `.num-col`
                 rather than trailing the spacer bare, so the heading and the
                 value under it are one column of the same width — which is
                 what the block is then sized to. */}
@@ -912,8 +914,26 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
               </div>
               {got.map((b) => (
                 <div key={b.label} className="row gap-2">
-                  <span className="t-cell truncate">{b.label}</span>
-                  {b.note && <span className="t-caption truncate">{b.note}</span>}
+                  {/* A TITLE ON A CELL THAT CAN NOW BE CUT. `.truncate` never
+                      fired inside a `max-content` box — every item was drawn
+                      at its full width and the BLOCK grew instead, which is
+                      how one 455px thread note came to push a figure column
+                      off a 1570px screen. `.num-rows .truncate` bounds it at
+                      20rem, so the cut is real and this is the only remaining
+                      copy of the tail.
+
+                      UNCONDITIONAL, because whether a given row is cut is a
+                      layout fact the render cannot see: a title on a cell that
+                      fits costs a redundant tooltip, and a missing one on a
+                      cell that does not costs the sentence. */}
+                  <span className="t-cell truncate" title={b.label}>
+                    {b.label}
+                  </span>
+                  {b.note && (
+                    <span className="t-caption truncate" title={b.note}>
+                      {b.note}
+                    </span>
+                  )}
                   <span className="spacer" />
                   <span className="mono t-num t-caption num-col">{fmtBytes(b.bytes)}</span>
                 </div>
@@ -987,57 +1007,64 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  */
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
-    <div className="num-block ledger-follows">
-      <div className="col gap-1 num-rows">
-        <div className="row gap-2">
-          <span className="t-label spacer">Prompt sent</span>
-          <span className="t-label num-col">System</span>
-          <span className="t-label num-col">User</span>
-          <span className="t-label num-col">Messages</span>
-          <span className="t-label num-col">Tools</span>
-          <span className="t-label num-col">Approx. tokens</span>
-        </div>
-        {rows.map((w) => (
-          <div key={`${w.phase}|${w.iteration}`} className="row gap-2">
-            <PhaseTag phase={w.phase} />
-            {w.iteration > 1 && (
-              <span className="t-caption" title="self-iterate round">
-                iter {w.iteration}
-              </span>
-            )}
-            {/* THE COUNT IS THE NEWS. Everything else on this row is the last
-                run's, so without it five identical rows said one thing five
-                times and a reader had no way to tell a re-run turn from a
-                repeating panel. */}
-            {w.runs > 1 && (
-              <span className="count-chip" title={runsTitle(w)}>
-                &times;{w.runs}
-              </span>
-            )}
-            <span className="spacer" />
-            <span className="mono t-num t-caption num-col" title="bytes in the system prompt">
-              {fmtBytes(w.systemBytes)}
-            </span>
-            <span className="mono t-num t-caption num-col" title="bytes in the user message">
-              {fmtBytes(w.userBytes)}
-            </span>
-            <span
-              className="mono t-num t-caption num-col"
-              title="bytes of conversation a resumed phase re-entered"
-            >
-              {fmtBytes(w.messageBytes)}
-            </span>
-            <span
-              className="mono t-num t-caption num-col"
-              title={`${fmtCount(w.toolCount)} tool definitions, as compact JSON`}
-            >
-              {fmtBytes(w.toolBytes)}
-            </span>
-            <span className="mono t-num t-caption num-col" title="the engine's own approximation">
-              {fmtCount(w.approximateTokens)}
-            </span>
+    /* THE RULE SPANS THE CARD; THE LEDGER IS SIZED TO ITS ROWS. Two boxes
+       because they are deliberately two different widths: `.num-block` is
+       `fit-content`, so a border on it is drawn at this table's own content
+       edge and reads as this table's top border rather than as a line between
+       two ledgers — see `.ledger-follows`. */
+    <div className="ledger-follows">
+      <div className="num-block">
+        <div className="col gap-1 num-rows">
+          <div className="row gap-2">
+            <span className="t-label spacer">Prompt sent</span>
+            <span className="t-label num-col">System</span>
+            <span className="t-label num-col">User</span>
+            <span className="t-label num-col">Messages</span>
+            <span className="t-label num-col">Tools</span>
+            <span className="t-label num-col">Approx. tokens</span>
           </div>
-        ))}
+          {rows.map((w) => (
+            <div key={`${w.phase}|${w.iteration}`} className="row gap-2">
+              <PhaseTag phase={w.phase} />
+              {w.iteration > 1 && (
+                <span className="t-caption" title="self-iterate round">
+                  iter {w.iteration}
+                </span>
+              )}
+              {/* THE COUNT IS THE NEWS. Everything else on this row is the
+                  last run's, so without it five identical rows said one thing
+                  five times and a reader had no way to tell a re-run turn
+                  from a repeating panel. */}
+              {w.runs > 1 && (
+                <span className="count-chip" title={runsTitle(w)}>
+                  &times;{w.runs}
+                </span>
+              )}
+              <span className="spacer" />
+              <span className="mono t-num t-caption num-col" title="bytes in the system prompt">
+                {fmtBytes(w.systemBytes)}
+              </span>
+              <span className="mono t-num t-caption num-col" title="bytes in the user message">
+                {fmtBytes(w.userBytes)}
+              </span>
+              <span
+                className="mono t-num t-caption num-col"
+                title="bytes of conversation a resumed phase re-entered"
+              >
+                {fmtBytes(w.messageBytes)}
+              </span>
+              <span
+                className="mono t-num t-caption num-col"
+                title={`${fmtCount(w.toolCount)} tool definitions, as compact JSON`}
+              >
+                {fmtBytes(w.toolBytes)}
+              </span>
+              <span className="mono t-num t-caption num-col" title="the engine's own approximation">
+                {fmtCount(w.approximateTokens)}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

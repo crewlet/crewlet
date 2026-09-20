@@ -78,6 +78,38 @@ function rules(css: string, selector: string): string[] {
   return out;
 }
 
+/**
+ * EVERY declaration block whose selector list MENTIONS `selector`, wherever it
+ * sits — a rule of its own, one member of a grouped selector, a descendant
+ * form, or a copy nested inside an `@media`.
+ *
+ * `block` above reads the FIRST rule with an exact selector and `rules` wants
+ * an exact one too, so both are blind to a second declaration of the same
+ * thing — and a gate that forbids a declaration has to see all of them or it
+ * forbids nothing. Measured: appending
+ *
+ *     @media (min-width: 900px) { .num-block { max-width: 38rem } }
+ *
+ * to components.css restored the 608px clamp at exactly the widths the bug
+ * was visible at, and every test in this directory stayed green.
+ *
+ * Each entry keeps its own selector text, because what a gate has to say
+ * about `.num-block` is usually not what it has to say about
+ * `.num-block > .row`.
+ */
+function mentioning(css: string, selector: string): { sel: string; body: string }[] {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const token = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`);
+  const out: { sel: string; body: string }[] = [];
+  for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const name of m[1]!.split(",")) {
+      if (token.test(name)) out.push({ sel: name.trim(), body: m[2]! });
+    }
+  }
+  expect(out.length, `${selector} is not declared at all`).toBeGreaterThan(0);
+  return out;
+}
+
 describe("the frame's layout", () => {
   // A CELL LANDS UNDER THE HEADER THAT NAMED IT.
   //
@@ -350,6 +382,28 @@ describe("the frame's layout", () => {
     // And the min-width is what leaves the spacer able to push the figures
     // right on a screen the block already fits in.
     expect(rows).toMatch(/min-width:\s*100%/);
+    // AND THE COLUMN ITSELF, which this test named as the entire reason the
+    // block exists and then never read. Nothing in the tree asserted
+    // `.num-col`'s own declarations: turning it from `flex: none` into a
+    // flexible track — which is what every other cell in this file is —
+    // collapses five figure columns onto their own text widths and leaves the
+    // headings above them at five different x positions, with every gate
+    // green. It is the same splay `.num-rows` exists to prevent, one level
+    // down.
+    const col = block(css, ".num-col");
+    expect(col, "a column that can flex is not a column").toMatch(/flex:\s*none/);
+    // A FLOOR, NOT THE VALUE. 7rem is derived from a RENDERED heading —
+    // APPROX. TOKENS measures 102px at `--fs-3xs` with `--track-wide` — which
+    // is font metrics and lives in no file, so a gate cannot re-derive it.
+    // What it can hold is that the column did not shrink back under the
+    // heading it was widened for. Measured by stepping the width: the heading
+    // is two lines at 6.25rem and below and one from 6.4rem up, while every
+    // figure under it sits on one at every width — so 6.5rem is the last
+    // value that still clears it, and anything under that is the 5.5rem this
+    // column was widened away from.
+    const rem = /width:\s*(\d+(?:\.\d+)?)rem/.exec(col);
+    expect(rem, ".num-col's width is what makes the figures a column").not.toBeNull();
+    expect(Number(rem![1]), "APPROX. TOKENS wraps below 6.5rem").toBeGreaterThanOrEqual(6.5);
   });
 
   // ONE BOX FOR EVERY ROW, WHICH IS WHAT KEEPS THE COLUMNS COLUMNS.
@@ -363,11 +417,24 @@ describe("the frame's layout", () => {
   // TWO-SIDED, because putting the width back on the rows is exactly how it
   // returns and neither half fails on its own: the rows' box has to carry it,
   // and nothing per-row may.
+  //
+  // THE FORBIDDEN HALF IS A PROPERTY, NOT A SPELLING. It used to test the
+  // literal string `.num-block > .row`, which is where the width sat before
+  // `.num-rows` existed — so the one spelling a regression would naturally
+  // take today, `.num-rows > .row`, was the one the gate did not mention.
+  // Measured: appending `.num-rows > .row { width: max-content }` restored
+  // the splay in full and every test in this directory stayed green. A gate
+  // keyed on a selector that has already been renamed once is a gate that
+  // retires itself at the next rename.
   test("the rows of a figure block are sized as one box, not one at a time", () => {
     const css = sheet("components.css");
-    expect(/\.num-block\s*>\s*\.row\b/.test(css), "a per-row width is the splay this removed").toBe(
-      false,
-    );
+    const inside = [...mentioning(css, ".num-block"), ...mentioning(css, ".num-rows")];
+    for (const { sel, body } of inside) {
+      if (!/\.row(?![\w-])/.test(sel)) continue;
+      expect(body, `${sel} sizes one row at a time — that is the splay`).not.toMatch(
+        /(^|[\s;])(min-)?width\s*:/,
+      );
+    }
     expect(block(css, ".num-rows")).toMatch(/width:\s*max-content/);
   });
 
@@ -381,14 +448,80 @@ describe("the frame's layout", () => {
   //
   // `fit-content`, NOT A CHOSEN CAP — which is what this was first written as.
   // A cap is a number invented to be wider than the content, so it still
-  // leaves a gap, and it has to be re-invented the day a column is added. The
-  // `max-width` that remains is a ceiling only: 100% so a phone scrolls the
-  // block instead of the page, and a rem bound so prose-long labels cannot
-  // quietly restore the gap.
-  test("a figure block is sized to its own rows, with max-width only a ceiling", () => {
-    const b = block(sheet("components.css"), ".num-block");
+  // leaves a gap, and it has to be re-invented the day a column is added.
+  //
+  // AND THE CEILING IS THE BOX, ASSERTED AS AN ABSENCE. The `max-width` read
+  // `min(100%, 38rem)` and the rem half was that same invented cap under a
+  // second property name: it cleared five columns at the 5.5rem `.num-col`
+  // then had, `.num-col` went to 7rem so APPROX. TOKENS would stop wrapping,
+  // and nobody re-derived 608px. It stopped being a ceiling and became the
+  // layout — inside the 1163px a 1570px viewport leaves the card, the weights
+  // block clamped to 608, scrolled 138px of itself out of sight and cut that
+  // same heading down to `APPR…`.
+  //
+  // THE ABSENCE IS THE ONLY SIDE THIS SUITE CAN HOLD, and that is the finding
+  // rather than a shortcut. The width such a number must clear is the column
+  // count in Turn.tsx, `.num-col` here, a gap in a token package, WHICH ROW
+  // the turn produced — a re-delivered self-iterating phase measures 746px
+  // against a header's 684 — and the rendered width of a heading at
+  // `--fs-3xs`, which is font metrics and lives in no file at all. A gate
+  // checking a literal against those needs a slack constant of its own, set
+  // from the same measurement that set 38rem, and it would have stayed green
+  // through this exact regression. So the rule is that there is no literal:
+  // whatever its value, a length on this ceiling is the bug.
+  //
+  // `100%` IS NOT REDUNDANT WITH `fit-content` and must not be tidied away
+  // with the rem: `.num-rows` is `width: max-content`, so this box's
+  // min-content equals its max-content, the floor swallows the available term
+  // and the block resolves to its content at every width — which costs it the
+  // scroller, since `overflow-x: auto` only scrolls a box narrower than its
+  // content. Measured with the line deleted: on a 390px phone the weights
+  // block draws 746px out of a 332px card content box, `.app` and `.screen`
+  // are both `overflow-x: hidden` so nothing takes the overflow, and three of
+  // the five figure columns sit past x=390 with no way to reach them.
+  //
+  // AND THE ABSENCE IS ASSERTED OVER EVERY RULE THAT NAMES THE BLOCK, not
+  // over the first one. Reading a single rule is how a forbidden declaration
+  // walks back in under a second selector: measured, appending
+  // `@media (min-width: 900px) { .num-block { max-width: 38rem } }` put the
+  // 608px clamp back at exactly the widths the bug was visible at, and every
+  // test in this directory stayed green.
+  test("a figure block's only ceiling is the box it sits in", () => {
+    const css = sheet("components.css");
+    const b = block(css, ".num-block");
     expect(b).toMatch(/width:\s*fit-content/);
-    expect(b).toMatch(/max-width:\s*min\(100%,\s*\d+(\.\d+)?rem\)/);
+    expect(b, "`fit-content` alone resolves to max-content here — see .num-rows").toMatch(
+      /max-width:\s*100%\s*;/,
+    );
+    for (const { sel, body } of mentioning(css, ".num-block")) {
+      expect(
+        body,
+        `${sel}: a rem or px ceiling is a sixth number nothing can hold in step with the five it clears`,
+      ).not.toMatch(/max-width:[^;]*\d+(\.\d+)?(rem|px|em|ch|vw|vmin)/);
+    }
+    // AND THE CLAMP IT REPLACED HAS TO LAND SOMEWHERE. Without this the gate
+    // is one-sided — deleting the cell measure passes it, and one prose-long
+    // note sizes the whole `max-content` row again, which is the x=37/x=645
+    // gap restored from the other end. `.truncate` alone does not do it:
+    // inside a `max-content` box every item is drawn at its full intrinsic
+    // width, so the class is decoration until something bounds it.
+    //
+    // A FLOOR RATHER THAN THE SHAPE, for the reason the paragraph above gives
+    // about `.num-block`'s own ceiling: `/\d+rem/` accepts a measure narrower
+    // than the notes it exists to let through, and those notes are the whole
+    // derivation. The three the blocks must render WHOLE — `the thread could
+    // not be read from that node` at 248px is the widest, against 204px and
+    // 198px — are what 20rem was set to clear, and telling them apart is why
+    // the engine puts `thread_context_read` on the wire at all. Below 16rem
+    // the widest of them is cut and the block starts lying about which state
+    // it is in; the ceiling side is free, because the row's own figures bound
+    // it.
+    const measure = /max-width:\s*(\d+(?:\.\d+)?)rem/.exec(block(css, ".num-rows .truncate"));
+    expect(measure, "the prose is the half of the row that can absorb a clamp").not.toBeNull();
+    expect(
+      Number(measure![1]),
+      "a measure under 16rem cuts the diagnostic notes this block exists to tell apart",
+    ).toBeGreaterThanOrEqual(16);
   });
 
   // AND A CAPPED CELL DOES NOT PAINT OUTSIDE ITS TRACK.

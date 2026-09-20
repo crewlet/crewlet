@@ -297,6 +297,47 @@ test("every figure column sits inside the box the rows are sized as", async () =
   }
 });
 
+// A LEDGER CELL THAT CAN BE CUT SAYS ITS WHOLE TEXT SOMEWHERE.
+//
+// `.truncate` cuts at a PIXEL, and until `.num-rows .truncate` was given a
+// measure it never fired in these rows at all: inside a `max-content` box every
+// item is drawn at its full width, so the class was decoration and the BLOCK
+// grew in its place — which is how one 455px note came to push a figure column
+// off a 1570px screen. The block holds its columns now and the prose is what
+// gives, so the title is the only remaining copy of the rest of the sentence.
+//
+// THE THREAD NOTE IS THE ONE THAT REACHES IT: 455px against a 320px measure,
+// and it grows with the message count's digits, where the other three the
+// blocks can say all arrive whole under 250px.
+//
+// jsdom computes no layout, so the CUT cannot be asserted here. The `title`
+// can, and it is exactly what goes missing when the next truncating cell is
+// added beside these two.
+test("a ledger cell that can be cut carries its whole text in a title", async () => {
+  mount({
+    events: [
+      event({
+        type: "prefetch_summary",
+        timestamp: "2026-09-13T10:00:00Z",
+        payload: {
+          turn_id: TURN,
+          thread_context_hit: true,
+          thread_context_bytes: 4096,
+          thread_context_read: true,
+          thread_context_posts: 12,
+          thread_context_stopped_short: true,
+        },
+      }),
+    ],
+  });
+  const note = await screen.findByText(/but not the newest/);
+  expect(note.className).toContain("truncate");
+  expect(note.getAttribute("title")).toBe(note.textContent);
+  const label = screen.getByText("The thread so far");
+  expect(label.className).toContain("truncate");
+  expect(label.getAttribute("title")).toBe("The thread so far");
+});
+
 // A TURN THAT ANSWERED WITH NOTHING IS AN EMPTY STATE, not a blank page — and
 // the empty state must not fire on a turn whose phases are arriving on the
 // stream instead, which is the deep-link-while-running case.
