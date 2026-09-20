@@ -437,20 +437,29 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.work_key", in.Run.UnitOfWork()))
 	defer span.End()
 
-	// THE INDICATOR THIS TURN LEFT UP. The suspended half ended with
-	// keepAlive, so the box's minutes are visible to whoever is waiting; this
-	// takes that same hold back rather than raising a second one over it, and
-	// ends it below however the resumed turn goes.
+	// THE INDICATOR A RESUMED TURN SHOWS, which comes from one of two places
+	// and never from both. Ended below however the resumed turn goes.
 	//
-	// REJOIN RATHER THAN BEGIN, because a resume has nothing to raise from: a
-	// parked run's row carries no chat metadata by design — the message that
-	// woke the suspended turn may be days gone and was never this node's to
-	// keep — and the conversation keys it does carry are partition keys, not
-	// addresses in a channel. Nil where the session is not on this node (the
-	// seat moved while the box ran, or this process restarted): the indicator
-	// that node raised lapses on the backend's own expiry, and a resumed turn
-	// that raised a fresh one would be asserting a conversation it cannot
-	// prove it is in.
+	// REJOIN FIRST, because a resume a BOX'S COMPLETION drove has nothing to
+	// raise from: the suspended half ended with keepAlive, so the hold is
+	// already up under this same turn id and the box's minutes are visible to
+	// whoever is waiting — and a parked run's row carries no chat metadata by
+	// design, the message that woke the suspended turn being days gone and
+	// never this node's to keep, while the conversation keys the row does
+	// carry are partition keys rather than addresses in a channel. A fresh
+	// raise there would assert a conversation this turn cannot prove it is
+	// in, over an indicator that is already up.
+	//
+	// BEGIN FROM THE TRIGGER WHERE NO HOLD IS LEFT, because that is a resume a
+	// PERSON'S ANSWER drove: the park released the hold, and the answer is an
+	// ordinary chat message carrying the conversation to raise in. Nil where
+	// neither holds — a completion whose session is not on this node, the seat
+	// having moved while the box ran or this process having restarted: the
+	// indicator that node raised lapses on the backend's own expiry, and
+	// nothing here invents a thread for it.
+	//
+	// See [Engine.resumeWorkingStatus], which owns that order and reports
+	// which of the two answered.
 	status, rejoined := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
 	// TRUE UNTIL THE TURN ACTUALLY RUNS, BUT ONLY ON ONE OF THE TWO ROUTES.
 	// Every early return below is a RETRY rather than an ending — a reply

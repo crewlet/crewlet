@@ -355,8 +355,8 @@ routinely runs minutes. Without a signal, the human who posted sees
 nothing until the reply lands and cannot tell "the bot is working" from
 "the bot is dead". Crewlet closes that gap: while an agent reasons about a
 Slack message it shows a **working status** in the thread — "*Agent SWE is
-thinking…*" under the composer — and clears it when the agent replies or
-gives up.
+thinking…*" under the composer — and takes it down once nothing is working
+behind it.
 
 ### What Slack actually supports
 
@@ -401,6 +401,15 @@ of the time it appears, which teaches the reader to distrust the whole
 indicator. Generic ("is thinking…") or plainly figurative ("is finding
 the coffee machine…") is safe; plausible-and-specific is not.
 
+**When it goes up, when it is held and when it comes down is the turn's, not
+this page's.** Every point in that lifecycle — including what a detached
+[sandbox](../concepts/code-sandbox.md) run does to it, which is where most of
+its rules are — is the table in
+[Turn Engine § The working status](../concepts/turn-engine.md#the-working-status),
+and that table is the only copy of it. It is identical on Mattermost; what
+differs between the two backends is only what the indicator can *say*. What
+follows is what is true of **this** backend and of no other.
+
 - **One line per phase, held for that phase.** The pick is deterministic
   in `(turn_id, phase, how many phases the turn has been through)`, so the
   45 s heartbeat re-asserts the *same* words — text that churned mid-phase
@@ -409,54 +418,20 @@ the coffee machine…") is safe; plausible-and-specific is not.
   one than that phase showed the first time, so a second pass is visible
   instead of looking stuck. Two turns in one thread start from different
   points in the pool, because the seed is the turn's own id.
-- **Raised at the start of the turn**, before it reads the thread, searches
-  the knowledge base or builds its runner — so the slowest part of getting
-  going happens with the agent visibly on it. It is *not* raised while a
-  trigger waits on the broker behind a busy agent: nothing is running yet,
-  and the indicator says an agent is working.
 - **Kept alive across long turns.** Slack expires a status after 2
   minutes; the engine re-asserts it every 45 s (two attempts inside every
   expiry window, ~1.3 requests/min against Slack's 600/min per-app limit).
-- **Cleared when the turn ends** — a posted reply, a `no_action` outcome
-  decision ("not addressed to me"), a failure, a guard breach or an
-  exhausted budget all clear it, as does a turn whose runner could not be
-  built at all. The exception is a RESUMED turn that never got that far and
-  was driven by a BOX's completion: that completion is put back for another
-  attempt and nothing else could raise the indicator again, so it stays up
-  for the attempt that follows. A resume a PERSON's answer drove clears
-  instead — it reverts to awaiting that same person, and their redelivered
-  message raises a fresh indicator of its own. Slack also clears it by itself the instant the agent posts
-  into the thread; the engine re-asserts only while a later phase is still
-  running, which is what keeps the indicator honest across a
-  `self_iterate` loop.
-- **Held across a detached [sandbox](../concepts/code-sandbox.md)
-  run — while the box is actually working.** When Execute suspends for a
-  background coding job the agent has neither replied nor given up, so the
-  indicator stays up until the resumed turn finishes, and the resume takes
-  that same hold back rather than raising a second one over it. The hold
-  follows the run's own record rather than the turn's intent to suspend: a
-  suspension the engine could not record is a run it settles and a box it
-  reclaims on the spot, and the indicator comes down with it. A store that
-  could not say either way keeps it, because the write may have landed.
-- **Released when that run stops to ask a question.** A coding job can come
-  back asking for a decision instead of a result; the run then parks, the
-  seat goes back to work, and the answer is waited for — possibly for days.
-  The agent has stopped, so its indicator comes down at the park. The reply
-  that answers the question is an ordinary chat message, so the resume it
-  triggers raises a fresh one in that thread and the work is visible again.
-- **Never in the way of the work.** A raise and a phase change hand the
-  request to the session's own goroutine, so an unreachable or slow
-  workspace cannot delay the turn; a refused or rate-limited `setStatus`
-  is logged and the status simply expires. Nothing about the indicator can
-  fail a turn.
-- **Bounded when a turn does not come back.** A held indicator is taken
-  down when the run it is held for parks or is settled, and when this node
-  hands the seat to a peer or shuts down — so a suspended turn whose resume
-  lands on another node does not leave one being re-asserted for ever. A process killed outright leaves its last
-  indicator to Slack's own two-minute expiry, and a `PUT /config` that
-  rebuilds the Slack transport clears the ones it was holding — turns in
-  flight then run without an indicator until they end, and their replies
-  land as usual.
+- **Slack clears it by itself the instant the agent posts into the thread.**
+  The engine re-asserts only while a later phase is still running, which is
+  what keeps the indicator honest across a `self_iterate` loop.
+- **A refused or rate-limited `setStatus` is logged and the status simply
+  expires.** Nothing about the indicator can fail a turn, and nothing about
+  it delays one.
+- **Two minutes is what is left standing when this process cannot clear
+  it.** A process killed outright leaves its last indicator to that expiry,
+  and a `PUT /config` that rebuilds the Slack transport clears the ones it
+  was holding — turns in flight then run without an indicator until they
+  end, and their replies land as usual.
 
 ### `typing_status` modes
 
