@@ -82,15 +82,39 @@ p {
 
    WHERE AN UNDERLINE IS THE ONLY HONEST MARK IT IS PERMANENT, not a hover: a
    link inside running prose is distinguished from the text around it by colour
-   alone otherwise, which is WCAG 1.4.1. `.prose.md a` (rendered Markdown) and
-   `.int-form-note a` (the sentence under a setup form) carry it at rest, and
-   they are the only two registers in this tree that are genuinely a phrase. */
+   alone otherwise, which is WCAG 1.4.1. `.prose-link` below is that register,
+   and `.prose.md a` (rendered Markdown) and `.int-form-note a` (the sentence
+   under a setup form) are the two containers that get it without asking. */
 a {
   color: var(--accent-ink);
   text-decoration: none;
 }
 a:hover {
   color: var(--text);
+}
+
+/* A LINK INSIDE A SENTENCE, and the one place the rule above does not reach.
+   The reset is right for chrome — a breadcrumb, a row that happens to be an
+   anchor, a caption-sized navigation — because every one of those is a THING
+   on the page rather than a word in a line. It is wrong the moment an anchor
+   is a word in a line: the text around it is `--text` and the link is
+   `--accent-ink`, and colour alone is exactly what WCAG 1.4.1 refuses.
+
+   This was first written as "the two containers below are the only registers
+   in this tree that are genuinely a phrase", which was not true and was not
+   checked. Seven anchors sat in running sentences outside them — the
+   linkifier that renders a problem's own prose, the retention banner's "What
+   the six terms mean", the webhook footer's "event log, which pages", the
+   setup dialog's "keep credentials in Credentials and…", and the two trailing
+   "Open <app>" links that follow a remedy in the same paragraph. Every one of
+   them lost its only non-colour cue.
+
+   A CLASS ON THE ANCHOR rather than a rule per container, because the seven
+   are in five different containers and the next one will be in a sixth;
+   `styles/proselinks.test.ts` is what stops it being forgotten, by refusing an
+   anchor that carries no class at all. */
+.prose-link {
+  text-decoration: underline;
 }
 
 button,

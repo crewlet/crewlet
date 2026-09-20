@@ -1107,8 +1107,11 @@ export function SetupDialog({
               <span className="sr-only">{WHY_SECRETS}</span>
             </span>
             <span>
-              Tip: keep credentials in <a href={href(["admin", "credentials"])}>Credentials</a> and
-              reference them here as {"${NAME}"}.
+              Tip: keep credentials in{" "}
+              <a className="prose-link" href={href(["admin", "credentials"])}>
+                Credentials
+              </a>{" "}
+              and reference them here as {"${NAME}"}.
             </span>
           </p>
         )}
@@ -1280,7 +1283,7 @@ export function SetupDialog({
                   <>
                     {" "}
                     {link ? (
-                      <a href={link} target="_blank" rel="noreferrer">
+                      <a className="prose-link" href={link} target="_blank" rel="noreferrer">
                         {r.link_text || `Open ${appName}`}
                       </a>
                     ) : (

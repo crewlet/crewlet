@@ -174,7 +174,7 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
     // away to read a page about how to fill it in.
     if (linked && href) {
       out.push(
-        <a key={key++} href={href} target="_blank" rel="noreferrer">
+        <a key={key++} className="prose-link" href={href} target="_blank" rel="noreferrer">
           {linked}
         </a>,
       );
@@ -186,7 +186,7 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
       );
     } else if (url) {
       out.push(
-        <a key={key++} href={url} target="_blank" rel="noreferrer">
+        <a key={key++} className="prose-link" href={url} target="_blank" rel="noreferrer">
           {url}
         </a>,
       );
