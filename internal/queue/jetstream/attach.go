@@ -478,9 +478,38 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 		return
 	}
 	a.q.beginHandler()
-	res := runHandler(ctx, a.log, ev, h)
+	res := runHandler(a.withDeliveriesLeft(ctx, msg), a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+}
+
+// withDeliveriesLeft states this delivery's remaining headroom on the
+// handler's context — see [queue.DeliveriesLeft] for what a handler does with
+// it.
+//
+// Off THIS message's own metadata rather than off [attachment.failures],
+// which counts something else entirely: the map is one attachment's record of
+// FAILURES and resets on every re-attach, while the budget a message is
+// spending is carried by the message and survives every handoff. Confusing
+// the two is the defect the value exists to end.
+//
+// A message whose metadata will not parse states NOTHING rather than a
+// guess, for the same reason [attachment.nakOrDeadLetter] still returns it:
+// the count is unreadable, not zero.
+func (a *attachment) withDeliveriesLeft(ctx context.Context, msgs ...jetstream.Msg) context.Context {
+	perMessage := make([]int, 0, len(msgs))
+	for _, msg := range msgs {
+		md, err := msg.Metadata()
+		if err != nil {
+			continue
+		}
+		perMessage = append(perMessage, budgetFor(a.q.cfg)-int(md.NumDelivered))
+	}
+	left, known := queue.LeastDeliveriesLeft(perMessage)
+	if !known {
+		return ctx
+	}
+	return queue.WithDeliveriesLeft(ctx, left)
 }
 
 // decode parses a message, acking-and-dropping a corrupt payload.

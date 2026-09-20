@@ -282,7 +282,17 @@ func (b *Broker) invoke(
 	// this twin, not of the fleet it models.
 	b.mu.Lock()
 	client.enterHandlerLocked()
+	// THIS DELIVERY'S REMAINING HEADROOM, read under the lock the counter
+	// lives under and before the handler runs — see [queue.DeliveriesLeft].
+	// The twin models the delivery budget, so it owes a handler the same
+	// number the real broker gives it, in the contract's convention rather
+	// than in this backend's: what is carried is deliveries LEFT, where
+	// this package counts redeliveries already spent.
+	left, known := deliveriesLeftLocked(sub, evs, client.maxRedeliveries)
 	b.mu.Unlock()
+	if known {
+		ctx = queue.WithDeliveriesLeft(ctx, left)
+	}
 
 	res := runHandler(ctx, call)
 
@@ -324,6 +334,28 @@ func (b *Broker) invoke(
 		log.ErrorContext(ctx, "event_dead_lettered", "topic", sub.topic, "group", sub.group,
 			"event_type", d.ev.Type, "redeliveries", d.redeliveries)
 	}
+}
+
+// deliveriesLeftLocked is how many further deliveries a partition has before
+// its budget is spent, in the contract's convention.
+//
+// An event on its FIRST delivery has spent no redeliveries, so its headroom is
+// the whole budget; one that has been redelivered budget times has none, and
+// the next Nak dead-letters it — which is exactly where
+// redeliverOrDeadLetterLocked draws the line, and the two must not be allowed
+// to disagree about the boundary they share.
+//
+// Every event is readable here, so the fold's absent answer is reachable only
+// for an empty partition, which PartitionByKey does not produce. It goes
+// through [queue.LeastDeliveriesLeft] regardless: the rule that a partition
+// reports the SMALLEST of its messages' is the contract's, and a twin folding
+// it its own way would certify a bound production does not have.
+func deliveriesLeftLocked(sub *subscription, evs []*events.Event, budget int) (int, bool) {
+	perMessage := make([]int, 0, len(evs))
+	for _, ev := range evs {
+		perMessage = append(perMessage, budget-sub.redeliveries[ev.ID])
+	}
+	return queue.LeastDeliveriesLeft(perMessage)
 }
 
 // deadLetter is one event that exhausted its budget, carried back out of the

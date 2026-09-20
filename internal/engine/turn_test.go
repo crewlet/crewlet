@@ -1484,6 +1484,196 @@ func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 	}
 }
 
+// THE HEADROOM IS WHAT THE MESSAGE CARRIES, not what this process remembers.
+//
+// A deferred answer goes back with a NAK and every return spends one of the
+// message's deliveries, so a route that kept offering until the last one
+// would hand the final delivery back and the broker would dead-letter a
+// person's reply. The coordinator's own ceiling cannot prevent that: it is
+// per node and per process, and it resets on exactly the events — a seat
+// handoff, a restart — that do NOT reset the count the broker enforces.
+//
+// The boundary is the assertion. One delivery either side of the reserve
+// decides whether a parked run is offered this message at all, and an
+// UNSTATED count leaves the route exactly as it was before this clause
+// existed: a node whose transport said nothing must not stop answering
+// coding runs.
+func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		left      int
+		stated    bool
+		wantOffer bool
+	}{
+		"one delivery outside the reserve": {left: sandbox.AnswerDeliveryReserve + 1, stated: true, wantOffer: true},
+		"at the reserve":                   {left: sandbox.AnswerDeliveryReserve, stated: true, wantOffer: false},
+		"one delivery left":                {left: 1, stated: true, wantOffer: false},
+		"none left at all":                 {left: 0, stated: true, wantOffer: false},
+		"a full budget":                    {left: 24, stated: true, wantOffer: true},
+		"no count stated":                  {stated: false, wantOffer: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions {
+				// FREE, with a question open on it: the shape a parked
+				// run leaves.
+				return inbox.Conditions{Owned: true, TurnEngineReady: true,
+					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+			}
+			var offers int
+			d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+				*events.Event,
+			) (sandbox.AnswerDisposition, error) {
+				offers++
+				return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+			}
+
+			ctx := context.Background()
+			if tc.stated {
+				ctx = queue.WithDeliveriesLeft(ctx, tc.left)
+			}
+			got := d.Dispatch(ctx, "swe", []*events.Event{inThread("notification", "chat:C1")})
+
+			if tc.wantOffer {
+				if offers != 1 {
+					t.Fatalf("the delivery was offered %d times, want once: it has "+
+						"deliveries to spare, so a run still owed it must be asked", offers)
+				}
+				if got.Outcome != queue.OutcomeNak {
+					t.Errorf("outcome = %v, want a nak: the run is still owed this answer",
+						got.Outcome)
+				}
+				if len(r.reqs) != 0 {
+					t.Errorf("a turn ran on an answer a parked coding run is still owed")
+				}
+				return
+			}
+			if offers != 0 {
+				t.Fatalf("the delivery was offered to a parked run with %d deliveries "+
+					"left: handing it back again risks the broker dead-lettering the "+
+					"reply, which is the one ending this route must never take", tc.left)
+			}
+			if got.Outcome != queue.OutcomeAck {
+				t.Errorf("outcome = %v, want an ack: what is left of this message "+
+					"belongs to the ordinary route now", got.Outcome)
+			}
+			if len(r.reqs) != 1 {
+				t.Fatalf("the ordinary turn ran %d times, want once: the message was "+
+					"neither offered nor worked, so nothing at all happened to it",
+					len(r.reqs))
+			}
+		})
+	}
+}
+
+// AND NO NUMBER OF HANDOFFS SPENDS A REPLY'S LAST DELIVERIES.
+//
+// THE PROPERTY THE RESERVE EXISTS FOR, driven rather than reasoned: walk one
+// message down from a full budget, one hand-back per delivery, with a
+// coordinator that defers every time — which is what a resume failing the
+// same way on every node looks like, since each handoff gives it a fresh
+// per-process count. Measured before the reserve existed, three such nodes
+// handed ONE reply back 27 times and the broker dead-lettered it at 25.
+//
+// The loop must end at the reserve, with the ordinary route holding exactly
+// the deliveries it was promised.
+func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		// EVERY node fails the same way, and every one of them starts
+		// its own attempt count.
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	answer := inThread("notification", "chat:C1")
+	left := 24 // a message on its first delivery of a 25-delivery budget
+	for {
+		got := d.Dispatch(queue.WithDeliveriesLeft(context.Background(), left),
+			"swe", []*events.Event{answer})
+		if got.Outcome != queue.OutcomeNak {
+			break
+		}
+		// The hand-back spends one, whatever it meant.
+		left--
+		if left < 0 {
+			t.Fatal("the answer route handed one reply back through its whole " +
+				"delivery budget: the next return dead-letters the person's reply")
+		}
+	}
+	if left != sandbox.AnswerDeliveryReserve {
+		t.Errorf("the ordinary route was left %d deliveries, want the reserve of %d",
+			left, sandbox.AnswerDeliveryReserve)
+	}
+	if len(r.reqs) != 1 {
+		t.Errorf("the ordinary turn ran %d times once the offer stopped, want once",
+			len(r.reqs))
+	}
+}
+
+// AND THE PER-PROCESS CLAUSE STILL BOUNDS ONE PROCESS.
+//
+// The message-carried count is the clause that makes the headroom claim true
+// across handoffs; it is not a replacement for the ceiling inside a node. A
+// delivery with a whole budget in hand would otherwise circle one seat's inbox
+// for as long as the resume kept failing, which is what
+// [sandbox.MaxAnswerAttempts] is for — so here the coordinator spends its own
+// budget with headroom to spare, and the dispatcher lets the message go at the
+// point IT says so rather than at the point the broker would.
+func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	// The coordinator's own bound, as this seam reports it: deferred until
+	// the attempts are spent, then the ordinary message it looks like.
+	var offers int
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offers++
+		if offers < sandbox.MaxAnswerAttempts {
+			return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+		}
+		return sandbox.AnswerNotMine, sandbox.ErrResumeUnavailable
+	}
+
+	answer := inThread("notification", "chat:C1")
+	// A full budget throughout, so nothing but the per-process clause can
+	// end this: the reserve is never approached.
+	ctx := queue.WithDeliveriesLeft(context.Background(), 24)
+	var got queue.Result
+	for range sandbox.MaxAnswerAttempts {
+		got = d.Dispatch(ctx, "swe", []*events.Event{answer})
+		if got.Outcome != queue.OutcomeNak {
+			break
+		}
+	}
+	if offers != sandbox.MaxAnswerAttempts {
+		t.Fatalf("the run was offered the message %d times, want %d: the "+
+			"per-process ceiling is what ends a resume that fails the same way "+
+			"on one node", offers, sandbox.MaxAnswerAttempts)
+	}
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack once the attempts are spent", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Errorf("the ordinary turn ran %d times, want once", len(r.reqs))
+	}
+}
+
 // AND WHAT IS OFFERED IS WHAT SURVIVED THE LEDGER.
 //
 // The offer on this path sits after the completion read, so the partition it

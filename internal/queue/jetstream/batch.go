@@ -179,8 +179,17 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 			evs[i] = d.ev
 		}
 
+		msgs := make([]jetstream.Msg, len(part.Items))
+		for i, d := range part.Items {
+			msgs[i] = d.msg
+		}
+
 		a.q.beginHandler()
-		res := runBatchHandler(ctx, a.log, evs, h)
+		// THE PARTITION'S OWN HEADROOM, which is the SMALLEST of its
+		// messages': one outcome covers all of them, so a hand-back
+		// spends a delivery of every one and the message nearest its
+		// budget is the one that dead-letters first.
+		res := runBatchHandler(a.withDeliveriesLeft(ctx, msgs...), a.log, evs, h)
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)

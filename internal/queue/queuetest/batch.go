@@ -3,6 +3,7 @@ package queuetest
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -110,6 +111,45 @@ func (s *suite) runBatch(t *testing.T) {
 			publish(ctx, t, q, "t", newConvEvent(string(rune('0'+i)), "c1"))
 		}
 		batches.awaitSizes(t, "the backlog to arrive as capped batches", 2, 2, 1)
+	})
+
+	t.Run("a_batch_handler_is_told_how_many_deliveries_are_left", func(t *testing.T) {
+		t.Parallel()
+		// The same number a single delivery carries — see
+		// a_handler_is_told_how_many_deliveries_are_left — because a
+		// partition's handler spends the budget the same way: one
+		// outcome, applied to every message it was handed.
+		//
+		// WHAT IS NOT DRIVEN HERE is a partition whose messages sit at
+		// DIFFERENT counts, which must report the smallest of them.
+		// Building one needs a redelivery and a fresh publish to meet in
+		// the same drain, which is a race on any backend with fetch
+		// latency and impossible on one that dispatches inline. The fold
+		// is [queue.LeastDeliveriesLeft] instead — one function both
+		// backends call, with its own case — so the rule cannot be two
+		// rules however each backend reads its own counters.
+		newQueueWithAttempts := s.needAttempts(t)
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		j := newJournal()
+		var attempts int
+		subscribeBatch(ctx, t, q, "t.left", "g",
+			func(hctx context.Context, _ []*events.Event) queue.Result {
+				attempts++
+				left, known := queue.DeliveriesLeft(hctx)
+				if !known {
+					j.record("unknown")
+					return queue.Ack()
+				}
+				j.record(strconv.Itoa(left))
+				if attempts < 3 {
+					return queue.Nak(errors.New("still failing"))
+				}
+				return queue.Ack()
+			}, queue.DefaultBatchOptions())
+		publish(ctx, t, q, "t.left", newConvEvent("a", "c1"))
+
+		j.awaitLabels(t, "the partition's headroom to count down", "2", "1", "0")
 	})
 
 	t.Run("failing_partition_redelivers_only_itself", func(t *testing.T) {

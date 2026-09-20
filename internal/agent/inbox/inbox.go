@@ -138,6 +138,16 @@ type Screening struct {
 	// caller matching on the sentence would break silently the first time
 	// it was reworded, and the failure mode is a clarification answer
 	// requeued for ever behind the question it answers.
+	//
+	// IT SAYS OFFER IT, NEVER THAT THE OFFER IS FREE. On the proceed path
+	// an offer that is not claimed hands the delivery back, which spends
+	// one of the message's deliveries — so the caller stops offering once
+	// what is left has to be kept for the ordinary route, and it is the
+	// caller that knows the count because it holds the queue's own
+	// delivery headroom. See sandbox.AnswerDeliveryReserve. Nothing about
+	// that decision belongs here: this package reaches no store and no
+	// transport, and a flag stating one screening's opinion of a broker's
+	// budget would be the same false claim it corrects.
 	OfferAsSandboxAnswer bool
 
 	// NoteDeferred asks the seat host to record that this consumer stopped,

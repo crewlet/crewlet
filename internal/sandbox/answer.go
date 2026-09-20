@@ -86,31 +86,42 @@ func (d AnswerDisposition) Valid() bool {
 	}
 }
 
-// MaxAnswerAttempts is how many times ONE delivery is handed to ONE parked
-// run before this node stops offering it and lets it be the ordinary message
+// MaxAnswerAttempts is how many times ONE PROCESS hands one delivery to ONE
+// parked run before it stops offering it and lets it be the ordinary message
 // it looks like.
 //
 // It counts ATTEMPTS, not hand-backs, so the last of them is not handed back:
-// one message reaches one run at most this many times.
+// one message reaches one run at most this many times IN THIS PROCESS.
 //
-// WHY A BOUND AT ALL. Nothing else ends the loop: a run parked on a question
-// stays matchable for ever — the pause reaper moves it to [StatusReseed],
-// which is still [Awaiting] — so a resume that fails the same way every time
-// would circle the seat's inbox for the life of the process.
+// WHY A BOUND AT ALL. Nothing else ends the loop within a process: a run
+// parked on a question stays matchable for ever — the pause reaper moves it to
+// [StatusReseed], which is still [Awaiting] — so a resume that fails the same
+// way every time would circle the seat's inbox for the life of the process.
 //
-// WHY TEN, AND WHAT EACH ATTEMPT NOW COSTS. A deferred answer is handed back
-// with a NAK ([Dispatcher.answered]), which is the same return the completion
-// route takes and therefore carries the same spacing: the queue's own backoff
-// — seed, doubling, ceiling, in internal/queue/jetstream — so ten attempts
-// span about two and a half minutes at the shipped values rather than the
+// THE OTHER CLAUSE IS THE ONE THE MESSAGE CARRIES, and it is not this one:
+// see [AnswerDeliveryReserve]. This count is PER NODE AND PER PROCESS and the
+// broker's delivery budget is per MESSAGE, so nothing here can make a claim
+// about that budget — and this doc made one anyway. It said ten attempts stay
+// "well under the broker's 25-delivery dead-letter budget" fourteen lines
+// above the paragraph saying a restart or a seat handoff resets the count.
+// Both cannot be true, and it was the headroom claim that was false: the
+// count the broker enforces rides on the message and survives every handoff,
+// so three nodes of ten attempts each hand ONE reply back twenty-seven times
+// (measured) and the twenty-fifth dead-letters it — the one ending this route
+// must never take. The headroom is now stated where it can be true, on the
+// delivery count itself, and this ceiling bounds what it always bounded: one
+// process's thrash.
+//
+// WHY TEN, AND WHAT EACH ATTEMPT COSTS. A deferred answer is handed back with
+// a NAK ([Dispatcher.answered]), which is the same return the completion route
+// takes and therefore carries the same spacing: the queue's own backoff —
+// seed, doubling, ceiling, in internal/queue/jetstream — so ten attempts span
+// about two and a half minutes at the shipped values rather than the
 // milliseconds an immediate republish burned them in. That span is what the
 // failures reaching this path actually need: a seat lease moving to a node
 // that can resume the run takes at most one seat lease TTL (45 s, see
 // internal/seat), a config apply that brings a missing runner arrives on the
-// reconcile poll, and a store blip heals in seconds. And it stays well under
-// the broker's 25-delivery dead-letter budget, which this same message also
-// spends on ordinary handoffs — reaching THAT budget dead-letters the
-// person's reply, which is the one ending this route must never take.
+// reconcile poll, and a store blip heals in seconds.
 //
 // IT IS NOT THE BROKER'S NUMBER, and an earlier doc here claimed it was: 25
 // with no spacing is not "the tolerance a completion already had", because a
@@ -119,17 +130,78 @@ func (d AnswerDisposition) Valid() bool {
 // not had a millisecond to clear. A count is not a tolerance; the pair of them
 // is.
 //
-// THE SECOND CLAUSE IS TIME, and it is the run's own: see [answerWindow].
+// THE THIRD CLAUSE IS TIME, and it is the run's own: see [answerWindow].
 //
 // PER NODE AND PER PROCESS, deliberately: every failure that reaches here is a
 // statement about THIS node — no resumer, a suspended conversation this build
 // cannot decode, a seat that is not in this node's company — so a restart or a
 // seat handoff is exactly the event that makes a further attempt worth making,
-// and both reset the count. It is also why the run is NOT settled when the
-// budget is spent: the turn is still resumable somewhere, so this node hands
-// the delivery back to the ordinary route rather than destroying work a peer
-// or a later build could still finish.
+// and both reset the count. That reset is safe now because it is no longer
+// the only thing between a reply and the dead-letter subject. It is also why
+// the run is NOT settled when the budget is spent: the turn is still resumable
+// somewhere, so this node hands the delivery back to the ordinary route rather
+// than destroying work a peer or a later build could still finish.
 const MaxAnswerAttempts = 10
+
+// AnswerDeliveryReserve is how many of a message's remaining deliveries are
+// left to the ordinary route: once a delivery is within this many of the
+// backend's dead-letter budget, it is no longer offered to a parked run.
+//
+// THE CLAUSE THAT MAKES THE HEADROOM CLAIM TRUE, because it is measured on
+// what the MESSAGE carries — queue.DeliveriesLeft, stated by the backend at
+// the handler boundary — rather than on what any one process remembers. Every
+// bound in this file resets when a seat moves or a node restarts, and the
+// broker's does not; see [MaxAnswerAttempts] for the reply that was
+// dead-lettered by the gap between those two facts.
+//
+// FIVE, AND WHAT CONSUMES THEM. The reserve is exactly what the ordinary
+// route is left holding, since the offer stops with this many deliveries
+// still on the message, and that route spends them one at a time on this same
+// reply:
+//
+//   - a seat handoff while the delivery is in flight. The dispatcher defers,
+//     which on this broker is a Nak and costs a delivery, and placement
+//     converges within one seat lease TTL (45 s, internal/seat) — so a
+//     company whose seats are moving spends one or two here.
+//   - a partition that would not merge, and a park whose requeue failed:
+//     one each, and both are the paths that hand a delivery back rather than
+//     republish it.
+//   - the turn's own retries. A turn that broke before it reached outside the
+//     engine is Naked and run again, and it is the whole point of falling
+//     through to the ordinary route that those retries exist.
+//
+// Five of them span about two minutes at the queue's backoff ceiling (30 s,
+// internal/queue/jetstream), which covers a seat lease TTL and several config
+// reconcile intervals (15 s, internal/configplane) — the same transients the
+// ten attempts above are sized for, which is the point: what is left over
+// must be worth as much as what was spent.
+//
+// It is deliberately NOT derived from the broker's budget. That number is a
+// backend's, configurable, and counted in two conventions (see
+// queue.DeliveriesLeft); a reserve expressed as a fraction of it would move
+// when an operator shrank it, which is the one moment the ordinary route can
+// least afford to have less.
+const AnswerDeliveryReserve = 5
+
+// MayOfferAnswer reports whether a delivery may still be offered to a parked
+// coding run, given how many further deliveries it has before the transport
+// dead-letters it.
+//
+// Takes the pair queue.DeliveriesLeft returns, so a caller composes the two
+// rather than re-deciding what an absent count means. AN ABSENT COUNT IS NOT
+// A SPENT ONE: a transport that did not say leaves the route exactly as it
+// was before this clause existed, bounded by [MaxAnswerAttempts] and
+// [answerWindow] alone. The alternative — reading silence as "no headroom" —
+// would turn every delivery on a node whose metadata is unreadable into an
+// ordinary turn, which spends the reply on the one failure this whole type
+// exists to prevent.
+//
+// Here rather than in the dispatcher because the rule belongs with the number
+// it reads, and because a rule stated in a frame that also holds a queue, a
+// screening and a turn is one nobody can exercise on its own.
+func MayOfferAnswer(left int, known bool) bool {
+	return !known || left > AnswerDeliveryReserve
+}
 
 // maxAnswerDeliveries is how many of one run's deliveries this node keeps a
 // budget for at once.

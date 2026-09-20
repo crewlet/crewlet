@@ -19,6 +19,10 @@
 //     subscription drops the event silently — hence EnsureSubscription.
 //   - Handlers have three outcomes, not two. Ack, Nak, and Defer (leave it
 //     unacked, stop consuming) — see Result.
+//   - A handler is told how many deliveries its message has LEFT before the
+//     backend dead-letters it (DeliveriesLeft), because every outcome that
+//     puts a message back spends one and the count rides on the message
+//     rather than on the process handling it.
 //   - Attachment has four verbs with different destructiveness: Quiesce,
 //     Unquiesce, Detach, DeleteSubscription.
 //   - The durable subscriptions a broker holds can be LISTED

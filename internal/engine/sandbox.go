@@ -632,9 +632,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// the offer reports [sandbox.AnswerDeferred] — the run is awaiting
 		// THIS reply again — so the dispatcher hands the delivery back
 		// with a NAK rather than letting it be the ordinary chat message
-		// it looks like, bounded by [sandbox.MaxAnswerAttempts] and by the
-		// run's own pause_ttl_seconds and let go to the ordinary route
-		// past either. This comment used to say the resume went back to
+		// it looks like, bounded by the deliveries the message itself has
+		// left ([sandbox.AnswerDeliveryReserve], the only clause a seat
+		// handoff does not reset), by [sandbox.MaxAnswerAttempts] within
+		// this process, and by the run's own pause_ttl_seconds — and let
+		// go to the ordinary route past any of them. This comment used to say the resume went back to
 		// awaiting the person "for the conversation's next message rather
 		// than for a redelivery of this one", which described the defect
 		// rather than the design: the reply that carried the answer was

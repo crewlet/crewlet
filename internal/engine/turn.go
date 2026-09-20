@@ -401,7 +401,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// turn must not also be spliced into somebody's coding run. The park
 	// cannot read the ledger at all — a parked partition is never marked
 	// done — so it offers what it has.
-	if screening.OfferAsSandboxAnswer {
+	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle) {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
 		case sandbox.AnswerConsumed:
@@ -761,6 +761,47 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 	}
 }
 
+// mayOfferAnswer reports whether this delivery still has the deliveries to
+// spare for the answer route, on what the MESSAGE carries.
+//
+// THE OFFER IS WHAT IS GATED, not the hand-back. A deferred answer goes back
+// with a NAK, and on the broker this engine ships every return spends one of
+// the message's deliveries — so a route that kept offering until the last one
+// would hand the twenty-fifth back and the broker would dead-letter a
+// person's reply, which is the one ending this route must never take. The
+// coordinator's own ceiling cannot prevent that: it is per node and per
+// process, and it resets on exactly the event (a seat handoff, a restart)
+// that does NOT reset the count the broker enforces. See
+// [sandbox.AnswerDeliveryReserve], which owns the rule and the number, and
+// [sandbox.MaxAnswerAttempts], which is the second clause and bounds one
+// process's thrash.
+//
+// ONLY THE FREE-SEAT OFFER, which is the one whose deferral NAKs. The park
+// branch above offers too, and must keep doing so with no reserve at all: a
+// delivery it does not consume is REPUBLISHED by the park, which is a new
+// message with a budget of its own, so nothing there is spending the count
+// this guard is protecting. Gating it would only cost the seat an answer it
+// could have taken.
+//
+// ON THIS NODE'S LOG when it refuses, because the delivery then becomes an
+// ordinary turn while a coding run may still be parked on its question: that
+// is the answer route giving up its claim on a message, and it is invisible
+// anywhere else.
+func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string) bool {
+	left, known := queue.DeliveriesLeft(ctx)
+	if sandbox.MayOfferAnswer(left, known) {
+		return true
+	}
+	log.WarnContext(ctx, "sandbox_answer_headroom_reserved",
+		"seat", handle, "deliveries_left", left,
+		"reserve", sandbox.AnswerDeliveryReserve,
+		"detail", "this message has spent nearly all of its deliveries, so what "+
+			"is left is kept for the ordinary route rather than offered to a "+
+			"parked coding run again; handing it back once more risks the "+
+			"broker dead-lettering the reply instead")
+	return false
+}
+
 // answered offers a delivery to a coding run of this seat that is waiting for
 // somebody to answer its question, and reports what to do with it.
 //
@@ -850,8 +891,10 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 // — the queue backs a failed delivery off (seed, doubling, ceiling) — so the
 // attempts [sandbox.MaxAnswerAttempts] allows are spread across the minutes a
 // seat handoff, a config apply or a store blip actually take, where a
-// republish handed all of them over in milliseconds. And it keeps the
-// message's IDENTITY and its place: a republish is a new message at the tail
+// republish handed all of them over in milliseconds. It also SPENDS one of
+// the message's deliveries, which is why [Dispatcher.mayOfferAnswer] stops
+// offering while [sandbox.AnswerDeliveryReserve] of them are still left. And
+// it keeps the message's IDENTITY and its place: a republish is a new message at the tail
 // of the inbox, behind whatever followed it on the same conversation, and one
 // whose delivery budget starts over on every copy.
 //

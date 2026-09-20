@@ -272,7 +272,10 @@ type Coordinator struct {
 	// the seat's inbox. One BUDGET PER DELIVERY, under a key naming the
 	// run it is owed to, and both bounds are stated at [MaxAnswerAttempts]
 	// and [maxAnswerDeliveries] — which is also where it says why this is
-	// per process.
+	// per process, and why a count that resets with the process cannot be
+	// the thing keeping a reply clear of the broker's dead-letter budget.
+	// That clause is [AnswerDeliveryReserve], and it is measured on the
+	// delivery rather than remembered here.
 	attempts map[answerKey]map[string]answerBudget
 }
 
@@ -561,7 +564,10 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// routes now hand a failed resume back the same way and take the same
 	// backoff, and what an answer needs on top is a bound that stops SHORT
 	// of the dead-letter boundary, because the delivery it is spending is a
-	// person's reply rather than an engine-generated completion. Every
+	// person's reply rather than an engine-generated completion. That bound
+	// is [AnswerDeliveryReserve], off the count the message carries — a
+	// per-process attempt ceiling cannot make a claim about a budget that
+	// survives the handoffs which reset it. Every
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{

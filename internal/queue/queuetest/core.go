@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -395,6 +396,51 @@ func (s *suite) runCore(t *testing.T) {
 		if got := labelsOf(deadLetters(q, "topic", "grp")); !equalStrings(got, []string{"t"}) {
 			t.Fatalf("dead letters = %v, want [t]", got)
 		}
+	})
+
+	t.Run("a_handler_is_told_how_many_deliveries_are_left", func(t *testing.T) {
+		t.Parallel()
+		// WHAT A HANDLER MAY BOUND ITS OWN RETRIES ON. A handler that
+		// hands a message back — and on a real broker every return does,
+		// including a deferral — is spending a budget it cannot otherwise
+		// see: the count is carried by the MESSAGE and survives the
+		// handoffs and restarts that reset anything a process remembers.
+		// The engine's sandbox answer route documented a headroom claim
+		// over a per-process count for exactly this reason and the claim
+		// was false; see internal/sandbox.AnswerDeliveryReserve.
+		//
+		// THE CONTRACT'S CONVENTION, not a backend's: deliveries LEFT
+		// after the one in hand, so the last attempt before the
+		// dead-letter reports zero. That is what lets a caller reason
+		// about headroom without knowing which of the two conventions
+		// its broker counts in.
+		newQueueWithAttempts := s.needAttempts(t)
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		j := newJournal()
+		var attempts int
+		subscribe(ctx, t, q, "topic.left", "grp",
+			func(hctx context.Context, _ *events.Event) queue.Result {
+				attempts++
+				left, known := queue.DeliveriesLeft(hctx)
+				if !known {
+					j.record("unknown")
+					return queue.Ack()
+				}
+				j.record(strconv.Itoa(left))
+				if attempts < 3 {
+					return queue.Nak(errors.New("still failing"))
+				}
+				return queue.Ack()
+			})
+		publish(ctx, t, q, "topic.left", newEvent("t"))
+
+		// Three attempts were configured, so the first delivery has two
+		// further ones and the third has none — the delivery after which
+		// a hand-back dead-letters, which is where
+		// exhausted_redeliveries_dead_letter_the_event draws the same
+		// line from the other side.
+		j.awaitLabels(t, "the headroom to count down to the last delivery", "2", "1", "0")
 	})
 
 	t.Run("defer_delivery_leaves_the_event_and_stops_consuming", func(t *testing.T) {
