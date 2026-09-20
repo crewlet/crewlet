@@ -483,3 +483,67 @@ func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A CAPPED HISTORY FEED SAYS IT WAS CAPPED.
+//
+// The cut was silent: a task with five hundred changes and a task with fifty
+// answered identically, so a reader deciding "has anybody touched this" was
+// told the whole story either way and could not tell which it had. That is the
+// failure the board reader refuses one file over — an overflow is counted and
+// said, never silently cut — and the escape hatch it points at, `task_activity`,
+// is only reachable by a caller who knows there is something to reach for.
+func TestACappedHistoryFeedSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("Rate limits in the GitLab client")
+
+	// Four changes beyond the create, so a limit of 2 leaves more behind and
+	// a limit past the whole feed does not.
+	for _, who := range []string{"ana", "bo", "cy", "di"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-assign-"+who, created.ID,
+			"ENG", tracker.NoIfMatch, tracker.TaskPatch{Assignee: strptr(who)},
+			tracker.ChangeAssignee, nil); err != nil {
+			t.Fatalf("assign %s: %v", who, err)
+		}
+		r.drain()
+	}
+
+	read := func(limit int) tracker.TaskDetail {
+		t.Helper()
+		detail, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{
+			History: true, HistoryLimit: limit,
+		}, statelog.Freshness{Level: statelog.ReadSession})
+		if err != nil {
+			t.Fatalf("read at limit %d: %v", limit, err)
+		}
+		return detail
+	}
+
+	cut := read(2)
+	if len(cut.History) != 2 {
+		t.Fatalf("a limit of 2 returned %d change(s)", len(cut.History))
+	}
+	if !cut.HistoryTruncated {
+		t.Error("the feed was cut and the answer does not say so, so a reader " +
+			"cannot tell this task from one with two changes in its whole life")
+	}
+
+	// THE EXTRA ROW IS EVIDENCE, NEVER AN ANSWER: the page stays at the
+	// bound. A limit+1 read that forgot to drop the probe row would return
+	// three here and the flag would be right for the wrong reason.
+	whole := read(50)
+	if whole.HistoryTruncated {
+		t.Errorf("a feed of %d change(s) under a limit of 50 reports itself cut",
+			len(whole.History))
+	}
+	if len(whole.History) != 5 {
+		t.Fatalf("the whole feed is %d change(s) after a create and four assigns",
+			len(whole.History))
+	}
+	// EXACTLY AT THE BOUND IS NOT CUT, which is the off-by-one that would
+	// make every full page claim there is more behind it.
+	if exact := read(5); exact.HistoryTruncated || len(exact.History) != 5 {
+		t.Errorf("a limit equal to the feed returned %d change(s), truncated=%v",
+			len(exact.History), exact.HistoryTruncated)
+	}
+}
