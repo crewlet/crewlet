@@ -563,7 +563,7 @@ const SlowAfter = 10 * time.Second
 // # Why a provisioning call needs this at all
 //
 // Because a stalled one is COMPLETELY SILENT, and that is what made a failed
-// boot undiagnosable. A node opens eighteen buckets across its two coordination
+// boot undiagnosable. A node opens nineteen buckets across its two coordination
 // stores, and several streams, in a row; if one of them hangs, nothing is
 // logged between the line before it and the failure a budget later — so the
 // log cannot say which object it was on,

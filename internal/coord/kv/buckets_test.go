@@ -53,16 +53,27 @@ func TestEveryBucketHasALifetimeClass(t *testing.T) {
 	// (3) NO COMMENT IN THE FILE STATES A COUNT THAT DISAGREES. This is the
 	// half that caught ":123" — a sentence about the replica count that
 	// happened to carry a bucket total.
+	// THE VOCABULARY RUNS PAST THE ESTATE ON PURPOSE. A word this map does
+	// not carry is skipped, not failed — so a list that stops at the current
+	// count turns the next bucket into the one sentence this gate cannot
+	// read, which is exactly the failure it exists for. It stopped at
+	// "eighteen" when the estate had eighteen, and the nineteenth arrived
+	// with three stale prose counts in the tree and nothing red. The
+	// alternation below is longest-first, because Go's regexp is
+	// leftmost-FIRST: "twenty" ahead of "twenty-one" would match the prefix
+	// and read 21 as 20.
 	words := map[string]int{
 		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
 		"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
 		"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
 		"sixteen": 16, "seventeen": 17, "eighteen": 18,
+		"nineteen": 19, "twenty": 20, "twenty-one": 21, "twenty-two": 22,
+		"twenty-three": 23, "twenty-four": 24,
 	}
 	// ADJACENT AND PLURAL. "two of those in one bucket" is prose about a
 	// pair, not a count of the estate, and a looser match measures the
 	// English rather than the number.
-	counts := regexp.MustCompile(`(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen) buckets\b`)
+	counts := regexp.MustCompile(`(?i)\b(twenty-one|twenty-two|twenty-three|twenty-four|twenty|nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one) buckets\b`)
 	for _, m := range counts.FindAllString(text, -1) {
 		word := strings.ToLower(regexp.MustCompile(`(?i)^\w+`).FindString(m))
 		n, known := words[word]
