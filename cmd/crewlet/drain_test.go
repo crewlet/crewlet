@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
@@ -93,6 +94,7 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	// Not parallel: it boots a whole node in a second process, and a
 	// package's parallel cases waiting on the same cores is time taken from
 	// the one budget here that matters.
+	client := drainProbeClient(t)
 	model := newHeldModel(t)
 	forge := newAccountForge(t)
 	port := freePort(t)
@@ -183,18 +185,18 @@ turn_engine:
 	// to a seat nobody holds would wait in its mailbox rather than start
 	// the turn this case needs in flight.
 	eventually(t, "the node to be ready", alive, func() bool {
-		status, _ := probe(base + "/ready")
+		status, _ := probe(client, base+"/ready")
 		return status == http.StatusOK
 	})
 	eventually(t, "the seat to be claimed", alive, func() bool {
-		_, body := probe(base + "/health")
+		_, body := probe(client, base+"/health")
 		seats, _ := body["seats"].([]any)
 		return slices.Contains(seats, any("ceo"))
 	})
 
 	// A TURN IN FLIGHT, started on the real inbound path and held by the
 	// model it is waiting on.
-	if status := deliver(t, base, "delivery-1"); status != http.StatusOK {
+	if status := deliver(t, client, base, "delivery-1"); status != http.StatusOK {
 		t.Fatalf("the delivery answered %d on a serving node", status)
 	}
 	select {
@@ -205,7 +207,7 @@ turn_engine:
 		t.Fatal("the turn never reached the model")
 	}
 	eventually(t, "the turn to count as in flight", alive, func() bool {
-		_, body := probe(base + "/health")
+		_, body := probe(client, base+"/health")
 		inFlight, _ := body["in_flight"].(float64)
 		return inFlight >= 1
 	})
@@ -219,7 +221,7 @@ turn_engine:
 	// the signal arrived, because the listener closed before the drain: a
 	// refused connection now is that bug, and no amount of waiting fixes it.
 	eventually(t, "/health to report the drain", alive, func() bool {
-		status, body := probe(base + "/health")
+		status, body := probe(client, base+"/health")
 		if status == refused {
 			t.Fatal("the node stopped answering /health on the signal, with its " +
 				"turn still running: an orchestrator would kill it mid-turn")
@@ -229,7 +231,7 @@ turn_engine:
 	// And keeps answering, rather than for one lucky request: the turn is
 	// still held, so every one of these is inside the drain.
 	for range 10 {
-		if status, body := probe(base + "/health"); status != http.StatusOK {
+		if status, body := probe(client, base+"/health"); status != http.StatusOK {
 			t.Fatalf("/health answered %d mid-drain (%v): an orchestrator would "+
 				"kill this node in the middle of the turn it is finishing", status, body)
 		}
@@ -237,21 +239,21 @@ turn_engine:
 	}
 
 	// READINESS IS 503, and says why.
-	if status, body := probe(base + "/ready"); status != http.StatusServiceUnavailable ||
+	if status, body := probe(client, base+"/ready"); status != http.StatusServiceUnavailable ||
 		body["reason"] != "draining" {
 		t.Errorf("/ready answered %d %v mid-drain, want 503 naming the drain", status, body)
 	}
 
 	// EVERY ROUTE THAT WOULD START WORK REFUSES, clearly: a second delivery
 	// on the webhook edge, and a config write with a valid token.
-	if status := deliver(t, base, "delivery-2"); status != http.StatusServiceUnavailable {
+	if status := deliver(t, client, base, "delivery-2"); status != http.StatusServiceUnavailable {
 		t.Errorf("a delivery answered %d mid-drain, want 503", status)
 	}
-	if status, code := write(t, base+"/config"); status != http.StatusServiceUnavailable || code != "draining" {
+	if status, code := write(t, client, base+"/config"); status != http.StatusServiceUnavailable || code != "draining" {
 		t.Errorf("PUT /config answered %d %q mid-drain, want 503 draining", status, code)
 	}
 	// And a read is still a read.
-	if status, _ := probe(base + "/agents"); status != http.StatusOK {
+	if status, _ := probe(client, base+"/agents"); status != http.StatusOK {
 		t.Errorf("GET /agents answered %d mid-drain, want 200", status)
 	}
 	if !alive() {
@@ -345,7 +347,7 @@ func newAccountForge(t *testing.T) *httptest.Server {
 // deliver posts one signed GitLab delivery assigning an issue to the seat,
 // and returns the status it got. Each id is a distinct delivery, so the
 // fleet's dedupe cannot be what answers the second one.
-func deliver(t *testing.T, base, id string) int {
+func deliver(t *testing.T, client *http.Client, base, id string) int {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
 		"object_kind": "issue",
@@ -380,7 +382,7 @@ func deliver(t *testing.T, base, id string) int {
 	req.Header.Set("webhook-id", id)
 	req.Header.Set("webhook-timestamp", stamp)
 	req.Header.Set("webhook-signature", "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)))
-	res, err := http.DefaultClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("delivering %s: %v", id, err)
 	}
@@ -391,7 +393,7 @@ func deliver(t *testing.T, base, id string) int {
 
 // write sends an authenticated config write and returns its status and the
 // error code it carried.
-func write(t *testing.T, url string) (int, string) {
+func write(t *testing.T, client *http.Client, url string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, url,
 		strings.NewReader("name: Acme\n"))
@@ -399,7 +401,7 @@ func write(t *testing.T, url string) (int, string) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+drainProbeToken)
-	res, err := http.DefaultClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT %s: %v", url, err)
 	}
@@ -415,13 +417,27 @@ func write(t *testing.T, url string) (int, string) {
 // which is a listener that is not there rather than one that is slow.
 const refused = -1
 
+// drainProbeClient is the one client every request in this case rides.
+//
+// ITS OWN POOL, from [httpxtest], never the process-global one: the two
+// httptest servers this case stands up sweep http.DefaultTransport when they
+// close, for every server in the binary rather than their own, and
+// internal/httpx's guard fails the build over exactly that. The child's
+// listener is a real one the engine opened, which is the case [httpxtest.Pool]
+// exists for.
+//
+// The timeout is well past anything a request here takes, because one that
+// timed out on a loaded machine must not read as a listener that went away.
+func drainProbeClient(t *testing.T) *http.Client {
+	t.Helper()
+	client := httpxtest.Pool(t)
+	client.Timeout = 15 * time.Second
+	return client
+}
+
 // probe GETs a URL once and returns its status and decoded body. Zero is a
 // request that got no answer, and [refused] one whose connection was refused.
-//
-// The timeout is well past anything a probe takes, because a probe that
-// timed out on a loaded machine must not read as a listener that went away.
-func probe(url string) (int, map[string]any) {
-	client := http.Client{Timeout: 15 * time.Second}
+func probe(client *http.Client, url string) (int, map[string]any) {
 	res, err := client.Get(url) //nolint:noctx // a probe against the child's own listener
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return refused, nil
