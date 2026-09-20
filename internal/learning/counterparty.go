@@ -274,10 +274,17 @@ func (c *Counterparties) Get(ctx context.Context, observer string, subject Subje
 // are the people it has met, which is bounded by the company and its
 // correspondents rather than by anything that grows with time. A seat with
 // more than this many is one whose profile list is a report rather than a
-// panel, and the cap is what keeps the panel from becoming one silently.
-func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, error) {
+// panel.
+//
+// AND THE SECOND RETURN IS WHAT KEEPS THE CAP HONEST. [MaxProfilesListed]'s
+// own doc names the failure — "a panel rendering the first two hundred of five
+// thousand would be claiming to be the whole list" — and that is exactly what
+// this did, because nothing above it could tell a full page from a complete
+// set. One row past the bound is read as evidence and dropped, the same shape
+// every other bounded read in this tree uses.
+func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, bool, error) {
 	if c == nil || c.db == nil || observer == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 	rows, err := c.db.SQL().QueryContext(ctx, `
 		SELECT observer_handle, subject_handle, subject_external_id, subject_platform,
@@ -286,9 +293,9 @@ func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, 
 		FROM counterparty_profiles
 		WHERE observer_handle = ?
 		ORDER BY last_updated_at DESC
-		LIMIT ?`, observer, MaxProfilesListed)
+		LIMIT ?`, observer, MaxProfilesListed+1)
 	if err != nil {
-		return nil, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
+		return nil, false, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
 	}
 	defer rows.Close()
 
@@ -302,7 +309,7 @@ func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, 
 		if err := rows.Scan(&p.Observer, &p.Subject.Handle, &p.Subject.ExternalID,
 			&p.Subject.Platform, &p.Subject.Name, &traits, &firstSeen, &updated,
 			&corroborated, &p.InteractionCount, &p.LastWorkKey); err != nil {
-			return nil, fmt.Errorf("learning: scan profile for %s: %w", observer, err)
+			return nil, false, fmt.Errorf("learning: scan profile for %s: %w", observer, err)
 		}
 		p.FirstSeenAt = store.DecodeTime(firstSeen)
 		p.LastUpdatedAt = store.DecodeTime(updated)
@@ -319,9 +326,12 @@ func (c *Counterparties) List(ctx context.Context, observer string) ([]Profile, 
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
+		return nil, false, fmt.Errorf("learning: list profiles for %s: %w", observer, err)
 	}
-	return out, nil
+	if len(out) > MaxProfilesListed {
+		return out[:MaxProfilesListed], true, nil
+	}
+	return out, false, nil
 }
 
 // MaxProfilesListed bounds [Counterparties.List].

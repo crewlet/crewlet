@@ -274,8 +274,8 @@ func (emptyConversations) History(context.Context, string, string, int) ([]ledge
 
 type emptyCounterparties struct{}
 
-func (emptyCounterparties) List(context.Context, string) ([]learning.Profile, error) {
-	return nil, nil
+func (emptyCounterparties) List(context.Context, string) ([]learning.Profile, bool, error) {
+	return nil, false, nil
 }
 
 type emptyPages struct{}
