@@ -69,8 +69,14 @@ func (probeDomain) Tables() map[string]statelog.TableClass {
 func (probeDomain) DeferredTable() string { return "probe_log_deferred" }
 func (probeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
 func (probeDomain) OpsTable() string      { return "probe_ops" }
-func (probeDomain) ReadinessInput() bool  { return true }
-func (probeDomain) ClaimsIdentity() bool  { return true }
+
+// OpsRetention is the framework's own default, which is what every domain in
+// this build answers: the probe is exercising the ledger's MECHANISM, and a
+// horizon of its own would be a second number to keep in step with nothing.
+func (probeDomain) OpsRetention() time.Duration { return statelog.OpsRetention }
+
+func (probeDomain) ReadinessInput() bool { return true }
+func (probeDomain) ClaimsIdentity() bool { return true }
 
 // applier stands in for this node's own apply loop: what it has committed,
 // and which operations it has written rows for.

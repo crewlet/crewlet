@@ -128,6 +128,16 @@ type OpsLedger interface {
 	// PurgeOps deletes this node's operation rows applied before cutoff,
 	// reporting how many went.
 	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// OpsRetention is how long THIS domain's ledger keeps a row.
+	//
+	// ON THE SEAM rather than a parameter, because the number is a
+	// property of the domain: the table takes one row per applied record,
+	// so its size is the domain's own commit rate times this horizon. A
+	// single number passed in sized every ledger for whichever domain the
+	// caller had in mind, which is wrong by an order of magnitude for one
+	// committing at conversational rates.
+	OpsRetention() time.Duration
 }
 
 // StatelogJobs sweeps each registered domain's operation ledger.
@@ -145,7 +155,11 @@ type OpsLedger interface {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
-func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
+//
+// EACH LEDGER STATES ITS OWN HORIZON and this takes none, because the table's
+// size is the domain's commit rate times its retention: one number for every
+// domain sized them all for whichever domain the caller was thinking of.
+func StatelogJobs(ledgers map[string]OpsLedger) []Job {
 	names := make([]string, 0, len(ledgers))
 	for name := range ledgers {
 		names = append(names, name)
@@ -159,7 +173,7 @@ func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
 	for _, name := range names {
 		ledger := ledgers[name]
 		jobs = append(jobs, Job{
-			Name: name + "_ops", Scope: NodeLocal, Horizon: retention,
+			Name: name + "_ops", Scope: NodeLocal, Horizon: ledger.OpsRetention(),
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 				return ledger.PurgeOps(ctx, cutoff)
 			},

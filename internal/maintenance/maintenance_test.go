@@ -1,8 +1,11 @@
 package maintenance_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -10,10 +13,50 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
 var base = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+
+// logs is where this package's own log lines go while the suite runs.
+//
+// A TESTMAIN OWNS THE PROCESS'S LOGGING, which is what [logging.Configure]
+// says about itself, and this package needs the lines rather than merely
+// wanting them quiet: [maintenance.New] answers a horizon it had to raise
+// with a WARNING and nothing else — the value it raises to is the one the
+// caller already asked for — so the line IS the behaviour.
+var logs = &syncBuffer{}
+
+// syncBuffer is a writer a logger and a test may both touch.
+//
+// Go resumes a parallel test only once every sequential one has finished, so
+// the reader here never overlaps a case that logs — but the detector reads
+// the handler's own goroutine, and a buffer with no lock is a race whether or
+// not anything ever interleaves.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// since returns what has been logged since a mark, and a mark for next time.
+func (b *syncBuffer) since(mark int) (string, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	all := b.buf.String()
+	return all[mark:], len(all)
+}
+
+func TestMain(m *testing.M) {
+	logging.Configure(slog.LevelWarn, logging.FormatText, logs)
+	os.Exit(m.Run())
+}
 
 // recorder is a job that remembers the cutoff it was handed.
 type recorder struct {
@@ -115,6 +158,53 @@ func TestAHorizonBelowTheTickIsRaisedToIt(t *testing.T) {
 	}
 	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour)) {
 		t.Fatalf("cutoff %s, want the raised horizon %s", got, base.Add(-time.Hour))
+	}
+}
+
+// A horizon sitting exactly ON the tick is the boundary the module's doc
+// names, and it is reported rather than accepted in silence.
+//
+// Raising it changes no number — the value already IS the tick — so the
+// warning is the whole of the behaviour, and that is the point: a retention
+// equal to the sweep's own cadence is one the SWEEP decides rather than the
+// caller, and the caller is the only one who will ever size a table from it.
+// The condition was strictly below, so this case passed without a word; the
+// state-log suite refuses a domain for exactly the same value.
+//
+// NOT PARALLEL, because it reads a process-wide log sink.
+func TestAHorizonExactlyAtTheTickIsReported(t *testing.T) {
+	_, mark := logs.since(0)
+	newWorker(t, maintenance.Options{
+		Now:      fixed(base),
+		Interval: time.Hour,
+		Jobs: []maintenance.Job{
+			{Name: "on_the_floor", Scope: maintenance.Fleet, Horizon: time.Hour, Run: (&recorder{}).run},
+		},
+	})
+	written, _ := logs.since(mark)
+	if !strings.Contains(written, "maintenance_horizon_raised_to_the_tick") ||
+		!strings.Contains(written, "on_the_floor") {
+		t.Fatalf("a horizon equal to the tick logged %q, want the raise warning "+
+			"naming the job — at the floor the value is the sweep's answer "+
+			"rather than the caller's, and nothing else ever says so", written)
+	}
+}
+
+// And a horizon comfortably above the tick says nothing, so the warning above
+// is a verdict rather than a line every worker prints.
+//
+// NOT PARALLEL, for [TestAHorizonExactlyAtTheTickIsReported]'s reason.
+func TestAHorizonAboveTheTickIsNotReported(t *testing.T) {
+	_, mark := logs.since(0)
+	newWorker(t, maintenance.Options{
+		Now:      fixed(base),
+		Interval: time.Hour,
+		Jobs: []maintenance.Job{
+			{Name: "roomy", Scope: maintenance.Fleet, Horizon: time.Hour + time.Second, Run: (&recorder{}).run},
+		},
+	})
+	if written, _ := logs.since(mark); strings.Contains(written, "roomy") {
+		t.Fatalf("a horizon above the tick logged %q, want silence", written)
 	}
 }
 
@@ -463,6 +553,51 @@ func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 		}
 	}
 }
+
+// EACH LEDGER'S OWN HORIZON REACHES ITS OWN JOB, which is the whole of the
+// repair: the sweep used to be handed ONE number for every domain, so a
+// domain committing an order of magnitude more than the tracker kept an order
+// of magnitude more table for the same thirty days. The ledger states it now,
+// and a job carrying its neighbour's number is indistinguishable from a
+// correct one until somebody measures the disk.
+func TestEachOperationLedgerGetsItsOwnHorizon(t *testing.T) {
+	t.Parallel()
+	jobs := maintenance.StatelogJobs(map[string]maintenance.OpsLedger{
+		"chatter": stubLedger{horizon: 7 * 24 * time.Hour},
+		"census":  stubLedger{horizon: 30 * 24 * time.Hour},
+	})
+	want := map[string]time.Duration{
+		// SORTED BY DOMAIN, so every node's sweep prints the same
+		// order — a map's would differ between peers.
+		"census_ops":  30 * 24 * time.Hour,
+		"chatter_ops": 7 * 24 * time.Hour,
+	}
+	if len(jobs) != len(want) {
+		t.Fatalf("built %d jobs for %d ledgers", len(jobs), len(want))
+	}
+	if jobs[0].Name != "census_ops" || jobs[1].Name != "chatter_ops" {
+		t.Fatalf("jobs are %q then %q, want them sorted by domain",
+			jobs[0].Name, jobs[1].Name)
+	}
+	for _, j := range jobs {
+		if j.Horizon != want[j.Name] {
+			t.Errorf("%s keeps rows for %v, want its ledger's own %v",
+				j.Name, j.Horizon, want[j.Name])
+		}
+		if j.Scope != maintenance.NodeLocal {
+			t.Errorf("%s is scoped %q — the rows record what THIS applier "+
+				"wrote, so a singleton tidies one node and lets every peer "+
+				"grow for ever", j.Name, j.Scope)
+		}
+	}
+}
+
+// stubLedger is an operation ledger that states a horizon and counts nothing.
+type stubLedger struct{ horizon time.Duration }
+
+func (s stubLedger) OpsRetention() time.Duration { return s.horizon }
+
+func (stubLedger) PurgeOps(context.Context, time.Time) (int64, error) { return 0, nil }
 
 // stubDiary remembers the clock it was swept on.
 type stubDiary struct {

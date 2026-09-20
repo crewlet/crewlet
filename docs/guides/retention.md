@@ -547,11 +547,20 @@ which looks exactly like a sweep that works to whoever checks the node it ran
 on.
 
 Each domain's **operation ledger** — the table that answers "did the operation
-I published land here?" — is swept at **30 days**. The horizon comes from the
+I published land here?" — is swept at a horizon **the domain itself declares**,
+and every domain in this build declares **30 days**. The horizon comes from the
 client that actually re-asks: a machine retry lives inside a five-second wait,
 but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
 than `applied`, which is the honest answer once the row is gone.
+
+It is per domain rather than one number for the fleet because the table takes
+one row per applied record: its size is that domain's own commit rate times
+this horizon, so a domain committing an order of magnitude more than the work
+tracker would keep an order of magnitude more table over the same thirty days.
+The floor is the sweep's own fifteen-minute tick — a horizon at or below it is
+raised to the tick and a `maintenance_horizon_raised_to_the_tick` warning names
+the job, because under the tick the declared number stops describing the table.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable

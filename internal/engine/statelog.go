@@ -2388,6 +2388,10 @@ func (s *stateLog) domainOf(stream string) string {
 // of building it here: a domain added to [statelogDomains] and forgotten in a
 // sweep list is a table that grows for ever with nothing to notice, and that
 // is exactly how these two came to be unswept.
+//
+// THE HORIZON TRAVELS WITH THE LEDGER rather than beside it: a runner answers
+// its own domain's [statelog.Domain.OpsRetention], so the sweep never has to
+// be told which domain a ledger belongs to in order to size it.
 func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
 	if s == nil {
 		return nil

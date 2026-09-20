@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -112,9 +111,12 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			// kept for ever, on every node. PER NODE rather than under
 			// the singleton, because each node owns its own copy —
 			// see [maintenance.StatelogJobs].
+			//
+			// NO HORIZON PASSED: each ledger states its domain's own,
+			// because the table's size is that domain's commit rate
+			// times its retention and one number sized them all alike.
 			if e.native.log != nil {
-				jobs = append(jobs, maintenance.StatelogJobs(
-					e.native.log.opsLedgers(), statelog.OpsRetention)...)
+				jobs = append(jobs, maintenance.StatelogJobs(e.native.log.opsLedgers())...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its

@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -286,11 +285,14 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		// a delete on one node's own authority is what the identity
 		// claim forbids.
 		//
-		// Their OPERATION LEDGERS are the exception, and they are here
-		// under one entry because every domain takes the same horizon:
-		// the ledger is framework bookkeeping about what THIS applier
-		// wrote, not a durable row any peer reads.
-		"<domain>_ops": statelog.OpsRetention,
+		// NOR THEIR OPERATION LEDGERS, which were one entry here while
+		// every domain took one constant. The horizon is per domain
+		// now — a ledger's size is that domain's own commit rate times
+		// its retention — and the rule is certified against EVERY
+		// registered domain by statelogtest's declaration case, which
+		// a fourth domain inherits without being added anywhere. A row
+		// per domain here would be a second list, and the list a new
+		// domain is not added to is the list that stops covering it.
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",
