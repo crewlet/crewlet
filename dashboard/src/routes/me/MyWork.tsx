@@ -261,23 +261,45 @@ export function MyWork() {
                   This node could not account for every change yet, so a block may be short.
                 </Callout>
               )}
+              {/* A FIGURE THAT IS A PAGE SAYS SO. Every block is bounded, so
+                  these four are counts over what was RETURNED — and the
+                  subtitle below already states the rule: "a number is read as
+                  'how many there are' until something says otherwise". Where
+                  the server says the block was cut, the sub line is what says
+                  otherwise. */}
               <StatGroup columns={4}>
                 <StatCard
                   label="Priorities"
                   value={mine.priorities.length}
-                  sub="in the stored order"
+                  sub={
+                    mine.truncated?.priorities
+                      ? "the newest — there are more"
+                      : "in the stored order"
+                  }
                 />
-                <StatCard label="Assigned" value={mine.assigned.length} />
+                <StatCard
+                  label="Assigned"
+                  value={mine.assigned.length}
+                  sub={mine.truncated?.assigned ? "the newest — there are more" : undefined}
+                />
                 <StatCard
                   label="Asked"
                   value={mine.asked_of_me.length}
                   icon={mine.asked_of_me.length ? <ErrorGlyph size="xs" /> : undefined}
-                  sub="waiting on an answer"
+                  sub={
+                    mine.truncated?.asked_of_me
+                      ? "the newest — more are waiting"
+                      : "waiting on an answer"
+                  }
                 />
                 <StatCard
                   label="Unblocked"
                   value={mine.unblocked_recent.length}
-                  sub="newly workable"
+                  sub={
+                    mine.truncated?.unblocked_recent
+                      ? "the newest — there are more"
+                      : "newly workable"
+                  }
                 />
               </StatGroup>
 
@@ -390,31 +412,52 @@ export function MyWork() {
                 </Card.Footer>
               </Card>
 
-              <Asks rows={mine.asked_of_me} now={now} chrome={chrome} ownDay={ownDay} />
+              <Asks
+                rows={mine.asked_of_me}
+                now={now}
+                chrome={chrome}
+                ownDay={ownDay}
+                more={mine.truncated?.asked_of_me}
+              />
               <TaskBlock
                 title="Priorities"
                 hint="What somebody put at the top of this list, in the order they put it."
                 rows={mine.priorities}
                 now={now}
                 chrome={chrome}
+                more={mine.truncated?.priorities}
               />
-              <TaskBlock title="Assigned" rows={mine.assigned} now={now} chrome={chrome} />
+              <TaskBlock
+                title="Assigned"
+                rows={mine.assigned}
+                now={now}
+                chrome={chrome}
+                more={mine.truncated?.assigned}
+              />
               <TaskBlock
                 title="Unblocked"
                 hint="Work whose blockers have all finished — the one block about a change rather than a state."
                 rows={mine.unblocked_recent}
                 now={now}
                 chrome={chrome}
+                more={mine.truncated?.unblocked_recent}
               />
-              <Checklist rows={mine.checklist_items} />
+              <Checklist rows={mine.checklist_items} more={mine.truncated?.checklist_items} />
               <TaskBlock
                 title="Collaborating"
                 hint="Brought on without owning."
                 rows={mine.collaborating}
                 now={now}
                 chrome={chrome}
+                more={mine.truncated?.collaborating}
               />
-              <TaskBlock title="Watching" rows={mine.watching_recent} now={now} chrome={chrome} />
+              <TaskBlock
+                title="Watching"
+                rows={mine.watching_recent}
+                now={now}
+                chrome={chrome}
+                more={mine.truncated?.watching_recent}
+              />
             </>
           )}
         </QueryState>
@@ -431,12 +474,14 @@ export function TaskBlock({
   rows,
   now,
   chrome,
+  more,
 }: {
   title: string;
   hint?: string;
   rows: WorkSummary[];
   now: number;
   chrome?: RowChrome;
+  more?: boolean;
 }) {
   if (rows.length === 0) return null;
   // THE TRACKER'S OWN ROW, so a task looks the same here as it does on the
@@ -444,7 +489,16 @@ export function TaskBlock({
   // the board six, and only one of the two knew a task could be blocked.
   return (
     <Card padding="none">
-      <Card.Header subtitle={hint} count={rows.length}>
+      {/* NO COUNT WHERE THE BLOCK IS CUT. Every block is bounded, so
+          `rows.length` on a full one is the page rather than the total — and a
+          header reading "20" beside two hundred real assignments is the claim
+          this screen exists to make and must not get wrong. */}
+      <Card.Header
+        subtitle={
+          more ? [hint, "The newest only — there are more."].filter(Boolean).join(" ") : hint
+        }
+        count={more ? undefined : rows.length}
+      >
         <Card.Title>{title}</Card.Title>
       </Card.Header>
       <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
@@ -460,6 +514,7 @@ export function Asks({
   rows,
   now,
   chrome,
+  more,
   // WHOSE QUESTIONS THESE ARE, and the DEFAULT IS SOMEBODY ELSE'S. This block
   // is rendered on a report's day here and on every seat page, which is written
   // in the third person throughout — so a caller that says nothing is a caller
@@ -473,11 +528,19 @@ export function Asks({
   now: number;
   chrome?: RowChrome;
   ownDay?: boolean;
+  more?: boolean;
 }) {
   if (rows.length === 0) return null;
   return (
     <Card>
-      <Card.Header icon={<HelpGlyph size="sm" />} count={rows.length}>
+      {/* NO COUNT WHERE THE BLOCK IS CUT — see TaskBlock. This block matters
+          most of the seven: an unanswered question is somebody else blocked on
+          this person, so "five" beside forty is the worst of the seven lies. */}
+      <Card.Header
+        icon={<HelpGlyph size="sm" />}
+        count={more ? undefined : rows.length}
+        subtitle={more ? "The newest only — there are more." : undefined}
+      >
         <Card.Title>{ownDay ? "Asked of you" : "Asked of them"}</Card.Title>
       </Card.Header>
       <div className="col gap-3">
@@ -510,11 +573,19 @@ export function Asks({
  *
  *  Its own block because no assignee filter over tasks reaches one: a person
  *  holding six checklist items and no assignment reads their queue as empty. */
-export function Checklist({ rows }: { rows: WorkChecklistRow[] }) {
+export function Checklist({ rows, more }: { rows: WorkChecklistRow[]; more?: boolean }) {
   if (rows.length === 0) return null;
   return (
     <Card>
-      <Card.Header count={rows.length} subtitle="On other people's tasks.">
+      {/* NO COUNT WHERE THE BLOCK IS CUT — see TaskBlock. */}
+      <Card.Header
+        count={more ? undefined : rows.length}
+        subtitle={
+          more
+            ? "On other people's tasks. The newest only — there are more."
+            : "On other people's tasks."
+        }
+      >
         <Card.Title>Checklist items</Card.Title>
       </Card.Header>
       {rows.map((item) => (

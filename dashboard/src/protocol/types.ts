@@ -3185,12 +3185,29 @@ export interface WorkMyWork {
   collaborating: WorkSummary[];
   watching_recent: WorkSummary[];
   unblocked_recent: WorkSummary[];
+  /** Which blocks hold more than they carry. Without it a seat with two
+   *  hundred assignments renders exactly like a seat with twenty, and the one
+   *  question this answer exists to settle is answered with a number nobody
+   *  can check. Flags rather than counts: each read takes a single row past
+   *  the bound as evidence. */
+  truncated?: WorkMyWorkTruncated;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
   log_lag?: number;
   complete: boolean;
   incomplete?: WorkIncomplete;
+}
+
+/** The blocks of a `my_work` answer that were cut at the per-block bound. */
+export interface WorkMyWorkTruncated {
+  priorities?: boolean;
+  assigned?: boolean;
+  asked_of_me?: boolean;
+  checklist_items?: boolean;
+  collaborating?: boolean;
+  watching_recent?: boolean;
+  unblocked_recent?: boolean;
 }
 
 /** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.

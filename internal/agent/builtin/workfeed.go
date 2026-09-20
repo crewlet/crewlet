@@ -168,7 +168,10 @@ func (t *myWork) Description() string {
 		"questions waiting on your answer with the call that answers each, " +
 		"the checklist items you claimed on other people's tasks, what you " +
 		"were brought onto, what moved on what you follow, and what just " +
-		"became workable. Call this first."
+		"became workable. Call this first. Each block carries its newest " +
+		"rows only: a block named under `truncated` holds more than it " +
+		"shows, and `" + tracker.ListWorkItemsTool + "` is what lists the " +
+		"rest with a filter of your own."
 }
 
 func (t *myWork) Parameters() map[string]any {
