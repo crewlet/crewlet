@@ -16,6 +16,10 @@ import (
 	"testing"
 )
 
+// docsOrigin is where the documentation is published, and therefore both what
+// makes a link this check's business and what it prints when reporting one.
+const docsOrigin = "https://docs.crewlet.ai"
+
 // docsLink matches an absolute link into the documentation site and captures
 // the path, which is what decides the verdict below.
 //
@@ -24,7 +28,10 @@ import (
 // the check uniform: /concepts/turn-engine and /concepts/turn-engine#workers
 // carry the same path, so they get the same answer, and the fix for the
 // second one is a slash before the '#' rather than at the end.
-var docsLink = regexp.MustCompile(`https://docs\.crewlet\.ai(/[A-Za-z0-9/._-]*)`)
+//
+// A '.' IS in the class, because a file has an extension — which is why the
+// verdict below has to tell an extension from a full stop.
+var docsLink = regexp.MustCompile(regexp.QuoteMeta(docsOrigin) + `(/[A-Za-z0-9/._-]*)`)
 
 // publishedTrees are the directories whose markdown is served at
 // docs.crewlet.ai. The docs site syncs docs/ into its pages and copies
@@ -94,9 +101,9 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 
 			for number, line := range strings.Split(string(source), "\n") {
 				for _, match := range docsLink.FindAllStringSubmatch(line, -1) {
-					if pageNeedsSlash(match[1]) {
+					if page, missing := pageMissingSlash(match[1]); missing {
 						offences = append(offences, fmt.Sprintf(
-							"%s:%d: %s", relative, number+1, match[0]))
+							"%s:%d: %s%s", relative, number+1, docsOrigin, page))
 					}
 				}
 			}
@@ -115,14 +122,25 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 	}
 }
 
-// pageNeedsSlash reports whether a docs.crewlet.ai path names a page that is
-// spelled without its trailing slash. See the exemptions on the test above.
-func pageNeedsSlash(path string) bool {
+// pageMissingSlash reports whether a docs.crewlet.ai path names a page spelled
+// without its trailing slash, and returns the path with any sentence
+// punctuation removed so the message names the URL rather than the prose
+// around it. See the exemptions on the test above.
+func pageMissingSlash(path string) (string, bool) {
+	// A bare URL at the end of a sentence carries the full stop into the
+	// match, and a dot is exactly how a file is recognised below — so left
+	// alone, "See https://docs.crewlet.ai/concepts/tool-skills." would read as
+	// a file and be exempted, which is the one spelling this check most needs
+	// to catch. Only a TRAILING run is punctuation; a dot inside the segment
+	// is an extension, so company.schema.json is still a file either way.
+	path = strings.TrimRight(path, ".")
+
 	last := path[strings.LastIndex(path, "/")+1:]
 	if last == "" {
-		return false // already correct, or the bare origin
+		return path, false // already correct, or the bare origin
 	}
-	return !strings.Contains(last, ".") // a dot means a file, which is served as itself
+	// A dot means a file, which is served as itself.
+	return path, !strings.Contains(last, ".")
 }
 
 // repoRoot is the module root, found from this file rather than from the
@@ -140,4 +158,41 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("expected the module root at %s: %v", root, err)
 	}
 	return root
+}
+
+// TestPageMissingSlashReadsPunctuationAsProse pins the cases that decide the
+// walk above, and in particular the one a review caught: a bare URL ending a
+// sentence used to be read as a file and exempted, so the guard stayed green
+// on exactly the spelling it exists to find.
+func TestPageMissingSlashReadsPunctuationAsProse(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		path    string
+		want    string
+		missing bool
+	}{
+		{"a page", "/concepts/tool-skills", "/concepts/tool-skills", true},
+		{"a page ending a sentence", "/concepts/tool-skills.", "/concepts/tool-skills", true},
+		{"a page ending a thought", "/concepts/tool-skills...", "/concepts/tool-skills", true},
+		{"a page already correct", "/concepts/tool-skills/", "/concepts/tool-skills/", false},
+		{"a file", "/schema/company.schema.json", "/schema/company.schema.json", false},
+		{
+			"a file ending a sentence",
+			"/schema/company.schema.json.",
+			"/schema/company.schema.json",
+			false,
+		},
+		{"the bare origin", "/", "/", false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path, missing := pageMissingSlash(testCase.path)
+			if path != testCase.want || missing != testCase.missing {
+				t.Errorf("pageMissingSlash(%q) = (%q, %v), want (%q, %v)",
+					testCase.path, path, missing, testCase.want, testCase.missing)
+			}
+		})
+	}
 }
