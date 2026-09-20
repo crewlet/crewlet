@@ -289,9 +289,10 @@ type Requirement struct {
 
 	// Resolved reports whether the value is actually usable in this
 	// process. THREE-VALUED, like every other resolution claim on this
-	// API: null is "this process cannot say", which is the honest answer
-	// where nothing resolved the document, and reporting it as false
-	// would tell an operator a working credential is broken.
+	// API: null is "nothing resolved this", because the document leaves
+	// the field empty or because it was read without a resolver, and
+	// reporting that as false would tell an operator a working credential
+	// is broken.
 	Resolved *bool `json:"resolved"`
 
 	// Seat is the handle a per-seat requirement belongs to, empty for a
@@ -408,10 +409,10 @@ func IsReference(value string) bool {
 // Present AND resolved, when resolution is knowable. A requirement whose
 // value is written down but did not resolve is the exact state that looks
 // configured from every other surface while the route refuses every
-// delivery, so it is NOT satisfied. Where resolution is unknown, present is
-// the most that can be claimed and it is claimed: refusing to call it
-// satisfied on a standalone API would show every operator a permanent list
-// of things to fix that are already fine.
+// delivery, so it is NOT satisfied. Where resolution is unknown (a requirement
+// read without a resolver), present is the most that can be claimed and it is
+// claimed: refusing to call it satisfied would list things to fix that are
+// already fine.
 func (r Requirement) Satisfied() bool {
 	if !r.Present {
 		return false
@@ -648,9 +649,10 @@ func Toggle(on bool) (bool, *bool, string) {
 // Resolution reports what a value in the document amounts to.
 //
 // resolve is how the caller turns a stored value into a live one, and a nil
-// resolve is a process that cannot say. Passing it in rather than reaching
-// for the environment keeps this package free of ambient state and lets the
-// API answer honestly on a node that resolved nothing.
+// resolve is a caller that cannot say, which answers null rather than a guess.
+// Passing it in rather than reaching for the environment keeps this package
+// free of ambient state: the API passes the engine's own chain, so what it
+// reports is what the node answering actually resolved.
 func Resolution(stored string, resolve func(string) (string, bool)) (present bool, resolved *bool) {
 	stored = strings.TrimSpace(stored)
 	present = stored != ""

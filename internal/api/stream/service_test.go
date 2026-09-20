@@ -3,6 +3,7 @@ package stream_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,14 +14,62 @@ import (
 
 func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Client) {
 	t.Helper()
-	if opts.Now == nil {
-		opts.Now = func() time.Time { return clock }
-	}
-	s := stream.NewService(livestate.New(), opts)
-	t.Cleanup(s.Stop)
+	s := buildService(t, opts)
 	c := stream.NewClient()
 	s.Hub().Register(c)
 	return s, c
+}
+
+// buildService fills every required function a case leaves unset with the
+// answer a node with no company gives, so a case names only what it is about.
+func buildService(t *testing.T, opts stream.Options) *stream.Service {
+	t.Helper()
+	if opts.Now == nil {
+		opts.Now = func() time.Time { return clock }
+	}
+	if opts.Health == nil {
+		opts.Health = func() stream.Health { return stream.Health{Status: "ok"} }
+	}
+	if opts.Handles == nil {
+		opts.Handles = func() map[string]string { return map[string]string{} }
+	}
+	if opts.Roster == nil {
+		opts.Roster = func() []map[string]any { return nil }
+	}
+	if opts.Org == nil {
+		opts.Org = func() any { return map[string]any{} }
+	}
+	if opts.Tools == nil {
+		opts.Tools = func() []map[string]any { return nil }
+	}
+	if opts.Schedules == nil {
+		opts.Schedules = func() any { return []any{} }
+	}
+	s, err := stream.NewService(livestate.New(), opts)
+	if err != nil {
+		t.Fatalf("stream.NewService: %v", err)
+	}
+	t.Cleanup(s.Stop)
+	return s
+}
+
+// EVERY SURFACE FUNCTION IS REQUIRED, and a missing one is refused by name.
+//
+// The engine beside every API answers each of them. With the health fields
+// always present, a missing health function would push a confident zero in
+// flight rather than an honest absence, so the constructor is where the mistake
+// has to surface.
+func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
+	t.Parallel()
+	_, err := stream.NewService(livestate.New(), stream.Options{})
+	if err == nil {
+		t.Fatal("a service with no surface functions was built")
+	}
+	for _, field := range []string{"Health", "Handles", "Roster", "Org", "Tools", "Schedules"} {
+		if !strings.Contains(err.Error(), "Options."+field) {
+			t.Errorf("the refusal does not name Options.%s: %v", field, err)
+		}
+	}
 }
 
 func envelope(etype string, payload map[string]any) livestate.Envelope {
@@ -248,12 +297,9 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// ONE timer for the whole service. What it keeps honest is the same
 	// answer for every tab, so a timer per client would multiply identical
 	// work by however many people happened to be watching.
-	inFlight := 3
-	s := stream.NewService(livestate.New(), stream.Options{
-		Now:    func() time.Time { return clock },
-		Health: func() stream.Health { return stream.Health{Status: "ok", InFlight: &inFlight} },
+	s := buildService(t, stream.Options{
+		Health: func() stream.Health { return stream.Health{Status: "ok", InFlight: 3} },
 	})
-	t.Cleanup(s.Stop)
 
 	a, b := stream.NewClient(), stream.NewClient()
 	s.Hub().Register(a)
@@ -269,7 +315,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 				t.Errorf("%s received %q, want a health tick", name, env.Kind)
 			}
 			health, ok := env.Data.(stream.Health)
-			if !ok || health.InFlight == nil || *health.InFlight != 3 {
+			if !ok || health.InFlight != 3 {
 				t.Errorf("%s health = %#v", name, env.Data)
 			}
 		case <-time.After(3 * stream.HealthInterval):
@@ -278,33 +324,29 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	}
 }
 
-func TestAnAbsentEngineReportsNoInFlightRatherThanZero(t *testing.T) {
+func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 	t.Parallel()
-	// ABSENT and ZERO are different answers. A dashboard that drew "0 in
-	// flight" for "cannot see the engine" would report an idle company
-	// during an outage.
-	s, _ := newService(t, stream.Options{})
+	// The snapshot and the tick answer from the same function, so a tab
+	// that connects mid-drain sees the drain at once rather than on the
+	// next tick.
+	s, _ := newService(t, stream.Options{
+		Health: func() stream.Health {
+			return stream.Health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
+		},
+	})
 	health, _ := s.Snapshot()["health"].(stream.Health)
-	if health.Status != "ok" {
-		t.Errorf("status = %q", health.Status)
-	}
-	if health.InFlight != nil {
-		t.Errorf("in flight = %d, want absent with no engine to ask", *health.InFlight)
+	if health.Status != "shutting_down" || health.InFlight != 2 || !health.ShuttingDown {
+		t.Errorf("health = %#v, want the engine's own answer", health)
 	}
 }
 
 func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 	t.Parallel()
-	// The merged topology can reach this from either half, so a second
-	// call is ordinary — and a second TIMER would double every tab's
-	// health traffic and leave one of them running past Stop, since only
-	// the later one is the one Stop knows about.
+	// A second call is ordinary, and a second TIMER would double every
+	// tab's health traffic and leave one of them running past Stop, since
+	// only the later one is the one Stop knows about.
 	const interval = 20 * time.Millisecond
-	s := stream.NewService(livestate.New(), stream.Options{
-		Now:            func() time.Time { return clock },
-		HealthInterval: interval,
-	})
-	t.Cleanup(s.Stop)
+	s := buildService(t, stream.Options{HealthInterval: interval})
 	c := stream.NewClient()
 	s.Hub().Register(c)
 
@@ -329,9 +371,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 
 func TestStoppingEndsTheTickAndTheClients(t *testing.T) {
 	t.Parallel()
-	s := stream.NewService(livestate.New(), stream.Options{
-		Now: func() time.Time { return clock },
-	})
+	s := buildService(t, stream.Options{})
 	c := stream.NewClient()
 	s.Hub().Register(c)
 	s.StartHealthTicks(t.Context())
@@ -353,16 +393,13 @@ func TestStoppingEndsTheTickAndTheClients(t *testing.T) {
 	if s.Hub().Clients() != 0 {
 		t.Error("Stop left clients registered")
 	}
-	// Idempotent: the merged topology can reach this from either half.
+	// Idempotent: a second Stop returns rather than closing a closed channel.
 	s.Stop()
 }
 
 func TestACancelledContextEndsTheTick(t *testing.T) {
 	t.Parallel()
-	s := stream.NewService(livestate.New(), stream.Options{
-		Now: func() time.Time { return clock },
-	})
-	t.Cleanup(s.Stop)
+	s := buildService(t, stream.Options{})
 	ctx, cancel := context.WithCancel(context.Background())
 	s.StartHealthTicks(ctx)
 	cancel()

@@ -362,12 +362,6 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	}
 	q := memory.New()
 	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
-	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: q, Pending: pending, Manager: manager,
-	})
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
 	bridge := mcpbridge.New(mcpbridge.Options{
 		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
 	})
@@ -375,11 +369,19 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	// listener took opens no session.
 	_ = bridge.Handler()
 	e := &Engine{
-		backends:           &Backends{Queue: q},
-		sandboxCoordinator: coordinator,
-		sandboxPending:     pending,
-		bridge:             bridge,
+		backends:       &Backends{Queue: q},
+		sandboxPending: pending,
+		bridge:         bridge,
 	}
+	// The engine's own resumer, as buildSandboxRuntime hands it over: the
+	// coordinator refuses to be built without one.
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	e.sandboxCoordinator = coordinator
 	e.epoch.current.Store(c)
 	return e
 }

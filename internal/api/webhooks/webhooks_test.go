@@ -140,13 +140,20 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 		Claims:     e.claims,
 		Stream:     e.stream,
 		Configured: func() bool { return configured },
-		Now:        func() time.Time { return pinned },
-		Keys:       testKeys(t),
+		// A flow that completes nothing. The landing cases that are about
+		// a creation hand in their own.
+		AppFlow: &stubFlow{},
+		Now:     func() time.Time { return pinned },
+		Keys:    testKeys(t),
 	}
 	for _, opt := range opts {
 		opt(&options)
 	}
-	webhooks.New(options).Routes(e.mux)
+	receiver, err := webhooks.New(options)
+	if err != nil {
+		t.Fatalf("webhooks.New: %v", err)
+	}
+	receiver.Routes(e.mux)
 	return e
 }
 
@@ -728,11 +735,12 @@ func TestSlackRetriesAreDedupedOnTheEventID(t *testing.T) {
 
 func TestAStoreOutageDoesNotSwallowTheWake(t *testing.T) {
 	t.Parallel()
-	// The event log is observability. A delivery that reached the queue
-	// will be worked whatever happens to the audit row, and a receiver that
-	// failed the request over a store error would drop real work to keep a
-	// feed tidy.
-	e := newEdge(t, func(o *webhooks.Options) { o.Events = nil; o.Claims = nil })
+	// The event log is observability, and the claim registry is a dedupe.
+	// A delivery that reached the queue will be worked whatever happens to
+	// the audit row, and a receiver that failed the request over a store
+	// or coordination error would drop real work to keep a feed tidy.
+	e := newEdge(t, func(o *webhooks.Options) { o.Claims = unreachableClaims{} })
+	e.closeStore(t)
 	res := e.post(t, "/webhooks/github", issueBody, githubDelivery(issueBody, "gh-secret"))
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200", res.Code)
@@ -740,6 +748,17 @@ func TestAStoreOutageDoesNotSwallowTheWake(t *testing.T) {
 	if e.published.count() != 1 {
 		t.Error("the delivery did not reach the queue")
 	}
+}
+
+// unreachableClaims is a claim registry whose store cannot be reached.
+type unreachableClaims struct{}
+
+func (unreachableClaims) Claim(context.Context, string, time.Duration, time.Time) (bool, error) {
+	return false, errors.New("the coordination store could not be reached")
+}
+
+func (unreachableClaims) Release(context.Context, string) error {
+	return errors.New("the coordination store could not be reached")
 }
 
 func TestGETIsNotAWebhook(t *testing.T) {

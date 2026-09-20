@@ -59,8 +59,9 @@ type NodeStatus struct {
 	// responses.
 	Posture string
 
-	// StartedAt is when the ENGINE started, which on a split deployment is
-	// a different process on a different clock from the API's own start.
+	// StartedAt is when the node's ENGINE was built, which is when the node
+	// started: its API runs in the same process and reports the same
+	// instant on its own health body.
 	StartedAt time.Time
 
 	// Projections is how many of this node's document projections have
@@ -111,10 +112,10 @@ func (s NodeStatus) Meta() map[string]any {
 //
 // # Absent is not zero
 //
-// A node that publishes no status — an older build, or one whose engine is
-// not co-located — is not a node with no work in flight. Reporting it as 0
-// would draw an idle row for a process that is simply not saying, which is
-// the confident-zero mistake the whole surface is written to avoid.
+// A node that publishes no status (a peer running a build older than the
+// field) is not a node with no work in flight. Reporting it as 0 would draw an
+// idle row for a process that is simply not saying, which is the confident-zero
+// mistake the whole surface is written to avoid.
 func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 	raw, ok := meta[StatusKey].(map[string]any)
 	if !ok {

@@ -333,8 +333,9 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 	var scratch string
 	if opts.StoreDir == "" {
 		// An in-memory server. Streams are memory-backed too (see
-		// ensureStreams), which suits tests and a stateless
-		// ingress-only node that materializes nothing.
+		// ensureStreams), which suits a test and no node serving a
+		// company: every node, an ingress-only one included, runs the
+		// engine and provisions the streams its company lives on.
 		opts.JetStreamMaxStore = -1
 
 		// It still needs somewhere to put its own metadata, and left

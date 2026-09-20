@@ -397,12 +397,16 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	queue := &publishRecorder{}
+	// The engine's own resumer, as buildSandboxRuntime hands it over: the
+	// coordinator refuses to be built without one.
+	e := &Engine{sandboxPending: store}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: queue, Pending: store, Manager: manager,
+		Queue: queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
+	e.sandboxCoordinator = coordinator
 	box, err := provider.Create(t.Context(), sandbox.Spec{})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -416,7 +420,6 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 		sandbox.BoxRef{SandboxID: box.ID(), CommandID: "1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	e := &Engine{sandboxPending: store, sandboxCoordinator: coordinator}
 
 	e.failSuspension(t.Context(), "t1", "sandbox_suspension_missing",
 		"the turn suspended but recorded no conversation", nil)
@@ -778,13 +781,15 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	equipped := &Engine{backends: &Backends{Fleet: fleet}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: &publishRecorder{}, Pending: store, Manager: manager,
+		Resume: &resumer{engine: equipped},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	equipped := &Engine{backends: &Backends{Fleet: fleet}, sandboxCoordinator: coordinator}
+	equipped.sandboxCoordinator = coordinator
 	if err := equipped.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err != nil {
 		t.Fatalf("retireSeatRuns: %v", err)
 	}

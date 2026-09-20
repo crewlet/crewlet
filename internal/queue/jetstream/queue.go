@@ -43,7 +43,7 @@ type Config struct {
 
 	// StoreDir is where an embedded server persists its streams. Empty
 	// selects an in-memory embedded server, which is what tests want and
-	// what a stateless ingress-only node can use.
+	// what no node serving a company should run: see config.Stream.
 	StoreDir string
 
 	// ClusterName, ClusterURLs and ClusterPort configure an embedded

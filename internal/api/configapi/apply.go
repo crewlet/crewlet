@@ -67,13 +67,6 @@ type Applied struct {
 	Derived config.Derived
 }
 
-// ErrNoControlPlane reports a process that can store a revision but cannot
-// point the fleet at one, so a write here would take effect nowhere.
-var ErrNoControlPlane = errors.New("configapi: no control plane on this process")
-
-// errNoStore reports a call on a service a node without a store never built.
-var errNoStore = errors.New("configapi: no store on this node")
-
 // RacedError reports that the active revision moved under the caller.
 //
 // Carries both sides, because the recovery needs them: the caller re-reads
@@ -252,18 +245,12 @@ type prepared struct {
 //
 //   - The active revision, and what the caller built on. A stale base is
 //     refused before any work, because nothing built on it can be kept.
-//   - The control plane. A process that cannot activate refuses BEFORE it
-//     validates, so a dry run on it answers exactly what the write would,
-//     503 rather than a clean check for a write that cannot land.
 //   - The stored document, opened and held to no rule: it is the merge base
 //     and the prior masks are restored from, and a revision this build
 //     would refuse must stay replaceable by the write that corrects it.
 //   - The proposal, built by the draft.
 //   - Its rules, and what an answer reports about it.
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
-	if s == nil {
-		return nil, errNoStore
-	}
 	active, found, err := s.configs.Active(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: read the active revision: %w", err)
@@ -283,14 +270,6 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		// conflict.
 		return nil, &RacedError{Base: d.expect, Current: active.ID}
 	}
-	if s.plane == nil {
-		// HERE RATHER THAN IN EACH CALLER: this is the one step every
-		// write on this surface passes through, so a new caller cannot
-		// forget it. Storing a revision this process cannot point the fleet
-		// at would report success for a change that takes effect nowhere.
-		return nil, ErrNoControlPlane
-	}
-
 	b := base{revision: active, found: found}
 	if found {
 		// THE STORED BYTES, never a re-marshal of them. A rolling upgrade

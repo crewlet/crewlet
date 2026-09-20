@@ -15,13 +15,14 @@
 //
 // # Signed and self-describing, not a key into a map
 //
-// Minting and verifying happen in DIFFERENT PROCESSES whenever the API runs on
-// its own host: the engine mints when it starts a run, the API verifies when
-// the box calls back. An in-memory store makes those the same process by
-// assumption, and the documented split deployment then refuses every request
-// from every run — visible only as retry noise inside a sandbox nobody is
-// watching. Expiry rides in the token too, so nothing is reaped and a restart
-// does not invalidate a live run's endpoint.
+// Minting and verifying happen on DIFFERENT NODES of a fleet: the node running
+// the seat mints when it starts a run, and the node the box reaches verifies
+// when it calls back, which for telemetry is whichever node the box can see.
+// An in-memory store makes those the same process by assumption, and a fleet
+// then refuses every request that reached any other node, from every run,
+// visible only as retry noise inside a sandbox nobody is watching. Expiry
+// rides in the token too, so nothing is reaped and a restart does not
+// invalidate a live run's endpoint.
 //
 // # One implementation, because it was two
 //
@@ -148,10 +149,10 @@ func (s *Signer) sign(payload string) string {
 
 // KeyFrom derives a signing key from the fleet's own key material.
 //
-// The point is that TWO PROCESSES DERIVE THE SAME KEY. In a split deployment
-// the engine mints and the API verifies, so a per-process random key means
-// every token is forged as far as the verifier is concerned — visible only as
-// a run whose telemetry and tool calls all fail, with nothing in the config
+// The point is that EVERY NODE DERIVES THE SAME KEY. On a fleet one node mints
+// and another may verify, so a per-process random key means every token that
+// reaches a different node is forged as far as that node is concerned, visible
+// only as a run whose telemetry and tool calls fail, with nothing in the config
 // looking wrong.
 //
 // The DOMAIN separates one endpoint's tokens from another's. Without it a

@@ -484,9 +484,9 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 
 func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	t.Parallel()
-	// "This node has no lease table" and "the fleet is empty" are
+	// "Nothing here reads the lease table" and "the fleet is empty" are
 	// different answers, and a dashboard that drew the second for the
-	// first would report a company with no nodes during a misconfiguration.
+	// first would report a company with no nodes that has several.
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
 	for _, what := range []string{
@@ -494,7 +494,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
 		if _, err := r.Answer(t.Context(), what, nil, "operator"); err == nil {
-			t.Errorf("%s answered on a node with no source for it", what)
+			t.Errorf("%s answered from a registry with no source for it", what)
 		}
 	}
 }
@@ -746,8 +746,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 			InFlight: 4, Posture: "shed",
 		}.Meta(),
 	})
-	// A peer that publishes no status at all — an older build, or one
-	// whose engine is not co-located.
+	// A peer that publishes no status at all: a build older than the field.
 	claim(coord.NodeResource("node-b"), "node-b:1", map[string]any{
 		"roles": []any{"ingress"},
 	})
@@ -869,13 +868,14 @@ integrations:
 	}
 }
 
-// AND A PROCESS THAT CANNOT SEE AN ENGINE DOES NOT GUESS.
-func TestAnApiWithNoEngineCannotSayWhatResolved(t *testing.T) {
+// AND A NODE THAT HAS RESOLVED NOTHING YET DOES NOT GUESS.
+func TestANodeThatCannotSayWhatResolvedAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		// No Verifiable: the standalone shape.
+		// No Verifiable: the shape of a node whose engine has not started
+		// its notification service yet.
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -896,16 +896,16 @@ func TestAnApiWithNoEngineCannotSayWhatResolved(t *testing.T) {
 
 // NOT KNOWING IS NOT KNOWING NOTHING.
 //
-// A standalone API has no co-located engine to ask which parsers registered,
-// so it answers null rather than false. Reporting false would tell an
-// operator their integrations are broken on the one deployment shape that
-// cannot see them.
-func TestAnApiWithNoEngineCannotSayWhatRoutes(t *testing.T) {
+// A node whose notification service has not started cannot say which parsers
+// registered, so it answers null rather than false. Reporting false would tell
+// an operator their integrations are broken over a window that closes on its
+// own.
+func TestANodeThatCannotSayWhatRoutesAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		// No Routed: the standalone shape.
+		// No Routed: nothing has registered a parser yet.
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -1173,9 +1173,9 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	}
 }
 
-// NULL, NOT ZERO, when nothing was counted. A node with no event log cannot
-// say how many deliveries were dropped, and reporting 0 would tell an
-// operator every one of them woke a seat.
+// NULL, NOT ZERO, when nothing was counted. An answer with no event log to
+// read cannot say how many deliveries were dropped, and reporting 0 would tell
+// an operator every one of them woke a seat.
 func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -1187,16 +1187,16 @@ func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 		entry, _ := row.(map[string]any)
 		for _, field := range []string{"skipped", "coalesced"} {
 			if entry[field] != nil {
-				t.Errorf("%s %s = %v, want null on a node with no event log",
+				t.Errorf("%s %s = %v, want null with no event log to read",
 					entry["key"], field, entry[field])
 			}
 		}
 	}
 }
 
-// AN UNREADABLE EVENT LOG REPORTS NULL, NOT ZERO — the same rule as a node
-// with no log at all, and for the same reason: a zero that means "could not
-// tell" is the number an operator would act on.
+// AN UNREADABLE EVENT LOG REPORTS NULL, NOT ZERO: the same rule as an answer
+// with no log to read at all, and for the same reason. A zero that means
+// "could not tell" is the number an operator would act on.
 //
 // A closed store fails the FIRST listing, so this covers the outer guard. The
 // narrower one inside countOutcomes applies the identical rule to a second
@@ -1233,10 +1233,11 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 // THE THREE-VALUED RECONCILE FIELD, and the third value is the one that took
 // a subsystem to be able to say at all.
 //
-// A standalone API has no loop to ask, and reporting that as "no surface has
-// been reconciled" would put an alarming claim on a screen that had asked the
-// wrong node. So null is "cannot say", an absent entry is "the loop has not
-// reached this surface yet", and a present one is a real finding.
+// A node that could not read the fleet's rows has no findings to report, and
+// rendering that as "no surface has been reconciled" would put an alarming
+// claim on a screen over a store that was briefly unreachable. So null is
+// "cannot say", an absent entry is "the loop has not reached this surface
+// yet", and a present one is a real finding.
 func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -1248,8 +1249,8 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 		})
 		for kind, row := range rows {
 			if got, present := row["reconcile"]; !present || got != nil {
-				t.Errorf("%s reconcile = %v, want null on a process with no "+
-					"loop to ask", kind, got)
+				t.Errorf("%s reconcile = %v, want null with no loop "+
+					"findings to read", kind, got)
 			}
 		}
 	})
@@ -1514,10 +1515,10 @@ func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
 
 // AND A PROCESS THAT CANNOT READ THE ADDRESS SAYS NOTHING, rather than false.
 //
-// A standalone API has no resolution chain, so it cannot know what the current
-// address is. Answering false there would report every registration as stale
-// on the strength of a value this process never had — the same three-valued
-// rule Routed, Verifiable and Reconciles already follow.
+// A node that cannot read the address cannot know what the current one is.
+// Answering false there would report every registration as stale on the
+// strength of a value this node never had, which is the same three-valued rule
+// Routed, Verifiable and Reconciles already follow.
 func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)

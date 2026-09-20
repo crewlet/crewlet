@@ -33,10 +33,7 @@ func newSocket(t *testing.T, authOpts func(*config.APIAuth), query stream.Query)
 		authOpts(&b.API.Auth)
 	}
 	guard := auth.New(&b)
-	svc := stream.NewService(livestate.New(), stream.Options{
-		Now: func() time.Time { return clock },
-	})
-	t.Cleanup(svc.Stop)
+	svc := buildService(t, stream.Options{})
 
 	srv := httptest.NewServer(stream.Handler(guard, svc, query))
 	t.Cleanup(srv.Close)

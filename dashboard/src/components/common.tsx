@@ -19,13 +19,7 @@ import {
   Tag,
   cx,
 } from "@crewlethq/ui";
-import {
-  CableGlyph,
-  DatabaseGlyph,
-  KeyGlyph,
-  ScheduleGlyph,
-  WarningGlyph,
-} from "@crewlethq/icons/glyphs";
+import { CableGlyph, KeyGlyph, ScheduleGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
@@ -358,13 +352,6 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       <InlineCode tone="inherit">api.auth.tokens</InlineCode> entries.
     </Callout>
   ),
-  no_event_store: (
-    <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>
-      This node keeps no event log, so there is no history to read. Set{" "}
-      <InlineCode tone="inherit">store.path</InlineCode> in{" "}
-      <InlineCode tone="inherit">crewlet.yaml</InlineCode> to make it durable.
-    </Callout>
-  ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
   // variant's own mark, and for neutral that is the info glyph and for danger
   // the error glyph — which is exactly what these passed by hand. An icon prop
@@ -419,10 +406,10 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 /**
  * What an empty or failed answer means, said precisely.
  *
- * `no_event_store` and "nothing has happened yet" are the same empty list and
- * completely different problems; so are `unauthorized` and a company with no
- * seats. Every screen routes its failure through here so the distinction is
- * made once.
+ * `unauthorized` and a company with no seats are the same empty list and
+ * completely different problems; so are `unknown_query` and "nothing has
+ * happened yet". Every screen routes its failure through here so the
+ * distinction is made once.
  */
 export function QueryState({
   error,

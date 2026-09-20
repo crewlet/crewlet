@@ -86,15 +86,13 @@ func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
 // the one that happened to be found.
 func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
-	s := setupapi.New(setupapi.Options{
-		Company: func() *config.Company { return &config.Company{} },
+	s := newService(t, setupapi.Options{
+		Company:   func() *config.Company { return &config.Company{} },
+		StateKeys: []string{"k1:material"},
 	})
-	if s == nil {
-		t.Fatal("a service with a company is nil")
-	}
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
-	flow := setupapi.NewAppFlow(s, []string{"k1:material"}, nil)
+	flow := s.AppFlow()
 	if flow == nil {
 		t.Fatal("no app flow")
 	}
@@ -117,12 +115,7 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 // first call gets past the spend, the second does not.
 func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	t.Parallel()
-	flow := setupapi.NewAppFlow(
-		setupapi.New(setupapi.Options{Company: func() *config.Company { return nil }}),
-		[]string{"k1:material"}, nil)
-	if flow == nil {
-		t.Fatal("no app flow")
-	}
+	flow := newService(t, setupapi.Options{StateKeys: []string{"k1:material"}}).AppFlow()
 	state := runtoken.New(runtoken.Options{
 		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
 	}).Mint("sre-lead", 15*time.Minute)
@@ -146,9 +139,9 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 // would mean an outage re-opened replay for as long as it lasted.
 func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	t.Parallel()
-	flow := setupapi.NewAppFlow(
-		setupapi.New(setupapi.Options{Company: func() *config.Company { return nil }}),
-		[]string{"k1:material"}, blindClaims{})
+	flow := newService(t, setupapi.Options{
+		StateKeys: []string{"k1:material"}, StateClaims: blindClaims{},
+	}).AppFlow()
 	state := runtoken.New(runtoken.Options{
 		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
 	}).Mint("sre-lead", 15*time.Minute)

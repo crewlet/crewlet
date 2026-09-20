@@ -144,10 +144,10 @@ func TestTheRoutingReadCarriesTheCompanysOwnInboxHorizon(t *testing.T) {
 	}
 }
 
-// AND A PROCESS WITH NO EPOCH STATES NONE, rather than the shipped default. A
-// standalone API genuinely cannot say how long this company keeps a notice,
-// and answering with 365 days would date a set against a number nobody here
-// is running.
+// AND A REGISTRY WITH NO EPOCH STATES NONE, rather than the shipped default. A
+// registry wired without a company source genuinely cannot say how long this
+// company keeps a notice, and answering with 365 days would date a set against
+// a number nobody here is running.
 func TestWithNoCompanyTheRoutingReadStatesNoHorizon(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}

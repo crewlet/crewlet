@@ -150,26 +150,26 @@ describe("the posture table", () => {
     expect(await screen.findByText("The engine could not be reached")).toBeDefined();
   });
 
-  test("a first dry run refused for want of a coordination store makes the lens read-only", async () => {
+  // THE TOOLBAR SAYS SO WHERE IT IS READ. An entry that is offered, pressed,
+  // and answers only into a live region nobody sees is worse than one marked
+  // unavailable.
+  //
+  // Driven through `guarded`, which is now the halting check state this is
+  // about. `readonly` was the other one, and it went with the 503
+  // `no_control_plane` that was its only producer: no process serves the API
+  // without the coordination store that refusal described.
+  test("a halted lens marks the toolbar's add entries unavailable", async () => {
+    storeToken("reader");
     const engine = new Engine(company());
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "no_control_plane" }, 503) : null;
+      r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
     mountBuilder({ engine });
-    expect(await screen.findByText("Read-only here")).toBeDefined();
-    expect(
-      screen.getByText(
-        "This process cannot write the configuration because it has no coordination store.",
-      ),
-    ).toBeDefined();
-    expect(screen.getByText("read only")).toBeDefined();
+    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+
     // An edit is refused before it reaches the log, and says why.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
-    expect(engine.checks()).toHaveLength(1);
 
-    // And the toolbar's own actions say so where they are read: an entry that
-    // is offered, pressed, and answers only into a live region nobody sees
-    // is worse than one marked unavailable.
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     const menu = await screen.findByRole("menu", { name: "Add to the organization" });
     for (const name of ["Add unit", "Add agent seat", "Add human seat"]) {

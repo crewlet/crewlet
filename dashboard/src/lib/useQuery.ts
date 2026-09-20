@@ -24,7 +24,7 @@ export interface QueryResult<T> {
    *  screen — replacing a rendered table with a skeleton every 30 seconds is
    *  how a polled screen becomes unreadable. */
   loading: boolean;
-  /** The engine's machine-readable code (`unauthorized`, `no_event_store`,
+  /** The engine's machine-readable code (`unauthorized`, `unknown_query`,
    *  `timeout`, …), or null. */
   error: string | null;
   /**

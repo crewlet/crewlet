@@ -14,7 +14,8 @@ labels: bug
 - OS and architecture (a release ships six of them):
 - How it was installed (release archive, `go install`, container image, built
   from source):
-- Deployment shape (embedded / split API, docker compose or own infra):
+- Deployment shape (one node or several, which `node.roles` each runs, docker
+  compose or own infra):
 
 ## Config shape
 

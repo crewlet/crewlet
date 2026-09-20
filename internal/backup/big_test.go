@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -54,9 +53,7 @@ func TestASnapshotPastTheInFlightWindowStillCompletes(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "big")
-	manifest, err := backup.New(backup.Options{
-		Conn: nc, NodeID: "node-0", Now: func() time.Time { return clock },
-	}).Take(t.Context(), dir)
+	manifest, err := service(t, openStore(t), nc).Take(t.Context(), dir)
 	if err != nil {
 		t.Fatalf("take: %v", err)
 	}

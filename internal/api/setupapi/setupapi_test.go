@@ -85,30 +85,137 @@ type surface struct {
 	vault   *vault
 	company func() *config.Company
 	configs *store.Configs
-	// setup is the service itself, kept so a test can attach the app flow
-	// the engine attaches after construction.
+	// status is the fleet row every write on this surface records to.
+	status *statusStore
+	// setup is the service itself, kept so a test can reach the app flow
+	// the webhook callback is served.
 	setup *setupapi.Service
 }
 
 func newSurface(t *testing.T) *surface { return newSurfaceWithApps(t, nil) }
 
-// newSurfaceWithApps is the same surface with a co-located engine's answer to
-// which Slack app each seat authenticates as. Nil is a standalone API, or
-// seats that have not come up.
-func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
+// newConfigSurface is the config write path over a store of the test's own.
+func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB) {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
-	cfg := configapi.New(configapi.Options{
+	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: coordmemory.NewFleet(),
 		Now: func() time.Time { return pinned },
 	})
+	if err != nil {
+		t.Fatalf("configapi.New: %v", err)
+	}
+	return cfg, db
+}
+
+// newService builds the service over whatever a case names, filling each
+// required dependency it leaves unset with an inert one, so a case names only
+// what it is about.
+func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
+	t.Helper()
 	v := &vault{}
-	s := &surface{mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs()}
+	if opts.Company == nil {
+		opts.Company = func() *config.Company { return nil }
+	}
+	if opts.Config == nil {
+		opts.Config, _ = newConfigSurface(t)
+	}
+	if opts.Secrets == nil {
+		opts.Secrets = v
+	}
+	if opts.Resolve == nil {
+		opts.Resolve = v.get
+	}
+	if opts.Passes == nil {
+		opts.Passes = setup.NewRunner(nil, nil, func() time.Time { return pinned })
+	}
+	if opts.Sink == nil {
+		opts.Sink = func(operator string) (provision.TokenSink, error) {
+			return provision.NewSecretStoreSink(sinkStore{v}, operator), nil
+		}
+	}
+	if opts.Status == nil {
+		opts.Status = &statusStore{}
+	}
+	if opts.SlackApps == nil {
+		opts.SlackApps = func() map[string]string { return nil }
+	}
+	if opts.StateClaims == nil {
+		opts.StateClaims = coordmemory.NewFleet()
+	}
+	svc, err := setupapi.New(opts)
+	if err != nil {
+		t.Fatalf("setupapi.New: %v", err)
+	}
+	return svc
+}
+
+// EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is refused
+// by name.
+//
+// The engine beside every API holds all of them, so a nil is a wiring mistake,
+// and a narrower surface built around it would look deliberate: every
+// disconnect refused, every requirement answering `resolved: null`, every
+// GitHub App refused. The constructor is where it has to surface.
+func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
+	t.Parallel()
+	cfg, _ := newConfigSurface(t)
+	v := &vault{}
+	complete := func() setupapi.Options {
+		return setupapi.Options{
+			Company:     func() *config.Company { return nil },
+			Config:      cfg,
+			Secrets:     v,
+			Resolve:     v.get,
+			Passes:      setup.NewRunner(nil, nil, nil),
+			Sink:        func(string) (provision.TokenSink, error) { return nil, nil },
+			Status:      &statusStore{},
+			SlackApps:   func() map[string]string { return nil },
+			StateClaims: coordmemory.NewFleet(),
+		}
+	}
+	if _, err := setupapi.New(complete()); err != nil {
+		t.Fatalf("the premise is wrong: a complete set was refused: %v", err)
+	}
+	for field, strip := range map[string]func(*setupapi.Options){
+		"Company":     func(o *setupapi.Options) { o.Company = nil },
+		"Config":      func(o *setupapi.Options) { o.Config = nil },
+		"Secrets":     func(o *setupapi.Options) { o.Secrets = nil },
+		"Resolve":     func(o *setupapi.Options) { o.Resolve = nil },
+		"Passes":      func(o *setupapi.Options) { o.Passes = nil },
+		"Sink":        func(o *setupapi.Options) { o.Sink = nil },
+		"Status":      func(o *setupapi.Options) { o.Status = nil },
+		"SlackApps":   func(o *setupapi.Options) { o.SlackApps = nil },
+		"StateClaims": func(o *setupapi.Options) { o.StateClaims = nil },
+	} {
+		opts := complete()
+		strip(&opts)
+		svc, err := setupapi.New(opts)
+		if err == nil {
+			t.Errorf("no %s built a setup surface: %v", field, svc)
+			continue
+		}
+		if !strings.Contains(err.Error(), "Options."+field) {
+			t.Errorf("the refusal does not name Options.%s: %v", field, err)
+		}
+	}
+}
+
+// newSurfaceWithApps is the same surface with the engine's answer to which
+// Slack app each seat authenticates as. Nil is a node whose Slack transport is
+// not running, or seats that have not come up.
+func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
+	t.Helper()
+	cfg, db := newConfigSurface(t)
+	v := &vault{}
+	s := &surface{
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
+		status: &statusStore{},
+	}
 	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
 	// engine hands it over: a screen bound to the company this process
 	// booted on would describe one that is no longer running.
@@ -119,11 +226,14 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string) *surface {
 		}
 		return doc
 	}
-	s.setup = setupapi.New(setupapi.Options{
+	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve:   v.get,
+		Status:    s.status,
 		SlackApps: func() map[string]string { return apps },
+		// The keyring a GitHub App state is signed from.
+		StateKeys: []string{"test-material"},
 		Now:       func() time.Time { return pinned },
 	})
 	s.setup.Routes(s.mux)
@@ -721,6 +831,10 @@ type statusStore struct {
 	states map[integration.Kind]integration.State
 	forgot []integration.Kind
 
+	// loadErr, when set, is what every read answers: a row the node could
+	// not reach.
+	loadErr error
+
 	// onSave runs inside every write, which is how a case observes what
 	// was TRUE at the moment the row was written — the lease being held,
 	// most of all. Nothing else can see that: the write is the last thing
@@ -753,6 +867,9 @@ func (s *statusStore) ForgetIntegration(_ context.Context, kind integration.Kind
 func (s *statusStore) LoadIntegrations(context.Context) ([]integration.State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
 	out := make([]integration.State, 0, len(s.states))
 	for _, state := range s.states {
 		out = append(out, state)
@@ -783,16 +900,19 @@ func (s *surface) withPass(
 	}
 	runner := setup.NewRunner(wired, nil, func() time.Time { return pinned })
 	s.mux = http.NewServeMux()
-	setupapi.New(setupapi.Options{
+	s.status = status
+	s.setup = newService(t, setupapi.Options{
 		Company: s.company, Config: s.config, Secrets: s.vault,
 		Resolve: s.vault.get,
 		Passes:  runner,
 		Sink: func(operator string) (provision.TokenSink, error) {
 			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
 		},
-		Status: status,
-		Now:    func() time.Time { return pinned },
-	}).Routes(s.mux)
+		Status:    status,
+		StateKeys: []string{"test-material"},
+		Now:       func() time.Time { return pinned },
+	})
+	s.setup.Routes(s.mux)
 	s.config.Routes(s.mux)
 	return status, runner
 }
@@ -1425,12 +1545,11 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 
 // A MISSING KEYRING SAYS SO, rather than internal_error.
 //
-// There are two ways to have no keyring and only one was caught: a node with
-// no secret store WIRED, and a node with one whose bootstrap names no key.
-// The second fails at the seal with secrets.ErrNoKeyring — a sentinel that
-// exists to be recognised — and fell through to the generic case, so a screen
-// that could have said "set secrets.keys" said internal_error and left an
-// operator reading engine logs to find a one-line fix.
+// A node whose bootstrap names no key fails at the seal with
+// secrets.ErrNoKeyring, a sentinel that exists to be recognised. It once fell
+// through to the generic case, so a screen that could have said "set
+// secrets.keys" said internal_error and left an operator reading engine logs
+// to find a one-line fix.
 func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

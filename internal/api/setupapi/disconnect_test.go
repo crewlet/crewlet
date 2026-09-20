@@ -1,6 +1,7 @@
 package setupapi_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -444,11 +445,11 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 	}
 }
 
-// AND ONE REFUSED FOR A REASON THAT WILL NOT CHANGE DOES NOT.
+// AND ONE REFUSED FOR ANY OTHER REASON DOES NOT.
 //
-// A node with no fleet status store cannot record a disconnect however many
-// times it is asked, and telling a caller to retry that is a loop with no
-// exit. Both answers are 503; only one of them is a race.
+// A status row the node cannot read is not a race another writer is about to
+// finish, and telling a caller to sit it out and retry sends them round a loop
+// the fault does not end. Both answers are 503; only one of them is a race.
 func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -457,13 +458,16 @@ func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("import = %d: %s", res.Code, res.Body)
 	}
-	// NO withPass, so no status store is wired.
+	s.status.mu.Lock()
+	s.status.loadErr = errors.New("the coordination store could not be reached")
+	s.status.mu.Unlock()
+
 	out := s.do(t, http.MethodDelete, "/setup/integrations/gitlab", `{}`, nil)
 	if out.Code != http.StatusServiceUnavailable {
 		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
 	}
 	if got := decode(t, out)["error"]; got == "surface_busy" {
-		t.Error("a node with no status store was reported as busy, so a " +
-			"caller retries a refusal that cannot ever change")
+		t.Error("a status row that could not be read was reported as busy, so a " +
+			"caller retries a refusal no amount of waiting ends")
 	}
 }

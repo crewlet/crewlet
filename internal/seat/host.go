@@ -118,10 +118,9 @@ type Config struct {
 	// Status is this node's live state, re-read on every heartbeat and
 	// advertised to peers on the presence lease.
 	//
-	// Nil publishes none, which is a real answer rather than a zero: a
-	// node whose engine is not co-located has no in-flight count to
-	// report, and a peer reading 0 for it would draw an idle row for a
-	// process that is simply not saying.
+	// Nil publishes none, and a peer reads that absence as "not saying"
+	// rather than as a zero (see coord.StatusFromMeta), so a host built
+	// without one draws no idle row. The engine always supplies one.
 	//
 	// It takes a context because answering may mean reading a store, and
 	// this runs on the path that renews presence: the beat bounds it to

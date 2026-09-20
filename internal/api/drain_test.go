@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
@@ -35,8 +36,8 @@ func drainingApp(t *testing.T, draining bool) *api.App {
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
 		},
+		Sources: queries.Sources{Company: active()},
 	})
-	a.SetConfigured(true)
 	return a
 }
 

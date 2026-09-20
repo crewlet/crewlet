@@ -38,9 +38,10 @@ A node that has not caught up is never offered create mode: its own store is
 empty while the fleet runs a company, and a create from there could only be
 refused.
 
-If the engine refuses the first dry run with `503 no_control_plane`, the lens
-is **read-only**: the process can read the configuration but has no
-coordination store to write it through. The status reads "Read-only here".
+A node that is draining refuses every check and save with `503 draining`,
+and the builder treats it as a node it could not reach: the draft is kept,
+and the check retries until a peer or the restarted node answers. Nothing is
+written by a refused save, so there is nothing to settle afterwards.
 
 Changing the operator token while a draft is open keeps the draft. The
 builder reads the configuration again and checks the draft under the new

@@ -789,11 +789,13 @@ type Stream struct {
 
 	// StoreDir is where an EMBEDDED server persists its streams. Empty
 	// selects an in-memory server, which only a company whose tracker and
-	// knowledge base are BOTH a vendor's may run: on either native backend
+	// knowledge base are BOTH a vendor's may run — on either native backend
 	// the company's own records live on that stream, so [CheckTiers]
 	// refuses the pairing rather than recreating those logs empty at the
 	// first restart. It is a cross-tier rule because neither document can
-	// see the other.
+	// see the other. No node is an exception for its roles: every node runs
+	// the engine, and an in-memory server creates every stream it
+	// provisions in memory.
 	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart)."`
 
 	// Cluster makes the embedded server join peers, which is the fleet

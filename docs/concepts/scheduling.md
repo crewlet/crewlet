@@ -223,9 +223,10 @@ what the fleet has to agree on is "may I start", and nothing more. Its
 the same trace, because every fire starts a trace of its own and the turn
 restores it.
 
-> A node with no database still schedules correctly — the guarantee lives
-> in the coordination store now, not in the node's file. What such a node
-> loses is its own dispatch history in the dashboard.
+> The at-most-once guarantee lives in the coordination store, not in the
+> node's file: a node whose `scheduled_runs` table cannot be read still
+> schedules correctly, and what it loses is its own dispatch history in the
+> dashboard.
 
 ### Missed-tick catchup
 

@@ -77,8 +77,8 @@ type OtelReceiver struct {
 // OtelReceiverOptions configure [NewOtelReceiver].
 type OtelReceiverOptions struct {
 	// BaseURL is the externally reachable engine API base the SANDBOX
-	// exports to. In a split deployment that is the API process, which is
-	// not the process that mints.
+	// exports to. On a fleet split by node.roles that is an ingress node,
+	// which need not be the node that mints.
 	BaseURL string
 
 	// Tokens mints and verifies. Required.
@@ -221,17 +221,17 @@ func ParseOtelHeaders(raw string) map[string]string {
 // on: the check runs on the request path of an endpoint that is deliberately
 // reachable without other credentials.
 //
-// With no keyring the key is RANDOM PER PROCESS. A single-process deployment
-// is unaffected, because the process that mints also verifies. A split one
-// gets a loud warning rather than a deterministic key invented from
-// non-secret material, which would let anyone who can reach the endpoint
-// forge one.
+// With no keyring the key is RANDOM PER PROCESS. A single node is unaffected,
+// because the node that mints also verifies. A fleet gets a loud warning
+// rather than a deterministic key invented from non-secret material, which
+// would let anyone who can reach the endpoint forge one.
 func OtelSigningKey(material []string) []byte {
 	if len(material) == 0 {
 		log.Warn("sandbox_otel_signing_key_ephemeral",
 			"detail", "no Tier A secrets.keys, so OTLP tokens are signed with "+
-				"a per-process key — a split deployment cannot verify tokens "+
-				"the other process minted. `crewlet secrets keygen` fixes it")
+				"a per-process key: on a fleet, a box that exports to any node "+
+				"but the one that minted its token is refused. `crewlet secrets "+
+				"keygen` fixes it")
 		return nil
 	}
 	return runtoken.KeyFrom(OtelKeyDomain, material)
@@ -302,15 +302,15 @@ const (
 	OtelUpstreamHeadersVar  = "OTEL_EXPORTER_OTLP_HEADERS"
 )
 
-// BuildOtelReceiver is THE construction path, called by the engine and by a
-// standalone API alike.
+// BuildOtelReceiver is THE construction path, called by every engine.
 //
-// Both need one and for different halves: the engine MINTS a run's endpoint,
-// and whichever process is externally reachable VERIFIES the token. A
-// deployment where only one of them built a receiver answered 401 to every
-// export while its config looked complete — which is the failure the signed,
-// stateless token exists to prevent, and it cannot prevent it if one side
-// never constructs the verifier.
+// A run's endpoint is minted by the engine that launched it, and the token is
+// verified by whichever node the box exports to, which on a fleet need not be
+// the same one. So every node builds its receiver from the same environment
+// and the same Tier A keyring: a node keyed differently from the one that
+// minted answers 401 to every export while its config looks complete, which is
+// the failure the signed, stateless token exists to prevent. A node with the
+// variable unset builds none, and its route is absent rather than refusing.
 //
 // keyMaterial is the Tier A keyring, which every process already loads. Nil
 // or empty takes a per-process key: correct for a single process, and warned

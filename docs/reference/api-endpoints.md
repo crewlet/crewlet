@@ -317,7 +317,6 @@ A valid check answers `200`:
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
 - **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
 - **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
-- **A process that cannot activate refuses the check with `503 no_control_plane`**, before validating, exactly as it refuses the write. A clean check there would promise a save that cannot land.
 - A dry run needs the same token a write does.
 
 #### Refusals carry located problems
@@ -437,9 +436,9 @@ Four rules follow from that:
 
 All `/secrets/*` routes require `Authorization: Bearer <token>`, reads
 included, for the same reason `/config` does: the listing alone says which
-credentials a company holds and when each last changed. They are served only
-by a process that can reach the [coordination store](../concepts/coordination.md)
-— a standalone API with none `404`s rather than answering `503` to everything.
+credentials a company holds and when each last changed. Every node serves
+them, because every node opens the fleet's
+[coordination store](../concepts/coordination.md) that holds the rows.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -509,7 +508,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
-- `503 Service Unavailable`: `no_control_plane` when the process has no coordination store to activate a revision with, on a write and on a dry run alike; `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
+- `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 
 ### The `config_audit` query
 
@@ -607,10 +606,10 @@ records `reload configuration`.
 
 Answers `201` with the revision, its epoch, its warnings and its derived
 hierarchy (see [What a write answers](#what-a-write-answers)),
-`409 no_active_revision` when nothing is configured, `400 validation_error` when the active document breaks a
+`409 no_active_revision` when nothing is configured, and
+`400 validation_error` when the active document breaks a
 runnable rule of this build (a reload is an apply, so it re-publishes only a
-company every node can run; correct it with `PUT` or `PATCH`), and
-`503 no_control_plane` on a process that cannot activate. A document that
+company every node can run; correct it with `PUT` or `PATCH`). A document that
 breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
 such as a duplicate seat or unit name stored before the rule existed, reloads:
 that is how a credential rotation still reaches a company carrying one. Its
@@ -740,7 +739,8 @@ reference to anything.
 
 `present` and `resolved` are the same two facts `secret_present` and
 `secret_usable` are, asked per field: written down, and actually usable in
-this process. `resolved` is `null` where nothing resolved the document.
+this process. `resolved` is `null` for a field the document leaves empty,
+since there is nothing to resolve.
 `blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
 that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
@@ -811,7 +811,7 @@ What the route does, in this order:
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 `409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
-`503 no_control_plane`, `503 no_keyring`.
+`503 no_keyring`.
 
 ### Running the provisioning pass
 
@@ -911,12 +911,10 @@ is the deliberate path.
 > signing secret alone, so two sealed per-seat credentials stayed in the store
 > with nothing telling the operator they were there.
 
-Refusals: `503 no_status_store` on a node with no coordination, which has
-nowhere to record the intent — retry against a node that has one, or force it —
-and `503 surface_busy` when a reconcile tick or an operator's own pass is
-writing at this surface right now. Those two are the same status and opposite
-facts: the first will not change however many times it is asked, and the second
-clears on its own, which is why it carries its own code. The request waits a
+Refusals: `503 surface_busy` when a reconcile tick or an operator's own pass is
+writing at this surface right now, which is the one refusal here that clears on
+its own and carries its own code for that reason: a caller that cannot tell a
+race from a fault treats both as terminal. The request waits a
 busy surface out for a few seconds first (a tick a moment from finishing is the
 common collision) and then names it; repeating the request is correct, because
 every step of a disconnect is idempotent. It used to answer `internal_error`,
@@ -1098,9 +1096,7 @@ organization's own app registration page whenever
 under a person's account cannot be installed on the organization that owns the
 repositories.
 
-Refusals: `503 no_app_flow` (this process holds no signing material, so a
-browser coming back could not be tied to the seat that started),
-`400 bad_body`, `400 seat_required`, `409 no_active_revision`,
+Refusals: `400 bad_body`, `400 seat_required`, `409 no_active_revision`,
 `404 no_such_seat`, and `409 no_public_url` when
 `integrations.public_base_url` is unset. The last one matters more than it
 looks: an app is created with its delivery, redirect and setup addresses baked
@@ -1245,7 +1241,7 @@ opens — before a single turn has run:
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
 | `org` | The same public projection [`GET /org`](#get-org) answers: the charter, root-level `roles` and `units` nesting to any depth, with only the public fields of each |
-| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Absent on a standalone API, which has no engine to ask |
+| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
 A seat carries `state: "idle"` when **this node** is serving it. A seat it
@@ -1265,8 +1261,8 @@ could learn from, and an overlay merge cannot express a row going away.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
-The API process maintains an **in-memory projection** of every agent's
-current state (`internal/api/livestate.LiveState`, owned by
+Every node that serves the API maintains an **in-memory projection** of
+every agent's current state (`internal/api/livestate.LiveState`, owned by
 `internal/api/stream.Service`).  It is fed by the same event stream the
 WebSocket fan-out consumes and read in O(1) thereafter — so `/agents`,
 `/stream/snapshot`, and the WebSocket handshake never re-derive state from a
@@ -1423,40 +1419,36 @@ reconnect restores every field without a second round trip.
 ```json
 {
   "status": "ok",
-  "node": "node-0",
+  "node": "core-1",
   "configured": true,
-  "engine": true,
   "version": "v0.4.0",
-  "started_at": "2026-04-01T12:00:00Z",
+  "started_at": "2026-04-01T11:58:03Z",
   "queue": "jetstream-embedded",
   "clients": 3,
   "event_history_seconds": 2592000,
   "in_flight": 2,
   "shutting_down": false,
   "posture": "serve",
-  "applied_epoch": 40,
-  "engine_started_at": "2026-04-01T11:58:03Z",
-  "seats": ["ceo", "eng"]
+  "applied_epoch": 41,
+  "seats": ["ceo", "cto"]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
 | `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence. A draining engine is draining first, whatever else is true of it, and a node with no active revision is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. |
-| `node` | This process's `node.id`. |
-| `configured` | Whether a company revision is active. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. Always `true` from `crewlet run`, which runs the engine in every process that serves the API, the `ingress`-only node of a split deployment included. The API contract keeps the flag and leaves the engine's fields (`in_flight`, `shutting_down`, `posture`, `applied_epoch`, `engine_started_at`, `seats`) absent when it is `false`, so a client can tell "nothing is running" from "this process cannot know" instead of rendering a confident zero for both. |
+| `node` | The name this node's engine runs under — `node.id`, else `CREWLET_NODE_ID`, else `node-0` — which is what its presence lease carries and the only way a caller can tell which node a load balancer sent it to. |
+| `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When the **API** was built. Deliberately separate from `engine_started_at`: the listener binds before the engine starts, so the two differ even in one process, and one merged "uptime" would be wrong for at least one of them. |
+| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `clients` | Dashboards currently connected to this API process. |
+| `clients` | Dashboards currently connected to this node. |
 | `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. Carried by `GET /health`, the snapshot's `health` section and the `stream` query; the 5-second push does not repeat it, because it does not change. |
-| `in_flight` | Handler invocations mid-flight (embedded API only). |
+| `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
-| `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck` (embedded API only). |
-| `applied_epoch` | The activation epoch this node last applied (embedded API only). |
-| `engine_started_at` | When this node's engine started (embedded API only). |
-| `seats` | The handles of the seats this node holds (embedded API only). |
+| `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
+| `applied_epoch` | The activation epoch this node last applied. |
+| `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
 
 Per-socket facts, such as how many envelopes *this* connection dropped and how
@@ -1496,10 +1488,6 @@ that floor on the wire — read it rather than restating the number, which
 is the store's own constant and not a promise this page makes. Once a
 cursor crosses that floor every page is empty — which is why a client
 must distinguish it from quiet, rather than drawing the gap as silence.
-A process with no event store does not register the `events` question at
-all, so `GET /events` answers **404** with `unknown_query` (the same code
-on the query channel) rather than an empty page, for the same reason:
-"there is nothing older" and "I cannot answer" are different facts.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
@@ -1663,13 +1651,13 @@ REST route calls, so the two surfaces cannot diverge:
 | `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
-| `schedules` | — | `GET /schedules` |
-| `fleet` | none | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease store that cannot be read answers `query_failed` (the REST twin answers `500` with the same code) |
-| `sandbox_runs` | none | `GET /sandbox-runs`; `unknown_query` on a process with no pending-run store |
-| `budgets` | — | `GET /budgets` |
-| `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
+| `schedules` | `{}` | `GET /schedules` |
+| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease store that cannot be read answers `query_failed` (the REST twin answers `500` with the same code) |
+| `sandbox_runs` | `{}` | `GET /sandbox-runs`: `query_failed` when the fleet's run record cannot be read (the REST twin answers `500` with the same code), never an empty list |
+| `budgets` | `{}` | `GET /budgets` |
+| `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
-| `integrations` | — | `GET /integrations` |
+| `integrations` | `{}` | `GET /integrations` |
 | `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, viewer, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend` and `status_entered`, each reversible with a leading `-`. **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
 | `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links, fields, blocked}` plus the same coverage half. `blocked` is on the ANSWER rather than on `task` because it is DERIVED — an open dependency edge, computed in the same transaction as the task, so the badge here and the badge on the board row cannot disagree; `links` say what the relations are, not whether any blocker is still open. `fields` are the task's CUSTOM fields resolved against the company's catalogue — each carrying its declared name, type and whether its declaration was archived — because a stored choice is an option's UUID and a panel rendering the raw value would print it under a heading |
 | `work_goals` | `{id, owner, group, archived}` | `GET /work/goals`. `id` asks for exactly one. Each goal carries its targets, and each target its own `progress` — a fraction from 0 to 1, or ABSENT when the target measures nothing: a `tasks` target whose tasks were all purged, a numeric one that starts where it ends. The goal's own `progress` is the unweighted mean of the targets that do measure something, and is likewise absent when none do — "nothing has happened" and "there is nothing to measure" are different facts. A `tasks` target also carries `finished_tasks` and `total_tasks`, because "7 of 12" is the number a person acts on |
@@ -1682,7 +1670,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_inbox` | `{handle, unread, primary_only, include_snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of nineteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the nineteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence. Same scope rule as `work_my_work` |
 | `work_search` | `{q, limit}` | `GET /work/search`. The company's work RANKED against a phrase — BM25 over the engine's own inverted list, which is the same ranking a seat gets from `search_work`. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered only where this node HOLDS an index, which is separate from holding the board: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. A score is comparable WITHIN one answer and nowhere else, because the statistics it is computed against are this corpus's |
 | `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of nineteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
-| `viewer` | — | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
+| `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
 | `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
 
@@ -1740,11 +1728,11 @@ over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
-| `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
+| `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
 | `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
-| `stream` | none | The health envelope (`GET /health`), on demand over the socket. |
-| `config` | — | `GET /config` *(operator token required)* |
+| `stream` | `{}` | The health envelope (`GET /health`), on demand over the socket. |
+| `config` | `{}` | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
 | `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
@@ -2212,7 +2200,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 
 | Route | What it does |
 |---|---|
-| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, `404` when the stream is not one this node runs, and `503` on a process running no state log. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
 
@@ -2222,9 +2210,10 @@ its position and its operation id: a gate the caller believes has landed and
 which is only `pending` is the difference between a node that has stopped
 writing and one that is about to.
 
-A process with no coordination store answers `503`, not `404`. The route exists
-on this build, and telling an operator it does not sends them looking for a
-version mismatch that is not there.
+A node whose company runs no native tracker has no eviction gate, and both gate
+routes answer `503 no_tracker` rather than `404`. The routes exist on this
+build, and telling an operator they do not sends them looking for a version
+mismatch that is not there.
 
 ### The capacity window
 
@@ -2376,17 +2365,15 @@ answer would then be partial, it opens a new trust edge, and it duplicates
 the mechanism the lease table already is.
 
 
-**Absent is not zero.** A node that publishes no status — one whose engine
-is not co-located — omits those fields entirely, and the dashboard draws an
+**Absent is not zero.** A node that publishes no status (one running a build
+older than the field) omits those fields entirely, and the dashboard draws an
 em dash. A confident `0` would render an idle row for a process that is
 simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
 node performs, and `unplaceable` lists seats whose `role.placement`
-matches no live node. Without a database configured there is no lease
-table and no fleet; the response says so in `degraded` rather than
-failing.
+matches no live node.
 
 ```json
 {
@@ -2465,10 +2452,10 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 deliberately not returned: it is the largest column in the row and every
 prompt in it is already reachable through the event store.
 
-A process with no pending-run store does not register the question, so
-the route answers `404` with `unknown_query` rather than an empty board; a
-store that is configured and unreadable answers `500` with `query_failed`,
-its reason in the log.
+The run record lives in the fleet's coordination store, which every node
+opens, so every node answers with the fleet's runs. A record that cannot be
+read answers `500 query_failed` rather than an empty list: "no run is
+parked" is a claim, and a store blip is not evidence for it.
 
 ### `GET /budgets`
 
@@ -2516,7 +2503,7 @@ itself a client of this route.
 be read: a counter that cannot be read is not a counter that reads zero, and
 without the flag a coordination blip renders every seat at the bottom of its
 cap, which is the most reassuring possible picture drawn at the moment nothing
-is known.
+is known. Human seats have no row, because they spend nothing.
 
 Exhaustion is `refused_at`, the moment a charge was turned away, never
 `durable_used >= max_tokens`. The gate refuses a charge that would exceed the
@@ -2551,14 +2538,10 @@ embedded broker, so a running node is the only thing that can reach it —
 which is why `crewlet budgets reset` is a client of this route rather than a
 command that opens a file.
 
-Two refusals, both deliberate:
-
-- **401 without a token.** `allow_anonymous_read` is on by default and opens
-  the whole read surface; a reset is a write, so it is never eligible.
-- **503 with no coordination store.** A standalone API with no counter
-  attached answers `{"error":"no_coordination_store"}` rather than 404: the
-  route exists on this build, and a 404 sends an operator looking for a
-  version mismatch that is not there.
+One refusal, deliberate: **401 without a token.** `allow_anonymous_read` is on
+by default and opens the whole read surface; a reset is a write, so it is never
+eligible. There is no "no counter here" refusal beside it, because every node
+opens the fleet's coordination store that holds the counter.
 
 ### `POST /backup`
 
@@ -2614,10 +2597,10 @@ Three refusals, each pointing somewhere different:
   or a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix.
-- **503 with no state to copy.** A process running neither a store nor a
-  broker answers `{"error":"nothing_to_back_up"}` rather than 404: the route
-  exists on this build, and a 404 sends an operator looking for a version
-  mismatch that is not there.
+- **A copy without the stream estate.** A node that dialled an external NATS
+  cluster has no connection to snapshot the streams over, so its manifest
+  carries the store copies alone and `crewlet backup` says where the rest
+  lives. Back that half up at the cluster, from the same moment.
 
 ### `GET /integrations`
 
@@ -2695,9 +2678,8 @@ third-party app signs with. For Slack, whose material is one signing secret per
 seat, it is lower: **one** seat whose secret resolved makes the surface usable,
 because a delivery addressed to that seat's path would be accepted, and a seat
 whose own secret is unresolved is reported by that seat's identity finding
-rather than by the whole surface. `null` means this process cannot say (a
-standalone API has no engine whose resolution to read), or the surface has no
-secret to resolve.
+rather than by the whole surface. `null` means this node cannot say (nothing has resolved
+yet), or the surface has no secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
 
@@ -2802,9 +2784,9 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 }
 ```
 
-`recent_runs` is empty when no database is configured (the configured
-list and `next_run` still render). Disabled schedules return an empty
-`next_run`.
+`recent_runs` is empty when the dispatch ledger cannot be read (the
+configured list and `next_run` still render). Disabled schedules return an
+empty `next_run`.
 
 ---
 

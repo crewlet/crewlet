@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -99,26 +98,10 @@ type StateClaims interface {
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 }
 
-// NewAppFlow builds the completer the webhook mux serves.
-//
-// Material keys the state signer, and MUST be the same in every node that
-// mints or validates one: a fleet where the begin and the callback land on
-// different nodes would otherwise refuse every completion. Empty material
-// takes a per-process key, which is correct for one node and cannot work
-// across two, and the caller logs what that costs.
-//
-// spent is where a used state is recorded, and it has the SAME fleet
-// requirement for the same reason: a callback landing on a node that cannot
-// see the first one's record would accept a replay. Nil takes a per-process
-// set, correct for one node and no more — exactly the trade the key material
-// above makes.
-func NewAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
-	if s == nil {
-		return nil
-	}
-	if spent == nil {
-		spent = &localClaims{seen: map[string]time.Time{}}
-	}
+// newAppFlow builds the completer the webhook mux serves. See
+// [Options.StateKeys] and [Options.StateClaims] for why both have to be the
+// fleet's rather than this process's.
+func newAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
 	return &AppFlow{
 		service: s,
 		spent:   spent,
@@ -129,31 +112,9 @@ func NewAppFlow(s *Service, material []string, spent StateClaims) *AppFlow {
 	}
 }
 
-// localClaims is the single-node stand-in for the fleet's registry.
-//
-// Bounded by the same TTL the fleet row carries, swept on write rather than
-// on a timer: a state is spent at most once per app creation, so the map
-// holds one entry per creation for fifteen minutes and there is no loop worth
-// running to keep it smaller.
-type localClaims struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
-}
-
-func (l *localClaims) Claim(_ context.Context, key string, ttl time.Duration, now time.Time) (bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for k, expiry := range l.seen {
-		if !now.Before(expiry) {
-			delete(l.seen, k)
-		}
-	}
-	if expiry, held := l.seen[key]; held && now.Before(expiry) {
-		return false, nil
-	}
-	l.seen[key] = now.Add(ttl)
-	return true, nil
-}
+// AppFlow is the completer the webhook mux serves for a GitHub App creation
+// this service began.
+func (s *Service) AppFlow() *AppFlow { return s.appFlow }
 
 // spend records a state as used, and reports whether this caller may use it.
 //
@@ -180,32 +141,12 @@ func (f *AppFlow) spend(ctx context.Context, state string) error {
 	return nil
 }
 
-// AttachAppFlow gives the service the signer its begin route needs.
-//
-// SET AFTER CONSTRUCTION because the flow holds the service: the callback has
-// to reach the writer and the secret store, and the service has to know
-// whether a flow exists at all so its begin route can refuse honestly rather
-// than mint a state nothing will validate.
-func (s *Service) AttachAppFlow(f *AppFlow) {
-	if s != nil {
-		s.appFlow = f
-	}
-}
-
 // beginApp serves POST /setup/integrations/github/app.
 //
 // It answers with what a browser needs to create the app and nothing it could
 // not work out itself: the manifest, the address to POST it to, and the state
 // that ties the answer back to this seat.
 func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
-	if s.appFlow == nil {
-		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoAppFlow, map[string]string{
-			"hint": "this process has no signing material for the callback, so a " +
-				"browser returning from GitHub could not be tied back to the seat " +
-				"that started",
-		})
-		return
-	}
 	// THROUGH THE PACKAGE'S OWN CAP, like every other route here. A decoder
 	// straight off r.Body reads whatever is sent: this route names one seat,
 	// so the body is tens of bytes, and streaming an unbounded one into a

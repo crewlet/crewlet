@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,11 +17,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
@@ -58,7 +54,8 @@ type cluster struct {
 	relays *jetstreamtest.Relays
 }
 
-// startCluster stands up n merged nodes on one clustered broker.
+// startCluster stands up n nodes, each an engine and its API, on one clustered
+// broker.
 func startCluster(t *testing.T, n int) *cluster {
 	t.Helper()
 	if n < 2 {
@@ -252,9 +249,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 // queue the engine owns, and the server serves the app.
 func stopAll(stops [][]func()) {
 	for _, member := range stops {
-		for i := len(member) - 1; i >= 0; i-- {
-			member[i]()
-		}
+		stopInReverse(member)
 	}
 }
 
@@ -372,37 +367,24 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 
-	// THE SUPPRESSION BELOW: api.New is a CONSTRUCTOR and takes no
-	// context; the loops it builds take theirs from app.Start below, which
-	// this call site hands context.WithoutCancel(ctx) deliberately because
-	// the API outlives the attempt. Threading a context into New to satisfy
-	// the linter would change a production signature for a test's benefit,
-	// and would hand those loops the one context that must not stop them.
-	app := api.New(api.Options{ //nolint:contextcheck // see above
-		Bootstrap:    &boot,
-		QueueBackend: e.Backends().Queue.Backend(),
-		Sources: queries.Sources{
-			Events:  e.Backends().Store.Events(),
-			Company: func() *config.Company { return cfg },
-		},
-		HealthInterval: tickInterval,
-	})
-	app.SetConfigured(true)
-	// THESE OUTLIVE THE ATTEMPT and so must not take its cancellation: the
-	// API and the projector serve for the whole case, while ctx ends when
-	// the bring-up does. WithoutCancel keeps the values and drops the
-	// deadline, which is exactly the difference wanted.
-	app.Start(context.WithoutCancel(ctx))
-	stops = append(stops, app.Stop)
-
-	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
-	if err := projector.Start(context.WithoutCancel(ctx)); err != nil {
-		return fail(fmt.Errorf("projector: %w", err))
+	// THROUGH wireAPI, NOT serveAPI: this runs off the test's goroutine,
+	// where t.Fatalf would end only this goroutine, and the API's teardown
+	// belongs in this member's list, after the engine's, so a failed
+	// attempt stops the listener, the projector and the app before the
+	// engine they read from, and before the next attempt starts.
+	//
+	// THE SUPPRESSION BELOW: the context handed over is deliberately NOT
+	// this attempt's. `ctx` is cancelled the moment the bring-up ends, and
+	// what wireAPI starts under it — the app's push ticks and the live
+	// projector — serves for the whole case. The test's own context is
+	// that lifetime exactly: longer than the attempt, and still ended when
+	// the case is over, which [context.WithoutCancel] would not be.
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil) //nolint:contextcheck // see above
+	stops = append(stops, apiStops...)
+	if err != nil {
+		return fail(fmt.Errorf("api: %w", err))
 	}
-	stops = append(stops, func() { projector.Stop(context.WithoutCancel(ctx)) })
 
-	srv := httptest.NewServer(app)
-	stops = append(stops, srv.Close)
 	return &node{
 		engine: e, app: app, server: srv, model: model,
 		id:          boot.Node.ID,

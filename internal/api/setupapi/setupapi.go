@@ -65,9 +65,7 @@ const MaxBody = 64 << 10
 // The refusals this surface answers with, beyond the shared ones.
 const (
 	codeUnknownKind      = httpjson.Code("unknown_kind")
-	codeNoControlPlane   = httpjson.Code("no_control_plane")
 	codeNoActiveRevision = httpjson.Code("no_active_revision")
-	codeNoAppFlow        = httpjson.Code("no_app_flow")
 	codeBadBody          = httpjson.Code("bad_body")
 	codeSeatRequired     = httpjson.Code("seat_required")
 	codeNoSuchSeat       = httpjson.Code("no_such_seat")
@@ -77,10 +75,6 @@ const (
 	codeValidationError  = httpjson.Code("validation_error")
 	codeInvalidInput     = httpjson.Code("invalid_input")
 	codeNoKeyring        = httpjson.Code("no_keyring")
-	// codeNoStatusStore is a node with no fleet row to record a disconnect
-	// on. Distinct from no_keyring, which is about sealing a credential:
-	// the two are different missing pieces and lead to different advice.
-	codeNoStatusStore = httpjson.Code("no_status_store")
 
 	// codeSurfaceBusy is a disconnect refused because something else is
 	// writing at this surface right now — a reconcile tick, or an operator's
@@ -97,27 +91,32 @@ const (
 )
 
 // Options wire the service.
+//
+// EVERY FIELD BUT Now AND StateKeys IS REQUIRED, and [New] refuses a missing one
+// by name. `crewlet run` builds this beside an engine that holds all of them, so
+// a nil is a wiring mistake, and a surface that quietly shrank around one (no
+// surface at all, every secret write refused, every requirement answering
+// `resolved: null`, every disconnect or GitHub App refused) would present the
+// mistake as a deliberate answer.
 type Options struct {
-	// Company reads the ACTIVE document. Nil serves no surface: with no
-	// company there is nothing to describe and nothing to patch.
+	// Company reads the ACTIVE document. It returns nil while no revision
+	// is active, which every route answers as such.
 	Company func() *config.Company
 
 	// Config is the write path, the same one PATCH /config drives.
 	Config *configapi.Service
 
-	// Secrets seals a submitted credential. Nil is a node with no
-	// keyring, which every secret write refuses rather than storing
-	// plaintext.
+	// Secrets seals a submitted credential. A node with no keyring still
+	// has one: its seal fails with [secrets.ErrNoKeyring], which every
+	// secret write refuses rather than storing plaintext.
 	Secrets setup.Secrets
 
 	// Resolve turns a ${VAR} name into what this process actually
-	// resolved. Nil is a process that cannot say, and every requirement
-	// then answers `resolved: null` rather than claiming false.
+	// resolved, through the engine's own chain.
 	Resolve func(string) (string, bool)
 
-	// Passes are the third-party apps this build can provision over the API. Nil
-	// serves the three pass routes as "not provisionable", which is the
-	// honest answer on a node with no secret store to mint into.
+	// Passes are the third-party apps this build can provision over the
+	// API.
 	Passes *setup.Runner
 
 	// Sink builds the recorder a pass writes minted credentials through.
@@ -130,16 +129,33 @@ type Options struct {
 	// SlackApps is which Slack app each agent seat authenticates as, by
 	// handle.
 	//
-	// A LIVE FACT FROM A CO-LOCATED ENGINE, and there is no other source:
-	// an agent's Slack app is named nowhere in the company document,
-	// because the app is what issues the token rather than something the
-	// token points at. The transport learns it from the vendor when it
-	// wires a seat.
+	// A LIVE FACT FROM THE ENGINE, and there is no other source: an
+	// agent's Slack app is named nowhere in the company document, because
+	// the app is what issues the token rather than something the token
+	// points at. The transport learns it from the vendor when it wires a
+	// seat.
 	//
-	// Nil on a standalone API, which is the honest answer rather than a
-	// confident empty map: the roster then says where the seat's
-	// credential lives, which is what it can prove.
+	// It returns nil where no Slack transport is running, which is the
+	// honest answer rather than a confident empty map: the roster then
+	// says where the seat's credential lives, which is what it can prove.
 	SlackApps func() map[string]string
+
+	// StateKeys is the Tier A keyring material the GitHub App state signer
+	// is keyed from, and it MUST be the same on every node that mints or
+	// validates a state: a fleet where the begin and the callback land on
+	// different nodes would otherwise refuse every completion.
+	//
+	// Empty takes a per-process key, which is correct for one node and
+	// cannot work across two. That is a real deployment (a node with no
+	// secrets.keys), so it is not refused; the caller logs what it costs.
+	StateKeys []string
+
+	// StateClaims is where a spent callback state is recorded, so no state
+	// is accepted twice. It has the same fleet requirement as StateKeys for
+	// the same reason: a callback landing on a node that cannot see the
+	// first one's record would accept a replay. The fleet's claim registry
+	// is open on every node.
+	StateClaims StateClaims
 
 	// Now is injectable so a test can pin a secret row's timestamp.
 	Now func() time.Time
@@ -151,8 +167,8 @@ type Service struct {
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
-	// slackApps is which Slack app each seat authenticates as, from a
-	// co-located engine. Nil elsewhere: see [Options.SlackApps].
+	// slackApps is which Slack app each seat authenticates as, from the
+	// engine. See [Options.SlackApps].
 	slackApps func() map[string]string
 	secrets   setup.Secrets
 	passes    *setup.Runner
@@ -162,10 +178,32 @@ type Service struct {
 	appFlow   *AppFlow
 }
 
-// New builds the service, or nil when this process has no company to set up.
-func New(opts Options) *Service {
-	if opts.Company == nil {
-		return nil
+// New builds the service and the GitHub App flow its begin route and the
+// webhook callback share.
+func New(opts Options) (*Service, error) {
+	var missing []string
+	for _, field := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Company", opts.Company == nil},
+		{"Config", opts.Config == nil},
+		{"Secrets", opts.Secrets == nil},
+		{"Resolve", opts.Resolve == nil},
+		{"Passes", opts.Passes == nil},
+		{"Sink", opts.Sink == nil},
+		{"Status", opts.Status == nil},
+		{"SlackApps", opts.SlackApps == nil},
+		{"StateClaims", opts.StateClaims == nil},
+	} {
+		if field.absent {
+			missing = append(missing, "Options."+field.name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("setupapi: %s required: the setup surface is "+
+			"built beside the engine, which supplies every one of them",
+			strings.Join(missing, ", "))
 	}
 	// THE CLOCK IS DEFAULTED HERE, not at each use. Every caller but the
 	// tests leaves it nil, and one path called it without a guard: the
@@ -176,7 +214,7 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{
+	s := &Service{
 		company:   opts.Company,
 		config:    opts.Config,
 		resolve:   opts.Resolve,
@@ -192,15 +230,16 @@ func New(opts Options) *Service {
 			Now:     now,
 		},
 	}
+	// BUILT HERE, NOT ATTACHED AFTERWARDS. The flow holds the service (the
+	// callback reaches the writer and the secret store through it), and one
+	// constructor for both halves leaves no window in which the begin route
+	// has a service with no flow to validate the state it would mint.
+	s.appFlow = newAppFlow(s, opts.StateKeys, opts.StateClaims)
+	return s, nil
 }
 
-// Routes registers the surface, or says why it did not.
+// Routes registers the surface.
 func (s *Service) Routes(mux *http.ServeMux) {
-	if s == nil {
-		log.Warn("setup_surface_disabled",
-			"hint", "this process serves no company configuration, so /setup is not served here")
-		return
-	}
 	mux.HandleFunc("GET /setup/integrations", s.list)
 	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
 	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
@@ -1020,14 +1059,11 @@ func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 
 // loopFindings is what the loop last recorded about one surface, or nothing.
 //
-// BEST EFFORT BY CONSTRUCTION. A node with no coordination store, or one that
-// could not be read, has nothing to add to the roster — and failing the read
-// of a whole screen because the loop's row was briefly unavailable would
-// replace a slightly stale answer with no answer at all.
+// BEST EFFORT BY CONSTRUCTION. A row that could not be read has nothing to add
+// to the roster, and failing the read of a whole screen because the loop's row
+// was briefly unavailable would replace a slightly stale answer with no answer
+// at all.
 func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []integration.Finding {
-	if s.status == nil {
-		return nil
-	}
 	state, err := s.currentState(ctx, kind)
 	if err != nil {
 		log.WarnContext(ctx, "setup_roster_without_loop_findings",
@@ -1195,8 +1231,8 @@ func (s *Service) surfaceStaying(
 	case integration.KindAtlassian:
 		declared = company.Integrations.Atlassian != nil
 	}
-	if !declared || s.status == nil {
-		return declared
+	if !declared {
+		return false
 	}
 	state, err := s.currentState(ctx, kind)
 	if err != nil {
@@ -1500,14 +1536,9 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 // would leave an operator no way to give one to them. Human seats are
 // excluded, because a person's Slack account is not something this engine
 // provisions or holds a token for.
-// apps is which Slack app each seat authenticates as, or an empty map where
-// nothing in this process knows.
-func (s *Service) apps() map[string]string {
-	if s.slackApps == nil {
-		return nil
-	}
-	return s.slackApps()
-}
+// apps is which Slack app each seat authenticates as, or nil where no Slack
+// transport is running.
+func (s *Service) apps() map[string]string { return s.slackApps() }
 
 func slackSeats(company *config.Company, resolve func(string) (string, bool),
 	apps map[string]string,
@@ -2034,16 +2065,6 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// the delete (a revoked token, an instance that is gone) would
 	// otherwise hold the integration in Disconnecting for ever.
 	if !req.Force {
-		if s.status == nil {
-			httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoStatusStore,
-				map[string]string{
-					"detail": "this node has no fleet status store, so a disconnect " +
-						"cannot be recorded for the loop to act on",
-					"hint": "retry against a node with coordination, or force the " +
-						"disconnect and remove what the third-party app holds by hand",
-				})
-			return
-		}
 		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats); err != nil {
 			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
 			// request can be repeated and may then work — but only this
@@ -2095,9 +2116,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// before this deleted it writes the row straight back, so the surface a
 	// person has just forced away reappears on the screen, reported healthy,
 	// with no block behind it and nothing to remove it again.
-	if s.status != nil {
-		s.forgetUnderGuard(r.Context(), kind)
-	}
+	s.forgetUnderGuard(r.Context(), kind)
 	log.InfoContext(r.Context(), "setup_disconnected",
 		"kind", kind, "revision", applied.RevisionID, "operator", operatorOf(r))
 	httpjson.Write(w, http.StatusOK, map[string]any{
@@ -2164,22 +2183,16 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		fields := configapi.RefusalFields(err)
 		fields["detail"] = patchErr.Err.Error()
 		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
-	case errors.Is(err, configapi.ErrNoControlPlane):
-		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoControlPlane, map[string]string{
-			"hint": "this process has no coordination store, so it cannot activate a revision",
-		})
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "import a company configuration first",
 		})
-	case s.secrets == nil || errors.Is(err, secrets.ErrNoKeyring):
-		// TWO WAYS TO HAVE NO KEYRING, and only the first was caught. A
-		// node with no secret store WIRED is `s.secrets == nil`; a node
-		// with one whose bootstrap names no key fails at the seal, with
-		// this sentinel, which exists to be recognised. It fell through
-		// to the generic case, so a screen that could have said "set
-		// secrets.keys" said internal_error and left the operator
-		// reading engine logs to find a one-line fix.
+	case errors.Is(err, secrets.ErrNoKeyring):
+		// A node whose bootstrap names no key fails at the seal, with this
+		// sentinel, which exists to be recognised. It once fell through to
+		// the generic case, so a screen that could have said "set
+		// secrets.keys" said internal_error and left the operator reading
+		// engine logs to find a one-line fix.
 		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
 			"detail": "this node has no secrets.keys, so a credential cannot be sealed",
 			"hint": "run `crewlet secrets keygen`, put the key in secrets.keys in " +

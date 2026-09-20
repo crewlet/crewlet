@@ -16,10 +16,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/observe"
 )
 
 // A golden company: two seats, one scripted model, one embedded broker.
@@ -76,8 +74,8 @@ turn_engine:
 // frames.
 const tickInterval = 25 * time.Millisecond
 
-// node is a running merged node: engine and API in one process, exactly as
-// `crewlet run` assembles them.
+// node is a running node: engine and API in one process, wired as
+// `crewlet run` wires them.
 type node struct {
 	engine *engine.Engine
 	app    *api.App
@@ -132,32 +130,7 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app := api.New(api.Options{
-		Bootstrap:    &boot,
-		QueueBackend: e.Backends().Queue.Backend(),
-		Sources: queries.Sources{
-			Events:  e.Backends().Store.Events(),
-			Company: func() *config.Company { return cfg },
-		},
-		// The shared tick, sped up. It owns the spend rollup — deliberately,
-		// so aggregating never runs on the engine's own goroutine mid-turn —
-		// and at the production five seconds a test whose turn finishes in
-		// 300ms would never see one, and would then "pass" on the snapshot
-		// alone while the push path went unexercised.
-		HealthInterval: tickInterval,
-	})
-	app.SetConfigured(true)
-	app.Start(t.Context())
-	t.Cleanup(app.Stop)
-
-	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
-	if err := projector.Start(t.Context()); err != nil {
-		t.Fatalf("projector: %v", err)
-	}
-	t.Cleanup(func() { projector.Stop(context.Background()) })
-
-	srv := httptest.NewServer(app)
-	t.Cleanup(srv.Close)
+	app, srv := serveAPI(t, e, &boot, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
 }

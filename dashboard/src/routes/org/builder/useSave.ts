@@ -125,8 +125,6 @@ function refusalMessage(outcome: CheckOutcome): string {
       return "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.";
     case "guarded":
       return "The engine refused this browser's token. Set a token it accepts, then save again.";
-    case "readonly":
-      return "This process cannot write the configuration because it has no coordination store.";
     default:
       return "The engine refused the save.";
   }

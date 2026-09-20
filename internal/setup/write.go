@@ -122,7 +122,8 @@ type Writer struct {
 // writing through an existing one, and refusing a literal.
 func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (Result, error) {
 	if w.Config == nil {
-		return Result{}, fmt.Errorf("setup: no config surface on this process")
+		return Result{}, fmt.Errorf("setup: Writer.Config is nil, so there is no " +
+			"config surface to write the submission through")
 	}
 	// THE STALE-BASE CHECK COMES FIRST, before a single value is sealed.
 	// A caller working from a page it read a minute ago would otherwise
@@ -197,8 +198,8 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		// config at that: a credential whose value is the spelling of
 		// another credential, refused by the vendor with no clue why.
 		//
-		// It needs no secret store in this process, which is why it is
-		// decided before that check: naming an entry is not writing one.
+		// It needs no secret store, which is why it is decided before that
+		// check: naming an entry is not writing one.
 		if ref, isRef := envref.Whole(strings.TrimSpace(value)); isRef {
 			if err := setPath(patch, r.ConfigPath, "${"+ref+"}"); err != nil {
 				return Result{}, err
@@ -207,8 +208,8 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		}
 		if w.Secrets == nil {
 			return Result{}, fmt.Errorf(
-				"setup: %s is a credential and this process has no secret store to seal it in",
-				r.ConfigPath)
+				"setup: %s is a credential and Writer.Secrets is nil, so there is "+
+					"nothing to seal it with", r.ConfigPath)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		name, writePointer, err := PointerFor(in.Kind, r, r.Stored)
@@ -317,8 +318,8 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		// config at that: a credential whose value is the spelling of
 		// another credential, refused by the vendor with no clue why.
 		//
-		// It needs no secret store in this process, which is why it is
-		// decided before that check: naming an entry is not writing one.
+		// It needs no secret store, which is why it is decided before that
+		// check: naming an entry is not writing one.
 		if ref, isRef := envref.Whole(strings.TrimSpace(value)); isRef {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := setPath(seat, r.ConfigPath, "${"+ref+"}"); err != nil {
@@ -329,8 +330,8 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		}
 		if w.Secrets == nil {
 			return Result{}, fmt.Errorf(
-				"setup: %s is a credential and this process has no secret store to seal it in",
-				r.ConfigPath)
+				"setup: %s is a credential and Writer.Secrets is nil, so there is "+
+					"nothing to seal it with", r.ConfigPath)
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		name, writePointer, err := PointerFor(in.Kind, r, r.Stored)
