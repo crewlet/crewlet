@@ -257,7 +257,7 @@ type Coordinator struct {
 	now     func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
-	// on every delivery.
+	// on every delivery, and attempts beside them.
 	//
 	// In memory rather than a store read per delivery: the seat's owner is
 	// the only node that runs its turns, so its own memory is authoritative
@@ -266,6 +266,12 @@ type Coordinator struct {
 	// round trip to answer a question this process already knows.
 	mu   sync.Mutex
 	runs map[string]seatRuns
+
+	// attempts counts the failed handoffs of one delivery to one parked
+	// run, so a resume that fails the same way every time stops circling
+	// the seat's inbox. Keyed by turn id — see [answerAttempt] and
+	// [MaxAnswerAttempts], which is also why it is per process.
+	attempts map[string]answerAttempt
 }
 
 // seatRuns is this node's count of one seat's detached runs, by the question
@@ -328,9 +334,10 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
-		stopped: opts.Stopped,
-		now:     opts.Now,
-		runs:    map[string]seatRuns{},
+		stopped:  opts.Stopped,
+		now:      opts.Now,
+		runs:     map[string]seatRuns{},
+		attempts: map[string]answerAttempt{},
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -544,9 +551,17 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return c.park(ctx, run, result)
 	}
 
-	return c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+	// THE ERROR IS THIS ROUTE'S WHOLE ANSWER, and the disposition beside it
+	// says nothing this caller can act on differently. A completion is
+	// handed back by NAKing it, which spends one of the broker's own 25
+	// deliveries — so the retry is bounded where it stands, and the
+	// requeue budget an answer needs ([MaxAnswerAttempts]) has no
+	// counterpart here. Every disposition that returns an error is the
+	// retry, and every one that does not is an ending.
+	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
 		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
 	})
+	return err
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
@@ -749,7 +764,11 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 
 // TryResumeFromAnswer resumes a parked run if this event answers its question.
 //
-// Reports whether it handled the event, so the caller skips normal handling.
+// Reports what the CALLER must do with the delivery — see [AnswerDisposition],
+// which is the whole contract and states what each answer costs when it is
+// wrong. The error beside it is the explanation and never the decision: a
+// caller logs it and acts on the disposition.
+//
 // The disambiguation is positional WITHIN A CONVERSATION: the next inbound on
 // the conversation the question was asked in, while a clarification is
 // pending, IS the answer. Hence the whole [ConversationRef] rather than one
@@ -757,15 +776,56 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 // along for the rows parked before an identity was written. Matching on the
 // partition alone lost every answer the engine's own prompt pushed into a
 // thread; see [ConversationRef.Answers].
-func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, conv ConversationRef, answer string, trigger *events.Event) (bool, error) {
+//
+// # Every failure, classified
+//
+// Nothing here reports an error and leaves the caller to guess what it meant,
+// which is precisely what the bool beside it cost: the dispatcher read every
+// error as "not handled" and spent the person's answer on an unrelated turn
+// while the run that asked was still waiting for it.
+//
+//   - No conversation keys at all, and no run awaiting this one:
+//     [AnswerNotMine]. Nothing was matched, so nothing is owed.
+//   - The lookup itself failed: [AnswerNotMine], and deliberately — an
+//     unreadable store must not swallow an ordinary message, and nothing was
+//     matched, so nothing is owed. The one error resolved rather than
+//     reported.
+//   - The claim could not be written: [AnswerDeferred]. The claim MAY have
+//     landed, so this is the ambiguous case, and the ambiguity is resolved
+//     towards the run — an answer arriving twice is recoverable and an answer
+//     spent is not. If it did land, the redelivery finds no awaiting row,
+//     answers [AnswerNotMine] and the message becomes the turn it looks like,
+//     while the claimed row is reaped by the seat's next recovery pass.
+//   - The claim was lost to another inbound: [AnswerConsumed]. That delivery
+//     is resuming the run, so this one must not ALSO be run as an unrelated
+//     message.
+//   - The resume ran, whatever it concluded: [AnswerConsumed]. Including a
+//     resumed turn that broke after writing outside the engine
+//     ([ErrResumeActed]), whose claim is deliberately never given back.
+//   - The resume could not be made and the claim went back:
+//     [AnswerDeferred] — the run is awaiting this same answer again, so the
+//     delivery has to come back. [ErrResumeUnavailable] is the case this
+//     exists for.
+//   - The run is terminally gone — no suspended conversation to resume into,
+//     or a claim that could not be given back and was settled instead:
+//     [AnswerNotMine]. Requeueing for a run that no longer exists is a loop
+//     with no end, and the message is an ordinary one now.
+//
+// See [Coordinator.resumeAndSettle], which makes the last three of those calls,
+// and [MaxAnswerAttempts] for what bounds a requeue that keeps failing.
+func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, conv ConversationRef, answer string, trigger *events.Event) (AnswerDisposition, error) {
 	if conv.Identity == "" && conv.Partition == "" {
-		return false, nil
+		return AnswerNotMine, nil
 	}
 	run, found, err := c.pending.FindAwaitingByConversation(ctx, handle, conv)
 	if err != nil {
 		// FAIL OPEN. An unreadable store must not swallow an ordinary
 		// message: handling it as a normal inbound is recoverable, dropping
-		// it is not.
+		// it is not. NOT a defer, and the reasoning is the same one the
+		// line below states — nothing was MATCHED, so no run is owed this
+		// delivery and there is nothing for a requeue to come back to.
+		// The error is resolved here rather than reported, because the
+		// caller has nothing left to decide about it.
 		// BOTH KEYS. The match turns on the identity and falls back to
 		// the partition for a row parked before an identity was
 		// written, so a line naming one of them cannot say which read
@@ -774,22 +834,29 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
 			"agent", handle, "conversation", conv.Identity,
 			"partition", conv.Partition, "error", err.Error())
-		return false, nil
+		return AnswerNotMine, nil
 	}
 	if !found {
-		return false, nil
+		return AnswerNotMine, nil
 	}
 	// THE JOB THAT ASKED, still waiting. The lookup is a snapshot, and a
 	// claim that took whatever the row held by now would hand this answer
 	// to the next job, which asked nothing.
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, AnswerTail(run.LaunchID))
 	if err != nil {
-		return false, err
+		// THE CLAIM MAY HAVE LANDED. A store that could not say is not a
+		// store that said no, and the two would be told apart by nothing
+		// on the delivery's side — so the run keeps its answer and the
+		// message comes back. See the classification above.
+		return c.deferAnswer(ctx, run, trigger,
+			fmt.Errorf("sandbox: claiming %s for the answer it is waiting on: %w", run.TurnID, err))
 	}
 	if !won {
-		// Another inbound already claimed it. Report handled so this one is
-		// not ALSO run as an unrelated message.
-		return true, nil
+		// Another inbound already claimed it: that delivery is resuming
+		// the run, so this one is spent rather than run as an unrelated
+		// message.
+		c.clearAnswerAttempts(run.TurnID)
+		return AnswerConsumed, nil
 	}
 	// FOUR VALUES, BECAUSE THE MATCH HAS TWO ENDS. The delivery's pair and
 	// the row's pair together are what say WHICH row won and WHY: a row
@@ -812,18 +879,39 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// NO OUTCOME: this resume collects no run. The box is still parked and
 	// its cost is charged where it is collected, so reporting one here would
 	// bill the same run twice.
-	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+	if disposition == AnswerDeferred {
+		// The claim went back and the run is awaiting this same answer
+		// again — so the delivery has to come back, up to the budget
+		// [MaxAnswerAttempts] gives it.
+		return c.deferAnswer(ctx, claimed, trigger, err)
+	}
+	// SPENT OR HANDED ON, either way not a failure in a series, so the next
+	// one starts its own.
+	c.clearAnswerAttempts(claimed.TurnID)
+	return disposition, err
 }
 
 // resumeAndSettle re-enters the suspended loop, then settles the box.
 //
 // After the resumed Execute returns: if the executor called run_sandbox AGAIN
-// the row holds a new job that owns the paused box, so it is left for that
-// job's own tail. Otherwise the phase is done with the box, so the box is
-// torn down and the run finished.
+// the row is back in running and a new job owns the paused box, so it is left
+// for the next completion. Otherwise the phase is done with the box, so the box
+// is torn down and the run finished.
+//
+// IT REPORTS WHAT IT LEFT THE DELIVERY, not merely whether it failed, because
+// "the resume did not happen" is three different facts and only one of them is
+// a retry: the run can be back where the claim found it (the delivery is still
+// owed to it), or terminally gone (nothing is owed it any more), or the turn
+// can have run and concluded something (the delivery is spent). Its two
+// callers arrive by different routes and read the pair differently — a
+// completion NAKs on the error and lets the broker's own budget bound the
+// retry, while a person's answer is requeued on [AnswerDeferred] and falls
+// through to an ordinary turn on [AnswerNotMine]. The classification is stated
+// once, at [Coordinator.TryResumeFromAnswer].
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
-) error {
+) (AnswerDisposition, error) {
 	if len(run.ExecuteState) == 0 {
 		// No suspended conversation to resume, and the turn cannot
 		// continue without one.
@@ -841,7 +929,11 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		c.settleFailed(ctx, run, types.SandboxFailureNoConversation,
 			"the run record carried no suspended conversation, so the turn that "+
 				"started it cannot be continued")
-		return nil
+		// TERMINALLY GONE, so nothing is owed the delivery that got here:
+		// requeueing it would circle a run this settle has just deleted,
+		// and acking it would swallow a person's message on behalf of a
+		// turn that no longer exists.
+		return AnswerNotMine, nil
 	}
 	// Freed only NOW, immediately before the resume, so no queued event can
 	// take the slot first. The claim holds the row in [StatusResumed]
@@ -892,7 +984,12 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				c.finish(ctx, settle, fenceOf(run))
 			}
 			c.syncSeat(ctx, run.AgentHandle)
-			return nil
+			// THE TURN RAN AND WROTE OUTSIDE THE ENGINE, so whatever drove
+			// it is SPENT: this is the one branch that deliberately keeps
+			// the claim, and handing the delivery back to the ordinary
+			// route would run a second turn on a message the resumed one
+			// has already acted on.
+			return AnswerConsumed, nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended
@@ -904,9 +1001,17 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
 			// back for a retry that would find nothing to claim.
-			return nil
+			//
+			// And nothing is owed the delivery either, for that same
+			// reason: the run it would come back to has been ended and
+			// announced.
+			return AnswerNotMine, nil
 		}
-		return err
+		// THE RUN IS BACK WHERE THE CLAIM FOUND IT, which on the answer
+		// route is awaiting this very reply. The delivery is still owed to
+		// it, so it has to come back rather than be worked as an ordinary
+		// message.
+		return AnswerDeferred, err
 	}
 
 	latest, err := c.current(ctx, run)
@@ -918,7 +1023,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// [Coordinator.settleClaimed].
 		c.settleClaimed(ctx, run, err)
 		c.syncSeat(ctx, run.AgentHandle)
-		return nil
+		// THE TURN RAN: the resume returned, and only the settle that
+		// follows it could not be decided. Whatever drove it is spent.
+		return AnswerConsumed, nil
 	}
 	if latest.LaunchID != run.LaunchID && slices.Contains(Active, latest.Status) {
 		// The resumed executor called run_sandbox AGAIN: a new detached job
@@ -935,8 +1042,8 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// already over (one that could not start) is settled like the
 		// rest: the phase is done with whatever box it still names.
 		log.InfoContext(ctx, "sandbox_reused_in_turn",
-			"turn_id", run.TurnID, "status", latest.Status, "launch_id", latest.LaunchID)
-		return nil
+			"turn_id", run.TurnID, "status", latest.Status)
+		return AnswerConsumed, nil
 	}
 	c.finish(ctx, latest, fenceOf(run))
 	// RECOUNTED, not assumed free. The count was cleared before the resume,
@@ -946,7 +1053,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// until the seat changed hands. The store now has no record of this run,
 	// so the recount keeps only the seat's other live runs.
 	c.syncSeat(ctx, run.AgentHandle)
-	return nil
+	// The ordinary ending: the turn came back and the run is finished, so
+	// whatever drove the resume did its whole job.
+	return AnswerConsumed, nil
 }
 
 // current is a claimed run as its record stands after the resumed turn
@@ -1084,6 +1193,22 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // reclaimed, record deleted, loss announced, stop reported — which is what
 // every other destroyed turn gets, and detail is the sentence that reaches an
 // operator's board.
+//
+// # NO STOP IS REPORTED ON THE SUCCESSFUL PATH, on either route
+//
+// Which is a decision rather than an omission — see
+// [CoordinatorOptions.Stopped] for what a stop takes down. A completion's
+// hand-back puts the run back to [StatusRunning], where the box IS still
+// working and the indicator the suspension kept alive must stay up. An
+// answer's puts it back to [StatusAwaiting], where nothing is working — but
+// the indicator over that wait was already taken down twice over: once at the
+// park, which reports its own stop, and again by the resume frame itself,
+// which raises a fresh indicator off the answer's trigger and clears it on
+// exactly this failure. A stop reported from here would have to know which of
+// the two it was in, which is the same distinction the reverted status already
+// makes — and getting it wrong on the completion route takes down an indicator
+// over work that is still running. The SETTLE is the exception, and it makes
+// its own report through the ending it performs.
 //
 // Reports whether the run is back in the hands of whatever will retry it: nil
 // where the claim went back (or had already moved on), and the release's own
@@ -1324,12 +1449,18 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, fence Fence
 	settled, ended, err := c.pending.Finish(ctx, run.TurnID, fence, whileIn)
 	if err != nil {
 		c.reportStopped(ctx, run)
+		// FORGOTTEN ON THE SAME GATE THE STOP TAKES, and for the same
+		// asymmetry: the delete may well have landed, and a count kept
+		// for a run nothing will ever offer a delivery to again is a
+		// map entry this process never drops. See [answerAttempt].
+		c.clearAnswerAttempts(run.TurnID)
 		return PendingRun{}, false, err
 	}
 	if !ended {
 		return PendingRun{}, false, nil
 	}
 	c.reportStopped(ctx, settled)
+	c.clearAnswerAttempts(settled.TurnID)
 	return settled, true, nil
 }
 
@@ -1595,6 +1726,11 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 // process, and the seat's next owner recovers it through RecoverSeat. Reaping
 // the box here would destroy work the successor is about to resume.
 func (c *Coordinator) ReleaseSeat(handle string) {
+	// The seat's answer-attempt counts go with it, for the reason they are
+	// per node at all: the successor gets a clean set of attempts at every
+	// run it inherits, and this node keeps no count for a seat it will
+	// never be offered a delivery for again. See [MaxAnswerAttempts].
+	c.releaseAnswerAttempts(handle)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.runs, handle)

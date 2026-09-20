@@ -689,6 +689,10 @@ func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
+		// THE ENGINE'S OWN, because these cases are about what the
+		// indicator does across the seam between the two and a stub
+		// would be a second answer to the question under test.
+		Resume: &resumer{engine: e},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -1143,13 +1147,14 @@ var resumeRetries = map[string]func(*Company) string{
 // to stop — told to the one human who could move the work, moments after they
 // tried to.
 //
-// Nothing is left claiming work, which is the asymmetry's other half: the
-// dispatcher's offer reports the failure rather than the delivery as handled, so
-// the message that carried the answer falls through and is run as the ordinary
-// chat message it looks like — raising a fresh indicator off its own trigger,
-// exactly as this one did — or requeued where a second run holds the seat. A
-// completion has no such second life: it is the run finishing, not a person
-// talking, so a redelivered one has only the hold to take back.
+// Nothing is left claiming work, which is the asymmetry's other half — and it
+// has to be cleared HERE, because nothing else will: the coordinator's revert
+// reports no stop (the same revert on the completion route puts a run back to
+// a box that is still working), and the delivery that carried the answer is
+// REQUEUED rather than run, so no fresh turn comes along to raise one in its
+// place. The next attempt at that message raises its own, exactly as this one
+// did. A completion has no such second life: it is the run finishing, not a
+// person talking, so a redelivered one has only the hold to take back.
 func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 	for name, derail := range resumeRetries {
 		t.Run(name, func(t *testing.T) {

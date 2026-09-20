@@ -1354,12 +1354,12 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 	var asked []string
 	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
 		answer string, trigger *events.Event,
-	) (bool, error) {
+	) (sandbox.AnswerDisposition, error) {
 		asked = append(asked, handle+"/"+conv.Identity)
 		if answer == "" || trigger == nil {
 			t.Error("the answer text and its trigger did not reach the coordinator")
 		}
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 
 	got := d.Dispatch(context.Background(), "swe",
@@ -1399,12 +1399,12 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 	var asked []string
 	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
 		answer string, trigger *events.Event,
-	) (bool, error) {
+	) (sandbox.AnswerDisposition, error) {
 		asked = append(asked, handle+"/"+conv.Identity+"/"+conv.Partition)
 		if answer == "" || trigger == nil {
 			t.Error("the answer text and its trigger did not reach the coordinator")
 		}
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 
 	got := d.Dispatch(context.Background(), "swe",
@@ -1424,6 +1424,143 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 	}
 }
 
+// AND AN ANSWER THE RUN IS STILL OWED IS REQUEUED RATHER THAN RUN.
+//
+// THE DEFECT THIS WHOLE PATH EXISTS FOR. The coordinator matched a parked run
+// and could not resume it — this node has no resumer, the suspended
+// conversation was written by a build it cannot read, the seat is not in its
+// company — so it gave the claim back and the run is awaiting THIS message
+// again. Read as "not the answer", which is what an error used to mean here,
+// the delivery went on to the ordinary route and was consumed as an unrelated
+// turn: the person answered, a turn ran on their reply, and the coding run
+// that asked waited out its pause TTL for a further message that may never
+// come. It is requeued instead, so this node or the seat's next owner is
+// offered it again.
+//
+// REQUEUED AND ACKED rather than deferred, which is the other half: a defer
+// stops the seat consuming altogether, and one parked run's failing resume
+// must not wedge a whole mailbox on a seat that is otherwise free — a run
+// parked on a question holds nothing.
+func TestAnAnswerAParkedRunIsStillOwedIsRequeuedRatherThanRun(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		// FREE, with a question open on it: the shape a parked run leaves.
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	answer := inThread("notification", "chat:C1")
+	got := d.Dispatch(context.Background(), "swe", []*events.Event{answer})
+
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack: the delivery was requeued, and a "+
+			"defer would stop the seat consuming at all", got.Outcome)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
+	}
+	if len(r.parked) != 1 || len(r.parked[0]) != 1 || r.parked[0][0] != answer {
+		t.Fatalf("the answer was not requeued (%v)", r.parked)
+	}
+}
+
+// AND WHAT IS REQUEUED IS WHAT SURVIVED THE LEDGER.
+//
+// The offer on this path sits after the completion read, so the partition it
+// is handed is already shorter than the one that arrived. Requeuing the whole
+// partition would put a trigger this seat has already worked back on its own
+// inbox, where the next drain offers it to the same match all over again —
+// and the ledger exists precisely so a worked trigger is never worked twice.
+func TestAnAnswerRequeuesOnlyWhatTheLedgerLeft(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	worked := inThread("notification", "chat:C1")
+	fresh := inThread("notification", "chat:C1")
+	ctx := context.Background()
+	if err := completions.Record(ctx, "swe",
+		workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	if got := d.Dispatch(ctx, "swe", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack", got.Outcome)
+	}
+	if len(r.parked) != 1 || len(r.parked[0]) != 1 || r.parked[0][0] != fresh {
+		t.Fatalf("requeued %v, want only the trigger the ledger had not worked", r.parked)
+	}
+}
+
+// AND A RUN THAT IS TERMINALLY GONE LETS ITS ANSWER BE A TURN.
+//
+// The other end of the same classification: the coordinator matched a run and
+// then settled it — there was no suspended conversation to resume into, or the
+// claim could not be given back and the run was ended in its place. Nothing is
+// coming back for this delivery, so requeueing it would circle a run that no
+// longer exists, and acking it would swallow the person's message on behalf of
+// a turn that is over. It runs as the ordinary message it looks like.
+//
+// A DISPOSITION THIS BUILD CANNOT READ TAKES THE SAME PATH, which is the one
+// place that fallback is visible: nothing in this build produces one, so it
+// means a seam that answered nothing, and the honest reading of that is a node
+// with no coordinator — a state the engine supports and which cannot loop. A
+// requeue would circle with nothing to bound it, because the bound lives with
+// the run the coordinator matched and an unreadable answer names no run.
+func TestAnAnswerForARunThatIsGoneRunsItsOrdinaryTurn(t *testing.T) {
+	t.Parallel()
+	for name, disposition := range map[string]sandbox.AnswerDisposition{
+		"a run that is terminally gone":          sandbox.AnswerNotMine,
+		"a disposition this build does not know": sandbox.AnswerDisposition("something else"),
+		"no disposition at all":                  sandbox.AnswerDisposition(""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions {
+				return inbox.Conditions{Owned: true, TurnEngineReady: true,
+					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+			}
+			d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+				*events.Event,
+			) (sandbox.AnswerDisposition, error) {
+				return disposition, nil
+			}
+
+			got := d.Dispatch(context.Background(), "swe",
+				[]*events.Event{inThread("notification", "chat:C1")})
+			if got.Outcome != queue.OutcomeAck {
+				t.Errorf("outcome = %v, want an ack for a completed turn", got.Outcome)
+			}
+			if len(r.reqs) != 1 {
+				t.Fatalf("the turn engine ran %d times, want the ordinary turn", len(r.reqs))
+			}
+			if len(r.parked) != 0 {
+				t.Errorf("the delivery was requeued with nothing to bound it: %v", r.parked)
+			}
+		})
+	}
+}
+
 // AND FALLS THROUGH TO THE TURN WHEN IT IS NOT THE ANSWER. A seat with a
 // question open is an ordinary working seat: every message on it that no
 // parked run claims is work like any other, and swallowing those would make a
@@ -1438,8 +1575,8 @@ func TestAMessageThatAnswersNothingStillRunsItsTurn(t *testing.T) {
 	}
 	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
 		*events.Event,
-	) (bool, error) {
-		return false, nil
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerNotMine, nil
 	}
 
 	got := d.Dispatch(context.Background(), "swe",
@@ -1482,9 +1619,9 @@ func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 	called := false
 	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
 		*events.Event,
-	) (bool, error) {
+	) (sandbox.AnswerDisposition, error) {
 		called = true
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 
 	if got := d.Dispatch(ctx, "swe", []*events.Event{worked}); got.Outcome != queue.OutcomeAck {
@@ -1505,17 +1642,32 @@ func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 	t.Parallel()
 	type answerer func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event) (bool, error)
+		*events.Event) (sandbox.AnswerDisposition, error)
 	for name, answer := range map[string]answerer{
 		"not this run's answer": func(context.Context, string, sandbox.ConversationRef,
 			string, *events.Event,
-		) (bool, error) {
-			return false, nil
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerNotMine, nil
 		},
 		"an unreadable store": func(context.Context, string, sandbox.ConversationRef,
 			string, *events.Event,
-		) (bool, error) {
-			return false, errors.New("the coordination store is unreachable")
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
+		},
+		// A RUN THIS NODE CANNOT RESUME asks for the delivery back, and
+		// the park is exactly that: the screening was going to requeue it
+		// anyway, which is why a held seat needs no branch of its own.
+		"a run this node cannot resume": func(context.Context, string, sandbox.ConversationRef,
+			string, *events.Event,
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerDeferred, errors.New("this node cannot resume the run")
+		},
+		// AND A DISPOSITION THIS BUILD CANNOT READ falls back to what a
+		// node with no coordinator does, which is this same park.
+		"a disposition this build does not know": func(context.Context, string,
+			sandbox.ConversationRef, string, *events.Event,
+		) (sandbox.AnswerDisposition, error) {
+			return sandbox.AnswerDisposition("something else"), nil
 		},
 		"no coordinator": nil,
 	} {
@@ -1562,8 +1714,8 @@ func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
 	}
 	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
 		*events.Event,
-	) (bool, error) {
-		return false, errors.New("the coordination store is unreachable")
+	) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
 	}
 	d.Dispatch(context.Background(), "swe",
 		[]*events.Event{inThread("notification", "chat:D1")})
@@ -1597,9 +1749,9 @@ func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 	called := false
 	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
 		*events.Event,
-	) (bool, error) {
+	) (sandbox.AnswerDisposition, error) {
 		called = true
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 	d.Dispatch(context.Background(), "swe", []*events.Event{ev("notification")})
 	if called {
@@ -1624,9 +1776,9 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 	called := false
 	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
 		*events.Event,
-	) (bool, error) {
+	) (sandbox.AnswerDisposition, error) {
 		called = true
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 	d.Dispatch(context.Background(), "swe",
 		[]*events.Event{inThread("notification", "chat:C1")})
@@ -2056,9 +2208,9 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 	}
 	dp.Answer = func(_ context.Context, _ string, conv sandbox.ConversationRef,
 		_ string, _ *events.Event,
-	) (bool, error) {
+	) (sandbox.AnswerDisposition, error) {
 		offered = conv
-		return true, nil
+		return sandbox.AnswerConsumed, nil
 	}
 	if got := dp.Dispatch(ctx, "swe", []*events.Event{
 		inDirectThread("notification", "chat:D1", "root-1"),

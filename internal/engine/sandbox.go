@@ -478,15 +478,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     revert puts the run back to awaiting THEM. Nothing is working, and
 	//     an indicator over that wait tells the one person who could move it
 	//     that nobody needs them — the same lie the park exists to stop. So
-	//     it is CLEARED, and nothing is left to claim otherwise: the
-	//     dispatcher's offer reports the failure rather than the delivery as
-	//     handled, so the message that carried the answer FALLS THROUGH —
-	//     run as the ordinary chat message it looks like on a seat a parked
-	//     run left free, which raises a fresh indicator off its own trigger,
-	//     or requeued where a second run holds the seat, which brings it
-	//     back. Only the second of those is a redelivery, and neither is the
-	//     coding run getting its answer: that run is awaiting the
-	//     conversation's NEXT message. See [Dispatcher.answered].
+	//     it is CLEARED, and this is the only place that clear happens: the
+	//     coordinator's revert reports no stop, deliberately, because the
+	//     same revert on the completion route puts a run back to a box that
+	//     is still working. See [sandbox.Coordinator.revertClaim].
+	//
+	//     THE MESSAGE ITSELF IS REQUEUED, not spent. The offer reports
+	//     [sandbox.AnswerDeferred] — the run is awaiting THIS answer again —
+	//     so the dispatcher requeues the delivery instead of letting it be
+	//     run as the ordinary chat message it looks like, and the next
+	//     attempt raises its own indicator off its own trigger. It used to
+	//     fall through, which answered the person with a turn rather than
+	//     with the coding run they were replying to and left that run
+	//     waiting for a further message. See [Dispatcher.answered].
 	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
