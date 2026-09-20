@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { ABSORBED, bandOf, prefetchBlocks, tellStory } from "./turnstory.ts";
+import { ABSORBED, bandOf, prefetchBlocks, promptWeights, tellStory } from "./turnstory.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
 function event(type: string, over: Partial<EventRecord> = {}): EventRecord {
@@ -197,5 +197,104 @@ describe("the prefetch", () => {
     // A turn whose prefetch event fell outside the store's window has no
     // answer here, which is different from a turn whose every block missed.
     expect(prefetchBlocks(undefined)).toEqual([]);
+  });
+});
+
+describe("what each phase's prompt weighed", () => {
+  function size(
+    phase: string,
+    iteration: number,
+    tokens: number,
+    over: Record<string, unknown> = {},
+  ): EventRecord {
+    return event("prompt.size", {
+      payload: {
+        turn_id: "t-1",
+        phase,
+        iteration,
+        approximate_tokens: tokens,
+        system_bytes: 24_000,
+        user_bytes: 2_800,
+        ...over,
+      },
+    });
+  }
+
+  test("a turn that ran once gets one row per phase, in the order it published", () => {
+    // The control. Without it the collapse below passes on a build that
+    // returns nothing at all.
+    const rows = promptWeights([
+      size("onboarding", 0, 3_046),
+      size("execute", 1, 6_807),
+      size("review", 1, 2_071),
+      size("execute", 2, 7_646),
+    ]);
+    expect(rows.map((r) => `${r.phase}|${r.iteration}`)).toEqual([
+      "onboarding|0",
+      "execute|1",
+      "review|1",
+      "execute|2",
+    ]);
+    expect(rows.every((r) => r.runs === 1)).toBe(true);
+  });
+
+  test("a phase key measured twice is one row that says so", () => {
+    // `turn_id|phase|iteration` IS the phase key, so a second measurement
+    // under one key is that phase RUNNING AGAIN — the turn's whole dispatch
+    // re-delivered and re-run under its work key. Listed flat it drew two
+    // byte-identical rows, which reads as a repeating panel rather than as
+    // news about the turn.
+    const rows = promptWeights([
+      size("execute", 1, 6_807),
+      size("execute", 1, 6_807),
+      size("execute", 1, 6_807),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.runs).toBe(3);
+    expect(rows[0]!.minTokens).toBe(6_807);
+    expect(rows[0]!.maxTokens).toBe(6_807);
+  });
+
+  test("the row carries the LAST run's figures and the range of the others", () => {
+    // The run that stands is the one whose frame the phase actually reasoned
+    // in; the earlier ones measured a prompt the turn then threw away. The
+    // range is the only thing those discarded rows still had to say.
+    const rows = promptWeights([
+      size("execute", 1, 6_807, { system_bytes: 24_000 }),
+      size("execute", 1, 6_807, { system_bytes: 24_000 }),
+      size("execute", 1, 6_616, { system_bytes: 23_000 }),
+    ]);
+    expect(rows[0]!.approximateTokens).toBe(6_616);
+    expect(rows[0]!.systemBytes).toBe(23_000);
+    expect(rows[0]!.minTokens).toBe(6_616);
+    expect(rows[0]!.maxTokens).toBe(6_807);
+  });
+
+  test("a re-run turn keeps its phases in first-seen order, not re-run order", () => {
+    // The screenshot this was rebuilt against interleaved five onboarding and
+    // five executor passes. Collapsed naively by deleting and re-inserting,
+    // ONBOARDING would have jumped below EXECUTE on the second pass and the
+    // page would read as though the executor went first.
+    const rows = promptWeights([
+      size("onboarding", 0, 3_046),
+      size("execute", 1, 6_807),
+      size("onboarding", 0, 3_046),
+      size("execute", 1, 6_616),
+    ]);
+    expect(rows.map((r) => r.phase)).toEqual(["onboarding", "execute"]);
+    expect(rows.map((r) => r.runs)).toEqual([2, 2]);
+  });
+
+  test("a self-iterate round is its own phase key, never a re-run", () => {
+    // Same phase, different iteration: two frames the model genuinely
+    // reasoned in, and collapsing them would hide the growth this panel
+    // exists to make visible.
+    const rows = promptWeights([size("execute", 1, 6_807), size("execute", 2, 7_646)]);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.runs)).toEqual([1, 1]);
+  });
+
+  test("an event with no payload is skipped rather than counted as a zero row", () => {
+    expect(promptWeights([event("prompt.size"), event("agent_phase_started")])).toEqual([]);
   });
 });
