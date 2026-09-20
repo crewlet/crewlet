@@ -77,19 +77,23 @@ var reviewSchema = map[string]any{
 		"decision": map[string]any{
 			"type": "string",
 			"enum": reviewDecisionEnum(),
-			"description": "done: the work is finished and was actually " +
-				"delivered. self_iterate: it is wrong or incomplete, the answer " +
-				"was never delivered by a tool call, or the executor said it " +
-				"lacks a tool it needs. failed: this cannot be completed at all.",
+			"description": "done: this turn is over — the work is finished and " +
+				"was actually delivered, or it is honestly blocked on somebody " +
+				"who has already been asked. self_iterate: it is wrong or " +
+				"incomplete, the answer was never delivered by a tool call, the " +
+				"executor said it lacks a tool it needs, or the person who has " +
+				"to act has NOT been asked yet. failed: this cannot be " +
+				"completed at all.",
 		},
 		"notes": map[string]any{
 			"type": "string",
 			"description": "Required on self_iterate: an actionable correction for " +
 				"the next round. Blocked, lacking authority, or needing someone " +
-				"else's identity? Still self_iterate — put the ask here so the " +
-				"next plan adds an outreach step. Never hand over a naked " +
-				"problem: include what was tried, the options, and your " +
-				"recommendation.",
+				"else's identity, and they have NOT been asked yet? self_iterate " +
+				"— put the ask here so the next round adds an outreach step. " +
+				"Once they HAVE been asked the turn is done, and their reply is " +
+				"what wakes the agent again. Never hand over a naked problem: " +
+				"include what was tried, the options, and your recommendation.",
 		},
 		"completed_work": map[string]any{
 			"type": "string",
@@ -134,9 +138,12 @@ const submitReviewDescription = "Submit your review decision. Call exactly once.
 	"Choose self_iterate whenever the work is wrong or incomplete, the " +
 	"answer was written but never delivered by a tool call, or the executor " +
 	"narrated that it lacks a tool it needs — say which tool in `notes`.\n\n" +
-	"Need a colleague or manager — blocked, lacking authority, or needing " +
-	"someone else's identity or credentials? Still self_iterate: put the " +
-	"ask in `notes` so the next round reaches them directly. Never hand " +
-	"over a naked problem — include what was tried, the options you see, " +
-	"and your recommendation.\n\n" +
+	"Need a colleague, a manager or the requester — blocked, lacking " +
+	"authority, or needing someone else's identity or credentials? Ask " +
+	"whether they have BEEN TOLD. Not yet: self_iterate, and put the ask in " +
+	"`notes` so the next round reaches them directly. Already asked: done — " +
+	"the turn is over and it did not fail, because no round of yours can " +
+	"produce somebody else's reply and that reply is what wakes this agent " +
+	"again. Never hand over a naked problem — include what was tried, the " +
+	"options you see, and your recommendation.\n\n" +
 	"The tool log is the evidence. What the executor said about itself is not."
