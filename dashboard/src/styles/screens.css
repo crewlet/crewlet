@@ -778,18 +778,6 @@
 .feed-row:hover {
   background: var(--surface-hover);
 }
-/* A ROW IS NOT AN INLINE LINK. `a:hover` underlines, which is right for a
-   link inside a sentence and wrong for a whole row that happens to be an
-   anchor: hovering one struck a line under its timestamp, its summary AND
-   its type, three unrelated fragments at once. A row-shaped link is already
-   telling you it is hoverable with its ground. */
-.feed-row:hover,
-.turn-row:hover,
-.seat-card:hover,
-.attention-row.clickable:hover,
-.hit-title:hover {
-  text-decoration: none;
-}
 .feed-row.failed {
   box-shadow: inset 2px 0 0 var(--critical);
 }
@@ -2633,18 +2621,12 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 0;
 }
 
-/* A ROW IS NOT AN INLINE LINK — see the rule in components.css. Every
+/* A ROW TAKES THE PAGE'S INK — see the rule in components.css. Every
    row-shaped anchor the tracker adds joins the same set. */
 a.work-card,
 a.work-row,
 a.work-cal-chip {
   color: inherit;
-  text-decoration: none;
-}
-a.work-card:hover,
-a.work-row:hover,
-a.work-cal-chip:hover {
-  text-decoration: none;
 }
 
 /* ---- Responsive ---------------------------------------------------------
@@ -3046,7 +3028,6 @@ a.work-cal-chip:hover {
   padding: 0 var(--space-2);
   font-size: var(--fs-xs);
   overflow: hidden;
-  text-decoration: none;
   border: 1px solid transparent;
   min-width: 10px;
 }
@@ -3121,7 +3102,6 @@ a.work-cal-chip:hover {
   padding: 0 var(--space-2);
   font-size: var(--fs-xs);
   color: var(--text);
-  text-decoration: none;
   min-width: 0;
 }
 .tl-name:hover {
@@ -3160,7 +3140,6 @@ a.work-cal-chip:hover {
   border-radius: var(--r-sm);
   font-size: var(--fs-xs);
   color: var(--text);
-  text-decoration: none;
 }
 .tl-chip:hover {
   background: var(--surface-hover);
@@ -3213,7 +3192,6 @@ a.work-cal-chip:hover {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  text-decoration: none;
   color: var(--text);
   font-size: var(--fs-sm);
 }
@@ -3368,7 +3346,6 @@ a.work-cal-chip:hover {
   padding: var(--space-1) var(--space-2);
   border-radius: var(--r-sm);
   color: var(--text-secondary);
-  text-decoration: none;
   /* THE ONLY TRANSITION ON THIS STRIP, and it is on colour. The figures
      re-render on every push, and a transition on anything geometric would
      make a number arriving look like the strip moving. */
@@ -3376,7 +3353,6 @@ a.work-cal-chip:hover {
 }
 .pulse-fact:hover {
   background: var(--surface-hover);
-  text-decoration: none;
 }
 .pulse-fact:focus-visible {
   outline: none;

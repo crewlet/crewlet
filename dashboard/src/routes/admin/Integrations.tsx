@@ -730,7 +730,7 @@ export function Reconcile({
           <p className="int-note-remedy">
             {reported?.remedy}
             {where && (
-              <a href={where} target="_blank" rel="noreferrer">
+              <a className="prose-link" href={where} target="_blank" rel="noreferrer">
                 Open {appName || "the app"}
               </a>
             )}
@@ -1991,8 +1991,10 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
         <Card.Footer variant="meta">
           <span className="t-caption">
             The newest {DELIVERY_PAGE}. Older deliveries are in the{" "}
-            <a href={href(["activity", "events"], { category: "webhook" })}>event log</a>, which
-            pages.
+            <a className="prose-link" href={href(["activity", "events"], { category: "webhook" })}>
+              event log
+            </a>
+            , which pages.
           </span>
         </Card.Footer>
       )}

@@ -538,12 +538,27 @@ export function PageView({ container, title }: { container: string; title: strin
           </>
         ) : undefined}
       </PageActions>
-      <PageNote>
-        {page ? (
+      {/* THE ANCESTOR CHAIN, outermost first — a page's place is what makes
+            it findable, and a title alone says nothing about which team's tree
+            it is in.
+
+            A CHAIN OF ONE IS NOT A CHAIN. On a page filed directly in its
+            container — which is most of them — this rendered the container and
+            nothing else: a lone accent word in an otherwise empty band above
+            the header, reading as a stray button, saying exactly what the
+            `Container` fact three lines below it already says as a link to the
+            same place. The trail earns its line when it has something the fact
+            cannot carry, which is the path THROUGH the tree; until then the
+            fact is the whole answer.
+
+            THE GUARD WRAPS THE NOTE, NOT ITS CONTENTS. `PageNote` renders its
+            `<p class="page-note">` whatever it is handed, and that paragraph
+            carries a `margin-bottom` of its own — so guarding only the
+            breadcrumb inside it swapped a stray link for an empty band, which
+            is the same gap with nothing in it. */}
+      {page && (data.ancestors ?? []).length > 0 ? (
+        <PageNote>
           <span className="row wrap" style={{ gap: "var(--space-1)" }}>
-            {/* THE BREADCRUMB IS THE ANCESTOR CHAIN, outermost first — a
-                  page's place is what makes it findable, and a title alone
-                  says nothing about which team's tree it is in. */}
             <a href={href(["knowledge", page.container])}>{page.container}</a>
             {(data.ancestors ?? []).map((a) => (
               <span key={a.id}>
@@ -552,8 +567,8 @@ export function PageView({ container, title }: { container: string; title: strin
               </span>
             ))}
           </span>
-        ) : undefined}
-      </PageNote>
+        </PageNote>
+      ) : undefined}
 
       {loading && <Skeleton variant="text" rows={8} label="Loading the page" />}
 

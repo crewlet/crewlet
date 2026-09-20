@@ -356,3 +356,56 @@ test("an empty trace list falls through to the rows", async () => {
   // could only have got from the row.
   expect(await screen.findByRole("button", { name: "Trace" })).toBeTruthy();
 });
+
+// THE TITLE IS A LEAD, SO THE PANEL STILL PRINTS THE WHOLE TRIGGER.
+//
+// `TurnBrief` drops its prose where the title already said it, and that
+// comparison is exact: `woke === omit`. While the title was the WHOLE string
+// it matched whenever the two came from the same place, and the paragraph
+// went. Now that `turnTitle` takes only the LEAD sentence, it matches only a
+// trigger that IS one sentence — so a longer one prints here in full, with the
+// header's own sentence at the front of it.
+//
+// That is the answer rather than an oversight, and these three cases are what
+// pin it. Printing only the tail would open the paragraph mid-thought; dropping
+// it would lose everything the lead did not take, which on a turn with no plan
+// summary is the only account of itself this screen has. What is still dropped
+// is the case the rule was written for — a trigger the title says ALL of.
+const ONE_SENTENCE = "Founder asked for the quarterly numbers.";
+const MANY = `${ONE_SENTENCE} They want revenue by unit and the headcount behind it.`;
+
+/** The prose paragraphs of the "Woken by" panel — the only ones on this page. */
+function briefProse(): string[] {
+  return [...document.querySelectorAll("p.t-body.measure")].map((p) => p.textContent ?? "");
+}
+
+/** One phase carrying a trigger, and no turn record — so the title is the trigger's. */
+function woken(trigger: Record<string, unknown>) {
+  return { events: [phase("2026-09-13T10:01:30Z", 90_000, { trigger })] };
+}
+
+test("a multi-sentence trigger prints whole, under the title's lead", async () => {
+  mount(woken({ id: "e-9", type: "chat_message", summary: MANY }));
+  await screen.findByText("Woken by");
+  // The header took the lead, and only the lead.
+  expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
+  // And the panel carries the whole thing, that lead included.
+  expect(briefProse()).toEqual([MANY]);
+});
+
+test("a one-sentence trigger the title says whole is not printed twice", async () => {
+  mount(woken({ id: "e-9", type: "chat_message", summary: ONE_SENTENCE }));
+  // The panel is still drawn, because it carries the link to the trigger
+  // event. What goes is the prose, which is the half the header already is.
+  expect(await screen.findByText("Woken by")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "the trigger →" })).toBeTruthy();
+  expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
+  expect(briefProse()).toEqual([]);
+});
+
+test("…and with nothing else to carry, the panel goes with it", async () => {
+  mount(woken({ type: "chat_message", summary: ONE_SENTENCE }));
+  // The phase card is what says this screen rendered at all.
+  await screen.findByTitle("how long this phase took");
+  expect(screen.queryByText("Woken by")).toBeNull();
+});

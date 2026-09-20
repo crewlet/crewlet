@@ -256,6 +256,33 @@ the two differ, and `unitDirectLabel` is what a roster group says, because a
 seat sits in exactly one group and nothing under a unit is in it. A filter
 outranks both: with one on, every count on the screen is over what matched.
 
+**A row's mark has a column whether or not the row has a mark.** The workspace
+sidebar draws three kinds of row — one with an icon, one with a status dot, one
+with neither — and while the mark was rendered conditionally it took layout
+only when it existed, so a list holding all three started its text at three
+different x positions. Measured in Admin, where Infrastructure expands to the
+fleet's nodes above the state log's domains: the node's label sat at 120px, a
+domain's at 134 and the icon-bearing parent's at 128. Activity's seat list does
+it over time rather than down the list — a seat that is working carries a dot
+and an idle one does not, so the column combs in and out as the company works.
+`.side-mark` is a 16px slot on every row, which is the same rule
+`--nav-gutter` plus `--nav-row-pad` already states for the rail beside it: every
+row at one depth starts its text on ONE vertical line.
+
+**The rail is as wide as its foot, not as its longest label.** `--rail-w` is
+composed — `--rail-foot-w` plus the foot's inset plus the rail's own border —
+rather than picked. It was a flat 80px, which holds "Knowledge" at `--fs-3xs`
+comfortably and does not hold the theme and density switches under it: a pill
+row is three hit targets at `--size-target-min`, which is 24px because WCAG 2.2
+says a pointer target may not stand smaller, plus two 2px gaps and the row's own
+2px padding — 80px with nothing negotiable in it. After the foot's inset the row
+had 71px, so the third option of each control was drawn OUTSIDE its own pill:
+"dark" and "comfortable" hung over the rail's edge with no ground under them, on
+every screen. Both settings are also in the command palette's `>` scope, which
+is where the collapsed rail and the phone's bottom bar send a reader — they are
+kept in the chrome because a theme switch you can SEE is the reason either is
+there, and what was wrong was a rail too narrow to draw what it was drawing.
+
 `g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
 `g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
 because every single-modifier combination worth having is already the browser's.
@@ -412,6 +439,65 @@ things follow from that, and each is a rule a new column has to keep:
   affordance, and `sort=` is in the URL — so a sorted list still arrives sorted
   from a link, or from the wider layout that set it.
 
+**A footnote may not set its column's width.** A `.fact` is a column flex box,
+so it is as wide as its widest child — and a note is prose where the value
+above it is a word. Measured on a knowledge page's header: `v1` under a 146px
+"set by Agent CEO · 2m ago" and `2m ago` under a 153px "any change, not only a
+save", beside three note-less facts at 66 to 75px, so the gaps between the five
+labels ran 85, 162, 90, 169 and the row read as five columns placed at random.
+A note is held to sixteen characters — about two short words a line at
+`--fs-3xs`, roughly the width of the label above it — which brought those gaps
+to 85, 144, 90, 144. `text-wrap: balance` is what makes the wrap look
+deliberate: at a hard 18ch the same two notes left "2m ago" and "a save" alone
+on a second line, and an orphan reads as a fault. This is deliberately not
+`--measure`: that is a reading measure for prose somebody sits down with, and a
+caption under a fact is read in one glance beside the thing it qualifies.
+
+**A trail of one segment is not a trail.** The knowledge page draws its
+ancestor chain above the header, outermost first, because a title alone says
+nothing about which team's tree a page is in. On a page filed directly in its
+container — which is most of them — that chain is the container and nothing
+else: a lone accent word in an otherwise empty band, reading as a stray button,
+saying exactly what the `Container` fact three lines below it already says as a
+link to the same place. The trail is drawn only once it has what the fact
+cannot carry, which is the path THROUGH the tree.
+
+And the guard wraps the NOTE, not its contents. `PageNote` renders its
+paragraph whatever it is handed, and that paragraph carries a margin of its
+own — so a guard on the breadcrumb inside it swaps a stray link for an empty
+band, which is the same gap with nothing in it. A test that counts the links
+cannot see that, so the element is asserted separately.
+
+### A dropdown's list sizes to its options
+
+The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode,
+and for a while this tree carried three rules compensating for it. All three
+are gone: they were fixed in the package, and `0.4.4` is the first release that
+carries them.
+
+What they were is worth keeping, because the shapes recur. A row in the panel
+shrank below its own content — an explicit `min-height` on a flex item replaces
+the automatic content minimum, so a list taller than its panel squeezed every
+row before it scrolled, and the overflow drew over the next row. An option's
+label declared `overflow: hidden` and `text-overflow: ellipsis` and no
+`white-space`, and neither of the first two does anything to text that is
+allowed to wrap, so the ellipsis was inert. And the panel was placed with the
+TRIGGER's width while its height was measured off the panel, in the same object
+literal — which pinned a toolbar picker's list to whatever its current answer
+happened to be, made `align="right"` compute the same number as `align="left"`,
+and clamped a panel that had grown as though it had not, so it hung over the
+viewport's edge.
+
+**A rule compensating for a package is a rule with an expiry date, and it is
+the consumer's job to notice.** These were written with the diagnosis attached
+precisely so they could be deleted rather than inherited — the last of them
+said outright that the fix belonged upstream, in the `placePopup` call that
+already measured the panel's own height. It does now. Nothing in this tree
+styles `.crewlet-select__menu`, `.crewlet-listbox__option` or
+`.crewlet-select__option-label` any more, and `styles/classes.test.ts` is what
+keeps that true: a rule on a package class has to earn an `ALLOWED` entry with
+a reason, so the next one cannot arrive quietly or outlive its cause.
+
 ### An object's own facts
 
 `PropertiesRail` is the rail beside an object — its state, its people, its
@@ -531,7 +617,7 @@ none of it:
 
 | Piece | What it is |
 |---|---|
-| `AppRail` | the workspaces, the badges, the engine pill, theme and density. 80px with labels, 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
+| `AppRail` | the workspaces, the badges, the engine pill, theme and density. `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -1176,6 +1262,20 @@ Four more controls that looked like something they were not:
   screen — rendered as dim static micro-text a reader could only find by
   hovering. `.t-link` is the caption register that keeps `--accent-ink`,
   which the palette suite already measures.
+- **A link inside a sentence says so, because nothing else can tell it apart.**
+  The anchor reset is right for chrome — a breadcrumb, a row that happens to be
+  an anchor, a caption-sized navigation — because each of those is a *thing* on
+  the page rather than a word in a line. It is wrong the moment an anchor is a
+  word in a line: the sentence around it is `--text` and the link is
+  `--accent-ink`, and colour alone is what WCAG 1.4.1 refuses. `.prose-link`
+  puts the underline back and keeps it, at rest rather than on hover.
+  `.prose.md a` (rendered Markdown) and `.int-form-note a` (the sentence under
+  a setup form) are the two containers that get it without asking. The rule was
+  first written as prose here and in `base.css` — "the only two registers in
+  this tree that are genuinely a phrase" — and was already false: seven anchors
+  sat in running sentences in five other files with no cue but colour. No scan
+  can decide whether an anchor is inside a sentence, so `proselinks.test.ts`
+  refuses the shape where nobody asked, an `<a>` carrying no class at all.
 - **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
   gesture, so on a screen whose point is one JSON record — a turn's record,
   the active configuration — it took the nav, the stat row and every phase
@@ -1351,6 +1451,27 @@ and names each for what it is.
 
 Three more header rules follow from the same audit:
 
+- **A heading is a name, and a turn has none.** The title is the LEAD SENTENCE
+  of `plan_summary`, not the whole of it. That field is the reviewer's own
+  account of the turn, written by a model against the engine's call ledger, and
+  a model asked to account for four tool calls writes four sentences: one real
+  turn headed itself with 280 characters at `--fs-xl` semibold, three lines
+  deep, pushing the fact line under it off a laptop's first screen — and the
+  turns list, the peek rail and the feed card all head with the same string. A
+  boundary is a stop FOLLOWED BY A SPACE, which keeps `1m 52s`, `v1.2` and
+  `mattermost_post_message` whole where a bare `.` split every one. The rest is
+  not dropped: `TurnBrief` prints the whole summary under "It set out to"
+  whenever the lead took less than all of it, and stays away when it did not —
+  which is the same no-sentence-twice rule that moved it out of the panel in the
+  first place. Prose with no boundary at all is left alone, because a cut
+  mid-clause reads as a broken string; `.object-title` wears `.clamp` so that
+  case is bounded at two lines rather than by a rule nobody can see. The
+  TRIGGER follows the same rule, and it is worth saying because the comparison
+  is exact: the panel drops its "Woken by" prose only where the title says ALL
+  of it, which now means a one-sentence trigger. A longer one prints whole,
+  with the header's own sentence at the front of it — dropping it would lose
+  everything the lead did not take, and on a turn with no plan summary that
+  prose is the only account of itself the screen has.
 - **A turn's outcome is a state, so it takes a tone.** `Stat` grows a `tone`
   for the case where the value IS an outcome — `done` positive, `self_iterate`
   caution, a guard breach critical. Deliberately not on the other tiles: a
@@ -1514,16 +1635,34 @@ same fact twice — and two chips plus a link after one line of prose is a
 hedge, not a header. Only the integration stays: it is the one thing the
 sentence does not reliably carry.
 
-### A row is not an inline link
+### A link is a colour, and its hover is a step within the text rungs
 
-`a:hover` underlines, which is right for a link inside a sentence and wrong
-for a whole ROW that happens to be an anchor: hovering one struck a line under
-its timestamp, its summary and its type at once — three unrelated fragments,
-none of them a link in the sense the underline means. A row-shaped link
-already says it is hoverable with its ground, so the decoration is suppressed
-on every one of them (`.feed-row`, `.turn-row`, `.seat-card`,
-`.attention-row`, `.brand`, `.hit-title`). `.nav-item` had always done this;
-the rest had not, and nothing connected them.
+Nothing in this product underlines on hover. `@crewlethq/tokens`' baseline does
+(`a:hover { text-decoration: underline }`) and `base.css` used to repeat it,
+and both were wrong here rather than wrong in general: almost nothing in this
+tree is a link inside a *sentence*. A breadcrumb, a seat in a grid cell, a
+caption-sized `turn 28e93bc3 →`, a whole row that happens to be an anchor —
+every one is a piece of chrome, and a rule struck under a timestamp, a summary
+and a type at once decorates three fragments that are not a phrase. The
+suppression had already spread to fifteen rules across four stylesheets, each
+undoing the same inherited declaration one class at a time, which is what a
+wrong default looks like from the inside: the exceptions outnumber it.
+
+So the frame's own hover vocabulary carries it. `.rail-row`, `.side-link`,
+`.rail-engine` and `.crumb-link` already answer a pointer by moving to
+`--text`, and a link does the same — in dark the accent ink (#8b9ff5) brightens
+toward near-white, in light the indigo (#3e50b8) darkens toward near-black, so
+in BOTH themes hovering makes a link MORE prominent rather than merely
+different. Both ends are measured text rungs, which is what rules out the
+obvious alternative: the accent family publishes exactly one text step, and
+`--accent`, `--accent-hover` and `--accent-active` are fills that
+`styles/rungs.test.ts` refuses as a colour.
+
+**Where an underline is the only honest mark it is permanent, not a hover.** A
+link inside running prose is distinguished from the text around it by colour
+alone otherwise, which is WCAG 1.4.1. `.prose.md a` (rendered Markdown) and
+`.int-form-note a` (the sentence under a setup form) carry it at rest, and they
+are the only two registers in this tree that are genuinely a phrase.
 
 ### A row is not a row
 
@@ -2275,9 +2414,11 @@ to.
     so a head carrying several of them overflows a phone's line instead of
     taking a second one. `PageBar` and `ObjectHeader` take their badges and
     their actions as slots that wrap, and any row built beside one wraps too.
-16. **A link reads as a link at every size.** A text-register class on an `<a>`
-    that overrides its colour makes a navigation into decoration; `.t-link` is
-    the caption-sized register that keeps the accent.
+16. **A link reads as a link at every size, and never by an underline.** A
+    text-register class on an `<a>` that overrides its colour makes a
+    navigation into decoration; `.t-link` is the caption-sized register that
+    keeps the accent. The hover is a step to `--text`, not a rule struck under
+    the words — see *A link is a colour* above.
 16b. **Text takes the ink, never the fill.** Every status family is three
     rungs: the base is what a thing is painted *with* — a primary button, a
     status dot, a meter bar — the `-soft` is the ground it tints, and the
