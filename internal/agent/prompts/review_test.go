@@ -10,7 +10,7 @@ func TestReviewPromptDescribesTheDecisionEnum(t *testing.T) {
 	excludes(t, p, "ask_colleague")
 	// No catalogue, no policies, no org context, no identity block.
 	excludes(t, p, "## Available tools", "Company Policies", "Company policies",
-		"Respect teammates.", "Build great things.", "# Your Identity")
+		"Respect teammates.", "Build great things.", "## Your Identity")
 }
 
 // Each rule below maps to a turn-ending failure that has actually happened.

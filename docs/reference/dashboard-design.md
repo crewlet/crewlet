@@ -868,6 +868,16 @@ reader could tick would report a change that never reached the page.
 speech: its line breaks are load-bearing there and it is not markdown. A
 document carries `.prose.md` beside it.
 
+The same file also **splits a document into its sections without rendering
+anything** — `splitSections` for the flat run, `nestSections` for the outline
+its heading levels describe — for the one surface whose subject is a *record*
+rather than a reading of one: a phase prompt, which the transcript folds on
+its own headings and hands back verbatim (see rule 11 below). That walk lives
+beside the renderer because what a heading is and where a fenced block
+suspends the grammar are decisions the renderer has already made — written
+again next to its caller, the two would drift exactly as `textcut`'s four
+copies and `whsec`'s two did, and the clause that would go first is the fence.
+
 A page's history shows **what a save changed**, not only what one version
 said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
 with no word-level refinement inside a changed line, because these documents
@@ -951,7 +961,7 @@ wrong.
 ## The transcript is stable, and reads in order
 
 The sharpest complaint about the screen this replaces was that the LLM calls
-jumped around, were hard to follow, and did not say much worth reading. Ten
+jumped around, were hard to follow, and did not say much worth reading. Eleven
 rules fix it, and each one names a specific mechanism:
 
 1. **One identity.** A phase is keyed `turn_id|phase|iteration`, live and
@@ -1089,6 +1099,46 @@ rules fix it, and each one names a specific mechanism:
    compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
    `tsKey`, and every comparator is three-way: one returning −1 for equal
    operands makes equal rows trade places on each render.
+11. **A prompt is a document, not a wall of text.** Both halves of a phase's
+   prompt were one code block each, and a seat's system prompt runs to tens
+   of kilobytes: identity, mission, policies, the roster, the turn contract,
+   whatever the turn prefetched, the workers, the skills and the tool
+   catalogue. An operator asking the question this screen exists for — *what
+   was the reviewer actually told about self-iterating?* — scrolled 30 kB
+   looking for a heading. Every prompt the engine builds is markdown, so the
+   fold now shows one section per `##` the builders wrote, sized and closed:
+   the outline is DERIVED from the document, never a list this app keeps, so
+   a prompt that grows a section grows a fold and no rename can leave a stale
+   name on screen.
+
+   Three properties travel with it. **The bodies stay verbatim** — a prompt is
+   the record an operator reproduces a turn from, so a section shows the
+   source slice rather than this app's rendering of it. **The whole document
+   stays one selection**, as a second view, because an outline that is the
+   only route to the record turns "copy the prompt" into a dozen opens and a
+   dozen select-alls; it is offered only where there are headings to have
+   split on. And **the outline is the document's own shape**, which mostly
+   means flat and sometimes does not: an executor's thirteen sections are
+   thirteen peers, but a ledger writes one `###` per prior turn *inside* its
+   block, and hoisting those would put a turn of somebody's conversation
+   between "Earlier in this conversation" and the ask.
+
+   Nesting is only correct because **the levels are**, and two of them were
+   not. `internal/agent/prompts` carried a single `#` over a run of `##`,
+   which claimed the rest of the executor's prompt was part of the agent's
+   identity — nested, that would have put the whole document inside it. And
+   the executor's user message carried a bare `Task:` label between two headed
+   ledgers, which filed the ask, the newest thing anybody said, inside the
+   conversation history above it. Both are structural facts about the
+   document rather than about this screen, so both are asserted there: every
+   heading a prompt builder emits is a sibling, and every block of the user
+   message is a peer.
+
+   The splitter is `lib/markdown.ts`'s, beside the renderer's own heading and
+   fence constants rather than next to the screen that wanted sections: what a
+   heading is and where a fenced block suspends the grammar are decisions that
+   file has already made once, and a `# install deps` inside a catalogue's
+   shell sample is exactly the drift a second copy starts with.
 
 ## A monitor is not a reader
 

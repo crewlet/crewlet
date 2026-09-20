@@ -1,7 +1,7 @@
 /**
  * One phase of one turn, rendered as a stable round ledger.
  *
- * Five rules, each of which fixes a specific way the previous surface either
+ * Six rules, each of which fixes a specific way the previous surface either
  * moved under the reader or told them something untrue:
  *
  *  1. **Identity is `turn|phase|iteration`** (see lib/phases.ts), so a phase
@@ -39,6 +39,12 @@
  *  5. **The header says the same things in the same places, always** — phase,
  *     model, rounds, tokens, decision — so a live phase and a finished one are
  *     the same shape and the row does not change height when it completes.
+ *  6. **The prompt is a document, not a wall of text.** Every prompt this
+ *     engine builds is markdown, so the Prompt fold folds each half on the
+ *     headings the builders wrote and keeps the verbatim block as its other
+ *     view — see `PromptDoc.tsx`. It was one 30 kB scroller, which is where a
+ *     reader went to answer "what was this phase told about X" and scrolled
+ *     looking for a heading.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -67,6 +73,7 @@ import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { PromptRecord } from "~/components/PromptDoc.tsx";
 
 function ToolRow({
   name,
@@ -544,40 +551,19 @@ export function PhaseCard({
             // — unlike a tool row, which is a transcript item. `lazy` matches
             // what ours did: a closed fold mounted nothing, and a seat's system
             // prompt is tens of kilobytes nobody asked for.
+            //
+            // What is INSIDE it is a document rather than a wall of text now:
+            // `PromptRecord` folds each half on its own markdown headings, so
+            // "what was this phase told about X" is one click rather than a
+            // scroll through 30 kB. It keeps the verbatim block as its other
+            // view — the tallest block on the page by a wide margin, and the
+            // one that most needed to stay one selection.
             <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
-              <div className="col gap-3">
-                {record.systemPrompt && (
-                  <div className="col gap-1">
-                    <div className="t-label">System</div>
-                    {/* The tallest block on the page by a wide margin — a
-                        seat's system prompt runs to tens of kilobytes — so
-                        this is the one that most needed to be reachable.
-                        `selectable` is how uilet grants that: ours measured
-                        the overflow and gave the stop to the blocks that
-                        scrolled, theirs ties the tab stop, the name and ⌘A
-                        into one flag. */}
-                    <CodeBlock
-                      plain
-                      maxHeight={RECORD_MAX_HEIGHT}
-                      selectable
-                      label={`The ${record.phase} phase's system prompt`}
-                      code={record.systemPrompt}
-                    />
-                  </div>
-                )}
-                {record.userPrompt && (
-                  <div className="col gap-1">
-                    <div className="t-label">User</div>
-                    <CodeBlock
-                      plain
-                      maxHeight={RECORD_MAX_HEIGHT}
-                      selectable
-                      label={`The ${record.phase} phase's user message`}
-                      code={record.userPrompt}
-                    />
-                  </div>
-                )}
-              </div>
+              <PromptRecord
+                phase={record.phase}
+                system={record.systemPrompt}
+                user={record.userPrompt}
+              />
             </Disclosure>
           )}
 

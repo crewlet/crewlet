@@ -29,6 +29,12 @@
  * is written by an agent acting on content it read somewhere else, so a href
  * in one is untrusted input, and an allowlist is the only form of this check
  * that is safe by construction rather than by exhaustive denial.
+ *
+ * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections]) without
+ * rendering anything, for the surfaces whose subject is a RECORD rather than a
+ * reading of one — a phase prompt, which an operator needs back verbatim and
+ * which has no structure but its headings. That walk shares this file's
+ * [HEADING] and [FENCE] rather than restating them; see its own note.
  */
 
 import { createElement, type ReactNode } from "react";
@@ -106,6 +112,31 @@ const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
+/**
+ * What CLOSES a fence opened with each marker.
+ *
+ * NOT `line.startsWith(marker)`, which is what both walks did. A closing fence
+ * carries NO INFO STRING, so a literal ```` ```ts ```` line inside a
+ * ```` ```sh ```` sample is content — and reading it as a close ended the block
+ * on its first line. `parseBlocks` then rendered an EMPTY code block and threw
+ * the sample away; the section walk went further and promoted every `# ` line
+ * in the rest of it to a heading of the document. A page teaching somebody how
+ * to write a fenced block is exactly that input, and a prompt carries page
+ * bodies verbatim.
+ *
+ * A LONGER RUN OF THE SAME CHARACTER STILL CLOSES, which is CommonMark's rule
+ * and free here: [FENCE] only ever opens on three, so a four-backtick line is
+ * not an opening this file can have made.
+ */
+const FENCE_CLOSE: Record<string, RegExp> = {
+  "```": /^`{3,}[ \t]*$/,
+  "~~~": /^~{3,}[ \t]*$/,
+};
+
+function closesFence(line: string, marker: string): boolean {
+  return FENCE_CLOSE[marker]?.test(line) ?? false;
+}
+
 /** Split a document into blocks. Pure, and the only thing that reads lines. */
 export function parseBlocks(source: string): Block[] {
   const lines = (source ?? "").replace(/\r\n?/g, "\n").split("\n");
@@ -135,7 +166,7 @@ export function parseBlocks(source: string): Block[] {
       const marker = fence[1] ?? "```";
       const body: string[] = [];
       i++;
-      while (i < lines.length && !(lines[i] ?? "").startsWith(marker)) {
+      while (i < lines.length && !closesFence(lines[i] ?? "", marker)) {
         body.push(lines[i] ?? "");
         i++;
       }
@@ -310,6 +341,192 @@ function parseList(lines: string[], start: number): [Block, number] {
   }
   close();
   return [{ kind: "list", ordered, start: startNumber, items }, i];
+}
+
+// --- sectioning ------------------------------------------------------------
+
+/** One ATX heading and the source under it. */
+export interface Section {
+  /** 1–6 for a heading; 0 for the run of text before the first one. */
+  level: number;
+  /** The heading's own text, inline markup and all. "" at level 0. */
+  title: string;
+  /**
+   * The source under the heading, VERBATIM and with its own line endings —
+   * the heading line itself removed, and the blank lines that bound the run
+   * with it. It is a SLICE of the document, so it is always found in it.
+   */
+  body: string;
+}
+
+/**
+ * Split a document into its ATX-heading sections.
+ *
+ * WHY IT IS NOT [parseBlocks]. That walk answers "what does this document
+ * RENDER to", and a caller that wants sections wants the opposite: the source
+ * back, unchanged, grouped under the headings somebody wrote. A phase prompt
+ * is the case — it is a RECORD, so an operator reading one needs the bytes the
+ * model was handed rather than this renderer's reading of them, and the
+ * headings are the only structure a ~30 kB document has.
+ *
+ * WHY IT IS HERE AND NOT BESIDE THAT CALLER: what a heading IS and where a
+ * fenced block suspends the grammar are decisions [parseBlocks] has already
+ * made, and [HEADING] and [FENCE] are the two constants this shares with it.
+ * Written again next to the screen that needed sections, the two would drift
+ * exactly as `textcut`'s four copies and `whsec`'s two did — and the drift
+ * that costs here is the fence, which nobody remembers until a `# ` inside a
+ * code sample splits a document somewhere its author never put a heading.
+ *
+ * THE LEAD RUN IS A SECTION, at level 0 with no title: a document whose first
+ * line is not a heading has content there, and dropping it would make this a
+ * lossy view of a record. It is omitted only when it is blank.
+ *
+ * WHAT IS LOST, deliberately and only this: the blank lines bounding each run.
+ * They are the separators between sections rather than content of one, and
+ * keeping them would open every section on an empty line. Every other line of
+ * the source appears in exactly one section, in order, byte for byte — LINE
+ * ENDINGS INCLUDED, which is why this reads lines through [readLines] rather
+ * than normalising them the way [parseBlocks] does.
+ */
+export function splitSections(source: string): Section[] {
+  const lines = readLines(source ?? "");
+  const out: Section[] = [];
+  let level = 0;
+  let title = "";
+  let body: Line[] = [];
+  // The fence marker currently open, or "" outside one.
+  let fence = "";
+
+  const close = () => {
+    const text = joinLines(trimBlankLines(body));
+    body = [];
+    // A heading with nothing under it is still a section — that is a fact
+    // about the document. An EMPTY lead run is not: nothing was written
+    // there, so there is nothing to name.
+    if (level === 0 && text === "") return;
+    out.push({ level, title, body: text });
+  };
+
+  for (const line of lines) {
+    // A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
+    // `split(/^#/m)`: `# install deps` inside a shell sample is a comment,
+    // and a tool catalogue is full of them.
+    if (fence !== "") {
+      if (closesFence(line.text, fence)) fence = "";
+      body.push(line);
+      continue;
+    }
+    const opened = FENCE.exec(line.text);
+    if (opened) {
+      fence = opened[1] ?? "```";
+      body.push(line);
+      continue;
+    }
+    const heading = HEADING.exec(line.text);
+    if (!heading) {
+      body.push(line);
+      continue;
+    }
+    close();
+    level = (heading[1] ?? "#").length;
+    // Closing hashes are decoration, not content — the same rule
+    // [parseBlocks] applies to the same line.
+    title = (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim();
+  }
+  close();
+  return out;
+}
+
+/** One section, and the sections nested under it. */
+export interface SectionNode extends Section {
+  children: SectionNode[];
+}
+
+/**
+ * Nest a flat section list on its heading levels.
+ *
+ * Each heading goes under the nearest preceding heading of a LOWER level, so
+ * an outline is the document's own shape rather than a list of every heading
+ * in it. That distinction is the whole reason this exists: a conversation
+ * ledger's `### 2026-08-20` entries belong inside `## Earlier in this
+ * conversation`, and flattened they read as blocks of the message in their own
+ * right, sitting between it and the ask.
+ *
+ * WHICH IS ONLY CORRECT BECAUSE THE LEVELS ARE. Nesting says a section is PART
+ * of the one above it, so a document with a stray `#` over a run of `##` nests
+ * everything inside it — see `internal/agent/prompts`, whose own suite now
+ * holds every builder to one level for exactly this reason.
+ *
+ * THE LEAD RUN IS NEVER A PARENT. It has no heading, so it contains nothing;
+ * at level 0 it would otherwise swallow the document that follows it.
+ */
+export function nestSections(sections: Section[]): SectionNode[] {
+  const roots: SectionNode[] = [];
+  const open: SectionNode[] = [];
+  for (const section of sections) {
+    const node: SectionNode = { ...section, children: [] };
+    if (node.level === 0) {
+      roots.push(node);
+      continue;
+    }
+    while (open.length > 0 && (open[open.length - 1]?.level ?? 0) >= node.level) open.pop();
+    const parent = open[open.length - 1];
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+    open.push(node);
+  }
+  return roots;
+}
+
+/** One source line and the break that ended it — "" on the last. */
+interface Line {
+  text: string;
+  eol: string;
+}
+
+/**
+ * Split a source into lines, KEEPING each one's own line break.
+ *
+ * [parseBlocks] normalises `\r\n` away, which is right for a renderer: a break
+ * becomes a React node and the bytes behind it are gone either way. A SECTION
+ * IS A SLICE OF A RECORD, though, and the same normalisation handed back a
+ * body that could not be found in the document it came out of — a prompt
+ * carries a webhook's task text and a page's body verbatim, and a GitHub issue
+ * body is CRLF, so the whole-document view showed the record and every fold
+ * showed an edited copy of it.
+ */
+function readLines(source: string): Line[] {
+  const out: Line[] = [];
+  const breaks = /\r\n|\r|\n/g;
+  let start = 0;
+  for (let m = breaks.exec(source); m !== null; m = breaks.exec(source)) {
+    out.push({ text: source.slice(start, m.index), eol: m[0] });
+    start = breaks.lastIndex;
+  }
+  out.push({ text: source.slice(start), eol: "" });
+  return out;
+}
+
+/**
+ * A run of lines as the source it was read from.
+ *
+ * The LAST line's break is dropped: it separates this run from whatever
+ * follows rather than ending the run's own content, which is the same reason
+ * a closed fence never carries its closing line.
+ */
+function joinLines(lines: Line[]): string {
+  return lines
+    .map((line, i) => (i === lines.length - 1 ? line.text : line.text + line.eol))
+    .join("");
+}
+
+/** A run of lines with its leading and trailing blank lines dropped. */
+function trimBlankLines(lines: Line[]): Line[] {
+  let lo = 0;
+  let hi = lines.length;
+  while (lo < hi && (lines[lo]?.text ?? "").trim() === "") lo++;
+  while (hi > lo && (lines[hi - 1]?.text ?? "").trim() === "") hi--;
+  return lines.slice(lo, hi);
 }
 
 // --- inline parsing --------------------------------------------------------

@@ -1,6 +1,8 @@
 package prompts
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -108,7 +110,7 @@ func TestZeroSeatRendersTheContractWithoutPanicking(t *testing.T) {
 	contains(t, BuildExecutor(s, ExecutorInput{}), "## Your turn")
 	contains(t, BuildReview(s, ReviewInput{}), "## REVIEW phase")
 	contains(t, BuildOnboarding(s, OnboardingInput{}), "## ONBOARDING phase")
-	excludes(t, BuildExecutor(s, ExecutorInput{}), "# Your Identity")
+	excludes(t, BuildExecutor(s, ExecutorInput{}), "## Your Identity")
 }
 
 func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
@@ -166,4 +168,105 @@ func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
 	with := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
 	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
 	excludes(t, with, "nobody to @-mention")
+}
+
+// -- Document structure ---------------------------------------------------
+
+// heading is one ATX heading a builder emitted: its level and its words.
+type heading struct {
+	level int
+	text  string
+}
+
+// headingsIn reads the ATX headings out of a rendered prompt, skipping
+// anything inside a fenced block — a tool catalogue carries shell samples,
+// and `# install deps` is a comment rather than a section.
+func headingsIn(prompt string) []heading {
+	var out []heading
+	fence := ""
+	for line := range strings.SplitSeq(prompt, "\n") {
+		if fence != "" {
+			if strings.HasPrefix(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			fence = line[:3]
+			continue
+		}
+		hashes := len(line) - len(strings.TrimLeft(line, "#"))
+		if hashes == 0 || hashes > 6 || !strings.HasPrefix(line[hashes:], " ") {
+			continue
+		}
+		out = append(out, heading{level: hashes, text: strings.TrimSpace(line[hashes:])})
+	}
+	return out
+}
+
+// EVERY SECTION OF A PHASE PROMPT IS A SIBLING.
+//
+// These documents are flat: the company's policies are not part of the
+// agent's identity, and the tool catalogue is not part of the turn contract —
+// each is the next thing the model reads. A single `#` over a run of `##`
+// says the opposite, and says it to every reader of the document: the model,
+// anything that summarises one, and the dashboard's prompt outline, which
+// draws the structure the builders wrote.
+//
+// It is asserted rather than remembered because nothing else would notice.
+// The executor's prompt carried that `#` for its whole life and no assertion
+// in this package was looking at the level of anything.
+func TestEveryHeadingAPromptBuilderEmitsIsASibling(t *testing.T) {
+	t.Parallel()
+	seat := lead()
+	// Zero inputs, so every heading counted below is one a builder in this
+	// package wrote — not one a caller passed in a catalogue or a skill body.
+	for name, prompt := range map[string]string{
+		"executor":   BuildExecutor(seat, ExecutorInput{}),
+		"review":     BuildReview(seat, ReviewInput{}),
+		"onboarding": BuildOnboarding(seat, OnboardingInput{}),
+		"subagent":   BuildSubagent(seat, SubagentInput{}),
+	} {
+		found := headingsIn(prompt)
+		// Guard the guard: a builder that emitted no heading at all would
+		// satisfy "every heading is level 2" without meaning anything.
+		if name != "subagent" && len(found) == 0 {
+			t.Errorf("%s: no headings at all — this case would pass on an empty prompt", name)
+		}
+		for _, h := range found {
+			if h.level != 2 {
+				t.Errorf("%s: %q is an h%d among siblings at h2 — it claims the "+
+					"sections after it are part of it", name, h.text, h.level)
+			}
+		}
+	}
+}
+
+// THE ASK IS A SECTION OF THE MESSAGE, NOT A LINE INSIDE THE BLOCK ABOVE IT.
+//
+// It was "Task:", a bare label, and the conversation ledger above it is a
+// heading — so with history present the newest thing anybody said was filed
+// under "Earlier in this conversation", whose own text calls it "the task
+// below". Every block of this message is a peer, and this is what says so.
+func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
+	t.Parallel()
+	msg := BuildPhaseUserMessage(UserMessage{
+		TaskDescription:     "THE-ASK",
+		PriorWork:           "PRIOR-WORK",
+		ConversationHistory: "CONVERSATION-HISTORY",
+	})
+	var levels []int
+	var texts []string
+	for _, h := range headingsIn(msg) {
+		levels = append(levels, h.level)
+		texts = append(texts, h.text)
+	}
+	if !slices.Contains(texts, "Task") {
+		t.Fatalf("the ask has no heading of its own: %q", texts)
+	}
+	for i, level := range levels {
+		if level != 2 {
+			t.Errorf("%q is an h%d — the message's blocks are peers", texts[i], level)
+		}
+	}
 }
