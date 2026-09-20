@@ -38,6 +38,9 @@
 //
 // # Why a message record is scoped to its CHANNEL and never to itself
 //
+// ADR-0018 is the record of this decision and of what the obvious alternative
+// costs; what follows is the mechanism.
+//
 // A message's subject is [KindMessage] with the CHANNEL's id, and its declared
 // scope is that channel's path. There is no per-message path in the scope
 // alphabet at all, and that is a correctness property rather than an economy.
