@@ -1855,12 +1855,15 @@ export interface WorkGroup {
   count: number;
   rows: WorkSummary[];
   subgroups?: WorkGroup[];
-  /** Lanes this column has beyond the cap, said rather than silently cut —
-   *  the same rule `groups_dropped` follows for the columns themselves. A
-   *  swimlane board is bounded by its CELLS: the statement count is the
-   *  product of the two axes, so the column cap drops when lanes are asked
-   *  for. */
-  subgroups_dropped?: number;
+  /** True when this column has lanes beyond the cap, said rather than
+   *  silently cut — the same rule `groups_truncated` follows for the columns
+   *  themselves. A swimlane board is bounded by its CELLS: the statement
+   *  count is the product of the two axes, so the column cap drops when lanes
+   *  are asked for.
+   *
+   *  A flag rather than a count: the server reads one row past the bound as
+   *  evidence, so the count it used to send could only ever be 1. */
+  subgroups_truncated?: boolean;
 }
 
 export interface WorkItemsAnswer {
@@ -1868,10 +1871,14 @@ export interface WorkItemsAnswer {
   /** The board's columns. `items` is EMPTY whenever this is set — returning
    *  both would be the same rows twice. */
   groups?: WorkGroup[];
-  /** Columns that did not fit the cap. A board that drew sixty-four of two
-   *  hundred and said nothing would look like a company with sixty-four
-   *  assignees. */
-  groups_dropped?: number;
+  /** True when columns did not fit the cap. A board that drew sixty-four of
+   *  two hundred and said nothing would look like a company with sixty-four
+   *  assignees.
+   *
+   *  A flag rather than a count, because the count was one the server could
+   *  not know: it read one row past the bound as evidence, so "1 more column"
+   *  was what a two-hundred-column board reported. */
+  groups_truncated?: boolean;
   /** True on an axis where one task is on several columns — a label board —
    *  so a reader knows the counts do not sum to `total_hint`. */
   groups_overlap?: boolean;

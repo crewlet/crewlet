@@ -639,7 +639,7 @@ func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
 			Key: "todo", Count: 12,
 			Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}},
 		}},
-		GroupsDropped: 3, GroupsOverlap: true,
+		GroupsTruncated: true, GroupsOverlap: true,
 		Totals:   []tracker.Total{{Key: "points:sum", Column: "points", Op: "sum"}},
 		Complete: true,
 	}}
@@ -652,7 +652,7 @@ func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
 	if !ok {
 		t.Fatalf("the answer is %T", got)
 	}
-	for _, key := range []string{"groups", "groups_dropped", "groups_overlap",
+	for _, key := range []string{"groups", "groups_truncated", "groups_overlap",
 		"totals"} {
 		if _, held := payload[key]; !held {
 			t.Errorf("the payload carries no %q, so a board built from it "+

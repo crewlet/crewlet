@@ -158,7 +158,7 @@ type Answer struct {
 	// unbounded set is the query that turns a poll into a scan.
 	//
 	// TotalCapped is what makes the cap VISIBLE, and it is here for
-	// [Answer.GroupsDropped]'s reason: the count stopped at
+	// [Answer.GroupsTruncated]'s reason: the count stopped at
 	// [TotalHintCeiling], so without a flag beside it every renderer has
 	// to know the ceiling to tell "exactly ten thousand" from "more than
 	// we counted" — and every one that does not reports the cap as an
@@ -181,10 +181,17 @@ type Answer struct {
 	// rather than over the rows it carries.
 	Groups []Group `json:"groups,omitempty"`
 
-	// GroupsDropped is how many columns did not fit [MaxGroups]. A board
-	// that drew sixty-four of two hundred and said nothing would look
-	// like a company with sixty-four assignees.
-	GroupsDropped int `json:"groups_dropped,omitempty"`
+	// GroupsTruncated says columns did not fit [MaxGroups]. A board that
+	// drew sixty-four of two hundred and said nothing would look like a
+	// company with sixty-four assignees.
+	//
+	// A FLAG RATHER THAN A COUNT — see [Group.SubgroupsTruncated], which
+	// carried the same arithmetic. It was `len(out) - limit` over a query
+	// that takes `limit+1`, so it could only ever read 0 or 1: a board with
+	// two hundred assignee columns reported "1 more column did not fit",
+	// which is a wrong number stated as a fact and therefore worse than the
+	// silence the rule was written against.
+	GroupsTruncated bool `json:"groups_truncated,omitempty"`
 
 	// GroupsOverlap marks an axis on which one task is on several columns
 	// — a label board — so a reader knows the counts do not sum to
@@ -374,7 +381,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 				return err
 			}
 			answer.Groups = groups.Groups
-			answer.GroupsDropped = groups.Dropped
+			answer.GroupsTruncated = groups.Truncated
 			answer.GroupsOverlap = groups.Overlap
 		} else {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

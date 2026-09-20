@@ -72,8 +72,8 @@ const MaxGroups = 64
 // at once — a board wide enough to need scrolling in both directions is a
 // board nobody is using as a board. The first axis is therefore capped LOWER
 // when a second one is asked for, and the count that did not fit is reported
-// exactly as it is for a single axis ([grouped.Dropped] and
-// [Group.SubgroupsDropped]) rather than silently cut.
+// as it is for a single axis ([grouped.Truncated] and
+// [Group.SubgroupsTruncated]) rather than silently cut.
 //
 // 1 + 16 × 18 = 289 statements, down from 4 225.
 const (
@@ -109,11 +109,22 @@ type Group struct {
 	// Subgroups is the second axis, when one was asked for.
 	Subgroups []Group `json:"subgroups,omitempty"`
 
-	// SubgroupsDropped is how many lanes this column has beyond
-	// [MaxSubgroups]. Said rather than silently cut, on the same rule the
-	// column overflow follows: a board that drew sixteen of two hundred
-	// lanes and reported nothing looks like a company with sixteen.
-	SubgroupsDropped int `json:"subgroups_dropped,omitempty"`
+	// SubgroupsTruncated says this column has lanes beyond [MaxSubgroups].
+	// Said rather than silently cut, on the same rule the column overflow
+	// follows: a board that drew sixteen of two hundred lanes and reported
+	// nothing looks like a company with sixteen.
+	//
+	// A FLAG RATHER THAN A COUNT, and it was a count that could only ever
+	// read 1. [groupCounts] selects `LIMIT limit+1` — one row past the
+	// bound, as evidence — so `len(out) - limit` was 0 or 1 whatever the
+	// company's real shape, and a board with two hundred lanes reported
+	// "1 more". A wrong number stated as a fact is worse than the silence
+	// the rule was written against, because a reader acts on it. The honest
+	// alternative is what [checkGroupBreadth] already concludes about its
+	// own bound — "the honest thing to report is the ceiling that was
+	// crossed rather than a total nobody counted" — and here the ceiling is
+	// already in the answer as the number of lanes returned.
+	SubgroupsTruncated bool `json:"subgroups_truncated,omitempty"`
 }
 
 // groupAxis is one grouping axis compiled into SQL.
@@ -286,7 +297,7 @@ func weekBucket(column string) string {
 
 // groupCounts reads one axis's distinct values and their counts.
 func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
-	where string, args []any, limit int) ([]Group, int, error) {
+	where string, args []any, limit int) ([]Group, bool, error) {
 
 	// THE DECLARED ORDER WHERE THERE IS ONE, and the largest column first
 	// where there is not — see [groupAxis.Order]. The CASE is built from
@@ -311,7 +322,7 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 	bound := append(append([]any{}, axis.Args...), args...)
 	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("tracker: count the groups: %w", err)
+		return nil, false, fmt.Errorf("tracker: count the groups: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -320,7 +331,7 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 		var key sql.NullString
 		var count int
 		if err := rows.Scan(&key, &count); err != nil {
-			return nil, 0, fmt.Errorf("tracker: scan a group: %w", err)
+			return nil, false, fmt.Errorf("tracker: scan a group: %w", err)
 		}
 		group := Group{Key: key.String, Count: count}
 		if group.Key == "" {
@@ -332,17 +343,22 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 		out = append(out, group)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("tracker: walk the groups: %w", err)
+		return nil, false, fmt.Errorf("tracker: walk the groups: %w", err)
 	}
-	dropped := 0
+	// THE OVERFLOW IS SAID, never silently cut: a board that drew
+	// sixty-four of two hundred columns and reported nothing would look
+	// like a company with sixty-four assignees.
+	//
+	// SAID rather than COUNTED, because the query takes `limit+1` and one
+	// extra row is evidence rather than a census — see
+	// [Group.SubgroupsTruncated], which carried the same arithmetic and the
+	// same wrong answer.
+	truncated := false
 	if len(out) > limit {
-		// THE OVERFLOW IS COUNTED AND SAID, never silently cut: a board
-		// that drew sixty-four of two hundred columns and reported
-		// nothing would look like a company with sixty-four assignees.
-		dropped = len(out) - limit
+		truncated = true
 		out = out[:limit]
 	}
-	return out, dropped, nil
+	return out, truncated, nil
 }
 
 // groupRows reads one group's own page.
@@ -399,9 +415,9 @@ func groupLabels(groups []Group, key string, fields map[string]resolvedField) {
 
 // grouped is a grouped answer's own half, before it reaches [Answer].
 type grouped struct {
-	Groups  []Group
-	Dropped int
-	Overlap bool
+	Groups    []Group
+	Truncated bool
+	Overlap   bool
 }
 
 // ErrTooBroad refuses a read whose input is wider than the answer can be
@@ -509,7 +525,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if q.GroupBy2 != "" {
 		columns = MaxGroupsWithSubgroups
 	}
-	groups, dropped, err := groupCounts(ctx, tx, axis, where, args, columns)
+	groups, truncated, err := groupCounts(ctx, tx, axis, where, args, columns)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -528,25 +544,25 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		// THE SECOND AXIS IS THE FIRST ONE AGAIN, inside this column.
 		// One level and no more: a third would be a tree, and a board
 		// draws columns and swimlanes rather than a hierarchy.
-		inner, innerDropped, err := readSubgroups(ctx, tx, q, fields, axis,
+		inner, innerTruncated, err := readSubgroups(ctx, tx, q, fields, axis,
 			groups[i].Key, where, args, terms, rowsPer)
 		if err != nil {
 			return grouped{}, err
 		}
 		groups[i].Subgroups = inner
-		groups[i].SubgroupsDropped = innerDropped
+		groups[i].SubgroupsTruncated = innerTruncated
 	}
-	return grouped{Groups: groups, Dropped: dropped, Overlap: axis.Multi}, nil
+	return grouped{Groups: groups, Truncated: truncated, Overlap: axis.Multi}, nil
 }
 
 // readSubgroups is the second axis within one column.
 func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
-	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
+	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, bool, error) {
 
 	inner, err := compileGroup(q.GroupBy2, fields)
 	if err != nil {
-		return nil, 0, err
+		return nil, false, err
 	}
 	// THE OUTER COLUMN NARROWS THE INNER QUERY, and the outer axis's own
 	// join rides with it — a subgroup of a tag column is still inside that
@@ -569,20 +585,20 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 		scoped += " AND " + innerClause
 		bound = append(append([]any{}, bound...), innerArgs...)
 	}
-	counts, dropped, err := groupCounts(ctx, tx, joined, scoped, bound, MaxSubgroups)
+	counts, truncated, err := groupCounts(ctx, tx, joined, scoped, bound, MaxSubgroups)
 	if err != nil {
-		return nil, 0, err
+		return nil, false, err
 	}
 	groupLabels(counts, q.GroupBy2, fields)
 	for i := range counts {
 		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped, bound,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
-			return nil, 0, err
+			return nil, false, err
 		}
 		counts[i].Rows = rows
 	}
-	return counts, dropped, nil
+	return counts, truncated, nil
 }
 
 // declaredOrder renders a closed set's own sequence as plain strings.
