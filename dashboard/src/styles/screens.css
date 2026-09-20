@@ -808,6 +808,17 @@
   font-size: var(--fs-3xs);
   white-space: nowrap;
 }
+
+/* HOW MANY ROWS THIS ONE STANDS FOR — see `collapseRuns` in lib/turnstory.ts.
+   A step BRIGHTER than the wire type beside it, because it qualifies the
+   sentence at the other end of the row and a reader scanning a failure band
+   has to see "×8" without hunting for it; the type is a name they read only
+   when they already care. It borrows the tail's own size rather than taking
+   one of its own: a count set larger than the row's quietest column would
+   read as a badge, and this is a footnote to a line. */
+.run-count {
+  color: var(--text);
+}
 @media (max-width: 700px) {
   .feed-row {
     grid-template-columns: 54px minmax(0, 1fr);
@@ -1568,7 +1579,7 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease);
 }
 .int-form-more[open] > summary::before {
   transform: rotate(90deg);
@@ -1620,7 +1631,7 @@
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   color: var(--text-muted);
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease);
 }
 .int-seat-form[open] > .int-seat-summary::before {
   transform: rotate(90deg);
@@ -1675,7 +1686,7 @@
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   color: var(--text-muted);
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease);
 }
 .int-manifest[open] > .int-manifest-summary::before {
   transform: rotate(90deg);

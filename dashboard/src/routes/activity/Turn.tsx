@@ -49,7 +49,7 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
   Button,
@@ -109,14 +109,16 @@ import {
 import {
   prefetchBlocks,
   promptWeights,
+  collapseRuns,
   tellStory,
   TURN_STOP,
   type PrefetchBlock,
   type PromptWeight,
+  type Run,
   type Story,
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
-import type { EventRecord, FeedRow, TurnRow } from "~/protocol/index.ts";
+import type { EventRecord, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -1054,15 +1056,30 @@ function list(items: string[]): string {
  * header already dates, so a clock is the whole useful part of the timestamp
  * and the rest was pushing rows to three lines tall.
  */
-function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
+function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
+  const { event, count, last } = run;
+  // THE SPAN, WHERE THERE IS ONE. A run's clock is two instants and a single
+  // row's is one, and the two must not render alike: "15:42:15" over a row
+  // standing for eight attempts would date the first and silently claim the
+  // rest happened then too. Identical clocks collapse back to one, because
+  // eight attempts inside a second are not a span a reader can act on.
+  const from = fmtTime(event.timestamp);
+  const to = fmtTime(last.timestamp);
+  const span = count > 1 && to !== from ? `${from}–${to}` : from;
   return (
     <a
       className={cx("turn-row", event.failed && "failed")}
       href={href(["activity", "events", event.id])}
-      title={fmtDateTime(event.timestamp)}
+      title={
+        count > 1
+          ? `${count} identical events, ${fmtDateTime(event.timestamp)} to ${fmtDateTime(
+              last.timestamp,
+            )} — this opens the first`
+          : fmtDateTime(event.timestamp)
+      }
     >
       <time className="feed-time" dateTime={event.timestamp}>
-        {fmtTime(event.timestamp)}
+        {span}
       </time>
       <span className="what truncate">
         {event.failed && (
@@ -1074,6 +1091,15 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
         {withoutActor(event.summary, actor) || event.type}
       </span>
       <span className="feed-tail">
+        {/* THE COUNT BEFORE THE TYPE, because it qualifies the SENTENCE to
+            its left rather than the wire name to its right. Absent at one:
+            "×1" on every ordinary row is a column that says nothing on all
+            but a handful of them. */}
+        {count > 1 && (
+          <span className="t-num run-count" title={`${count} of these, one after another`}>
+            ×{count}
+          </span>
+        )}
         <span className="muted mono truncate">{event.type}</span>
       </span>
     </a>
@@ -1094,11 +1120,19 @@ export function withoutActor(summary: string, actor: string): string {
   return rest || summary;
 }
 
+/**
+ * One band of a turn's rows.
+ *
+ * COLLAPSED HERE rather than in the panel that noticed the problem, so all
+ * four bands answer the same way: a repeat is a repeat wherever it lands, and
+ * a rule applied to one list is a rule the next list silently does not have.
+ */
 function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
+  const runs = useMemo(() => collapseRuns(events), [events]);
   return (
     <div className="list">
-      {events.map((e) => (
-        <TurnEventRow key={e.id} event={e} actor={actor} />
+      {runs.map((run) => (
+        <TurnEventRow key={run.event.id} run={run} actor={actor} />
       ))}
     </div>
   );
@@ -1289,8 +1323,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </>
         }
       </PageActions>
-      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
-
       {/* THE OBJECT'S OWN HEADER, and the turn id with it. The id used to be
           a lone `PageNote` under the page bar — a hand-rolled identity line,
           which is exactly the eyebrow `ObjectHeader` draws — and the facts
@@ -1304,6 +1336,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         status={turnStatus(view)}
         facts={turnFacts(view)}
       />
+      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header that is
+          drawn from the id and needs no answer to exist. Above it, it was six
+          rows of grey pushing the header down the page and then letting it
+          spring back the moment the query landed — so opening a turn moved
+          the one part of the screen that had been readable all along. The
+          screen is keyed on the turn id (`app/App.tsx`), so this runs on
+          every navigation between turns, not only on a cold open. */}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
       <QueryState
         error={error}
         loading={loading}
@@ -1415,11 +1455,19 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             >
               <Card.Title>Also published</Card.Title>
             </Card.Header>
-            <div className="list">
-              {story.rest.map((e) => (
-                <EventRow key={e.id} event={e as unknown as FeedRow} showDate />
-              ))}
-            </div>
+            {/* THE SCREEN'S OWN ROW, like the three bands above it. This band
+                alone rendered the activity feed's row with the date forced
+                on, which is the exact shape `.turn-row` exists to replace: a
+                FOUR-column grid (time, actor, summary, tail) taking three
+                children, so the summary landed in the 132px actor track and a
+                full date wrapped to three lines inside the 62px time one.
+                Every row was three lines tall, in a different grid and a
+                different height from the panels above it, naming the same
+                seat on each. The `as unknown as FeedRow` cast was the tell —
+                an `EventRecord` is not a `FeedRow`. Nothing is lost: the row
+                carries the full instant in its title, and the header dates
+                the turn. */}
+            <EventList events={story.rest} actor={role} />
           </Card>
         )}
 
