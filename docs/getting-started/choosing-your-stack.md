@@ -256,20 +256,47 @@ both look like.
 
 Chat is the human↔agent conversational surface (DMs, channels, escalations)
 and is also where the DACI [decision framework](../concepts/decision-framework.md)
-plays out. Two backends ship.
+plays out. **Three backends ship, and one of them is the engine itself.**
 
-| | Mattermost | Slack |
-|---|---|---|
-| Hosting | self-hosted, open source | SaaS |
-| Credentials per agent | 1 (bot token) | 2 (bot token + signing secret) |
-| Manual steps per agent | none | one OAuth **Allow** click |
-| Engine must be publicly reachable | no — the engine dials out | yes — the Events API POSTs to it |
-| Working status | fixed *"is typing…"* (default off) | free text, per turn phase |
+The choice is a single field, and it is exclusive — see
+[Chat](../concepts/chat.md) for why two live chat homes is not a configuration
+this engine offers:
 
-The two are interchangeable as far as the engine is concerned; they differ in
-what you have to stand up and where your people already are.
+```yaml
+chat:
+  backend: native    # the default — the engine is the chat system
+# backend: vendor    # Slack or Mattermost
+# backend: none      # no chat at all
+```
 
-**Mattermost is the quickest to try.** It ships in this repo's
+| | Native | Mattermost | Slack |
+|---|---|---|---|
+| Hosting | none — it is the engine | self-hosted, open source | SaaS |
+| Credentials per agent | none | 1 (bot token) | 2 (bot token + signing secret) |
+| Manual steps per agent | none | none | one OAuth **Allow** click |
+| Engine must be publicly reachable | no | no — the engine dials out | yes — the Events API POSTs to it |
+| Where people read it | the Crewlet dashboard | the Mattermost app | the Slack app |
+| Notified while away | **no** — unread counts and a mention feed only | yes, by Mattermost | yes, by Slack |
+| File attachments | no — links only | yes | yes |
+| Search | keyword, over the engine's own index | the vendor's | the vendor's |
+| Working status | free text, per turn phase | fixed *"is typing…"* (default off) | free text, per turn phase |
+
+**Native is the default, and it is the right answer for a company that will
+not connect a workspace** — because of where the data would sit, because of
+what a workspace costs per seat, or because the company is a handful of people
+and a dozen agents and a chat product priced for humans is the wrong shape.
+There is nothing to stand up, nothing to provision and no credential: channels,
+threads, DMs, mentions, reactions and search are in the dashboard the moment
+the engine runs. Give a unit a `channel` and the engine opens that room with
+the unit's seats in it.
+
+**The one thing to know before choosing it** is the row above that says no: the
+engine has never sent anything as itself, so nobody is emailed, pushed or
+paged. A person learns they were mentioned when they next open the dashboard.
+If that is unacceptable for your company, one of the two vendors is the answer
+and the reason is this row rather than any of the others.
+
+**Mattermost is the quickest vendor to try.** It ships in this repo's
 `docker-compose.yml`, provisioning is one non-interactive command, and nothing
 has to reach the engine — so you can go from nothing to an agent answering in a
 channel on a laptop, with no account to create and no tunnel. It is what the
@@ -283,10 +310,39 @@ compliance setup your organization already runs, with nothing new to host or
 patch. It also renders the per-phase working indicator as real text, which
 Mattermost has no API for.
 
-Running both at once is supported — each agent seat carries whichever
-identities it needs.
+Running Mattermost and Slack at once is supported — each agent seat carries
+whichever identities it needs, which is what a company migrating between them
+looks like for months. That is why the field's value is `vendor` rather than a
+product name. What is **not** supported is native beside either of them: the
+engine refuses it at validation, because a person who replied in one place
+would have answered a thread the agents are reading the other half of, and no
+rule anywhere could say which conversation was the real one.
 
-### Option A: Mattermost (self-hosted)
+### Option A: the engine's own chat (no setup)
+
+Nothing. `chat.backend` unset with no vendor chat block derives `native`, so a
+company that configures nothing already has it. Give each unit a room:
+
+```yaml
+units:
+  - name: Engineering
+    channel: engineering       # lowercase letters, digits and `-`
+```
+
+The name is an **address**, not a rendering of one: write `engineering`, never
+`#engineering` and never a vendor's opaque id. The engine opens that room with
+every seat in the unit's subtree as a member and hands the name to the agents
+as something they can type into their own tools.
+
+The founder's policy — how long messages are kept, whether new channels are
+private, how much of a thread a woken seat reads — is the optional
+`chat.native` block in
+[Configuration § Chat](configuration.md#chat). Its default keeps messages for
+a year; `0` keeps them for ever, and chat is the highest-volume thing this
+engine stores, so read
+[Retention](../guides/retention.md) before choosing that.
+
+### Option B: Mattermost (self-hosted)
 
 1. **Run the Mattermost server yourself** (official Docker image; it needs
    its own PostgreSQL) and **create the team** agents will live in. Crewlet
@@ -305,7 +361,7 @@ Nothing needs to reach the engine from outside: it opens outbound websockets
 per seat rather than receiving webhooks, so no tunnel and no public URL.
 Details: [Mattermost integration](../integrations/mattermost.md).
 
-### Option B: Slack
+### Option C: Slack
 
 There is no self-hosted variant:
 
@@ -405,6 +461,16 @@ crewlet llm login default -from-host \
 crewlet run -config examples/nimbus-claude-cli.config.yaml \
             -company examples/nimbus-claude-cli.company.yaml
 ```
+
+**Both examples run chat on a vendor, and that is now the deliberate part
+rather than the free one.** Native chat costs less to stand up than either —
+nothing at all — so an example that used it would demonstrate no chat
+configuration whatsoever. These two keep Mattermost because the vendor path is
+the one with blocks to show: a bot token per seat, a provisioning command, the
+working-indicator settings and the thread routing. To run either example on
+the engine's own chat instead, delete its `integrations.mattermost` block and
+each seat's, give the units a `channel`, and drop the compose profile from the
+commands below; `chat.backend` then derives `native` on its own.
 
 Reading it top to bottom is the fastest way to see the choices on this page
 made concretely — each block carries the rationale in comments, including the

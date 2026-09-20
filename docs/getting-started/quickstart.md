@@ -496,7 +496,16 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them. If
+- **You already have chat.** `chat.backend` defaults to the engine's own, so
+  the units you gave a `channel` above have rooms in the dashboard right now,
+  with their seats in them: post in one and the seats it names wake up. What
+  it does not do is reach you when you are not looking — the engine sends no
+  email, no push and no SMS, so a mention becomes an unread count and a
+  mention feed. See [Chat](../concepts/chat.md).
+- Connect a **vendor** chat instead if your people already live in one, or if
+  being notified while away matters. It is exclusive with the engine's own —
+  one live chat home, or a person answers in the place the agents are not
+  reading. If
   your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
