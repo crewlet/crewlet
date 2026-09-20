@@ -175,6 +175,24 @@ func TestAnUnreadableHalfIsReportedAndDoesNotCostTheOther(t *testing.T) {
 	if len(live.RecentEvents(0)) != 0 {
 		t.Error("the failing half seeded rows anyway")
 	}
+
+	// AND THE MIRROR, which is the half the seed exists for: a spend read
+	// that fails must still leave the feed seeded. Without this case a
+	// change that let either error short-circuit the other would pass.
+	live = livestate.New()
+	err = observe.Seed(t.Context(), halfBroken{spend: boom}, live)
+	if err == nil {
+		t.Fatal("an unreadable spend window was seeded silently")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v, want the store's own cause", err)
+	}
+	if len(live.RecentEvents(0)) != 1 {
+		t.Errorf("feed = %+v, want the half that could be read", live.RecentEvents(0))
+	}
+	if len(live.SpendRecords()) != 0 {
+		t.Error("the failing half seeded records anyway")
+	}
 }
 
 // halfBroken answers one read and fails the other.
@@ -213,9 +231,17 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 		t.Errorf("spend read limit = %d, want the projection's record cap %d",
 			history.spend.Limit, livestate.SpendRecordLimit)
 	}
-	if history.spend.SinceDays != livestate.LiveSpendWindowDays() {
-		t.Errorf("spend read window = %d days, want the live window's %d",
-			history.spend.SinceDays, livestate.LiveSpendWindowDays())
+	// AS AN INSTANT, so the read covers the projection's window whatever
+	// that window is. Asked for in whole days it would agree only while
+	// the window is a whole number of them.
+	if history.spend.SinceDays != 0 {
+		t.Errorf("spend read named %d days; the window is named as an instant, "+
+			"and a day count beside it is a second answer the store may prefer",
+			history.spend.SinceDays)
+	}
+	if want := time.Now().UTC().Add(-livestate.LiveSpendWindow); history.spend.Since.Sub(want).Abs() > time.Minute {
+		t.Errorf("spend read from %v, want the live window's start around %v",
+			history.spend.Since, want)
 	}
 	if history.feed.Limit != livestate.EventFeedLimit {
 		t.Errorf("feed read limit = %d, want the ring's %d",
@@ -237,17 +263,4 @@ func (r *recordingHistory) List(_ context.Context, q store.ListQuery) ([]store.E
 func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error) {
 	r.spend = q
 	return nil, nil
-}
-
-// THE WINDOW THE SEED READS IS THE WINDOW THE PROJECTION KEEPS. The store
-// takes whole DAYS, so a live window that is not a whole number of them would
-// silently seed less history than the projection retains.
-func TestTheSeededSpendWindowIsAWholeNumberOfDays(t *testing.T) {
-	t.Parallel()
-	if livestate.LiveSpendWindow%(24*time.Hour) != 0 {
-		t.Fatalf("LiveSpendWindow = %v, which store.PhaseTokenQuery cannot express: "+
-			"it takes whole days, so the seed would cover %d of them and the "+
-			"projection would keep more", livestate.LiveSpendWindow,
-			livestate.LiveSpendWindowDays())
-	}
 }

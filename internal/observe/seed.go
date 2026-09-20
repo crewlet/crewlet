@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/store"
@@ -38,6 +39,12 @@ type Seeded interface {
 //     seed's time budget, only to be cut to the cap on arrival, and a read
 //     that ran out of budget seeded no spend at all.
 //
+// THE SPEND WINDOW IS ASKED FOR AS AN INSTANT, never as a day count. The two
+// are the same window only while [livestate.LiveSpendWindow] is a whole number
+// of days, and a window of 36 hours asked for in days would seed 24 of them
+// while the projection kept all 36 — less history than the screen claims to
+// cover, with nothing to say so.
+//
 // Called AFTER the broadcast subscription is attached, so an event published
 // between the read and the subscription cannot fall into the gap; the
 // projection recognises one that arrives both ways. See [livestate.History]
@@ -61,8 +68,8 @@ func Seed(ctx context.Context, history EventHistory, live Seeded) error {
 	}
 
 	h.Spend, err = history.PhaseTokens(ctx, store.PhaseTokenQuery{
-		SinceDays: livestate.LiveSpendWindowDays(),
-		Limit:     livestate.SpendRecordLimit,
+		Since: time.Now().UTC().Add(-livestate.LiveSpendWindow),
+		Limit: livestate.SpendRecordLimit,
 	})
 	if err != nil {
 		errs = append(errs, fmt.Errorf("observe: read the live spend window's history: %w", err))
