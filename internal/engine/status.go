@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
-	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -86,26 +85,92 @@ func (e *Engine) beginWorkingStatus(ctx context.Context, handle, turnID string,
 }
 
 // endWorkingStatus takes a turn's indicator down, or leaves it up for the
-// detached run that is still working.
+// work that is still going.
 //
 // THE KEEP-ALIVE RULE, written once because both turn frames need it and a
 // second reading of it would be a second answer: an indicator survives a turn
-// if and only if that turn SUSPENDED into a detached coding run. The box is
-// still running, the same turn resumes when it reports, and the person who
-// asked is still waiting — so taking it down would say the agent had stopped
-// in the middle of the longest thing it does. Every other ending clears: done,
+// if and only if SOMETHING IS STILL WORKING behind it — a detached coding run
+// this turn is actually coming back from. Every other ending clears: done,
 // failed, skipped, a guard breach, a runner that could not be built.
 //
-// Off [turn.Result.Suspended], which is the SAME field [Engine.persistSuspension]
-// is driven by, so the indicator and the parked row can never disagree about
-// whether a turn is coming back. A zero result — a turn that never reached the
-// loop — is not suspended, which is what makes ending on the error paths
-// correct rather than merely safe.
+// keepAlive is a FACT each frame establishes, never the turn's intent to
+// suspend. [turn.Result.Suspended] says the executor asked to park; whether
+// anything can ever resume it is the run's ROW, and the row is written after
+// the result exists and can fail on its own — see [stillWorking]. Driven off
+// the intent, an indicator outlived every failed persist for the life of the
+// process: the turn never came back, and nothing but a seat handoff or a
+// shutdown would have taken it down.
 //
 // The context is DETACHED because this is a teardown: the ending it is
 // reporting is often the cancellation itself (a shed seat, a drained node, a
 // turn that ran out of time), and a clear on a dead context does nothing at
 // all — which leaves an indicator claiming the agent is still working.
-func endWorkingStatus(ctx context.Context, s *notify.StatusSession, res turn.Result) {
-	s.End(context.WithoutCancel(ctx), res.Suspended)
+func endWorkingStatus(ctx context.Context, s *notify.StatusSession, keepAlive bool) {
+	s.End(context.WithoutCancel(ctx), keepAlive)
+}
+
+// stillWorking reads [Engine.persistSuspension]'s answer as the one question
+// the indicator asks: is anything going to come back?
+//
+// THREE ANSWERS, TWO OF WHICH KEEP THE INDICATOR UP. A row that landed is a
+// run the completion poll will resume, so the box is still working. A row that
+// could not be written is a run that was settled and reclaimed while the turn
+// was still here, so nothing is working and the indicator must come down —
+// that is the whole of what this function exists to distinguish.
+//
+// AN UNKNOWN COUNTS AS WORKING, which is the same reading internal/coord takes
+// of an unreachable store and for the same reason: the write that could not be
+// confirmed may well have landed, and a run it moved to running is one the
+// completion poll resumes. Read as loss, an indicator would come down on a
+// two-second store blip in the middle of the longest thing an agent does,
+// where reading it as work leaves at worst one indicator standing until this
+// node hands the seat on or stops.
+func stillWorking(resumable bool, err error) bool {
+	return resumable || err != nil
+}
+
+// releaseWorkingStatus drops one turn's hold because the agent has STOPPED
+// without the turn ending — the detached run it suspended into has parked on a
+// question and is waiting for a person.
+//
+// The counterpart of the keep-alive above, and the reason that rule needs one:
+// a suspended turn's indicator is kept up because a box is working, and a park
+// is the moment the engine learns it no longer is. Nothing else can say so —
+// the turn does not return, the run is not finished, and a person can take
+// days — so without this the indicator says "is thinking…" at the one person
+// who could answer, for as long as this process lives.
+//
+// It is one turn's HOLD, not the seat's indicators: a second turn in the same
+// thread keeps its own. See [notify.Statuses.Release].
+func (e *Engine) releaseWorkingStatus(ctx context.Context, handle, turnID string) {
+	e.Status().Release(context.WithoutCancel(ctx), handle, turnID)
+}
+
+// resumeWorkingStatus is the indicator a RESUMED turn shows.
+//
+// TWO SOURCES, tried in this order, because a resume arrives by two routes and
+// only one of them has an indicator still standing:
+//
+//   - A BOX'S COMPLETION resumes the turn its suspension kept alive. The hold
+//     is already up and heartbeating under the same turn id, so this takes it
+//     back rather than raising a second one over it — and a resume has nothing
+//     to raise FROM on that route: a parked run's row deliberately carries no
+//     chat metadata, and the conversation keys it does carry are partitions
+//     rather than addresses in a channel.
+//   - A PERSON'S ANSWER resumes a run that parked on a question. That hold was
+//     released at the park, because the agent had stopped; the answer is an
+//     ordinary chat message, so the trigger that woke this resume carries the
+//     conversation to raise in — and the person who just answered is the one
+//     waiting on the composer.
+//
+// Nil where neither holds: a completion whose session is not on this node (the
+// seat moved while the box ran, or this process restarted) raises nothing, and
+// a trigger that is not a chat message has no conversation to raise in.
+func (e *Engine) resumeWorkingStatus(ctx context.Context, handle, turnID string,
+	trigger *events.Event,
+) *notify.StatusSession {
+	if kept := e.Status().Rejoin(handle, turnID); kept != nil {
+		return kept
+	}
+	return e.beginWorkingStatus(ctx, handle, turnID, []*events.Event{trigger})
 }

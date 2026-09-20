@@ -73,6 +73,27 @@ func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
 	return nil
 }
 
+// Release drops ONE turn's hold on its indicator, wherever that hold is.
+//
+// It is what the engine calls when a turn that was kept alive has STOPPED
+// without ending: a detached coding run that parked on a question is waiting
+// on a person, not working, and an indicator still saying "is thinking…" over
+// that wait is worse than no indicator at all.
+//
+// [Statuses.Rejoin] then [StatusSession.End] rather than a clear of its own,
+// which is the whole of it: the hold is reference-counted by turn id, so a
+// second turn holding the same thread — a queued follow-up, a colleague's ask
+// — keeps ITS indicator and only the last hold takes the indicator down. A
+// driver-level clear would have taken that second turn's indicator with it.
+//
+// A hold this node does not have answers a nil session whose End is a no-op,
+// which is the honest outcome where the park landed on a node that is not the
+// one that raised the indicator: that node cleared it when it released the
+// seat ([Statuses.ClearFor]).
+func (s *Statuses) Release(ctx context.Context, handle, turnID string) {
+	s.Rejoin(handle, turnID).End(ctx, false)
+}
+
 // ClearFor takes down every indicator either backend holds for one seat.
 //
 // Both, unconditionally: a seat can be configured on two chat surfaces at

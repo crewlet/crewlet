@@ -451,9 +451,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// that node raised lapses on the backend's own expiry, and a resumed turn
 	// that raised a fresh one would be asserting a conversation it cannot
 	// prove it is in.
-	status := e.Status().Rejoin(in.Turn.Handle(), in.Run.TurnID)
-	var outcome turn.Result
-	defer func() { endWorkingStatus(ctx, status, outcome) }()
+	status := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
+	var working bool
+	defer func() { endWorkingStatus(ctx, status, working) }()
 
 	company := in.Company
 	if company == nil {
@@ -558,7 +558,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// What the deferred indicator teardown reads — and on this path a
 	// resumed turn that suspended AGAIN keeps its indicator, because the
 	// same box is still working. See [endWorkingStatus].
-	outcome = res
+	working = res.Suspended
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	if err != nil {
 		if reason, abandon := turn.Abandon(res, err); abandon {
@@ -580,9 +580,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	// A resumed turn that suspended AGAIN persists its new conversation the
 	// same way the first one did — the coordinator sees the row back in
-	// running and leaves the box for the next completion.
+	// running and leaves the box for the next completion — and keeps its
+	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		e.persistSuspension(ctx, r, in.Run.TurnID)
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -664,7 +665,8 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 }
 
 // persistSuspension writes a turn's suspended conversation to its row, which
-// is also what OPENS the run to the completion poll.
+// is also what OPENS the run to the completion poll, and reports whether the
+// turn is actually coming back.
 //
 // Called the moment the turn returns Suspended, because the runner holds the
 // conversation only until its frame unwinds. Until this lands the run sits in
@@ -677,27 +679,49 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // box is still in the engine's hands and the seat's owner is still this
 // process, is far better than leaving a launching row to hold a box until its
 // seat happens to move.
-func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) {
+//
+// # Why it answers, and why the answer is three-valued
+//
+// A caller that has to know whether anything is still working cannot read that
+// off [turn.Result] — every path below leaves it Suspended while settling the
+// run, so the turn's own intent says "coming back" on exactly the endings
+// where nothing is. The working indicator is that caller: driven off the
+// intent it stayed up for the life of the process on every failure here.
+//
+// The three answers are the ordinary three, so the middle one is not collapsed
+// into the loss: (true, nil) the row is open and the poll will resume it;
+// (false, nil) the run is settled and definitively will not; and a non-nil
+// error for the one case nothing can establish — a write that failed MAY have
+// landed, and [sandbox.Coordinator.FailRun] settles only a run still
+// launching, so a row this reports as unwritten can be one the completion poll
+// resumes. The error is for deciding, not for logging: every failure path here
+// has already said what it did and why (see [Engine.failSuspension]), and no
+// caller fails a turn over it — the run is settled either way.
+func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) (bool, error) {
 	if e.sandboxPending == nil || e.sandboxCoordinator == nil {
-		return
+		// No store and no coordinator: nothing recorded the run, nothing
+		// polls it, and nothing will ever resume this turn.
+		return false, nil
 	}
 	suspension, ok := r.Suspended()
 	if !ok {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_missing",
 			"the turn suspended but recorded no conversation", nil)
-		return
+		return false, nil
 	}
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",
 			"the suspended conversation could not be serialized", err)
-		return
+		return false, nil
 	}
 	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
 			"the suspended conversation could not be written", err)
-		return
+		// UNKNOWN, not lost: the write may have landed, and the settle
+		// that follows it declines a row that is no longer launching.
+		return false, fmt.Errorf("engine: recording the suspension of turn %s: %w", turnID, err)
 	}
 	if !suspended {
 		// The row is not launching, so this suspension has nowhere to go:
@@ -706,7 +730,9 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		// one is worse than failing.
 		e.failSuspension(ctx, turnID, "sandbox_suspension_not_launching",
 			"the run was no longer launching when its conversation was written", nil)
+		return false, nil
 	}
+	return true, nil
 }
 
 // failSuspension settles a run whose suspension has nowhere to go, and says
@@ -1120,6 +1146,11 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
+		// A run that stops to ask a person something takes the working
+		// indicator down with it: the agent is waiting on THEM, and the
+		// turn that suspended into it does not return to say so. See
+		// [sandbox.CoordinatorOptions.Parked].
+		Parked: e.releaseWorkingStatus,
 	})
 	if err != nil {
 		return err

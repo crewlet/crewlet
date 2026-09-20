@@ -148,6 +148,23 @@ type CoordinatorOptions struct {
 	// not finished, and its box will resume into the same session.
 	Ended func(runID string)
 
+	// Parked is called once for every run that stops to ask a person
+	// something, after the question is durably recorded.
+	//
+	// The counterpart of Ended, and the reason both exist is that a parked
+	// run is neither finished nor working: the turn that suspended into it
+	// has not come back, so nothing on the Ended path fires, and the agent
+	// has nonetheless STOPPED — everything now waits on a person who may
+	// take days. Anything the engine holds up "while the agent works" has
+	// to come down here, the working indicator above all: an "is thinking…"
+	// that outlives the thinking tells the one person who could answer the
+	// question that nobody is waiting on them.
+	//
+	// After MarkAwaiting, never before: until the question is on the row
+	// this completion can still be retried, and a retry that resumed the
+	// turn would find the hold already dropped.
+	Parked func(ctx context.Context, handle, turnID string)
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -184,6 +201,7 @@ type Coordinator struct {
 	resume  Resumer
 	account Accountant
 	ended   func(runID string)
+	parked  func(ctx context.Context, handle, turnID string)
 	now     func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
@@ -258,8 +276,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
-		now:  opts.Now,
-		runs: map[string]seatRuns{},
+		parked: opts.Parked,
+		now:    opts.Now,
+		runs:   map[string]seatRuns{},
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -618,6 +637,13 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// The claim took the row through [StatusResumed], so it is the holding
 	// side it leaves.
 	c.moveRun(run.AgentHandle, StatusResumed, StatusAwaiting)
+
+	// THE AGENT HAS STOPPED, and this is the moment that becomes durable.
+	// Whatever the engine holds up while a turn works comes down here — see
+	// [CoordinatorOptions.Parked].
+	if c.parked != nil {
+		c.parked(ctx, run.AgentHandle, run.TurnID)
+	}
 
 	if run.PauseTTLSeconds == 0 {
 		c.teardown(ctx, run)

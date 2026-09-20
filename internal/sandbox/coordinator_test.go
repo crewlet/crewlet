@@ -140,6 +140,17 @@ type coordRig struct {
 	coordinator *Coordinator
 	resumer     *resumeSpy
 	accountant  *ledgerSpy
+
+	mu     sync.Mutex
+	parked []string
+}
+
+// parkedTurns is every turn the coordinator reported as stopped on a
+// question, in order.
+func (r *coordRig) parkedTurns() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.parked...)
 }
 
 func newCoordRig(t *testing.T) *coordRig {
@@ -153,6 +164,11 @@ func newCoordRig(t *testing.T) *coordRig {
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
+		Parked: func(_ context.Context, handle, turnID string) {
+			rig.mu.Lock()
+			defer rig.mu.Unlock()
+			rig.parked = append(rig.parked, handle+"/"+turnID)
+		},
 		Now: func() time.Time { return base.now },
 	})
 	if err != nil {
@@ -273,6 +289,42 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	if held || !awaits {
 		t.Fatalf("SeatRuns = held %v / awaiting %v, want a free seat with an "+
 			"open question", held, awaits)
+	}
+}
+
+// AND THE PARK IS ANNOUNCED TO THE ENGINE, which is the only way anything
+// above this package can learn that an agent STOPPED.
+//
+// A parked run is neither finished nor working: the turn that suspended into
+// it does not return, so nothing on the Ended path fires, and a person who may
+// take days is now the only thing that can move it. Whatever the engine holds
+// up "while the agent works" — the working indicator first of all — has
+// nothing else to come down on. An ordinary completion must NOT report one:
+// there the turn is resumed immediately and the agent never stopped.
+func TestAParkedRunIsReportedAndAnOrdinaryCompletionIsNot(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("asks")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+	})
+	payload, ev := rig.completion("asks")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.parkedTurns(); len(got) != 1 || got[0] != "swe/asks" {
+		t.Fatalf("the park reported %v, want the seat and turn that stopped", got)
+	}
+
+	rig.launch("answers")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true})
+	payload, ev = rig.completion("answers")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.parkedTurns(); len(got) != 1 {
+		t.Fatalf("a run that came back with an answer reported a park: %v", got)
 	}
 }
 

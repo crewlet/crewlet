@@ -3,20 +3,21 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -373,15 +374,19 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 	e.raisedNothing(t, ws)
 }
 
-// A TURN THAT SUSPENDED INTO A DETACHED CODING RUN KEEPS ITS INDICATOR. The
-// box is still running, the same turn resumes when it reports, and the person
-// who asked is still waiting — so taking it down would say the agent had
-// stopped in the middle of the longest thing it does.
+// AN INDICATOR SURVIVES A TURN ONLY WHILE SOMETHING IS STILL WORKING.
 //
-// Driven through [endWorkingStatus] rather than a whole suspending turn,
-// because that function IS the rule both turn frames read: a case that
-// reproduced a sandbox run would be testing the sandbox.
-func TestASuspendedTurnKeepsTheIndicatorUp(t *testing.T) {
+// The keep-alive case is a turn that suspended into a detached coding run the
+// engine has established is coming back: the box is running, the same turn
+// resumes when it reports, and the person who asked is still waiting — so
+// taking it down would say the agent had stopped in the middle of the longest
+// thing it does. Every other ending clears.
+//
+// Driven through [endWorkingStatus] rather than a whole turn, because that
+// function IS the rule both turn frames read. WHAT ESTABLISHES the fact it is
+// given is the frames' own business, and the cases below it drive that
+// end to end.
+func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 	e, ws := indicating(t, notify.StatusAlways)
 	// One conversation per case: a second turn in the SAME channel would
 	// JOIN the first's session rather than raise its own, so a case that
@@ -395,31 +400,284 @@ func TestASuspendedTurnKeepsTheIndicatorUp(t *testing.T) {
 		return s
 	}
 
-	suspended := raise("wk-suspend", "D0ANA")
+	working := raise("wk-suspend", "D0ANA")
 	ws.shownAtLeast(t, 1)
-	endWorkingStatus(t.Context(), suspended, turn.Result{Suspended: true})
+	endWorkingStatus(t.Context(), working, true)
 	if got := ws.shown(); slices.Contains(got, "") {
-		t.Fatalf("a suspended turn cleared its indicator: %v", got)
+		t.Fatalf("a turn whose detached run is still working cleared its indicator: %v", got)
 	}
 	if len(e.notify.slack.Status().Live()) != 1 {
-		t.Fatal("the suspended turn's indicator is not live")
+		t.Fatal("the kept-alive indicator is not live")
 	}
 
-	// Every other ending clears: done, failed, skipped, a guard breach, a
-	// runner that could never be built.
-	for i, res := range []turn.Result{
-		{Suspended: false},
-		{Breach: &turn.Breach{Kind: types.GuardStall}},
-		{},
+	// And an ending clears — done, failed, skipped, a guard breach, a
+	// runner that could never be built, and a suspension whose run was
+	// settled instead of recorded are all the same fact here: nothing is
+	// working any more.
+	before := len(ws.shown())
+	ending := raise("wk-end", "D0END")
+	ws.shownAtLeast(t, before+1)
+	endWorkingStatus(t.Context(), ending, false)
+	if shown := ws.shown(); len(shown) <= before || shown[len(shown)-1] != "" {
+		t.Fatalf("a turn that ended did not clear: %v", shown[before:])
+	}
+	if live := e.notify.slack.Status().Live(); len(live) != 1 {
+		t.Errorf("the ending took down %d indicators, want only its own: %v", 2-len(live), live)
+	}
+}
+
+// AND "STILL WORKING" IS THE RUN'S ROW, NOT THE TURN'S INTENT TO SUSPEND.
+//
+// [turn.Result.Suspended] says the executor asked to park. Whether anything
+// can ever resume it is what [Engine.persistSuspension] answers, and its three
+// answers are three different facts: a row that landed is a run the completion
+// poll resumes, a row that could not be written is a run already settled and
+// reclaimed, and a store that could not answer is neither — the write may well
+// have landed, and the settle that follows declines a row that is no longer
+// launching.
+//
+// AN UNKNOWN THEREFORE COUNTS AS WORKING, the same reading internal/coord takes
+// of an unreachable store: read as loss, a two-second store blip takes the
+// indicator down in the middle of the longest thing an agent does.
+func TestOnlyARecordedSuspensionKeepsTheIndicatorUp(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		resumable bool
+		err       error
+		want      bool
+	}{
+		"a row the completion poll will resume":              {resumable: true, want: true},
+		"a run settled because its row could not be written": {want: false},
+		"a store that could not say either way": {
+			err: errors.New("the coordination store did not answer"), want: true,
+		},
 	} {
-		before := len(ws.shown())
-		channel := "D0END" + strconv.Itoa(i)
-		ending := raise("wk-end"+channel, channel)
-		ws.shownAtLeast(t, before+1)
-		endWorkingStatus(t.Context(), ending, res)
-		if shown := ws.shown(); len(shown) <= before || shown[len(shown)-1] != "" {
-			t.Fatalf("a turn ending on %+v did not clear: %v", res, shown[before:])
+		if got := stillWorking(tc.resumable, tc.err); got != tc.want {
+			t.Errorf("%s: stillWorking(%v, %v) = %v, want %v",
+				name, tc.resumable, tc.err, got, tc.want)
 		}
+	}
+}
+
+// END TO END: A SUSPENSION NOTHING RECORDED TAKES THE INDICATOR DOWN.
+//
+// This is the failure the rule above exists for, and it is reachable on a
+// single node with no seat movement at all: the turn returns Suspended, the
+// row is not written, the run is settled and its box reclaimed — and the turn
+// never comes back. Keyed on the intent, the indicator said "is thinking…"
+// every refresh interval for the life of the process, which is exactly what
+// [notify.StatusDriver.ClearFor] was added to bound and what nothing else
+// would ever have taken down.
+func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
+	launching := func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
+		t.Helper()
+		if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+			TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
+		}, sandbox.Fence{}); err != nil {
+			t.Fatalf("BeginLaunch: %v", err)
+		}
+		return store
+	}
+
+	for name, tc := range map[string]struct {
+		pending func(*testing.T, *sandbox.CoordStore) sandbox.PendingStore
+		live    int
+	}{
+		"a run whose row is open to the completion poll": {pending: launching, live: 1},
+		"a run whose row was never launched": {
+			// MarkSuspended finds nothing launching, so the suspension
+			// has nowhere to go and the run is settled.
+			pending: func(_ *testing.T, store *sandbox.CoordStore) sandbox.PendingStore { return store },
+			live:    0,
+		},
+		"a store that could not answer": {
+			pending: func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
+				return unwritableRuns{PendingStore: launching(t, store)}
+			},
+			live: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, ws := indicatingWith(t, notify.StatusAlways, suspendingModel{})
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			equipForCode(t, e, tc.pending(t, store))
+
+			res, err := e.runTurn(t.Context(), Request{
+				Handle: "swe", WorkKey: "wk-code",
+				Events: []*events.Event{chatTrigger("D0ANA")},
+			})
+			if err != nil {
+				t.Fatalf("runTurn: %v", err)
+			}
+			if !res.Suspended {
+				t.Fatalf("the turn did not suspend, so this case asserts nothing: %+v", res)
+			}
+			if live := e.notify.slack.Status().Live(); len(live) != tc.live {
+				t.Fatalf("%d indicators live, want %d: %v (the workspace heard %v)",
+					len(live), tc.live, live, ws.shown())
+			}
+		})
+	}
+}
+
+// unwritableRuns is a run store whose suspension write fails without saying
+// whether it landed — the one answer that is neither "resumable" nor "lost".
+type unwritableRuns struct{ sandbox.PendingStore }
+
+func (unwritableRuns) MarkSuspended(context.Context, string, map[string]any) (bool, error) {
+	return false, errors.New("the coordination store did not answer")
+}
+
+// equipForCode gives the fixture's seat a code gate, a run_sandbox that
+// detaches, and the store the engine records its suspension in.
+//
+// The tool is a stand-in for the real one and does what the real one does to
+// the LOOP: it detaches, so the Execute phase suspends with its call
+// unanswered. What is behind it — a provider, a box, a coding agent — is the
+// sandbox package's business and none of it changes what the ENGINE does with
+// a suspension, which is what these cases are about.
+func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
+	t.Helper()
+	company := e.Company()
+	seat := company.Org.AgentSeatByHandle("swe")
+	seat.Sandbox = &org.RoleSandbox{Enabled: true}
+	if err := company.Tools.Register(suspendingTool{}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("registering the detaching tool: %v", err)
+	}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: e.backends.Queue, Pending: pending, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	e.sandboxPending, e.sandboxCoordinator = pending, coordinator
+}
+
+// suspendingModel hands its first round to the detaching tool, which is all it
+// takes: the loop suspends with that call unanswered and the turn returns.
+type suspendingModel struct{}
+
+func (suspendingModel) Model() string { return "suspending" }
+func (suspendingModel) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{ToolCalls: []llm.ToolCall{{
+		ID: "c1", Name: builtin.RunSandboxTool,
+		Arguments: map[string]any{"brief": "fix the failing test"},
+	}}}, nil
+}
+
+// suspendingTool is run_sandbox as far as the tool loop can tell.
+type suspendingTool struct{}
+
+var _ tools.Detached = suspendingTool{}
+
+func (suspendingTool) Name() string { return builtin.RunSandboxTool }
+func (suspendingTool) Description() string {
+	return "Hand a concrete code task to a coding agent in an isolated sandbox."
+}
+
+func (suspendingTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"brief": map[string]any{"type": "string"}},
+		"required":   []any{"brief"},
+	}
+}
+
+func (suspendingTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "this tool can only be called where the loop can suspend",
+		Failed: true}, nil
+}
+
+func (suspendingTool) CallDetached(_ context.Context, t *turnctx.Turn, _ map[string]any) (tools.DetachedResult, error) {
+	return tools.DetachedResult{
+		Result:  tools.Result{Output: "(the coding job is running)"},
+		Suspend: true,
+		Payload: map[string]any{"turn_id": t.RunID},
+	}, nil
+}
+
+// A RUN THAT PARKED ON A QUESTION TAKES ITS INDICATOR DOWN.
+//
+// The other half of the keep-alive, and the one the suspension rule cannot
+// answer: the run was recorded, the turn IS coming back, and the agent has
+// nonetheless stopped — everything now waits on the person the question was
+// asked of. An indicator that keeps saying "is thinking…" at that person is
+// worse than none at all, because it tells the one human who could unblock the
+// work that nobody is waiting on them.
+//
+// AND IT IS ONE TURN'S HOLD, not the seat's indicators: a second turn in the
+// same thread is still working and keeps its own.
+func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
+	e, ws := indicating(t, notify.StatusAlways)
+
+	coding := e.beginWorkingStatus(t.Context(), "swe", "wk-code",
+		[]*events.Event{chatTrigger("D0ANA")})
+	if coding == nil {
+		t.Fatal("no indicator was raised for a chat trigger")
+	}
+	ws.shownAtLeast(t, 1)
+	endWorkingStatus(t.Context(), coding, true)
+
+	// A colleague's ask lands in the same thread while the box runs, and it
+	// is a different turn: the session is shared and reference-counted.
+	alongside := e.beginWorkingStatus(t.Context(), "swe", "wk-alongside",
+		[]*events.Event{chatTrigger("D0ANA")})
+	if alongside == nil {
+		t.Fatal("a second turn in the same thread joined no session")
+	}
+
+	e.releaseWorkingStatus(t.Context(), "swe", "wk-code")
+
+	if got := ws.shown(); slices.Contains(got, "") {
+		t.Fatalf("the park cleared an indicator a second turn is still holding: %v", got)
+	}
+	if live := e.notify.slack.Status().Live(); len(live) != 1 {
+		t.Fatalf("the second turn's indicator went down with the park: %v", live)
+	}
+
+	// And when that turn ends too, the last hold takes it down.
+	endWorkingStatus(t.Context(), alongside, false)
+	if shown := ws.shown(); shown[len(shown)-1] != "" {
+		t.Errorf("the last hold ended without clearing: %v", shown)
+	}
+	if live := e.notify.slack.Status().Live(); len(live) != 0 {
+		t.Errorf("an indicator outlived every turn holding it: %v", live)
+	}
+}
+
+// AND A PERSON'S ANSWER RAISES ONE AGAIN.
+//
+// The park released the hold, so a resume that only ever rejoined would work
+// through the answer in silence — the exact gap this indicator exists to
+// close, at the one moment a person has just asked for something. A run
+// resumed by an ANSWER is woken by an ordinary chat message, so the trigger
+// carries the conversation to raise in; a run resumed by a BOX is not, and a
+// resume that invented a conversation for it would be claiming a thread it
+// cannot prove it is in.
+func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
+	e, ws := indicating(t, notify.StatusAlways)
+
+	answered := e.resumeWorkingStatus(t.Context(), "swe", "wk-code", chatTrigger("D0ANA"))
+	if answered == nil {
+		t.Fatal("the answer that resumed a parked run raised no indicator")
+	}
+	if got := ws.shownAtLeast(t, 1)[0]; got == "" {
+		t.Errorf("the workspace was asked for %q, want the indicator raised", got)
+	}
+
+	// A completion carries no chat conversation, and with no hold left to
+	// take back there is nothing to raise: a parked run's row deliberately
+	// keeps no chat metadata.
+	completion := events.New(types.SandboxRunCompleted{TurnID: "wk-box"}, events.TraceContext{})
+	if s := e.resumeWorkingStatus(t.Context(), "swe", "wk-box", completion); s != nil {
+		t.Errorf("a box's completion raised an indicator in %v", s.Conversation())
 	}
 }
 
@@ -439,7 +697,7 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	suspended := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
 		[]*events.Event{chatTrigger("D0ANA")})
 	ws.shownAtLeast(t, 1)
-	endWorkingStatus(t.Context(), suspended, turn.Result{Suspended: true})
+	endWorkingStatus(t.Context(), suspended, true)
 	if got := ws.raises(); got != 1 {
 		t.Fatalf("the suspended turn raised %d indicators, want one", got)
 	}
@@ -533,7 +791,7 @@ func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 	s := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
 		[]*events.Event{chatTrigger("D0ANA")})
 	ws.shownAtLeast(t, 1)
-	endWorkingStatus(t.Context(), s, turn.Result{Suspended: true})
+	endWorkingStatus(t.Context(), s, true)
 	if len(e.notify.slack.Status().Live()) != 1 {
 		t.Fatal("the suspended turn's indicator is not live")
 	}
@@ -562,7 +820,7 @@ func TestTheClearSurvivesTheCancellationThatEndedTheTurn(t *testing.T) {
 	s := e.beginWorkingStatus(ctx, "swe", "wk-cancel", []*events.Event{chatTrigger("D0ANA")})
 	ws.shownAtLeast(t, 1)
 	cancel()
-	endWorkingStatus(ctx, s, turn.Result{})
+	endWorkingStatus(ctx, s, false)
 
 	if shown := ws.shown(); shown[len(shown)-1] != "" {
 		t.Errorf("a turn ended by a cancellation left its indicator up: %v", shown)

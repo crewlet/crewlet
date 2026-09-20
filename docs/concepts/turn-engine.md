@@ -548,8 +548,10 @@ whose indicator carries no text):
 | Turn start, before the turn assembles anything | Indicator raised, so the thread read, the knowledge search and the runner build all happen with the agent visibly on it |
 | Each phase opening | Next line drawn from that phase's pool — *is getting crewleted in…* → *is crewleting…* → *is marking its own homework…* (see [Slack § Behaviour](../integrations/slack.md#behaviour)) |
 | Turn end (a reply, a skipped turn, a failure, a guard breach, budget exhaustion, a runner that could not be built) | Indicator cleared |
-| The executor suspended for a detached sandbox run | Indicator **held** — the agent has neither replied nor given up, and the same `turn_id` resumes when the job completes |
-| That run's resume | The same hold taken back, never a second indicator over the first — and cleared when the resumed turn ends |
+| The executor suspended for a detached sandbox run, and the run's row landed | Indicator **held** — the agent has neither replied nor given up, and the same `turn_id` resumes when the job completes |
+| A suspension the engine could not record | Indicator cleared: the run is settled and its box reclaimed on the spot, so nothing is coming back. A store that could not say whether the write landed keeps it instead, because a run it moved to running is one the completion poll resumes |
+| That run parked on a clarification question | Indicator cleared — the agent has stopped and a person may take days to answer. One turn's hold, so a second turn working in the same thread keeps its own |
+| That run's resume | The hold taken back, never a second indicator over the first — and cleared when the resumed turn ends. A resume driven by a person's ANSWER has no hold left to take back and raises a fresh indicator off the answer's own thread |
 | This node hands the seat to a peer, or shuts down | Indicator cleared, because a kept-alive one would otherwise be re-asserted by a node that is no longer running the turn |
 
 A trigger that is not a chat message raises nothing at all: a schedule tick, an
@@ -573,9 +575,9 @@ turn, and it never delays one either: a raise and a phase change write the
 session's state and wake its own goroutine, so a chat instance that is slow to
 answer costs the agent's work nothing. What bounds an indicator whose turn
 never came back is the backend's own expiry (about two minutes on Slack) plus
-the two points above where this node takes its own down — a seat handed to a
-peer, and shutdown. A process that is killed outright leaves the last one to
-lapse.
+the points above where this node takes its own down — a run that parked or was
+settled, a seat handed to a peer, and shutdown. A process that is killed
+outright leaves the last one to lapse.
 
 Whether it appears at all is the org-wide `typing_status` setting on the chat
 block that triggered the turn (`always` by default, and the only other value is

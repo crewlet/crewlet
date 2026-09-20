@@ -425,19 +425,29 @@ the coffee machine…") is safe; plausible-and-specific is not.
   running, which is what keeps the indicator honest across a
   `self_iterate` loop.
 - **Held across a detached [sandbox](../concepts/code-sandbox.md)
-  run.** When Execute suspends for a background coding job the agent has
-  neither replied nor given up, so the indicator stays up until the
-  resumed turn finishes — and the resume takes that same hold back rather
-  than raising a second one over it.
+  run — while the box is actually working.** When Execute suspends for a
+  background coding job the agent has neither replied nor given up, so the
+  indicator stays up until the resumed turn finishes, and the resume takes
+  that same hold back rather than raising a second one over it. The hold
+  follows the run's own record rather than the turn's intent to suspend: a
+  suspension the engine could not record is a run it settles and a box it
+  reclaims on the spot, and the indicator comes down with it. A store that
+  could not say either way keeps it, because the write may have landed.
+- **Released when that run stops to ask a question.** A coding job can come
+  back asking for a decision instead of a result; the run then parks, the
+  seat goes back to work, and the answer is waited for — possibly for days.
+  The agent has stopped, so its indicator comes down at the park. The reply
+  that answers the question is an ordinary chat message, so the resume it
+  triggers raises a fresh one in that thread and the work is visible again.
 - **Never in the way of the work.** A raise and a phase change hand the
   request to the session's own goroutine, so an unreachable or slow
   workspace cannot delay the turn; a refused or rate-limited `setStatus`
   is logged and the status simply expires. Nothing about the indicator can
   fail a turn.
 - **Bounded when a turn does not come back.** A held indicator is taken
-  down when this node hands the seat to a peer or shuts down, so a
-  suspended turn whose resume lands on another node does not leave one
-  being re-asserted for ever. A process killed outright leaves its last
+  down when the run it is held for parks or is settled, and when this node
+  hands the seat to a peer or shuts down — so a suspended turn whose resume
+  lands on another node does not leave one being re-asserted for ever. A process killed outright leaves its last
   indicator to Slack's own two-minute expiry, and a `PUT /config` that
   rebuilds the Slack transport clears the ones it was holding — turns in
   flight then run without an indicator until they end, and their replies

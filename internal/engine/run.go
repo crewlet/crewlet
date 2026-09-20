@@ -1477,12 +1477,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	status := e.beginWorkingStatus(ctx, req.Handle, req.WorkKey, req.Ask())
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
-	// nothing else would ever take it down. `outcome` stays the zero result
-	// until the loop returns one, and a zero result is not suspended — so a
-	// turn that never started clears rather than leaving an indicator up for
-	// a detached run that does not exist. See [endWorkingStatus].
-	var outcome turn.Result
-	defer func() { endWorkingStatus(ctx, status, outcome) }()
+	// nothing else would ever take it down. `working` stays false until a
+	// suspension's own ROW says a detached run is coming back, so every other
+	// path — including a redelivered trigger, which raises a fresh indicator
+	// of its own when it runs again — clears. See [endWorkingStatus].
+	var working bool
+	defer func() { endWorkingStatus(ctx, status, working) }()
 
 	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
 	// that built its runner from one revision and took its round caps from
@@ -1580,15 +1580,16 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
 		turnInputFor(req, reply))
-	// What the deferred indicator teardown reads. Assigned the moment the
-	// loop returns, so a panic below it still ends on this turn's own
-	// outcome rather than on the zero one.
-	outcome = res
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.
+	//
+	// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` — the
+	// intent to park and a run that can actually be resumed are different
+	// facts, and this call is where the second one is established. See
+	// [stillWorking].
 	if res.Suspended {
-		e.persistSuspension(ctx, r, req.RunID)
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
