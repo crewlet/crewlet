@@ -2893,6 +2893,10 @@ Notes:
   cheaper model for reflection / summarisation work.
 - All lists are sorted by `total_tokens` descending; `by_turn` is
   sorted by `ended_at` descending and capped at `recent_turns`.
+  `turns_total` is how many turns the window actually held, so a full
+  page is distinguishable from a complete one — `totals` above is summed
+  over every record in the window, and without the count the table and
+  the figure above it describe different sets with nothing saying so.
 - `aggregated_through` is the latest event timestamp this rollup
   aggregated, and empty when no events matched. It is the rollup's own
   freshness: the dashboard renders it as "counted through", so a reader

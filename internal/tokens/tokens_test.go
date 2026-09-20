@@ -2,6 +2,7 @@ package tokens_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -387,5 +388,56 @@ func TestTwoRunsOfOneTriggerAreTwoLinkableRows(t *testing.T) {
 	if byID["run-1"].WorkKey != "wk-1" || byID["run-2"].WorkKey != "wk-1" {
 		t.Errorf("work keys = %q and %q, want both to name the one trigger",
 			byID["run-1"].WorkKey, byID["run-2"].WorkKey)
+	}
+}
+
+// A CAPPED TURN TABLE SAYS HOW MANY TURNS THERE WERE.
+//
+// `by_turn` is the newest N of the window and `totals` is summed over every
+// record in it, so the table and the figure above it describe different sets.
+// Without a count a reader who asked for fifty and got fifty could not tell
+// fifty-one turns from five thousand — and the sibling cut in this package
+// already refuses exactly that, folding the groups past its limit into a
+// residual that names how many it stands for.
+func TestACappedTurnTableSaysHowManyTurnsThereWere(t *testing.T) {
+	t.Parallel()
+	const want = 5
+	var records []tokens.Record
+	for i := range want * 2 {
+		records = append(records, rec("CEO", "execute", "sonnet",
+			fmt.Sprintf("t%02d", i),
+			time.Date(2026, 6, 14, 12, 0, i, 0, time.UTC).Format(time.RFC3339),
+			10, 5))
+	}
+	got := tokens.Aggregate(records, tokens.Options{
+		Handles: map[string]string{"CEO": "ceo"},
+		Since:   since, Until: until, RecentTurns: want,
+	})
+
+	if len(got.ByTurn) != want {
+		t.Fatalf("by_turn holds %d rows, want the page of %d", len(got.ByTurn), want)
+	}
+	// COUNTED BEFORE THE CUT. A total taken after it would be the page's
+	// own length, which is the bug a total exists to remove.
+	if got.TurnsTotal != want*2 {
+		t.Errorf("turns_total = %d, want %d — the table is a page and the "+
+			"totals above it cover every turn in the window",
+			got.TurnsTotal, want*2)
+	}
+	// AND THE TOTALS DESCRIBE THE WHOLE WINDOW, which is what makes the
+	// count necessary rather than decorative.
+	if got.Totals.Calls != want*2 {
+		t.Errorf("totals cover %d calls, want %d", got.Totals.Calls, want*2)
+	}
+
+	// A WINDOW THAT FITS REPORTS ITS OWN SIZE, so the count is not simply
+	// the record count and a reader can compare it with len(by_turn).
+	small := tokens.Aggregate(records[:3], tokens.Options{
+		Handles: map[string]string{"CEO": "ceo"},
+		Since:   since, Until: until, RecentTurns: want,
+	})
+	if small.TurnsTotal != 3 || len(small.ByTurn) != 3 {
+		t.Errorf("a three-turn window reports %d of %d",
+			len(small.ByTurn), small.TurnsTotal)
 	}
 }

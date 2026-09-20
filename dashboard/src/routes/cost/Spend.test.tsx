@@ -67,6 +67,7 @@ function rollup(total: number): Rollup {
     by_worker: [],
     by_agent: [],
     by_turn: [],
+    turns_total: 0,
     aggregated_through: "2026-09-13T10:00:00Z",
   };
 }

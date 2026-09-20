@@ -195,6 +195,18 @@ type Rollup struct {
 	ByAgent  []AgentRow  `json:"by_agent"`
 	ByTurn   []TurnRow   `json:"by_turn"`
 
+	// TurnsTotal is how many turns the window actually held, against the
+	// bounded slice [Breakdown.ByTurn] carries.
+	//
+	// WITHOUT IT THE TABLE AND THE FIGURE ABOVE IT DESCRIBE DIFFERENT SETS.
+	// `Totals` is computed over every record in the window and the table is
+	// a page of the newest, so a reader who asked for fifty and got fifty
+	// could not tell fifty-one turns from five thousand — while the number
+	// above the table was summed over all of them. The sibling cut in this
+	// package already refuses that: a group row past the limit becomes a
+	// residual naming how many it stands for (see [GroupRow.Folded]).
+	TurnsTotal int `json:"turns_total"`
+
 	// AggregatedThrough is the latest timestamp this rollup counted.
 	//
 	// THE ROLLUP'S OWN FRESHNESS, rendered as "counted through": a total
@@ -368,6 +380,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 		}
 		return cmp.Compare(a.TurnID, b.TurnID)
 	})
+	// COUNTED BEFORE THE CUT, which is the whole of what it is for.
+	out.TurnsTotal = len(out.ByTurn)
 	if len(out.ByTurn) > limit {
 		out.ByTurn = out.ByTurn[:limit]
 	}
