@@ -1127,3 +1127,67 @@ func TestASnippetOverAShortPageIsUnchangedByTheBodyRead(t *testing.T) {
 		t.Errorf("snippet = %q, want the whole short body", got)
 	}
 }
+
+// THE FUSED PATH NEEDS THE SAME SNIPPET, and it is a different function.
+//
+// A fan-out participant answers with keys and scores — a Slice carries no
+// text at all — so [search.Indexer.Hydrate] is the only place in that path
+// where a snippet exists. It was cutting from the same 600-byte opening, so a
+// company big enough to fan out got preamble snippets on every long page
+// while a single-node company got the match.
+func TestAFusedHitsSnippetAlsoShowsTheMatch(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	page(t, db, "p.deep", "ENG", "Platform Handbook",
+		strings.Repeat("This handbook covers the platform and its many procedures. ", 40)+
+			"The quarterly budget is approved by the finance lead.", 1)
+	indexAll(t, x)
+
+	hits, err := x.Hydrate(t.Context(),
+		[]string{search.Key(search.SourcePage, "p.deep")}, "budget")
+	if err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hydrated %d hits, want the handbook", len(hits))
+	}
+	if !strings.Contains(strings.ToLower(hits[0].Snippet), "budget") {
+		t.Errorf("the fused hit's snippet does not contain the term that "+
+			"made it a hit: %q", hits[0].Snippet)
+	}
+}
+
+// A MERGE INPUT DOES NOT PAY FOR A SNIPPET NOBODY READS.
+//
+// A fan-out participant's answer becomes a [search.Slice], which carries keys
+// and scores and no text — so a body read to centre its snippets is fifty
+// documents fetched and discarded, per query, per node. The flag is what
+// keeps the fix above off that path, and the observable consequence is that
+// such an answer still carries the excerpt-cut snippet: the preamble, which
+// is free because it is a column of a row the hydration already reads.
+func TestAMergeInputKeepsTheFreeSnippetAndReadsNoBody(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	page(t, db, "p.deep", "ENG", "Platform Handbook",
+		strings.Repeat("This handbook covers the platform and its many procedures. ", 40)+
+			"The quarterly budget is approved by the finance lead.", 1)
+	indexAll(t, x)
+
+	hits, err := x.Search(t.Context(), search.LexicalQuery{
+		Text: "budget", MergeInput: true,
+	})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits = %v, want the handbook", titles(hits))
+	}
+	if strings.Contains(strings.ToLower(hits[0].Snippet), "budget") {
+		t.Errorf("a merge input read the body to cut a snippet its own "+
+			"transport cannot carry: %q", hits[0].Snippet)
+	}
+}

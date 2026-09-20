@@ -58,6 +58,11 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		// slice returns N of them. See [MergeByScore].
 		Limit:  FuseN,
 		Shards: shards,
+		// THIS ANSWER IS MERGE INPUT. A [Slice] carries keys and
+		// scores, so a snippet cut here is read from the body and
+		// thrown away — fifty documents per query per node. The
+		// coordinator cuts them once, over the fused list.
+		MergeInput: true,
 	})
 	if err != nil {
 		// THE LEXICAL HALF IS THE ONE THAT MAY FAIL THE SCAN. It reads
