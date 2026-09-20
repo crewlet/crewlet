@@ -42,34 +42,95 @@ import (
 	"unicode"
 )
 
-// The BM25 parameters.
+// A Profile is one corpus's BM25 tuning, chosen by the index that ranks with
+// it rather than baked into the arithmetic.
 //
-// TUNED TO THIS CORPUS, not copied from a paper's default, and the corpus is
-// a company's own pages and work items: a few thousand documents from a few
-// words (a bug title) to a few thousand (a runbook), written by colleagues
-// who reuse each other's vocabulary heavily.
-const (
-	// K1 saturates term frequency: how much the tenth occurrence of a word
-	// adds over the second.
-	//
-	// 1.2, the low end of the usual 1.2-2.0 range, because these documents
-	// repeat their subject constantly — a page about the deploy pipeline
-	// says "deploy" thirty times — and a higher K1 would rank a document
-	// by how verbosely it says one word rather than by how many of the
-	// query's words it covers.
-	K1 = 1.2
+// TWO CORPORA, ONE ARITHMETIC. The knowledge base and the company's chat are
+// ranked by the same pure functions and differ in exactly one parameter,
+// because their length distributions differ and nothing else about BM25 does.
+// A second implementation would be two rankings to re-measure; a second
+// parameter set is one line each and a test that says what it buys.
+//
+// It is a named string rather than a struct of numbers so the zero value is
+// INVALID rather than a silent third tuning: an unset struct would score with
+// K1 = 0 and B = 0, which is not "the default" but "ignore term frequency and
+// ignore length" — a ranking nobody chose, returning plausible nonsense.
+type Profile string
 
-	// B is how hard length normalisation bites, from 0 (ignore length) to
-	// 1 (fully normalise).
-	//
-	// 0.75, the standard value, kept deliberately: the length spread here
-	// is real and meaningful. A three-line page that mentions a term is
-	// usually ABOUT that term; a long runbook that mentions it usually
-	// is not. Dropping toward 0 would let every long page crowd out the
-	// short answer, and pushing toward 1 would bury the runbook that is
-	// genuinely the right hit for a broad query.
-	B = 0.75
+const (
+	// ProseProfile ranks documents somebody sat down to write: a page, a
+	// runbook, a work item and its description.
+	ProseProfile Profile = "prose"
+
+	// ChatProfile ranks a company's chat, where the length distribution is
+	// bimodal — one-line remarks and pasted blocks — and nothing in
+	// between.
+	ChatProfile Profile = "chat"
 )
+
+// Valid reports a profile this package has a tuning for.
+//
+// An unknown profile is a PROGRAMMING error rather than a value off the wire:
+// a profile is chosen by the indexer in code and never decoded from a record,
+// so the honest answer is to refuse it here and let the caller's own
+// validation say so, rather than to fall back to a tuning nobody asked for.
+func (p Profile) Valid() bool {
+	_, _, ok := p.params()
+	return ok
+}
+
+// Profiles is every tuning this package ships, for a caller enumerating them.
+func Profiles() []Profile { return []Profile{ProseProfile, ChatProfile} }
+
+// params is the tuning itself, and the one place either number is written.
+//
+// TUNED TO THESE CORPORA, not copied from a paper's defaults.
+func (p Profile) params() (k1, b float64, ok bool) {
+	switch p {
+	case ProseProfile:
+		// K1 saturates term frequency: how much the tenth occurrence of
+		// a word adds over the second. 1.2, the low end of the usual
+		// 1.2-2.0 range, because these documents repeat their subject
+		// constantly — a page about the deploy pipeline says "deploy"
+		// thirty times — and a higher K1 would rank a document by how
+		// verbosely it says one word rather than by how many of the
+		// query's words it covers.
+		//
+		// B is how hard length normalisation bites, from 0 (ignore
+		// length) to 1 (fully normalise). 0.75, the standard value,
+		// kept deliberately: the length spread here is real and
+		// meaningful. A three-line page that mentions a term is usually
+		// ABOUT that term; a long runbook that mentions it usually is
+		// not. Dropping toward 0 would let every long page crowd out the
+		// short answer, and pushing toward 1 would bury the runbook that
+		// is genuinely the right hit for a broad query.
+		return 1.2, 0.75, true
+	case ChatProfile:
+		// THE SAME SATURATION, because a person who says a word twice
+		// in a message means it as much as a page that says it twice.
+		//
+		// A MUCH WEAKER LENGTH PENALTY, because the prose argument
+		// inverts on this corpus. A chat corpus is bimodal: "ok" and
+		// "shipped, thanks" beside a pasted stack trace or a paragraph
+		// of reasoning, with almost nothing between them. At 0.75 the
+		// short messages win nearly everything — the two-token
+		// acknowledgement that happens to contain the query word
+		// outranks the paragraph that actually answers it, which is the
+		// opposite of what a person searching chat is looking for. At
+		// 0.30 length is a mild correction rather than the dominant
+		// term, and a substantive message beats an acknowledgement
+		// while a wall of pasted logs still does not beat a considered
+		// sentence. The ratio each value buys is pinned by a test.
+		return 1.2, 0.30, true
+	}
+	return 0, 0, false
+}
+
+// K1 is this profile's term-frequency saturation.
+func (p Profile) K1() float64 { k1, _, _ := p.params(); return k1 }
+
+// B is this profile's length normalisation.
+func (p Profile) B() float64 { _, b, _ := p.params(); return b }
 
 // MinTermLength is the shortest token indexed.
 //
@@ -242,14 +303,20 @@ func IDF(corpusDocs, termDocs int) float64 {
 	return math.Log(1 + (float64(corpusDocs)-float64(termDocs)+0.5)/(float64(termDocs)+0.5))
 }
 
-// Score is one term's BM25 contribution to one document.
+// Score is one term's BM25 contribution to one document, under this profile.
 //
 // A caller sums this over the query's terms. Split per term rather than
 // scored per document so the caller can stream postings term by term — which
 // is how the index is stored, and what keeps a query from materialising the
 // whole corpus.
-func Score(idf float64, p Posting, c Corpus) float64 {
-	if p.Freq <= 0 || idf <= 0 {
+//
+// AN INVALID PROFILE SCORES NOTHING, deliberately: a zero-valued Profile is a
+// caller that never chose a tuning, and ranking it with a default would hide
+// that behind a result list nobody can tell from a tuned one. Nothing ranks,
+// which the caller's own tests see immediately.
+func (prof Profile) Score(idf float64, p Posting, c Corpus) float64 {
+	k1, b, ok := prof.params()
+	if !ok || p.Freq <= 0 || idf <= 0 {
 		return 0
 	}
 	avg := c.AvgLength
@@ -263,8 +330,8 @@ func Score(idf float64, p Posting, c Corpus) float64 {
 		length = avg
 	}
 	tf := float64(p.Freq)
-	norm := K1 * (1 - B + B*length/avg)
-	return idf * (tf * (K1 + 1)) / (tf + norm)
+	norm := k1 * (1 - b + b*length/avg)
+	return idf * (tf * (k1 + 1)) / (tf + norm)
 }
 
 // Snippet is the best window of body text for a hit, cut to limit bytes.
