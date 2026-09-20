@@ -76,15 +76,35 @@ func TestAFieldBothSuppliedAndGeneratedSaysSo(t *testing.T) {
 	}
 }
 
-// THE STORED SUMMARY IS ALWAYS VALID UTF-8. It is cut to a length, and a raw
-// byte slice cuts mid-rune whenever a multi-byte character straddles the
-// boundary — leaving a string the JSON encoder substitutes and the Config
-// screen renders as a replacement character.
-func TestTheAuditSummaryIsNeverCutMidRune(t *testing.T) {
+// THE CALLER'S OWN WORDS REACH THE HISTORY WHOLE.
+//
+// This was cut at 120 bytes, and it was the only cut on this column: `PUT
+// /config` writes the same field through configapi and bounds it nowhere, so
+// the same sentence survived whole from one writer and was severed from the
+// other. The revision history is what an operator reads at 3am to find the
+// change that broke something, and the clause that says WHY is at the end.
+func TestTheAuditSummaryCarriesTheCallersWordsWhole(t *testing.T) {
 	t.Parallel()
-	// Three bytes per rune, so a byte cut lands inside one for most lengths.
-	got := auditSummary(integration.KindGitHub, strings.Repeat("é", 200))
+	// Multi-byte throughout, because the cut this replaced went through
+	// textcut precisely so it would not leave invalid UTF-8 — so a
+	// replacement that quietly reinstated a byte slice would still have to
+	// fail this.
+	words := strings.Repeat("é", 200) +
+		" because the workspace was migrated and the old app was deleted"
+	got := auditSummary(integration.KindGitHub, words)
 	if !utf8.ValidString(got) {
-		t.Errorf("the summary is not valid UTF-8: %q", got)
+		t.Fatalf("the summary is not valid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, words) {
+		t.Errorf("the summary does not end in what the caller wrote — it is "+
+			"%d bytes against the %d supplied", len(got), len(words))
+	}
+
+	// NEWLINES STILL GO. Folding whitespace earns its place where the
+	// length cut did not: a smuggled newline breaks a line-structured
+	// render, which is a fact about the shape and not about the size.
+	folded := auditSummary(integration.KindGitHub, "rotated\nthe\ttoken")
+	if strings.ContainsAny(folded, "\n\t") {
+		t.Errorf("the summary carries raw whitespace: %q", folded)
 	}
 }

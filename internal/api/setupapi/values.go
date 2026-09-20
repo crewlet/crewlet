@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Reading the document a submission is measured against, and producing the
@@ -171,13 +170,6 @@ func refuseUngated(values map[string]string, reqs []setup.Requirement) error {
 	return nil
 }
 
-// maxSummary bounds a caller's own words in the stored sentence.
-//
-// A short phrase is all this field has ever been: it is rendered inline in the
-// revision list beside the id and the actor, where a longer one would push
-// both off the row.
-const maxSummary = 120
-
 // auditSummary is the sentence stored on the revision.
 //
 // SERVER-GENERATED, and a caller's own text is capped and never trusted to be
@@ -190,13 +182,23 @@ func auditSummary(kind integration.Kind, supplied string) string {
 	if supplied == "" {
 		return base
 	}
-	// Newlines out, length capped. What survives is a short phrase, which
-	// is all this field has ever been.
+	// NEWLINES OUT, LENGTH LEFT ALONE. A smuggled newline genuinely breaks
+	// a line-structured render, so folding whitespace earns its place; the
+	// 120-byte cut beside it did not.
+	//
+	// It was the only cut on this column. `PUT /config` writes the same
+	// field through configapi and bounds it nowhere, so one operator's
+	// three-hundred-character account of a change survived whole and
+	// another's — the same sentence, submitted from the /setup screen —
+	// was severed, with no reason behind the difference. And the history
+	// is what somebody reads at 3am to find the change that broke
+	// something, which is the worst place to keep half a sentence: the
+	// clause that says WHY is at the end of "rotated the Slack bot token
+	// because the workspace was migrated and the old app was deleted".
+	//
+	// The row width the cut was protecting is the renderer's own problem,
+	// and the Config screen already draws configapi's unbounded summaries
+	// with the CSS rule it has for exactly that.
 	supplied = strings.Join(strings.Fields(supplied), " ")
-	// THROUGH textcut, which exists to remove exactly this. A raw
-	// `supplied[:n]` cuts mid-rune whenever a multi-byte character straddles
-	// the boundary, and what is left is invalid UTF-8: the JSON encoder
-	// substitutes it, so the summary stored on the revision and rendered on
-	// the Config screen ends in a replacement character.
-	return base + ": " + textcut.Ellipsis(supplied, maxSummary)
+	return base + ": " + supplied
 }
