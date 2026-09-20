@@ -86,9 +86,25 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigResponseBytes))
+	// +1 SO THE OVERRUN IS VISIBLE, and REFUSED at the cap rather than read
+	// up to it — the rule this client's three siblings in this directory
+	// each write down and this one did not keep. io.LimitReader reports a
+	// clean EOF when it stops, so a clipped answer reached json.Unmarshal as
+	// malformed JSON and was reported as "not the expected JSON": an
+	// activation that LANDED on the node came back looking like a protocol
+	// fault, and the operator re-ran an import that had already succeeded.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigResponseBytes+1))
 	if err != nil {
 		return "", 0, fmt.Errorf("reading the answer from %s: %w", c.base, err)
+	}
+	if len(raw) > maxConfigResponseBytes {
+		return "", 0, fmt.Errorf(
+			"the answer from %s exceeded %d bytes, so it was not read: this "+
+				"build caps one answer to bound a proxy's error page. Check "+
+				"that -api names the engine rather than something in front of "+
+				"it. The revision may still have been activated — run "+
+				"`crewlet config show` before importing again",
+			c.base, maxConfigResponseBytes)
 	}
 	if resp.StatusCode/100 != 2 {
 		return "", 0, c.refusal(resp.StatusCode, raw)
