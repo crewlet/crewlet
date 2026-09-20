@@ -73,8 +73,24 @@ type FusedHit struct {
 // "the" — has a posting list the size of the corpus, and scanning all of it
 // buys nothing: its IDF is near zero, so every one of those documents scores
 // almost the same and the ranking is decided by the query's OTHER terms. The
-// cap turns the pathological query into a bounded one, at the cost of an
-// arbitrary subset of a term that was not discriminating anyway.
+// cap turns the pathological query into a bounded one.
+//
+// WHAT IT DROPS IS THE BOTTOM OF THE LIST, which is the only thing that makes
+// an absolute cap defensible at all. The paragraph above justifies cutting a
+// term that appears in nearly every document, and 5 000 is not that on a
+// large corpus: a term in 5 001 of 100 000 documents has an IDF near 3 and
+// decides the ranking. So the cut cannot be arbitrary, and the read is
+// ORDERED BY THE TERM'S OWN BM25 CONTRIBUTION — see [Indexer.postings] — so
+// what a capped term loses are postings that would have ranked below five
+// thousand others of its own.
+//
+// It was `ORDER BY p.freq DESC`, which is the same thing only when every
+// document is the same length. BM25 divides by length, so raw frequency keeps
+// the LONGEST documents — a 10 000-term runbook mentioning the term five
+// times displaced a 50-term page mentioning it five times, though the page
+// scores an order of magnitude higher. That is ranking by verbosity rather
+// than by coverage, which is the exact failure [textindex.K1] is pinned at
+// 1.2 to avoid, reintroduced underneath it by a LIMIT.
 const maxPostingScan = 5000
 
 // defaultSearchLimit is how many hits a query returns when it says nothing.
@@ -108,7 +124,7 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 
 	scores := map[string]float64{}
 	for _, term := range terms {
-		postings, docs, err := x.postings(ctx, term, q)
+		postings, docs, err := x.postings(ctx, term, q, corpus)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +161,22 @@ func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 // within a scope would make the same word rare in a small space and common in
 // a large one, so a hit's rank would depend on which container it happened to
 // be in rather than on how well it matched.
-func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery) ([]textindex.Posting, int, error) {
+//
+// ORDERED BY THE TERM'S OWN BM25 CONTRIBUTION, which is what makes
+// [maxPostingScan] a cut of the bottom of the list rather than of an
+// arbitrary slice of it. The expression is the ORDER of [textindex.Score] and
+// not the score: `idf` and `K1+1` are constants within one term, and
+// `tf/(tf+K)` is increasing in `tf/K`, so ordering by `tf/K` gives exactly
+// the same sequence with one division instead of three. K is
+// `K1*(1-B+B*len/avg)`, and dropping the constant K1 and the constant avg
+// leaves `freq / ((1-B)*avg + B*length)` — the whole of it, with B bound from
+// [textindex.B] rather than written into the SQL, so the two cannot drift.
+//
+// A DOCUMENT WITH NO RECORDED LENGTH scores as AVERAGE here, exactly as
+// [textindex.Score] treats it: as infinitely short it would sort above
+// everything and take the cap's whole budget.
+func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery,
+	corpus textindex.Corpus) ([]textindex.Posting, int, error) {
 	var total int
 	if err := x.db.SQL().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM kb_postings WHERE term = ?`, term).Scan(&total); err != nil {
@@ -178,14 +209,23 @@ func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery) ([]
 		where = append(where, "d.search_shard >= ? AND d.search_shard < ?")
 		args = append(args, q.Shards.From, q.Shards.To)
 	}
-	args = append(args, maxPostingScan)
+	// The same guard [textindex.Score] applies, for the same reason: an
+	// index whose lengths are all zero would otherwise divide by zero here
+	// and order by nothing at all.
+	avg := corpus.AvgLength
+	if avg <= 0 {
+		avg = 1
+	}
+	args = append(args, textindex.B, avg, textindex.B, avg, maxPostingScan)
 
 	rows, err := x.db.SQL().QueryContext(ctx, `
 		SELECT p.doc_id, p.freq, d.length
 		  FROM kb_postings p
 		  JOIN kb_docs d ON d.id = p.doc_id
 		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY p.freq DESC
+		 ORDER BY p.freq /
+		          ((1 - ?) * ? + ? * (CASE WHEN d.length > 0 THEN d.length ELSE ? END))
+		          DESC, p.doc_id
 		 LIMIT ?`, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search: read postings for %q: %w", term, err)

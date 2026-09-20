@@ -45,6 +45,16 @@ actually the answer. There is no phrase query, no proximity and no query
 language, because the seam deliberately does not have one: an agent writes a
 keyword line and a person types into a box.
 
+One term contributes at most **5 000 documents** to a query. A word in nearly
+every page — the company's own name, or "the" — otherwise makes one query a
+scan of the whole corpus for a term whose weight is near zero, and the
+ranking is decided by the query's other words anyway. What the cap drops is
+the **bottom** of that term's list: the read is ordered by the term's own BM25
+contribution, so a document it leaves out is one that would have ranked below
+five thousand others of its own. Ordering by raw term count instead would keep
+the longest documents, which is the same runbook-over-page inversion the
+length normalisation above exists to prevent, reintroduced underneath it.
+
 ### Semantic search: two stages, no index, no new dependency
 
 Keyword search finds what shares words. Semantic search finds what shares
