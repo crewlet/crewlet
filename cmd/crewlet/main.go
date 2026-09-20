@@ -1234,11 +1234,23 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// Said BEFORE the drain, which can take minutes: this line is what an
 	// operator at a terminal reads to learn what the node is waiting for and
 	// how to stop waiting.
+	//
+	// WHAT THE PROBES SAY IS CONDITIONAL on there being a listener to say it
+	// on. A node with api.port 0 is a real posture (see [serveAPI]'s
+	// api_disabled warning), and promising such an operator a /health that
+	// stays 200 sends them to a refused connection, which is exactly what a
+	// node that died mid-drain looks like — the confusion the rest of this
+	// change exists to remove.
+	probes := "this node binds no HTTP listener, so its drain is visible " +
+		"only in this log"
+	if surface != nil {
+		probes = "/health stays 200, /ready answers 503 and every route " +
+			"that would start new work answers 503"
+	}
 	log.InfoContext(ctx, "engine_draining",
 		"in_flight", e.Backends().Queue.InFlightCount(),
 		"detail", "the turns already running finish before this node stops; "+
-			"until they have, /health stays 200, /ready answers 503 and every "+
-			"route that would start new work answers 503",
+			"until they have, "+probes,
 		"hint", "a second interrupt exits at once, leaving those turns to be "+
 			"redelivered once their ack window elapses")
 
@@ -1319,13 +1331,25 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	log.InfoContext(ctx, "api_stopped")
 }
 
-// apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS.
+// apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS,
+// and CUTS whatever is still running when it expires.
 //
-// Requests, not turns. A REST call is a read against the local store and a
-// webhook is a signature check plus a publish — both are milliseconds — so this
-// only ever covers a client that stopped reading its own response. The turns
-// are the engine's drain to wait for, and that one is bounded by the process
-// supervisor rather than by a constant here.
+// Requests, not turns: the turns are the drain's to wait for, and that one is
+// bounded by the process supervisor rather than by a constant here. Five
+// seconds is sized for what a REST read or a webhook's signature-check-plus-
+// publish takes, which is milliseconds, so on an ordinary shutdown this is
+// spent only by a client that stopped reading its own response.
+//
+// IT IS NOT AN UPPER BOUND ON EVERY REQUEST THIS LISTENER CAN BE HOLDING, and
+// the exception is deliberate on both sides. The drain keeps serving
+// [mcpbridge.PathPrefix], whose sessions carry NO idle timeout on purpose (see
+// [mcpbridge.Bridge.Handler]) because a coding agent legitimately goes quiet
+// for as long as a build takes. A node stopped while such a session is open
+// therefore spends the whole grace here and logs api_shutdown_failed, and that
+// is the honest outcome rather than a fault: the run is one this process will
+// never resume, its record is in the fleet's coordination store, and the
+// alternative — a listener held open for a build — is the thing the grace
+// exists to stop.
 const apiShutdownGrace = 5 * time.Second
 
 // companyConfig is the engine's CURRENT company document, or nil.
