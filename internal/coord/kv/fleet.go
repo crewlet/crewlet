@@ -197,6 +197,22 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// sends an operator to the wrong subsystem.
 		return nil, createErr
 	}
+	if jsprovision.NoApplicableLimit(createErr) {
+		// NO LIMIT APPLIES TO THIS BUCKET AT ALL, which is not the arm
+		// above wearing another code: that one is a ceiling that does
+		// not fit inside a limit, and this is an account that states no
+		// limit to fit into. A bucket declares no ceiling of its own,
+		// so it is the clearest case of the two being different — there
+		// is no number here to make smaller.
+		//
+		// TERMINAL AND NOT READ BACK for the same reason as the arm
+		// above, and it matters more here: unclassified, this refusal
+		// fell through and reported a bucket that is "not there", which
+		// of everything on a boot path is the sentence most likely to
+		// be read as corruption.
+		return nil, fmt.Errorf("%w%s", createErr,
+			jsprovision.NoApplicableLimitDetail(cfg.Replicas))
+	}
 	if jsprovision.Unplaceable(createErr) {
 		// STILL FORMING, and it stayed that way for the whole budget,
 		// which createKeyValue has already waited out — re-asking every

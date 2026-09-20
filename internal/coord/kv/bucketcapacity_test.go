@@ -209,3 +209,67 @@ func TestAPlacementRefusalIsRetriedAndThenReportedWithoutAReadBack(t *testing.T)
 			"and it was not waited on at all", got)
 	}
 }
+
+// A BUCKET THE ACCOUNT HAS NO LIMIT FOR NAMES THE CLASS, AND IS NOT A MISSING
+// BUCKET EITHER.
+//
+// # A third refusal, and it was the one nothing classified
+//
+// `no JetStream default or applicable tiered limit present` (10120) is the
+// broker answering that the account's limits are TIERED and carry none for the
+// replica class `stream.replicas` puts this node in. It is decided before a
+// byte is compared, so it is not the arm above wearing another code: a bucket
+// declares no ceiling at all, which makes it the clearest case of the two being
+// different — there is nothing here to make smaller.
+//
+// Unclassified it matched neither [jsprovision.OutOfCapacity] nor
+// [jsprovision.Unplaceable] and fell through to [jsprovision.Settle], which
+// spent its window asking after a bucket nobody made and reported one that is
+// "not there". Of everything a boot path can say about the store that holds the
+// fleet's leases and this company's secrets, that is the sentence most likely
+// to be read as corruption.
+func TestABucketWithNoApplicableLimitNamesTheClassAndIsNotAMissingBucket(t *testing.T) {
+	t.Parallel()
+	refusal := &jetstream.APIError{ErrorCode: 10120, Code: 400,
+		Description: "no JetStream default or applicable tiered limit present"}
+	js := refusingBroker(t, refusal)
+
+	started := time.Now()
+	bucket, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
+		Bucket: "t_nolimit", TTL: time.Minute, Replicas: 3,
+	})
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("a bucket the account carries no limit for was reported as " +
+			"opened")
+	}
+	if bucket != nil {
+		t.Error("a handle was returned beside the refusal, and nothing was " +
+			"placed for it to name")
+	}
+	if !errors.Is(err, refusal) {
+		t.Errorf("the refusal is not the broker's own:\n%v", err)
+	}
+	for _, needle := range []string{"R3", "stream.replicas"} {
+		if !strings.Contains(err.Error(), needle) {
+			t.Errorf("the refusal does not mention %q, so an operator gets "+
+				"the broker's bare text and nothing to move:\n%v", needle, err)
+		}
+	}
+	if strings.Contains(err.Error(), "it is not there") {
+		t.Errorf("the refusal was read back, so an account with no applicable "+
+			"limit is reported as a bucket that does not exist:\n%v", err)
+	}
+	// ATTEMPTED ONCE AND ANSWERED AT ONCE. A limit table is not changed by
+	// a member arriving, so neither the placement retry nor the capacity
+	// grace has anything to wait for here.
+	if got := js.creates.Load(); got != 1 {
+		t.Errorf("the create was issued %d times", got)
+	}
+	if elapsed >= jsprovision.ReadBack {
+		t.Errorf("the refusal took %v, which is at least the read-back "+
+			"window — a terminal answer spent time asking after an object "+
+			"nobody made", elapsed)
+	}
+}

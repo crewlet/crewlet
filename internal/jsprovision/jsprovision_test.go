@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1091,5 +1092,109 @@ func TestNeitherRefusalPredicateFiresOnAnOrdinaryError(t *testing.T) {
 		if Unplaceable(err) {
 			t.Errorf("%v was read as a cluster still forming", err)
 		}
+	}
+}
+
+// A CREATE REFUSED FOR HAVING NO APPLICABLE LIMIT IS ITS OWN FACT.
+//
+// # What it was, unclassified
+//
+// 10120 matched neither [OutOfCapacity] nor [Unplaceable], so every create path
+// fell through to the read-back it keeps for a peer that won the race: it spent
+// [ReadBack] asking after an object the broker had just refused to make, found
+// nothing, and appended `(and it is not there: stream not found)` to the one
+// sentence that said what was actually wrong. An operator reading that goes
+// looking for a missing stream on a cluster whose account never carried a limit
+// for it.
+//
+// # And why it is not a third arm of OutOfCapacity
+//
+// Because the remedy differs. OutOfCapacity means the ceiling asked for does
+// not fit inside a limit that exists, and its sentence names that limit, what
+// is already reserved against it and `stream.store_max_bytes`. Here there is no
+// limit at all: the account's are tiered and it carries none for this node's
+// replica class, so those three numbers do not exist and the lever is
+// `stream.replicas` or the account's own tier declarations. Folded in, the
+// refusal would offer a field that changes nothing.
+func TestACreateWithNoApplicableLimitIsClassifiedOnItsOwn(t *testing.T) {
+	t.Parallel()
+	refusal := &jetstream.APIError{ErrorCode: errCodeNoLimits, Code: 400,
+		Description: "no JetStream default or applicable tiered limit present"}
+
+	if !NoApplicableLimit(refusal) {
+		t.Fatal("the refusal is not recognised, so it reaches a caller's " +
+			"read-back and is reported as an object that is not there")
+	}
+	// WRAPPED, because that is how it arrives: the caller adds the object's
+	// name before anything sees it.
+	if !NoApplicableLimit(errors.Join(
+		errors.New("ensure stream CREWLET_PAGES_LOG"), refusal)) {
+		t.Fatal("a wrapped refusal is not recognised")
+	}
+
+	// DISJOINT FROM EVERY OTHER ANSWER THIS PATH CLASSIFIES. Each has its
+	// own remedy, and an error matching two takes whichever branch was
+	// written first.
+	for name, matched := range map[string]bool{
+		"OutOfCapacity": OutOfCapacity(refusal),
+		"Unplaceable":   Unplaceable(refusal),
+		"NotYetVisible": NotYetVisible(refusal),
+		"Unanswered":    Unanswered(context.Background(), refusal),
+	} {
+		if matched {
+			t.Errorf("the refusal is also %s, so it is answered with that "+
+				"condition's remedy — and a limit table is not freed by "+
+				"waiting, not fitted into by a smaller ceiling, and not "+
+				"about to become visible", name)
+		}
+	}
+
+	// AND NOTHING ELSE IS IT.
+	for _, err := range []error{
+		nil,
+		errors.New("connection refused"),
+		&jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400,
+			Description: "no suitable peers for placement, insufficient storage"},
+		&jetstream.APIError{ErrorCode: errCodeOutOfStore, Code: 500,
+			Description: "insufficient storage resources available"},
+		&jetstream.APIError{ErrorCode: jetstream.JSErrCodeStreamNotFound, Code: 404},
+	} {
+		if NoApplicableLimit(err) {
+			t.Errorf("%v was read as an account with no applicable limit, "+
+				"which sends an operator to `stream.replicas` over something "+
+				"else entirely", err)
+		}
+	}
+}
+
+// AND THE CLAUSE NAMES THE CLASS AND THE TWO LEVERS, AND NOT THE ONE THAT WOULD
+// BE WRONG.
+//
+// The broker's own words are `no JetStream default or applicable tiered limit
+// present`: no class, no field, and nothing to do about it. What an operator
+// needs is which replica class was asked for — the account's limits are
+// per-class and this node's number is `stream.replicas` — and that the two
+// things that move are that field and the account's declarations. What they
+// must NOT be offered is `stream.store_max_bytes`, which bounds an embedded
+// broker and is read by nobody on the topology this refusal comes from.
+func TestTheNoApplicableLimitClauseNamesTheClassAndNotTheCapacityLever(t *testing.T) {
+	t.Parallel()
+	got := NoApplicableLimitDetail(3)
+	for _, needle := range []string{"R3", "stream.replicas", "TIERED"} {
+		if !strings.Contains(got, needle) {
+			t.Errorf("the clause does not mention %q:\n%s", needle, got)
+		}
+	}
+	if strings.Contains(got, "store_max_bytes") {
+		t.Errorf("the clause offers the capacity lever, which bounds an "+
+			"embedded broker and is read by nobody on the external cluster "+
+			"this refusal comes from:\n%s", got)
+	}
+	// A ZERO IS ONE REPLICA, the way the server reads it when it picks the
+	// tier (server/jetstream.go, tierName) — so the class named here is the
+	// class the refusal was decided against.
+	if zero := NoApplicableLimitDetail(0); !strings.Contains(zero, "R1") {
+		t.Errorf("an unset replica count named a class the server never "+
+			"looks up:\n%s", zero)
 	}
 }

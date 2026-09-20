@@ -213,7 +213,20 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 					"provisioning deadline")
 		})
 		stop()
-		if err != nil && !jsprovision.Unplaceable(err) {
+		if jsprovision.NoApplicableLimit(err) {
+			// NO LIMIT APPLIES TO THIS CONSUMER AT ALL, which is not
+			// a peer having won the race and never becomes one: the
+			// account's limits are tiered and carry none for the class
+			// `stream.replicas` puts this node in, so the broker
+			// refused before it looked at anything else
+			// (server/consumer.go, acc.selectLimits). Read back like
+			// any other create error it came back as a consumer that
+			// is "not there", which reads as a state-log reader this
+			// node lost rather than as an account with no limit for
+			// it.
+			err = fmt.Errorf("%w%s", err,
+				jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
+		} else if err != nil && !jsprovision.Unplaceable(err) {
 			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
 			// the consumer this create met is one THIS NODE made on an
 			// earlier boot and has not been told about yet — the name

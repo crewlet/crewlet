@@ -55,6 +55,7 @@ package jsprovision
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -675,6 +676,96 @@ const (
 	errCodeOutOfStore  jetstream.ErrorCode = 10047
 	errCodeOutOfMemory jetstream.ErrorCode = 10028
 )
+
+// errCodeNoLimits is JetStream's "no JetStream default or applicable tiered
+// limit present", a NUMBER for [errCodeNoPeers]'s reason.
+//
+// It is the one refusal in this family that is about the LIMIT TABLE rather
+// than about a quantity: the server resolves an object's limits through
+// jsAccount.selectLimits, which answers not-ok when the account carries
+// neither a default limit nor one for this object's replica class, and every
+// create path returns this code at that point — before it compares a byte
+// (server/stream.go and server/jetstream_cluster.go for a stream,
+// server/consumer.go for a consumer, in the pinned nats-server).
+const errCodeNoLimits jetstream.ErrorCode = 10120
+
+// NoApplicableLimit reports a create the broker refused because NO LIMIT IN
+// THE ACCOUNT APPLIES TO IT AT ALL.
+//
+// # Why it needs a predicate of its own, beside [OutOfCapacity]
+//
+// Because it is terminal in the same way and remedied in a different one, and
+// a caller that cannot tell them apart sends an operator to the wrong lever.
+// OutOfCapacity means the ceiling asked for does not fit inside a limit that
+// exists: what moves is the limit, or what is already reserved against it.
+// This means the account states no limit that COULD be fitted into — its
+// limits are tiered and it carries none for the replica class this node's
+// objects land in — so nothing here fits by being made smaller. What moves is
+// `stream.replicas`, or the account's own tier declarations.
+//
+// Folded in as a third arm of OutOfCapacity it would have inherited that
+// refusal's sentence, which names a limit, a usage and
+// `stream.store_max_bytes`: three numbers and a field that do not exist on
+// this account, offered as the thing to change.
+//
+// # And unclassified it was reported as an object that is not there
+//
+// Which is what it was. Neither OutOfCapacity nor [Unplaceable] matched, so
+// every create path fell through to its read-back, spent [ReadBack] asking
+// after an object the broker had refused to make, and appended `(and it is not
+// there: stream not found)` to the one sentence that said what was actually
+// wrong. An operator reading that goes looking for a missing stream on a
+// cluster whose account never carried a limit for it.
+//
+// TERMINAL, and never waited out: no member arriving changes a limit table, so
+// unlike [Unplaceable] there is nothing here for the placement retry to wait
+// for.
+func NoApplicableLimit(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == errCodeNoLimits
+}
+
+// NoApplicableLimitDetail is the clause a caller attaches to that refusal, in
+// the shape [Unplaceable]'s and [OutOfCapacity]'s callers already use: a
+// leading-space sentence appended to the broker's own words.
+//
+// ONE WORDING FOR FOUR CALLERS — the stream create, the bucket create and the
+// two consumer creates — because the remedy is the same at each and the server
+// makes no distinction between them either. Written per caller it would drift
+// the way every other pair in this tree has.
+//
+// IT NAMES THE CLASS RATHER THAN THE OBJECT, because the class is the whole
+// fact: the account's limits are per replica class and this node's number is
+// `stream.replicas`. replicas is normalised the way the server normalises it
+// (server/jetstream.go, tierName reads 0 as 1), so the class named here is the
+// class the refusal was decided against.
+//
+// It states that the account IS tiered rather than guessing: selectLimits can
+// only answer not-ok when there is no default limit, and an account with no
+// limits at all is not a shape the server permits — EnableJetStream installs
+// defaultJSAccountTiers for one. It also says an embedded broker never answers
+// this, because that is the first thing a reader will wonder and the answer
+// saves them looking at Tier A for a field that is not the lever.
+//
+// A TIER THAT IS THERE AND CARRIES NO LIMIT reaches this same refusal, which
+// is why the sentence says "carries none for" rather than "declares no tier
+// for": the account's report lists every class it holds objects in, and
+// [internal/queue/jetstream]'s budget tells the two apart for the operator who
+// reads it there.
+func NoApplicableLimitDetail(replicas int) string {
+	if replicas < 1 {
+		replicas = 1
+	}
+	return fmt.Sprintf(" — this account's storage limits are TIERED and it "+
+		"carries none for R%d, which is the replica class `stream.replicas` "+
+		"puts this node's streams, consumers and buckets in. The broker "+
+		"refuses every create in this state before it compares a byte, so "+
+		"nothing here fits by being made smaller: set `stream.replicas` to a "+
+		"class the account carries a limit for, or have whoever runs that "+
+		"cluster declare one for R%d. An embedded broker never answers this — "+
+		"the account is an external cluster's, and its limits are its "+
+		"operator's", replicas, replicas)
+}
 
 // OutOfCapacity reports a create the broker refused because the byte ceiling
 // asked for does not fit inside the storage limit in force.

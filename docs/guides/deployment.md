@@ -511,6 +511,14 @@ the tier that is already there. A tier declared **unlimited** is neither: it
 states its limit as a negative, the broker creates against it, and the engine
 sizes from its own free disk as it does for any broker that states no limit.
 
+Every create the broker refuses that way **names the class and the levers
+too**. The engine classifies that refusal rather than reading it as the stream,
+consumer or bucket having failed to appear, so what a stalled boot says is the
+class the account carries no limit for and what to move — not `(and it is not
+there: stream not found)` appended to the broker's bare text. Both shapes read
+the same way there, because the broker resolves them through the same table and
+refuses both before it compares a byte.
+
 ---
 
 ## Running the Engine + API
