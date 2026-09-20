@@ -1638,8 +1638,16 @@
 .int-seat-form[open] > .int-seat-summary::before {
   transform: rotate(90deg);
 }
+/* A HOVER IS AN INTERACTION STATE, so it takes the interaction token rather
+   than a structural rung. It used to reach for the rung above the page, which
+   worked only while `.int-seat-form` stood on the page itself; the form is on
+   the raised rung now (it opens inside a modal, and a modal paints the panel
+   one), so naming that same rung here drew the summary in its own parent's
+   colour and the block lost its hover affordance entirely. `--surface-hover`
+   is a translucent overlay, so it lifts whatever it lands on — which is what
+   every other hover in the product already uses. */
 .int-seat-summary:hover {
-  background: var(--surface-raised);
+  background: var(--surface-hover);
 }
 /* The badge sits at the far end, so a column of blocks reads down its right
    edge as a list of what is left to do. */

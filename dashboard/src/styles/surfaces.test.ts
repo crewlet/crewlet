@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +41,12 @@ const STYLES = fileURLToPath(new URL(".", import.meta.url));
 const require_ = createRequire(import.meta.url);
 
 const sheet = (name: string) => readFileSync(join(STYLES, name), "utf8");
+
+/** Every stylesheet in the tree, for the cases that scan rather than look up. */
+const sheets = (): [string, string][] =>
+  readdirSync(STYLES)
+    .filter((f) => f.endsWith(".css"))
+    .map((f) => [f, sheet(f)] as [string, string]);
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function block(css: string, selector: string): string {
@@ -182,6 +188,49 @@ describe("a screen's tint against the ground it lands on", () => {
         hex(resolved(values, alias, CARD_GROUND)),
       );
     }
+  });
+
+  // AN INTERACTION STATE IS NOT A RUNG.
+  //
+  // The structural rungs are opaque and say where a box STANDS; `--surface-
+  // hover`, `--surface-active` and `--surface-inset` are translucent overlays
+  // and say what is happening TO it. An overlay lifts whatever it lands on, so
+  // it is correct wherever the element sits; a rung is correct only against
+  // the one ground it was chosen for, and it draws nothing the day that ground
+  // moves.
+  //
+  // Which is exactly what happened: `.int-seat-summary:hover` painted the rung
+  // above the page, which worked while `.int-seat-form` stood on the page —
+  // and the form moved to the raised rung (it opens inside a modal, and a
+  // modal paints the panel one), so the summary's hover became its own
+  // parent's colour and the block lost its hover affordance with nothing in
+  // the diff to read.
+  test("no interaction state paints a structural rung", () => {
+    const RUNGS = ["--bg", "--surface-panel", "--surface-raised"];
+    const STATES = /:hover|:focus|:active/;
+    const offenders: string[] = [];
+    let states = 0;
+    for (const [file, css] of sheets()) {
+      const bare = css.replace(/\/\*[\s\S]*?\*\//g, " ");
+      for (const m of bare.matchAll(/(^|\})\s*([^{}]*)\{([^{}]*)\}/gm)) {
+        const selector = m[2]!.trim().replace(/\s+/g, " ");
+        if (!STATES.test(selector)) continue;
+        const paint = /background(?:-color)?:\s*var\((--[\w-]+)\)/.exec(m[3]!);
+        if (!paint) continue;
+        states += 1;
+        if (RUNGS.includes(paint[1]!)) offenders.push(`${file} ${selector} -> ${paint[1]}`);
+      }
+    }
+    // A VACUITY FLOOR: a scan that matched no interaction state at all would
+    // pass this perfectly while checking nothing.
+    expect(
+      states,
+      "no :hover/:focus rule paints anything, so this checked nothing",
+    ).toBeGreaterThan(5);
+    expect(
+      offenders,
+      "an overlay lifts any ground; a rung only lifts the one it was picked for",
+    ).toEqual([]);
   });
 
   // A VACUITY FLOOR, the house idiom: an empty resolve satisfies the first case
