@@ -208,7 +208,13 @@ function adminCrumbs(rest: string[], labels: Labels): Crumb[] {
     return [
       ...trail,
       { label: "Revisions", path: ["admin", "config", "revisions"] },
-      { label: named(labels, tail[1]), mono: true },
+      // MONO ONLY WHILE IT IS THE ID. This branch asserted the mono face
+      // unconditionally, from when nothing published a label for a revision
+      // and the crumb could only ever be the raw id. The config screen
+      // publishes the revision's own summary now, and a sentence set in the
+      // mono face reads as a value rather than as prose — which is the rule
+      // every other branch here already follows.
+      { label: named(labels, tail[1]), mono: !labels[tail[1]] },
     ];
   }
   // TWO SEGMENTS ONLY, because that is what the route discriminates on: one

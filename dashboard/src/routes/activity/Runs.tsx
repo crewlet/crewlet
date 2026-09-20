@@ -40,6 +40,7 @@ import {
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -150,6 +151,17 @@ export function mergeRuns(durable: SandboxRun[], live: SandboxEntry[]): SandboxR
   return [...byTurn.values()].sort(
     (a, b) => tsKey(b.updated_at || b.started_at) - tsKey(a.updated_at || a.started_at),
   );
+}
+
+/**
+ * What to call one coding run in a header, which always needs a word in the
+ * slot — the page's and the peek's alike, so the two cannot drift.
+ *
+ * The placeholder is deliberately NOT what this screen publishes as the run's
+ * label: see the `usePageLabels` call below.
+ */
+function runTitle(run: SandboxRun): string {
+  return run.task_description || "No task was recorded";
 }
 
 /**
@@ -339,7 +351,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
               kind="Coding run"
               icon="terminal"
               identifier={run.turn_id.slice(0, 8)}
-              title={run.task_description || "No task was recorded"}
+              title={runTitle(run)}
               status={<RunStatus status={run.status} />}
               facts={runFacts(run)}
             />
@@ -442,6 +454,16 @@ export function Runs({ runId }: { runId?: string }) {
   );
 
   const detail = rows.find((r) => r.turn_id === selected) ?? null;
+  // WHAT THE RUN IS CALLED, for the breadcrumb, the browser tab and the
+  // palette's recents — all of which read the one label a screen publishes and
+  // fall back to the raw path segment otherwise, which here is the turn's
+  // uuid. THE TASK ONLY, never the header's "No task was recorded": that
+  // placeholder is a sentence about the absence of a name, and two runs
+  // wearing it are two identical recents rows going to different runs. The id
+  // at least tells them apart.
+  usePageLabels(
+    selected && detail?.task_description ? { [selected]: detail.task_description } : {},
+  );
   const waiting = rows.filter((r) => AWAITING.includes(r.status)).length;
   const running = rows.filter((r) => r.status === "running").length;
 
@@ -621,7 +643,7 @@ export function Runs({ runId }: { runId?: string }) {
             kind="Coding run"
             icon="terminal"
             identifier={detail.turn_id.slice(0, 8)}
-            title={detail.task_description || "No task was recorded"}
+            title={runTitle(detail)}
             status={<RunStatus status={detail.status} />}
             facts={runFacts(detail)}
             actions={

@@ -31,6 +31,7 @@ import { QueryState, Section } from "~/components/common.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -63,6 +64,19 @@ function useSeatName(): (handle: string) => string {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   return useCallback((handle: string) => index.byHandle.get(handle)?.name || handle, [index]);
+}
+
+/**
+ * What an A2A channel is called: who asked whom.
+ *
+ * ONE FUNCTION for the page's header, the peek's and the label this screen
+ * publishes, because a channel wearing two spellings of its own name in two
+ * places is how the third one goes wrong. SEAT NAMES rather than handles, with
+ * `seatName`'s own fallback behind them, so an unresolved roster degrades to
+ * `alice → bob` rather than to an arrow with nothing either side of it.
+ */
+function channelTitle(channel: A2AChannel, seatName: (handle: string) => string): string {
+  return `${seatName(channel.requester)} → ${seatName(channel.target)}`;
 }
 
 /** Open or closed — the only predicate a channel has. */
@@ -312,7 +326,7 @@ export function ChannelPeek({ id }: { id: string }) {
               kind="A2A channel"
               icon="link"
               identifier={channel.id}
-              title={`${seatName(channel.requester)} → ${seatName(channel.target)}`}
+              title={channelTitle(channel, seatName)}
               status={<ChannelState channel={channel} />}
               facts={channelFacts(channel, seatName, now)}
             />
@@ -362,6 +376,12 @@ export function Conversations({ channelId }: { channelId?: string }) {
   );
 
   const addressedChannel = rows.find((c) => c.id === addressed) ?? null;
+  // AND THAT NAME IS THE CHANNEL'S EVERYWHERE, not just in the header below.
+  // The breadcrumb, the browser tab and the palette's recents read the one
+  // label a screen publishes and otherwise show the raw path segment — a
+  // channel uuid, which says neither who nor what.
+  const channelName = addressedChannel ? channelTitle(addressedChannel, seatName) : "";
+  usePageLabels(addressed && channelName ? { [addressed]: channelName } : {});
 
   return (
     <>
@@ -489,7 +509,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
             kind="A2A channel"
             icon="link"
             identifier={addressedChannel.id}
-            title={`${seatName(addressedChannel.requester)} → ${seatName(addressedChannel.target)}`}
+            title={channelName}
             status={<ChannelState channel={addressedChannel} />}
             facts={channelFacts(addressedChannel, seatName, now)}
           />

@@ -50,6 +50,7 @@ import { QueryState } from "~/components/common.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -519,6 +520,13 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
   const addressed = revisionPath
     ? (rows.find((r) => r.revision_id === revisionPath) ?? null)
     : null;
+  // WHAT THE REVISION IS CALLED, for the breadcrumb, the browser tab and the
+  // palette's recents — all of which read the one label a screen publishes and
+  // otherwise show the raw path segment, which here is a revision id. THE
+  // SUMMARY ONLY, never the header's "No summary was written": a header needs
+  // a word in the slot and a recents row needs to name one revision, and two
+  // rows reading "No summary was written" name none.
+  usePageLabels(revisionPath && addressed?.summary ? { [revisionPath]: addressed.summary } : {});
 
   return (
     <>

@@ -116,6 +116,7 @@ import {
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -472,22 +473,41 @@ export function lead(prose: string): string {
 }
 
 /**
- * What to call one turn.
+ * What this turn is called — or the empty string, where nothing has named it.
  *
- * A TURN HAS NO NAME, so the title is the nearest thing it has to one: the
- * LEAD of the plan summary the executor or the reviewer wrote about what this
- * turn was for. That is also what the turns list puts in its "What it did"
- * column — `Turn.Summary` at the store IS `plan_summary` — so a reader who
- * opened a rail from a row is headed by the sentence they clicked on.
+ * A TURN HAS NO NAME, so this is the nearest thing it has to one: the LEAD of
+ * the plan summary the executor or the reviewer wrote about what this turn was
+ * for. That is also what the turns list puts in its "What it did" column —
+ * `Turn.Summary` at the store IS `plan_summary` — so a reader who opened a
+ * rail from a row is headed by the sentence they clicked on.
  *
  * It falls back to what WOKE the turn, because a turn that has not finished
- * has no plan summary yet and "Turn" over a turn is the eyebrow twice. That
- * fallback is led too: a vendor summariser's sentence is no more bounded than
- * a model's. The panel below drops whichever sentence the title took, and
- * prints what the lead left behind — see [TurnBrief].
+ * has no plan summary yet. That fallback is led too: a vendor summariser's
+ * sentence is no more bounded than a model's. The panel below drops whichever
+ * sentence the title took, and prints what the lead left behind — see
+ * [TurnBrief].
+ *
+ * EMPTY RATHER THAN A PLACEHOLDER, because the two readers of this want
+ * different things from the unnamed case. A header needs a word in the slot,
+ * and [turnTitle] supplies it. The BREADCRUMB needs to know there is no name,
+ * so that it can go on showing the id: "Turn" in the trail names no particular
+ * turn, and two of them in the palette's recents are two identical rows
+ * pointing at different places — strictly worse than the two uuids they
+ * replaced, which at least told them apart.
+ */
+export function turnName(view: TurnView): string {
+  return lead(str(view.rec.learning, "plan_summary") || wokeBy(view));
+}
+
+/**
+ * What to call one turn in a header, which always needs a word in the slot.
+ *
+ * "Turn" over a turn is the eyebrow twice, and that is what makes it a last
+ * resort rather than a fallback anything should reach for: it is what a turn
+ * nothing has said a word about yet is headed with, and nothing else.
  */
 export function turnTitle(view: TurnView): string {
-  return lead(str(view.rec.learning, "plan_summary") || wokeBy(view)) || "Turn";
+  return turnName(view) || "Turn";
 }
 
 /**
@@ -925,6 +945,21 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   );
   // The other half of the `given` band, and until now the half nothing read.
   const weights = useMemo(() => promptWeights(story.given), [story]);
+
+  // THE BREADCRUMB, THE BROWSER TAB AND THE PALETTE'S RECENTS, which all read
+  // the one label a screen publishes and otherwise fall back to the raw path
+  // segment — for a turn, its uuid. The page has had a name for this object
+  // all along and simply never said so, which is why a reader's recents read
+  // as three identical-looking hex strings.
+  //
+  // THE SCREEN'S OWN TITLE, never re-derived: `Recent.label` is documented as
+  // the label the screen showed, so what the header renders and what the
+  // palette offers are the same string by construction. The CSS bounds it —
+  // `.crumb-here` ellipsises and the palette row clamps — so a long lead
+  // sentence is cut where it is drawn rather than cut here, once, in a length
+  // nobody could defend.
+  const name = turnName(view);
+  usePageLabels(name ? { [turnId]: name } : {});
 
   const title = turnTitle(view);
   const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
