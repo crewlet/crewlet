@@ -483,14 +483,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     same revert on the completion route puts a run back to a box that
 	//     is still working. See [sandbox.Coordinator.revertClaim].
 	//
-	//     THE MESSAGE ITSELF IS REQUEUED, not spent. The offer reports
-	//     [sandbox.AnswerDeferred] — the run is awaiting THIS answer again —
-	//     so the dispatcher requeues the delivery instead of letting it be
-	//     run as the ordinary chat message it looks like, and the next
-	//     attempt raises its own indicator off its own trigger. It used to
-	//     fall through, which answered the person with a turn rather than
-	//     with the coding run they were replying to and left that run
-	//     waiting for a further message. See [Dispatcher.answered].
+	//     THE MESSAGE ITSELF IS HANDED BACK, not spent. The offer reports
+	//     [sandbox.AnswerDeferred] — the run is awaiting THIS answer again
+	//     — so the dispatcher NAKs the delivery instead of letting it be
+	//     run as the ordinary chat message it looks like, and the
+	//     redelivery, once the queue's backoff has passed, raises its own
+	//     indicator off its own trigger. It used to fall through, which
+	//     answered the person with a turn rather than with the coding run
+	//     they were replying to and left that run waiting for a further
+	//     message. See [Dispatcher.answered].
 	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
@@ -619,11 +620,27 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// coming back for this turn.
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
-		// Reverted, so the turn is not over: a completion comes round
-		// again — from a peer or from this node's next delivery — and an
-		// answer-driven resume goes back to awaiting the person who sent
-		// it, for the conversation's next message rather than for a
-		// redelivery of this one.
+		// Reverted, so the turn is not over — and BOTH ROUTES BRING THIS
+		// SAME DELIVERY BACK rather than wait for a further one.
+		//
+		// A BOX'S COMPLETION is NAK'd by the seat's control-topic handler
+		// and redelivered on the broker's own backoff, to this node once
+		// it recovers or to the seat's next owner, until its delivery
+		// budget is spent.
+		//
+		// A PERSON'S ANSWER takes the same return for the same reason:
+		// the offer reports [sandbox.AnswerDeferred] — the run is awaiting
+		// THIS reply again — so the dispatcher hands the delivery back
+		// with a NAK rather than letting it be the ordinary chat message
+		// it looks like, bounded by [sandbox.MaxAnswerAttempts] and by the
+		// run's own pause_ttl_seconds and let go to the ordinary route
+		// past either. This comment used to say the resume went back to
+		// awaiting the person "for the conversation's next message rather
+		// than for a redelivery of this one", which described the defect
+		// rather than the design: the reply that carried the answer was
+		// spent on an unrelated turn while the run that asked waited out
+		// its pause TTL for a message that may never come.
+		//
 		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
 		// same retry rule reached one step later, over the same revert.
 		working = rejoined
