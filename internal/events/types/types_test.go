@@ -242,6 +242,139 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 	}
 }
 
+// wireTags is the OTHER HALF OF THE WIRE CONTRACT: the exact JSON keys each
+// registered type publishes. `wireTypes` above pins the type strings, and
+// nothing pinned the keys — so a renamed tag was as green as a comment
+// change, which is exactly how `prompt.size` lost `system_chars`/`user_chars`
+// to a tidier spelling for the length of one review cycle.
+//
+// A KEY IS A PEER CONTRACT, AND A RENAME IS A SILENT DELETE. ADR-0006 is
+// additive-only and binds before any release, because a rolling upgrade runs
+// in both directions at once: a renamed tag is a dropped field on whichever
+// half has not upgraded, and every row already written keeps the old key
+// forever. The failure has no symptom a reviewer can see — the build is
+// green, the tests pass, and a reader of the dashboard gets a confidently
+// wrong `0` where the payload used to answer.
+//
+// GOLDEN, NOT DERIVED. Computing the expected keys from the struct is a test
+// that asserts the code equals itself; the whole value here is that the
+// literal strings live in a file a rename has to edit, in a diff a reviewer
+// reads. An ADDITIVE change — a genuinely new field — edits one line here and
+// that friction is the feature. A rename edits one too, and then has to argue
+// for it.
+//
+// Sorted per type, because the comparison is against sorted marshalled keys.
+var wireTags = map[string][]string{
+	"org_started":                     {"org_name"},
+	"org_stopped":                     {"org_name"},
+	"agent_spawned":                   {"agent_id", "role"},
+	"agent_terminated":                {"agent_id", "reason", "role"},
+	"config_revision_activated":       {"created_by", "revision_id", "revision_summary"},
+	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
+	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
+	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},
+	"external_notification":           {"addressed", "agent_id", "body", "context_requires_recon", "messages", "metadata", "notification_source", "recipient_email", "salient_body", "sender", "source_event_type", "subject"},
+	"turn_trigger_skipped":            {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
+	"notifications_coalesced":         {"agent_handle", "conversation_key", "count", "first_at", "last_at", "notification_source"},
+	"notification_skipped":            {"handle", "notification_source", "reason"},
+	"a2a_request":                     {"channel_id", "content", "requester", "sender_role"},
+	"a2a_message":                     {"channel_id", "content", "question", "sender", "sender_role"},
+	"a2a_channel_opened":              {"channel_id", "participants", "requester", "target"},
+	"a2a_message_sent":                {"channel_id", "content", "message_id", "recipient", "sender", "sender_role"},
+	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants"},
+	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "role", "used_tokens"},
+	"budget_reported":                 {"agents", "meter_id", "org_max_tokens", "org_used_tokens", "seq"},
+	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id"},
+	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id"},
+	"agent_turn_completed":            {"a2a_context", "agent_id", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "plan_model", "prompt", "prompt_messages", "response", "review_model", "role", "subagent_count", "subagent_tokens", "tool_executions", "total_tokens", "trigger", "turn_id"},
+	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_decision", "plan_summary", "plan_tool_sequence", "review_outcome", "role", "skills_used", "started_at", "task_id", "task_summary", "tool_sequence", "turn_id"},
+	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id"},
+	"agent_phase_completed":           {"agent_id", "backend", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "input_tokens", "iteration", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_narration", "rounds_used", "sandbox_id", "system_prompt", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "worker"},
+	"agent_turn_progress":             {"a2a_context", "agent_id", "input_tokens", "iteration", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_narration", "round_num", "tool_executions", "total_tokens", "trigger", "turn_id"},
+	"subagent_batched":                {"failures", "graph", "parent_handle", "statuses", "successes", "task_count", "total_tokens"},
+	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id"},
+	"persist_decider_completed":       {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id"},
+	"skill_used":                      {"agent_handle", "agent_id", "file_loaded", "role", "skill_id", "skill_name", "source_kind", "turn_id"},
+	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "episode_recall_bytes", "episode_recall_hit", "onboarding_hint_bytes", "onboarding_hint_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "synthesized_skills_bytes", "synthesized_skills_hit", "trigger_requires_recon", "turn_id"},
+	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id"},
+	"skill_synthesized":               {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id"},
+	"skill_refined":                   {"agent_handle", "agent_id", "refinement_kind", "role", "skill_id", "skill_name", "skill_version", "turn_id"},
+	"skill_promoted":                  {"container_key", "distinct_agents", "page_id", "page_title", "role", "sibling_count", "skill_name", "unit_id"},
+	"skill_staled":                    {"agent_handle", "last_used_at", "skill_id", "skill_name", "transitioned_at"},
+	"skill_archived":                  {"agent_handle", "last_used_at", "skill_id", "skill_name", "transitioned_at"},
+	"skill_revived":                   {"agent_handle", "prior_state", "skill_id", "skill_name", "transitioned_at"},
+	"skill_telemetry_write_failed":    {"agent_handle", "error", "kind", "skill_id", "skill_name"},
+	"compaction_requested":            {"agent_handle", "raw_count", "threshold"},
+	"compaction_completed":            {"agent_handle", "clusters_compacted", "compacted_evicted", "consolidated_dropped", "non_terminal_dropped", "raw_replaced_by_compaction", "skipped_reason"},
+	"reflection_completed":            {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "workers_run"},
+	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "role", "sandbox_id", "task", "task_id", "turn_id"},
+	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "role", "sandbox_id", "turn_id"},
+	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id"},
+	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id"},
+	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id"},
+	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_chars", "turn_id", "user_chars"},
+	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id"},
+	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
+}
+
+// TestPayloadTagsMatchTheWireContract pins every payload's keys, both ways: a
+// type whose keys moved fails, and so does a type missing from the golden map
+// or listed in it after being retired.
+//
+// This is ADR-0006's field-level clause, which had no gate until now — both
+// of the records it named cover unknown-TYPE preservation, so the rule that
+// existing fields are never removed or repurposed was held by prose alone.
+func TestPayloadTagsMatchTheWireContract(t *testing.T) {
+	t.Parallel()
+	declared := make(map[string]bool, len(wireTags))
+	for name := range wireTags {
+		declared[name] = true
+	}
+	for _, prototype := range catalogue() {
+		t.Run(prototype.EventType(), func(t *testing.T) {
+			t.Parallel()
+			want, ok := wireTags[prototype.EventType()]
+			if !ok {
+				t.Fatalf("no declared wire keys: a new type adds its keys to " +
+					"wireTags, which is what puts them in front of a reviewer")
+			}
+			// `filled` populates every field, so omitempty drops nothing and
+			// the key set is the whole contract rather than whatever a zero
+			// value happened to emit.
+			raw, err := json.Marshal(filled(prototype))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			keys := map[string]json.RawMessage{}
+			if err := json.Unmarshal(raw, &keys); err != nil {
+				t.Fatalf("remap: %v", err)
+			}
+			got := make([]string, 0, len(keys))
+			for key := range keys {
+				got = append(got, key)
+			}
+			slices.Sort(got)
+			sorted := slices.Clone(want)
+			slices.Sort(sorted)
+			if slices.Equal(got, sorted) {
+				return
+			}
+			t.Errorf("wire keys moved — a renamed key is a DROPPED FIELD on "+
+				"whichever half of a rolling upgrade has not upgraded, and a "+
+				"silent one on every row already stored (ADR-0006)\n"+
+				"declared but not published (a rename or a removal): %v\n"+
+				"published but not declared (an additive field, or a rename): %v",
+				missing(sorted, got), missing(got, sorted))
+		})
+		delete(declared, prototype.EventType())
+	}
+	// THE OTHER DIRECTION: an entry whose type left the catalogue is stale,
+	// and a stale entry is how a golden list stops describing the build.
+	for name := range declared {
+		t.Errorf("wireTags declares %q, which the catalogue no longer carries", name)
+	}
+}
+
 // TestUnknownTypeSurvivesIntact is the rolling-upgrade invariant: an event this
 // build has never heard of must decode into the envelope with every unknown
 // field preserved and re-encode identically. Dropping or erroring on one would
