@@ -1692,11 +1692,25 @@ package won the only state a reader can see it in, and every link in the
 dashboard underlined under the pointer, the app rail's own rows included.
 Nothing failed: an outranked declaration is not an error, not a warning and not
 a build failure, and an unhovered screenshot looks exactly right. So the reset
-is written at `a:hover` as well, and `styles/baseline.test.ts` holds it
-selector for selector against the *installed* package — two-sided, so a bump
-that decorates `a:focus-visible` fails there rather than in somebody's browser,
-and a reset for a declaration the package has dropped fails too, because at
-(0,1,1) it would go on suppressing the one underline this product keeps.
+is written at `a:hover` as well, and `styles/baseline.test.ts` holds it against
+the *installed* package — every entry point `main.tsx` loads, not just the one
+called `base`.
+
+That gate then got the same treatment from the other side. Its first version
+held the reset SELECTOR for selector and never looked at the value, so writing
+`a:hover { text-decoration: underline }` in `base.css` — the reported bug,
+verbatim — left every one of its tests green. A gate that cannot fail for the
+regression it is named after is worth less than none, because it also stops
+anybody writing the real one. It now holds four things, each of which was a
+live hole: that the selector is answered, that what answers it *is* a reset,
+that no sheet of ours re-decorates a bare anchor from the other side
+(`screens.css` is imported later, so it would win on order with `base.css`
+untouched), and that `main.tsx` still imports the baseline *before* our reset —
+equal specificity means the later sheet wins, which is the one premise the
+rules themselves cannot carry. It is two-sided as well: a reset for a
+declaration the package has dropped is a rule with nothing on the other side,
+indistinguishable to the next reader from one whose declaration they failed to
+find.
 
 So the frame's own hover vocabulary carries it. `.rail-row`, `.side-link`,
 `.rail-engine` and `.crumb-link` already answer a pointer by moving to
@@ -1707,6 +1721,18 @@ different. Both ends are measured text rungs, which is what rules out the
 obvious alternative: the accent family publishes exactly one text step, and
 `--accent`, `--accent-hover` and `--accent-active` are fills that
 `styles/rungs.test.ts` refuses as a colour.
+
+**And where the colour step cannot be seen, the underline is the hover.** Under
+`forced-colors: active` the UA forces `color` to `LinkText` in *both* states, so
+the rung step this whole section trades the underline for is unobservable, and
+it composites the 4–5% row wash onto its own `Canvas` as nothing. Measured in
+Chromium with the mode on: after the reset, `.crumb-link`, `.t-link`,
+`.cell-seat`, `.work-col-foot a` and every prose register render pixel-identical
+hovered and unhovered, and only `.rail-row` and `.side-link` still answer at
+all. `text-decoration` is the one property the mode leaves to the author — which
+is exactly why the baseline's default is right *there* and wrong everywhere
+else — so `base.css` puts it back inside an `@media (forced-colors: active)`
+block, and the gate requires that block to exist for as long as the reset does.
 
 **Where an underline is the only honest mark it is permanent, not a hover.** A
 link inside running prose is distinguished from the text around it by colour
@@ -1723,7 +1749,15 @@ back everywhere except under a pointer — the one place a permanent mark must
 not go missing, since it is where a reader is deciding whether the word is a
 link. `.prose.md a` outranks the reset on arithmetic and `.int-form-note a`
 ties with it and wins on import order; both say it anyway, so neither depends
-on a fact stated somewhere else.
+on a fact stated somewhere else, and `styles/baseline.test.ts` refuses a
+register that draws the underline without also drawing it at `:hover` —
+deleting one of those selectors reads exactly like removing a duplicate.
+
+Stating the underline is not the same as answering the pointer, and
+`.prose.md a` was the register that proved it: pinning its colour at (0,2,1)
+kept the `a:hover` step from ever reaching it, so it was the one anchor in the
+product where hovering changed nothing whatsoever. It takes the step now, like
+everything else — see rule 16a.
 
 ### A row is not a row
 
@@ -2486,11 +2520,29 @@ to.
     so a head carrying several of them overflows a phone's line instead of
     taking a second one. `PageBar` and `ObjectHeader` take their badges and
     their actions as slots that wrap, and any row built beside one wraps too.
-16. **A link reads as a link at every size, and never by an underline.** A
-    text-register class on an `<a>` that overrides its colour makes a
+16. **A link reads as a link at every size, and a rule under the words is not
+    how.** A text-register class on an `<a>` that overrides its colour makes a
     navigation into decoration; `.t-link` is the caption-sized register that
-    keeps the accent. The hover is a step to `--text`, not a rule struck under
-    the words — see *A link is a colour* above.
+    keeps the accent. The hover is a step within the text rungs, not a rule
+    struck under the words. The exception is the one WCAG 1.4.1 forces and it
+    is PERMANENT rather than a hover: an anchor that is a word in a running
+    sentence takes `.prose-link`, and `.prose.md a` and `.int-form-note a` get
+    it without asking — colour alone is what that clause refuses, and a
+    hover-only mark was never an answer to it, since it is invisible to a
+    keyboard, a touch screen and anybody who has not already guessed. The
+    second exception is `forced-colors: active`, where the rung step cannot be
+    seen at all. See *A link is a colour* above for all three.
+16a. **And every anchor register answers the pointer.** A register that pins its
+    own colour silently takes the `a:hover` step away — `.work-col-foot a` and
+    `.int-form-note a` are (0,1,1) exactly as the step is, and the later sheet
+    wins — and one that is already `--text` at rest, like `.cell-seat` and
+    `.wl-who`, is handed a step to `--text` that moves nothing. Three of those
+    shipped, each invisible for as long as the baseline's hover underline was
+    quietly doing the work: with it reset, hovering them changed nothing at
+    all. A register whose rest colour is the accent ink steps to `--text`; one
+    that is `--text` at rest steps to the accent ink, which is what says *this
+    name* is the link rather than the row around it. Nothing in
+    `styles/` can check this today — it needs a real cascade, not a parse.
 16b. **Text takes the ink, never the fill.** Every status family is three
     rungs: the base is what a thing is painted *with* — a primary button, a
     status dot, a meter bar — the `-soft` is the ground it tints, and the

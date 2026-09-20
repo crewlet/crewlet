@@ -1520,10 +1520,11 @@
 }
 /* A PERMANENT UNDERLINE, and it says so in both states. This sits in a
    sentence, so the underline is its only non-colour cue (base.css, WCAG
-   1.4.1) — and `.int-form-note a` is (0,1,1), the same specificity as the
-   `a:hover` reset base.css now carries, so what decides the tie is that this
-   sheet is imported later. Stating the hover keeps the mark a property of the
-   rule rather than of `main.tsx`'s import order. */
+   1.4.1). Stating the hover is what makes that true independently of load
+   order: `.int-form-note a` alone is (0,1,1), the same specificity as the
+   `a:hover` reset base.css now carries, so in the hover state the tie would
+   fall to whichever sheet `main.tsx` imports second. `.int-form-note a:hover`
+   is (0,2,1) and wins outright, so the mark is a property of the rule. */
 .int-form-note a,
 .int-form-note a:hover {
   text-decoration: underline;
@@ -2082,8 +2083,17 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--text-muted);
   border-top: 1px solid var(--border-subtle);
 }
+/* IT ANSWERS THE POINTER. `.work-col-foot a` is (0,1,1) and so is the
+   `a:hover` colour step, and this sheet is imported second — so pinning the
+   colour here silently took the step away, and while the baseline still
+   underlined on hover nobody could see that it had. With the underline reset,
+   hovering `N more →` changed nothing whatsoever. (0,2,1) puts the step back
+   where the tie cannot reach it. */
 .work-col-foot a {
   color: var(--accent-ink);
+}
+.work-col-foot a:hover {
+  color: var(--text);
 }
 .work-col-empty {
   padding: var(--space-4) var(--space-3);
@@ -2812,6 +2822,14 @@ a.work-cal-chip {
 .prose.md a {
   color: var(--accent-ink);
 }
+/* AND IT ANSWERS THE POINTER, which `.prose.md a` pinning the colour at
+   (0,2,1) stopped `a:hover` from doing. Measured: this was the one register in
+   the product where hovering changed nothing at all in normal colours — the
+   underline is permanent here, so it says "link" without help, but it cannot
+   say "the pointer is on THIS one". Same step as every other link takes. */
+.prose.md a:hover {
+  color: var(--text);
+}
 .prose.md img {
   max-width: 100%;
   border-radius: var(--r-sm);
@@ -3211,6 +3229,17 @@ a.work-cal-chip {
   min-width: 0;
   color: var(--text);
   font-size: var(--fs-sm);
+}
+/* THE NAME IS THE LINK, so it has to be the thing that answers the pointer.
+   The row already washes on hover, but the row washes from anywhere in it —
+   the badge column, the load bar — so the wash says "this row", never "this
+   name is a link". At rest the name is `--text` and `a:hover` moves it to
+   `--text`, which is no move at all; the step here is the other direction,
+   onto the accent's one text rung, which is the same ink every other link in
+   the product wears. Same decision as `.cell-seat` in frame.css, which is the
+   same object — a person's name inside a table row. */
+.wl-who:hover {
+  color: var(--accent-ink);
 }
 .wl-handle {
   font-size: var(--fs-xs);

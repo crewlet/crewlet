@@ -106,6 +106,30 @@ a:hover {
   text-decoration: none;
 }
 
+/* WHERE THE COLOUR STEP CANNOT BE SEEN, THE RULE UNDER THE WORDS IS THE HOVER.
+
+   Everything above trades the underline for a step within the text rungs, and
+   forced colours is the one mode where that currency does not exist: the UA
+   forces `color` to LinkText in BOTH states, so the step is unobservable, and
+   it composites the 4–5% row wash onto its own Canvas as nothing. Measured in
+   Chromium with `forced-colors: active`: after the reset, `.crumb-link`,
+   `.t-link`, `.cell-seat`, `.work-col-foot a` and every prose register render
+   pixel-identical hovered and unhovered. Only `.rail-row` and `.side-link`
+   still answer, and only because their wash happens to survive.
+
+   `text-decoration` is the one property the mode leaves to the author, which
+   is exactly why the baseline's default is right THERE and wrong everywhere
+   else — so this is not a compatibility path for the rule above, it is the
+   same decision expressed in the only vocabulary that mode has.
+   `styles/baseline.test.ts` requires this block to exist for as long as the
+   reset does, because a reset that removes the last affordance in a mode
+   nobody on the team runs is a regression nothing would report. */
+@media (forced-colors: active) {
+  a:hover {
+    text-decoration: underline;
+  }
+}
+
 /* A LINK INSIDE A SENTENCE, and the one place the rule above does not reach.
    The reset is right for chrome — a breadcrumb, a row that happens to be an
    anchor, a caption-sized navigation — because every one of those is a THING
