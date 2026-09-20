@@ -1,9 +1,12 @@
 /**
  * The page bar: where you are, and what you can do about it.
  *
- * Sticky, 52 px, on every screen. It replaces a topbar that carried a single
- * `<h1>` derived from the route's first segment — so an item page said "Work",
- * a project said "Work", and a page nested four levels deep said "Knowledge".
+ * On every screen, and 52 px whenever it can be: the height is a FLOOR rather
+ * than a fixed value, because the bar grows a second row once its own width
+ * cannot hold the trail beside the page's controls — see `@container page` in
+ * frame.css. It replaces a topbar that carried a single `<h1>` derived from
+ * the route's first segment — so an item page said "Work", a project said
+ * "Work", and a page nested four levels deep said "Knowledge".
  *
  * # The breadcrumb is the address, not a title
  *

@@ -46,6 +46,13 @@
  * The cap evicts by `at` for the same reason: the entry to lose is the one
  * nobody has opened in longest, never whichever happens to sit at the bottom
  * of a list that no longer moves.
+ *
+ * AND THAT EVICTION CAN TAKE A ROW OUT OF THE MIDDLE, which is the one thing
+ * this arrangement gives up: the old rule always dropped the bottom row. It
+ * only ever fires when a place the reader has not been arrives, which already
+ * moves every row down one, so there is no gesture under which the rail moves
+ * and the reader was not asking for it — and dropping the bottom row instead
+ * is exactly what would lose the board somebody opens every morning.
  */
 
 import { useMemo, useSyncExternalStore } from "react";
