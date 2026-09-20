@@ -253,13 +253,38 @@ function Row({
           href={href(row.path, row.query)}
           aria-current={here ? "page" : undefined}
         >
-          {row.icon && <RowGlyph name={row.icon} />}
-          {/* THEIRS, and it is the same 6px mark in the same tones — with the
-              neutral one measured: ours drew it on `--text-faint`, which is
-              2.33:1 against a light page, where `StatusDot` takes the tertiary
-              step at 4.87:1. It hides itself from assistive technology, so the
-              `aria-hidden` that used to be spelled here is theirs now. */}
-          {row.tone && <StatusDot tone={uiletTone(row.tone)} />}
+          {/* THE SLOT IS ALWAYS DRAWN, whether or not there is a mark to put
+              in it — which is the same rule `--nav-gutter` plus `--nav-row-pad`
+              states for the rail, and for the same reason: every row at one
+              depth has to start its text on ONE vertical line.
+
+              Rendered conditionally, the mark took layout only when it
+              existed, so a list holding all three kinds of row had three text
+              edges. Measured in Admin, where Infrastructure expands to the
+              fleet's nodes (no mark) above the state log's domains (a tone
+              dot): the node's label sat at 120px, a domain's at 134 and the
+              icon-bearing parent's at 128. Activity's seat list does it too —
+              a seat that is working carries a dot and an idle one does not, so
+              the column combs in and out as the company works.
+
+              A row never carries both: `workspaces/sidebars.tsx` gives the
+              fixed destinations an icon and the live rows a tone, so one 16px
+              slot holds either. The dot is 6px and the glyph 16, both centred
+              in it.
+
+              The dot is THEIRS, and it is the same 6px mark in the same tones —
+              with the neutral one measured: ours drew it on `--text-faint`,
+              which is 2.33:1 against a light page, where `StatusDot` takes the
+              tertiary step at 4.87:1. It hides itself from assistive
+              technology, so the `aria-hidden` that used to be spelled here is
+              theirs now. */}
+          <span className="side-mark" aria-hidden="true">
+            {row.icon ? (
+              <RowGlyph name={row.icon} />
+            ) : row.tone ? (
+              <StatusDot tone={uiletTone(row.tone)} />
+            ) : null}
+          </span>
           <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
             <span className="truncate">{row.label}</span>
             {row.sub && <span className="side-sub truncate">{row.sub}</span>}

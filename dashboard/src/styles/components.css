@@ -142,16 +142,9 @@ a.feed-row,
 a.org-node,
 a.seat-chip {
   color: inherit;
-  text-decoration: none;
 }
 a.seat-chip:hover {
   color: var(--accent-ink);
-}
-a.seat-card:hover,
-a.list-row:hover,
-a.feed-row:hover,
-a.org-node:hover {
-  text-decoration: none;
 }
 
 /* ---- Table --------------------------------------------------------------

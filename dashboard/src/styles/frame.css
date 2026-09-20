@@ -13,11 +13,34 @@
    ======================================================================== */
 
 :root {
-  /* 80px, not 68: the label is the point of this rail — a row a reader has to
-     learn by its icon is a row they hover — and the longest workspace name
-     ("Knowledge") needs 60px of it at --fs-3xs. At 68 it ellipsed to
-     "Knowle…", which is the label failing at the one job it has. */
-  --rail-w: 80px;
+  /* THE RAIL'S WIDTH IS DECIDED BY ITS FOOT, not by its longest label.
+
+     The label is still the point of the rail — a row a reader has to learn by
+     its icon is a row they hover — and the longest workspace name
+     ("Knowledge") needs 60px of it at `--fs-3xs`, which is why this was raised
+     from 68 (it ellipsed to "Knowle…") to a flat 80 in the first place. What
+     80 does not fit is the two segmented controls UNDER those labels, and that
+     is not a taste question: a pill row is three hit targets at
+     `--size-target-min`, which is 24px because WCAG 2.2 says a pointer target
+     may not stand smaller, plus two 2px gaps and the row's own 2px padding —
+     80px, and not one pixel of it is negotiable. Inside an 80px rail, after
+     the foot's own inset, the row had 71px, so the third option of each
+     control was drawn OUTSIDE its own pill: "dark" and "comfortable" hung over
+     the rail's edge with no ground under them, permanently, on every screen.
+
+     So the width is composed from the thing that cannot shrink, and the label
+     floor is met with room to spare rather than by coincidence. The `+ 1px` is
+     the rail's own `border-right`, which `box-sizing: border-box` takes out of
+     the track before the foot ever sees it — the pixel that made the obvious
+     96px still one short.
+
+     The settings could have moved to the command palette's `>` scope instead,
+     where they already live and where the collapsed rail and the phone's
+     bottom bar already send them. They are kept because a theme switch a
+     reader can SEE is the reason either of them is in the chrome at all; what
+     was actually wrong was a rail too narrow to hold what it was drawing. */
+  --rail-foot-w: 80px;
+  --rail-w: calc(var(--rail-foot-w) + 2 * var(--space-2) + 1px);
   --rail-w-collapsed: 48px;
   /* The bottom bar's height on a phone. A glyph, its label under it, and the
      touch target both have to live in: 56px is the floor every platform's own
@@ -186,7 +209,6 @@
   padding: var(--space-2) 2px;
   border-radius: var(--r-md);
   color: var(--text-muted);
-  text-decoration: none;
   position: relative;
 }
 
@@ -285,12 +307,28 @@
   color: var(--text-faint);
 }
 
+/* THE FOOT IS THREE THINGS, NOT ONE BLOCK. A state, two settings and the
+   rail's own hinge sat 4px from each edge of an 80px rail and 4px from each
+   other, which is the inset `.rail-rows` above takes for a column of ROWS —
+   and a row is a strip of one kind of thing, where the neighbour above it
+   being 4px away is what says they are one list. These are four unrelated
+   controls stacked: the engine's state, the theme, the density and the
+   collapse. At the rows' own spacing they read as a fifth, sixth and seventh
+   nav item rather than as the bar under them, and the two segmented controls —
+   which draw their own boundary — touched both walls.
+
+   So the foot takes its OWN inset: `--space-2` at the sides, which doubles the
+   air around the two controls that have a border of their own, and
+   `--space-3` top and bottom, which separates the first control from the
+   hairline above it by more than the controls are separated from each other.
+   The gap is `--space-2`, one step up from the rows', because what is being
+   separated here is kinds rather than siblings. */
 .rail-foot {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-1);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2);
   border-top: 1px solid var(--border);
   flex: 0 0 auto;
 }
@@ -392,7 +430,6 @@
   padding: var(--space-1) var(--space-2);
   border-radius: var(--r-sm);
   color: var(--text-secondary);
-  text-decoration: none;
   font-size: var(--fs-xs);
 }
 
@@ -405,6 +442,18 @@
   background: var(--accent-soft);
   color: var(--accent-ink);
   font-weight: var(--fw-medium);
+}
+
+/* The mark's column, drawn on every row. See WorkspaceSidebar.tsx for what a
+   conditional one cost. 16px is the glyph's own box, which the 6px dot is
+   centred in, so a tone row and an icon row put their first letter in the same
+   place — and so does a row carrying neither. */
+.side-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex: 0 0 auto;
 }
 
 .side-sub {
@@ -501,7 +550,6 @@
 
 .crumb-link {
   color: var(--text-muted);
-  text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -509,7 +557,6 @@
 
 .crumb-link:hover {
   color: var(--text);
-  text-decoration: underline;
 }
 
 .crumb-here {
@@ -592,6 +639,10 @@
   letter-spacing: 0;
 }
 
+/* THE RECIPE IS `.clamp`'s, worn in the markup — see ObjectHeader.tsx for why
+   a heading needs one at all. Written out here it would be the second copy of
+   a five-declaration rule that does nothing if any one of them is missing,
+   which is what `styles/text.test.ts` exists to refuse. */
 .object-title {
   font-size: var(--fs-xl);
   font-weight: var(--fw-semibold);
@@ -629,10 +680,31 @@
   color: var(--text);
 }
 
+/* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH. `.fact` is a column flex box, so
+   it is as wide as its widest child — and a note is prose where the value
+   above it is a word. Measured on a page header: `v1` under a 146px "set by
+   Agent CEO · 2m ago" and `2m ago` under a 153px "any change, not only a
+   save", beside three note-less facts at 66 to 75px. The gaps between the five
+   labels then ran 85, 162, 90, 169, which reads as five columns placed at
+   random rather than as one row of facts.
+
+   Sixteen characters is about two short words a line at `--fs-3xs`, which
+   holds a footnote to roughly the width of the LABEL above it and brought
+   those gaps to 85, 144, 90, 144. `balance` is what makes the wrap look
+   deliberate rather than broken: at a hard 18ch the same two notes left "2m
+   ago" and "a save" alone on a second line, and an orphan reads as a fault.
+   It is ignored where it is not implemented, which costs nothing — the cap is
+   what does the work.
+
+   This is NOT `--measure`, and the difference is the point: that is a reading
+   measure for prose somebody sits down with, and a caption under a fact is
+   read in one glance beside the thing it qualifies. */
 .fact-note,
 .fact-setby {
   font-size: var(--fs-3xs);
   color: var(--text-muted);
+  max-width: 16ch;
+  text-wrap: balance;
 }
 
 /* ---- The detail rail ---------------------------------------------------- */
@@ -835,7 +907,6 @@
   min-height: var(--row-h);
   border-bottom: 1px solid var(--border-subtle);
   color: inherit;
-  text-decoration: none;
   cursor: pointer;
   /* The containing block for `.row-link` below. */
   position: relative;
@@ -991,11 +1062,10 @@
   gap: var(--space-2);
   min-width: 0;
   color: inherit;
-  text-decoration: none;
 }
 
 .cell-seat:hover {
-  text-decoration: underline;
+  color: var(--text);
 }
 
 .cell-status {
@@ -1136,7 +1206,6 @@
   border: 1px solid var(--border);
   border-radius: var(--r-full);
   color: var(--text-secondary);
-  text-decoration: none;
   font-size: var(--fs-2xs);
   max-width: 180px;
 }
@@ -1164,10 +1233,9 @@
   align-items: center;
   gap: 2px;
   width: 100%;
-  padding: var(--space-1) 2px;
+  padding: var(--space-1) var(--space-1);
   border-radius: var(--r-sm);
   color: var(--text-muted);
-  text-decoration: none;
   font-size: var(--fs-3xs);
   min-width: 0;
 }

@@ -117,7 +117,12 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
             Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>:{" "}
             {d.prose || `the ${d.blocked_by} term is holding it`}
             {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
-            <a href="https://docs.crewlet.ai/guides/retention" target="_blank" rel="noreferrer">
+            <a
+              className="prose-link"
+              href="https://docs.crewlet.ai/guides/retention"
+              target="_blank"
+              rel="noreferrer"
+            >
               What the six terms mean
             </a>
           </span>
