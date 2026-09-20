@@ -64,11 +64,27 @@ export function TurnCard({
   const startedAt = row?.started_at || group.startedAt;
   const began = tsKey(startedAt);
 
+  // THE ENGINE'S OWN MARK, OR THE PHASES', WHICHEVER SAYS SO — the same rule
+  // the duration above follows, and for a sharper reason.
+  //
+  // `group.failed` is `phases.some(p => p.failed)`, which cannot see a turn the
+  // engine killed BETWEEN phases: a panic recovered outside the loop, a
+  // detached sandbox run that failed. The store's aggregate reads those (a
+  // failure BY TYPE — see `events.Failed`), so the Turns grid one panel up
+  // marked them failed and this card, drawn from the same screen's data, did
+  // not. One turn, two answers, side by side.
+  //
+  // EITHER, never the row alone: the row is polled and the phases are pushed,
+  // so a phase that failed a moment ago is red here before the next poll
+  // carries it. The row is a superset once it arrives, so the union settles on
+  // the row's answer rather than oscillating.
+  const failed = !!row?.failed || group.failed;
+
   const trigger = group.trigger;
   const headline = triggerHeadline(trigger);
 
   return (
-    <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
+    <article className={cx("turn-card", group.live && "live", failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
         {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
@@ -137,7 +153,7 @@ export function TurnCard({
             running
           </Tag>
         )}
-        {group.failed && <Tag variant="danger">failed</Tag>}
+        {failed && <Tag variant="danger">failed</Tag>}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE TURN'S ZERO IS AN ABSENCE. This
             read `totalTokens ? … : "—"`, so a turn that genuinely spent
             nothing — every phase on a subscription CLI, which reports no
