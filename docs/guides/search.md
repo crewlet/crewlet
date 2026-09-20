@@ -3,6 +3,17 @@
 How the knowledge search is answered, what it costs, and what a fleet can do
 about it when the corpus outgrows one node's CPU.
 
+> **This page is about the KNOWLEDGE corpus** — pages and work items, behind
+> the `knowledge.Searcher` seam and the `search_knowledge` tool. The company's
+> **chat** is searched too, and none of what follows applies to it: it has an
+> index of its own, it has **no semantic half at all**, and no query fuses the
+> two. That is a decision with an arithmetic behind it rather than a gap — see
+> [Chat § Search](../concepts/chat.md#search) and `adr/0019`. Chat search is
+> also the only search on this page with a **viewer**: a private room's
+> contents are not a fact about the company the way a page is, so every chat
+> query carries the channels its asker may see and one that names none is
+> refused rather than answered empty.
+
 Search is answered from **this node's own tables**. Every node holds the whole
 corpus — see [Scaling](../concepts/scaling.md) — so there is no lookup that has
 to leave the machine and no answer that depends on a peer being up. What a
