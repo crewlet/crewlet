@@ -617,6 +617,23 @@ store:
                                     #   a copy of this one alone; separate it
                                     #   only to put it on a different disk, and
                                     #   never onto the same file as `path`
+  # max_open_conns: 0               #   connection-pool bound; 0 takes the
+                                    #   store's own default, which is four
+                                    #   readers plus one pinned connection per
+                                    #   state-log domain. Raise it if the
+                                    #   `pool_starved` alarm fires — see
+                                    #   reference/alarms.md — which means reads
+                                    #   are queuing before they start
+  # busy_timeout_seconds: 0         #   how long a WRITE waits for the
+                                    #   database's write lock before giving up
+                                    #   and retrying once; 0 takes the store's
+                                    #   default of 5s, half the dashboard's own
+                                    #   query timeout. It bounds the wait
+                                    #   wherever it happens — in the driver, or
+                                    #   in the engine's own FIFO queue for that
+                                    #   lock. Raise it on a node doing bulk
+                                    #   applies, where `store_tx_retry` in the
+                                    #   log names it; see guides/replication.md
 
 coordination:
   type: local                       # one node holding its own seat leases;
