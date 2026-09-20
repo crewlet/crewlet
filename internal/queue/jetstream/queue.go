@@ -617,16 +617,26 @@ func (q *Queue) createOrObserveStream(
 	if createErr == nil {
 		return nil
 	}
-	if jsprovision.Unplaceable(createErr) {
-		// STILL FORMING and it stayed that way for the whole budget,
-		// which createStream has already waited out. The metadata
-		// leader REFUSED to place this stream, so nothing was placed
-		// and there is nothing to become visible — reading back would
-		// spend the window asking after an object nobody made, and
-		// append a misleading not-found to the error that says what is
-		// actually wrong. [openBucket] has always gated this; the
-		// stream path did not, which is the same rule written twice
-		// and drifting.
+	if jsprovision.Unplaceable(createErr) || errors.Is(createErr, ErrInsufficientStorage) {
+		// NOTHING WAS PLACED, so there is nothing to become visible.
+		// Two refusals say that, and both must skip the read-back:
+		// reading back would spend the whole window asking after an
+		// object nobody made, and append a misleading not-found to the
+		// error that says what is actually wrong. [openBucket] has
+		// always gated the first; the stream path did not, which is
+		// the same rule written twice and drifting.
+		//
+		// STILL FORMING is the metadata leader refusing to PLACE this
+		// stream, after createStream waited out the whole budget.
+		//
+		// AND A REFUSED RESERVATION is it refusing the ceiling: the
+		// limits check runs only once no peer holds an assignment for
+		// the name (a peer that already made it answers "name already
+		// in use"), so this code is never a race a read-back could
+		// resolve. Left to fall through, the boot's clearest error —
+		// the one naming the bytes, the limit and the Tier A field —
+		// arrived wrapped in "(and it is not there)", five seconds
+		// later, once per refused log.
 		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
 	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes

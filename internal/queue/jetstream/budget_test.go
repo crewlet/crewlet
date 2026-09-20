@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,38 @@ func TestARefusedReservationIsNamed(t *testing.T) {
 	}
 	if err := q.EnsureDomainStream(t.Context(), budgetLog("FITS", budget.Available())); err != nil {
 		t.Fatalf("a ceiling of exactly what was left was refused: %v", err)
+	}
+}
+
+// AND A REFUSED RESERVATION IS NOT READ BACK, because nothing was placed.
+//
+// The peer-race read-back exists for a create the broker may still be
+// committing. A refused reservation is the opposite: the limits check runs
+// only once no peer holds an assignment for the name, so there is no object to
+// become visible. Left to fall through it spent the whole read-back window per
+// refused log and then wrapped the one error a refused boot needs — the bytes,
+// the limit and the Tier A field — in "(and it is not there: stream not
+// found)", which reads as the cause.
+func TestARefusedReservationIsNotReadBack(t *testing.T) {
+	t.Parallel()
+	q := fileQueue(t)
+	budget, err := q.StreamBudget(t.Context())
+	if err != nil {
+		t.Fatalf("StreamBudget: %v", err)
+	}
+	err = q.EnsureDomainStream(t.Context(), budgetLog("REFUSED", budget.Available()+1))
+	if !errors.Is(err, ErrInsufficientStorage) {
+		t.Fatalf("EnsureDomainStream = %v, want the refusal", err)
+	}
+	// THE READ-BACK'S OWN WORDS, which only a fall-through can produce.
+	for _, unwanted := range []string{"and it is not there", "stream not found"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("the refusal carries %q, so it was read back after a create "+
+				"that placed nothing:\n%v", unwanted, err)
+		}
+	}
+	if errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Errorf("the refusal wraps a not-found from the read-back: %v", err)
 	}
 }
 
