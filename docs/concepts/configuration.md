@@ -223,7 +223,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | Route | Behaviour while unconfigured |
 |-------|------------------------------|
 | `GET /health` | `200 {"status": "unconfigured", "node": "node-0", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
-| `GET /ready` | `503 {"ready": false, "configured": false}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation |
+| `GET /ready` | `503 {"ready": false, "configured": false, "reason": "unconfigured", ...}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation. `reason` names which of [the four](control-plane.md#posture-what-a-lagging-node-does) took it out |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted, and creates the first active revision, as long as the FLEET has no activation either: a node that has not caught up with its fleet answers `412 already_configured` (with `If-None-Match: *`) or `409 revision_advanced`, naming the revision the fleet is on. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so it answers `412 no_active_revision` |
@@ -232,7 +232,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including the reflect dispatcher and the inbound edge that boot starts only for a company it already has (see the `learning` and `integrations` stages below) → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being dropped, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including the reflect dispatcher and the inbound edge that boot starts only for a company it already has (see the `learning` and `integrations` stages below) → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being refused, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
 
 ---
 

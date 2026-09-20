@@ -42,9 +42,9 @@ type Health struct {
 
 	// Configured is true once a company revision is active. It has been on
 	// the wire since this surface existed and nothing rendered it, which
-	// meant an engine with no active revision — one dropping every inbound
-	// webhook — looked exactly like a healthy idle one, just with empty
-	// screens.
+	// meant an engine with no active revision — one refusing every inbound
+	// webhook with a 503 the sender retries, never dropping one — looked
+	// exactly like a healthy idle one, just with empty screens.
 	Configured bool `json:"configured"`
 
 	// Engine says whether the fields below can be known at all.

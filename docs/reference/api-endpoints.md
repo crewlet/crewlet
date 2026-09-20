@@ -37,7 +37,9 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
-| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `/operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+
+`/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
 A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
 
@@ -507,7 +509,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
-- `503 Service Unavailable`: `no_control_plane` when the process has no coordination store to activate a revision with, on a write and on a dry run alike
+- `503 Service Unavailable`: `no_control_plane` when the process has no coordination store to activate a revision with, on a write and on a dry run alike; `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 
 ### The `config_audit` query
 

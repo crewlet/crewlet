@@ -65,6 +65,17 @@ const DrainRetryAfter = 30 * time.Second
 //     teardown is about to close, and the operator MCP files and moves work.
 //     Refusing by default is what keeps a write route added later from being
 //     admitted through a drain because nobody listed it.
+//
+// The one route the method rule SPLITS is /operator/mcp, which is mounted for
+// every verb because streamable HTTP is a GET for the server-to-client stream
+// and a DELETE to end a session. Its POST — every JSON-RPC call it serves,
+// reads included — is refused, its GET stream is served like any other read,
+// and its DELETE rides the default above. That last one is a session teardown
+// rather than work, so refusing it costs the caller an error on a session that
+// dies with the listener a moment later anyway: carving it out would buy that
+// back at the price of the default-refuse property, which is the thing here
+// worth keeping. /mcp/{token} is NOT split, because the whole prefix is
+// exempted above.
 func servedWhileDraining(r *http.Request) bool {
 	path := r.URL.Path
 	switch {
