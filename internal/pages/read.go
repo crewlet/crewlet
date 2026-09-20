@@ -38,7 +38,6 @@ import (
 // every multi-statement answer runs inside one `BEGIN DEFERRED`, and the
 // framework's read is where that transaction now comes from.
 type Reader struct {
-	db  *store.DB
 	log *statelog.Reader
 
 	// committed is this node's own applied position on the pages log, or
@@ -48,9 +47,15 @@ type Reader struct {
 }
 
 // ReaderOptions configure a reader.
+//
+// THERE IS NO STORE HANDLE HERE. Every statement a read issues runs inside
+// the transaction [statelog.Reader.Read] opens — that is what D119 moved them
+// into — so a second handle beside it is a door a statement can escape
+// through, outside the snapshot, outside the level and outside the coverage
+// probe. It was carried here unread for as long as it took somebody to notice;
+// the field is gone rather than left as a dependency a caller must satisfy and
+// nothing consumes.
 type ReaderOptions struct {
-	DB *store.DB
-
 	// Log is this domain's read authority. REQUIRED: without it every read
 	// level is a label rather than a guarantee, which is silent at every
 	// surface that renders one.
@@ -64,16 +69,13 @@ type ReaderOptions struct {
 
 // NewReader builds the knowledge base's read side.
 func NewReader(opts ReaderOptions) (*Reader, error) {
-	if opts.DB == nil {
-		return nil, errors.New("pages: a store is required")
-	}
 	if opts.Log == nil {
 		return nil, errors.New("pages: a reader needs its domain's read " +
 			"authority — without it every read level is a label rather than " +
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed}
+	r := &Reader{log: opts.Log, committed: opts.Committed}
 	if r.committed == nil {
 		r.committed = func() statelog.Position { return statelog.Position{} }
 	}

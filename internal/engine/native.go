@@ -308,8 +308,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
-			DB: e.backends.Store, Log: running.reader,
-			Committed: running.runner.Committed,
+			Log: running.reader, Committed: running.runner.Committed,
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
