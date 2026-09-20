@@ -309,6 +309,17 @@ img {
    bordered control's hover moves both and easing one of them looks like a
    fault.
 
+   `font-weight` IS ONE OF THEM, and it is the property that gave this rule
+   away. The current sidebar row and the current rail row both take
+   `--fw-medium`, so a selection that moved eased its background and its ink
+   over `--dur-fast` while the label's stroke changed on the first frame — the
+   text thickened, its advance widths grew, the row's count shifted and
+   `.truncate` re-clipped, all at once, under a fill that was still fading. It
+   is interpolable because the faces are variable (`@crewlethq/tokens` ships
+   Inter and JetBrains Mono as variable `woff2`); on a build where they are
+   not, the declaration is ignored and the weight snaps exactly as it does
+   today.
+
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
 .rail-row,
@@ -338,7 +349,8 @@ button.histogram-bar {
   transition:
     background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    color var(--dur-fast) var(--ease),
+    font-weight var(--dur-fast) var(--ease);
 }
 
 /* ---- Type utilities -----------------------------------------------------
