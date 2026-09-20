@@ -115,34 +115,108 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 // Stop ends this process's consumption; the durable position survives.
 func (r *domainRecords) Stop() error { return r.group.Stop() }
 
-// trackerFeedSource is the tracker's own change feed over its log.
-func trackerFeedSource(running *runningDomain) (tracker.FeedSource, error) {
-	if running == nil {
-		return tracker.FeedSource{}, fmt.Errorf("engine: the tracker domain is " +
-			"not running on this node, so nothing derives a wake from a " +
-			"committed record")
-	}
-	return tracker.FeedSource{Log: domainFeed{
-		log:    running.log,
-		stream: running.domain.Stream().Name,
-		envel:  running.domain.Envelope,
-	}}, nil
+// nativeFeed is one domain's wake feed: the translator that decides what a
+// committed record means, and how to open a durable consumer over that
+// domain's log.
+type nativeFeed struct {
+	// translator is what a record MEANS, and it is also where the durable
+	// consumer's name is declared — see [changefeed.Translator.Source].
+	translator changefeed.Translator
+
+	// open builds the consumer over this node's running log.
+	open func(running *runningDomain) (changefeed.Opener, error)
 }
 
-// pagesFeedSource is the knowledge base's own consumer over its log.
+// nativeFeeds is every domain whose committed records wake somebody, keyed on
+// the DOMAIN's own name.
 //
-// The same shape [trackerFeedSource] has, and separate rather than generic
-// because each domain declares its own group name — which IS the fleet's
-// position, so a helper that derived one would be a rename waiting to happen.
-func pagesFeedSource(running *runningDomain) (pages.FeedSource, error) {
-	if running == nil {
-		return pages.FeedSource{}, fmt.Errorf("engine: the pages domain is not " +
-			"running on this node, so nothing derives a wake from a committed " +
-			"record")
+// ONE DECLARATION, because two callers need the same answer and each used to
+// hold its own. [Engine.startNativeFeeds] opens the consumer; the trim's feed
+// term ([feedTermOf]) reads how far that same consumer has acknowledged before
+// it lets the log be purged. The term spelled the TRACKER's group into itself,
+// so on every other domain's log the lookup found no consumer at all: the term
+// read that as a floor of zero, permitted nothing, and CREWLET_PAGES_LOG grew
+// toward its ceiling with no error, no alarm and no line in any log. A domain
+// listed here inherits both halves at once.
+//
+// THE GROUP NAME IS NEVER SPELLED HERE. It comes off the translator's own
+// [changefeed.Source], which is where each domain declares it exactly once. A
+// second list would be a second place for it to drift — and a drifted group is
+// not an error but a fresh consumer at the head of the log, with everything
+// the first had not yet handled silently abandoned.
+//
+// skills names the reserved tool-skills container the knowledge base's
+// translator quiets; see [pages.NewTranslator]. It is nil wherever only a
+// SOURCE is wanted, because a translator's source is its identity rather than
+// its configuration.
+func nativeFeeds(skills func() string) map[string]nativeFeed {
+	return map[string]nativeFeed{
+		tracker.Domain{}.Name(): {
+			translator: tracker.NewTranslator(),
+			open: func(running *runningDomain) (changefeed.Opener, error) {
+				// THE LOG IS THE SOURCE, and it is the piece the
+				// domain replaced outright: a bucket feed needs a
+				// family and a key class, and a log delivery has
+				// neither. Its own fleet-wide group over the same
+				// stream the applier reads is what derives a wake
+				// from a committed record.
+				consumer, err := domainFeedFor(running, tracker.Domain{}.Name())
+				if err != nil {
+					return nil, err
+				}
+				return tracker.FeedSource{Log: consumer}, nil
+			},
+		},
+		pages.Domain{}.Name(): {
+			translator: pages.NewTranslator(skills),
+			open: func(running *runningDomain) (changefeed.Opener, error) {
+				consumer, err := domainFeedFor(running, pages.Domain{}.Name())
+				if err != nil {
+					return nil, err
+				}
+				return pages.FeedSource{Log: consumer}, nil
+			},
+		},
 	}
-	return pages.FeedSource{Log: domainFeed{
+}
+
+// domainFeedFor is the consumer half of one running domain's log.
+//
+// GENERIC WHERE THE TWO OPENERS ARE NOT, and the split is deliberate: what is
+// shared is the delivery SHAPE — a stream name, a generation and an envelope
+// decoder — and what is not is the group name, which each domain declares for
+// itself and which this function never touches.
+func domainFeedFor(running *runningDomain, domain string) (domainFeed, error) {
+	if running == nil {
+		return domainFeed{}, fmt.Errorf("engine: the %s domain is not running "+
+			"on this node, so nothing derives a wake from a committed record",
+			domain)
+	}
+	return domainFeed{
 		log:    running.log,
 		stream: running.domain.Stream().Name,
 		envel:  running.domain.Envelope,
-	}}, nil
+	}, nil
+}
+
+// feedGroup is the durable consumer one domain's wakes ride on, and whether
+// that domain has a wake feed at all.
+//
+// THE REGISTRY IS THE AUTHORITY on both halves, rather than a predicate that
+// merely correlates with one. The trim's feed term asked
+// [statelog.Domain.ClaimsIdentity], which is true of every domain that has a
+// feed today and is still a different question: a domain that claims identity
+// and that nobody registered a feed for would be read as having one, and its
+// term would block the trim for ever waiting on a consumer that is never
+// created.
+func feedGroup(domain string) (string, bool) {
+	// NIL SKILLS, because a translator's [changefeed.Source] is its
+	// identity rather than its configuration: the reserved container
+	// quiets pages the feed would otherwise wake somebody about, and
+	// changes neither the source name nor the group.
+	feed, registered := nativeFeeds(nil)[domain]
+	if !registered {
+		return "", false
+	}
+	return feed.translator.Source().Group, true
 }

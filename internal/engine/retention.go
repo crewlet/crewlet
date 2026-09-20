@@ -546,14 +546,37 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 	seq uint64, has, readable bool) {
 
-	if !running.domain.ClaimsIdentity() {
+	return feedTermOf(running.domain.Name(), func(group string) (uint64, bool, error) {
+		return running.log.GroupAckFloor(ctx, group)
+	})
+}
+
+// feedTermOf is the arithmetic, over anything that can be asked for a durable
+// consumer's acknowledged floor.
+//
+// SEPARATED FROM THE BROKER for [ageFloorOf]'s reason, and the defect it
+// closes is why the separation earns its keep here: the group was SPELLED as
+// the tracker's, for every domain. On any other domain's log that names a
+// consumer which does not exist, the lookup answers "no such consumer", the
+// term reads that as a floor of zero and permits nothing — so the wiki's log
+// has never trimmed and would have grown to its ceiling with no symptom. None
+// of that is reachable through a live broker without standing one up per
+// domain, which is exactly the kind of case nobody re-checks.
+//
+// THE GROUP COMES FROM [feedGroup], which reads the domain's own translator,
+// so a fourth domain is correct here the moment it is registered.
+func feedTermOf(domain string, ackFloor func(group string) (uint64, bool, error)) (
+	seq uint64, has, readable bool) {
+
+	group, feeds := feedGroup(domain)
+	if !feeds {
 		// THIS DOMAIN HAS NO WAKE FEED, which is absent rather than
 		// unreadable: a compacted domain never had one, and reporting
 		// zero would block its trim for ever on a term it does not
 		// have.
 		return 0, false, false
 	}
-	floor, exists, err := running.log.GroupAckFloor(ctx, tracker.FeedGroup)
+	floor, exists, err := ackFloor(group)
 	switch {
 	case err != nil:
 		return 0, true, false

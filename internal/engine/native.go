@@ -618,48 +618,34 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 	// says what it can read and a feed says how to run a durable consumer
 	// over one domain's own stream; which estate the records are in was
 	// the piece the domains replaced outright.
-	type source struct {
-		translator changefeed.Translator
-		opener     changefeed.Opener
-	}
-	sources := []source{}
-	if running := e.native.log.Domain(tracker.Domain{}.Name()); running != nil {
-		// THE LOG IS THE SOURCE, and it is the piece the domain
-		// replaced outright: a bucket feed needs a family and a key
-		// class, and a log delivery has neither. Its own fleet-wide
-		// group over the same stream the applier reads is what derives
-		// a wake from a committed record.
-		feed, err := trackerFeedSource(running)
+	//
+	// DRIVEN OFF [nativeFeeds] rather than a block per domain, so the
+	// consumer this opens and the consumer the trim's feed term reads are
+	// the same one by construction. They were two, and the term held the
+	// tracker's group for every domain — which is why the wiki's log never
+	// trimmed.
+	//
+	// IN THE REGISTER'S OWN ORDER, for [registeredDomains]' reason: a map's
+	// iteration order would shuffle a boot's log lines between restarts and
+	// between nodes.
+	feeds := nativeFeeds(e.skillsContainer)
+	for _, domain := range registeredDomains() {
+		registered, has := feeds[domain.Name()]
+		if !has {
+			// A DOMAIN WITH NO WAKE FEED, which is the compacted
+			// one: its rows are DERIVED, so there is no change
+			// anybody asked to be told about.
+			continue
+		}
+		translator := registered.translator
+		opener, err := registered.open(e.native.log.Domain(domain.Name()))
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
-				"source", tracker.Source, "error", err.Error())
-		} else {
-			sources = append(sources, source{
-				translator: tracker.NewTranslator(),
-				opener:     feed,
-			})
+				"source", translator.Source().Name, "error", err.Error())
+			continue
 		}
-	}
-	if running := e.native.log.Domain(pages.Domain{}.Name()); running != nil {
-		// THE LOG IS THE SOURCE HERE TOO. A bucket feed needed a family
-		// and a key class; a log delivery has neither, and its own
-		// fleet-wide group over the same stream the applier reads is
-		// what derives a wake from a committed record.
-		feed, err := pagesFeedSource(running)
-		if err != nil {
-			log.ErrorContext(ctx, "changefeed_unavailable",
-				"source", pages.Source, "error", err.Error())
-		} else {
-			sources = append(sources, source{
-				translator: pages.NewTranslator(e.skillsContainer),
-				opener:     feed,
-			})
-		}
-	}
-	for _, src := range sources {
-		translator := src.translator
 		feed, err := changefeed.New(changefeed.Options{
-			Opener: src.opener, Publisher: e.backends.Queue,
+			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
 			Metrics: e.metrics,
 		})
