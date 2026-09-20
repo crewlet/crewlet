@@ -1030,7 +1030,7 @@ const (
 // rows, and json_extract runs only on the ones they keep.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
-       phase, host_phase, worker, model, turn_id, iteration,
+       phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
@@ -1230,7 +1230,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		)
 		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
-			&rec.TurnID, &rec.Iteration,
+			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
 			&rec.CostUSD,
 		); err != nil {

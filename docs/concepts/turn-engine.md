@@ -586,6 +586,15 @@ A **resumed** turn is not a re-run. A detached coding job re-enters the run
 that parked it, carrying that run's id and work key on its own row, so a
 suspend/resume pair is one turn on every screen.
 
+Where that shows on the screens:
+
+| Screen | What a re-run looks like |
+|---|---|
+| **Turns** | two rows, the later one tagged `re-run` |
+| A seat's **Turns** tab | two cards, the later one tagged `attempt 2/2` |
+| A **turn's own page** | the badge, plus a button to each other attempt saying whether it failed |
+| **Cost** and a seat's spend | two rows with their own real bills, each tagged `re-run` — the tokens are not summed, because each attempt genuinely spent them |
+
 `adr/0017` records the decision and what folding the two into one value cost.
 
 ---

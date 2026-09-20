@@ -21,7 +21,7 @@ import { Spend } from "./Spend.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { Bucket, Rollup } from "~/protocol/index.ts";
+import type { Bucket, Rollup, TurnSpendRow } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -131,4 +131,43 @@ test("a window whose answer was refused shows the refusal, not the live rollup",
   // are absent, and an em dash is how this screen says "not this window's".
   expect(screen.getByText("30 days")).toBeTruthy();
   expect(screen.getByText("nothing recorded")).toBeTruthy();
+});
+
+/**
+ * A RETRIED TRIGGER'S TWO BILLS SAY THEY ARE ONE PIECE OF WORK.
+ *
+ * A turn id names one RUN (`adr/0017`), so a turn that failed without
+ * reaching outside the engine and was redelivered spends twice — and each row
+ * is a real bill, so summing them would charge one turn with another's
+ * tokens. Unmarked, though, an expensive-looking pair reads as the company
+ * having paid for the work twice, which is exactly the conclusion this table
+ * invites when it is scanned for what cost the most.
+ */
+test("two runs of one trigger are two rows, each marked a re-run", async () => {
+  const turn = (id: string, key: string | undefined, total: number): TurnSpendRow => ({
+    turn_id: id,
+    work_key: key,
+    role: "CEO",
+    handle: "ceo",
+    agent_id: "a-1",
+    started_at: "2026-09-13T09:00:00Z",
+    ended_at: "2026-09-13T09:01:00Z",
+    by_phase: {},
+    ...bucket(total),
+  });
+  const answer = { ...rollup(0) };
+  answer.by_turn = [
+    turn("run-1", "wk-1", 10),
+    turn("run-2", "wk-1", 327_000),
+    // A turn that ran once, and one with no trigger key at all: neither is a
+    // re-run, and grouping the keyless ones together would report every
+    // unledgered turn as an attempt at every other.
+    turn("run-3", "wk-2", 5),
+    turn("run-4", undefined, 5),
+    turn("run-5", undefined, 5),
+  ];
+  mount(() => Promise.resolve(answer));
+
+  await screen.findByText("run-1".slice(0, 8));
+  expect(screen.getAllByText("re-run")).toHaveLength(2);
 });

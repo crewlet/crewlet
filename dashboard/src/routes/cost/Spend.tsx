@@ -290,6 +290,17 @@ export function Spend() {
     () => (tokens?.by_turn ?? []).slice().sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
     [tokens],
   );
+  // HOW MANY RUNS EACH TRIGGER GOT, over the rows this window holds — the
+  // same count the Turns table takes, for the same reason. An empty work key
+  // is the ABSENCE of an identity, so counting those together would report
+  // every unledgered turn as a re-run of every other.
+  const reruns = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of turns) {
+      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
+    }
+    return counts;
+  }, [turns]);
   // WHAT `[` AND `]` WALK — BOTH tables, in the order this screen draws them.
   //
   // There is ONE publisher per screen and the last caller owns the stepper, so
@@ -667,7 +678,31 @@ export function Spend() {
               shrink: true,
               // UNLINKED: the row is already a link to this turn, and `KeyCell`
               // is the one spelling of an identifier every grid here uses.
-              cell: (t) => <KeyCell value={t.turn_id.slice(0, 8)} />,
+              //
+              // THE RE-RUN MARKER BESIDE IT, because this table is scanned by
+              // comparing a row against its neighbours: a turn id names one
+              // RUN (`adr/0017`), so a trigger that failed without acting and
+              // was redelivered is two rows here, each with its own real bill.
+              // Unmarked they read as the company having paid for the work
+              // twice, which is exactly the conclusion an expensive-looking
+              // pair invites.
+              cell: (t) => (
+                <span className="row gap-1">
+                  <KeyCell value={t.turn_id.slice(0, 8)} />
+                  {t.work_key && (reruns.get(t.work_key) ?? 0) > 1 && (
+                    <Tag
+                      appearance="outline"
+                      title={
+                        `one of ${reruns.get(t.work_key)} runs of the same trigger in this ` +
+                        `window — each attempt spent what this row says, and the turn's own ` +
+                        `page links them`
+                      }
+                    >
+                      re-run
+                    </Tag>
+                  )}
+                </span>
+              ),
             },
           ]}
         />

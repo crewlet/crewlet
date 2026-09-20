@@ -753,3 +753,88 @@ func TestTheTurnListEchoesItsCursor(t *testing.T) {
 		t.Errorf("next = %#v on an empty page", empty["next"])
 	}
 }
+
+// THE TURN SCREEN SAYS WHICH ATTEMPT IT IS SHOWING.
+//
+// A turn id names one RUN (ADR-0017), so a trigger that failed without
+// reaching outside the engine and was redelivered is several turns — and this
+// screen is the destination of every deep link in the product. Landing on one
+// of them with nothing saying the other exists is how a reader concludes the
+// company did the work twice, or that it failed when the next attempt
+// succeeded.
+func TestATurnNamesEveryAttemptAtItsTrigger(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Minute)
+
+	write := func(id, kind, run, key string, at time.Time) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{
+			"turn_id": run, "work_key": key, "phase": "execute",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: kind, Time: at, Category: "lifecycle", Actor: "CEO",
+			Tags: map[string]string{
+				"turn_id": run, "work_key": key, "agent_role": "CEO",
+			},
+			Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two attempts at one trigger, and an unrelated turn that must not join.
+	write("a", "agent_phase_completed", "run-1", "wk-1", base)
+	write("b", "agent_phase_completed", "run-2", "wk-1", base.Add(2*time.Minute))
+	write("c", "agent_phase_completed", "run-9", "wk-2", base.Add(3*time.Minute))
+
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "run-2"}))
+
+	if got["work_key"] != "wk-1" {
+		t.Errorf("work_key = %v, want the trigger both attempts share — a key read "+
+			"off a field the read path never fills answers this for no turn at all",
+			got["work_key"])
+	}
+	attempts := rows(t, got["attempts"])
+	if len(attempts) != 2 {
+		t.Fatalf("%d attempts, want both runs of wk-1 and not the other trigger's: %v",
+			len(attempts), attempts)
+	}
+	// OLDEST FIRST, because "attempt 2 of 2" counts from the one that ran
+	// first however the listing was ordered.
+	if attempts[0]["turn_id"] != "run-1" || attempts[1]["turn_id"] != "run-2" {
+		t.Errorf("attempts = %v, want run-1 then run-2", attempts)
+	}
+}
+
+// AND A TURN WITH NO WORK KEY SAYS SO rather than claiming every other
+// unkeyed turn as an attempt at itself.
+func TestATurnWithNoWorkKeyClaimsNoAttempts(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	payload, err := json.Marshal(map[string]any{"turn_id": "run-1", "phase": "execute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "a", Type: "agent_phase_completed", Time: time.Now().UTC().Add(-time.Minute),
+		Category: "lifecycle", Actor: "CEO",
+		Tags:    map[string]string{"turn_id": "run-1", "agent_role": "CEO"},
+		Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "run-1"}))
+	if got["work_key"] != "" {
+		t.Errorf("work_key = %v, want empty", got["work_key"])
+	}
+	if n := len(rows(t, got["attempts"])); n != 0 {
+		t.Errorf("%d attempts for a turn with no trigger key, want none", n)
+	}
+}

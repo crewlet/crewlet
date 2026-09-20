@@ -117,9 +117,27 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		log.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", err)
 		traces = []string{}
 	}
+	// WHICH ATTEMPT THIS IS, and where the others are.
+	//
+	// A turn id names one RUN (ADR-0017), so a trigger that failed without
+	// acting and was redelivered is several turns — and this screen is the
+	// destination of every deep link in the product. Landing on one of them
+	// with nothing saying the other exists is how a reader concludes the
+	// company did the work twice, or that it failed when in fact the next
+	// attempt succeeded.
+	//
+	// DEGRADES like the two reads above, and for the same reason: the rows
+	// are what the caller came for.
+	key, siblings := s.attemptsOf(ctx, id, records)
 	return map[string]any{
 		"turn_id": id,
-		"events":  records,
+		// The unit of work this run was an attempt at, and every run of it
+		// this store holds, oldest first. One element — this turn — is the
+		// ordinary case; empty means the turn carries no work key at all,
+		// which is a trigger with nothing to collapse on.
+		"work_key": key,
+		"attempts": siblings,
+		"events":   records,
 		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
 		// client that predates the field is unaffected — and one that has it
 		// can say the gap is the middle rather than warning that the page
@@ -127,6 +145,43 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		"truncated": truncated,
 		"trace_ids": traces,
 	}, nil
+}
+
+// attemptsOf reports the unit of work a run was an attempt at, and every run
+// of it in the window, oldest first.
+//
+// THE KEY COMES OFF THE ROWS THIS READ ALREADY HAS rather than from a second
+// seek: every event of the turn carries it, and a turn with none is answered
+// as having none rather than searched for.
+//
+// OFF THE TAGS, not off [store.EventRecord.Spend]. That field is set by the
+// WRITE path and never by a read — `finishRecord` does not populate it — so a
+// reader that reached through it would find nil on every row and quietly
+// answer "no attempts" for every turn in the company. The tags blob is on
+// `listColumns`, so it is there whether or not the payload was selected.
+func (s Sources) attemptsOf(ctx context.Context, id string,
+	records []store.EventRecord,
+) (string, []store.Turn) {
+	key := ""
+	for _, rec := range records {
+		if k := rec.Tags["work_key"]; k != "" {
+			key = k
+			break
+		}
+	}
+	if key == "" {
+		return "", []store.Turn{}
+	}
+	rows, err := s.Events.Turns(ctx, store.TurnQuery{WorkKey: key})
+	if err != nil {
+		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,
+			"work_key", key, "error", err)
+		return key, []store.Turn{}
+	}
+	// OLDEST FIRST, which the listing is not: "attempt 2 of 3" has to count
+	// from the one that ran first, whatever order the list was built in.
+	slices.Reverse(rows)
+	return key, rows
 }
 
 // TurnClosingEvents is how many of a long turn's last rows are recovered

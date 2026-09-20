@@ -387,7 +387,12 @@ export interface AgentSpendRow extends Bucket {
   by_phase: Record<string, Bucket>;
 }
 export interface TurnSpendRow extends Bucket {
+  /** ONE ROW PER RUN. Each attempt at a redelivered trigger really did spend
+   *  what it spent, so summing them would charge one turn with another's
+   *  tokens — `work_key` is what relates them. See `adr/0017`. */
   turn_id: string;
+  /** The unit of work this run was an attempt at, absent when it had none. */
+  work_key?: string;
   role: string;
   handle: string;
   agent_id: string;
@@ -2585,9 +2590,21 @@ export interface PhasesPage {
   exhausted: boolean;
 }
 
-/** Every stored event of one turn, ordered oldest first. */
+/** Every stored event of one RUN of a turn, ordered oldest first. */
 export interface TurnAnswer {
   turn_id: string;
+  /**
+   * The unit of work this run was an attempt at, and every run of it the
+   * store holds, OLDEST FIRST.
+   *
+   * A turn id names one execution (see `adr/0017`), so a trigger that failed
+   * without reaching outside the engine and was redelivered is several turns
+   * — and this screen is where every deep link in the product lands. One
+   * element (this turn) is the ordinary case; an empty `work_key` means the
+   * trigger had no key to collapse on, and `attempts` is then empty too.
+   */
+  work_key?: string;
+  attempts?: TurnRow[];
   events: EventRecord[];
   /**
    * True when the store stopped at its per-turn cap rather than at the end of
