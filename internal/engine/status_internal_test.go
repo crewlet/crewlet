@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -46,11 +47,16 @@ type workspace struct {
 
 	mu       sync.Mutex
 	statuses []string
+	// posted is closed and replaced on every recorded status, so a waiter
+	// that took it under the same lock as its snapshot cannot miss the post
+	// that follows. A counted channel would drop one the moment a buffer
+	// filled, which is the flake a wait helper must not have.
+	posted chan struct{}
 }
 
 func newWorkspace(t *testing.T) *workspace {
 	t.Helper()
-	ws := &workspace{}
+	ws := &workspace{posted: make(chan struct{})}
 	ws.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := strings.TrimPrefix(r.URL.Path, "/api/")
 		if method == "assistant.threads.setStatus" {
@@ -59,6 +65,8 @@ func newWorkspace(t *testing.T) *workspace {
 			status, _ := body["status"].(string)
 			ws.mu.Lock()
 			ws.statuses = append(ws.statuses, status)
+			close(ws.posted)
+			ws.posted = make(chan struct{})
 			ws.mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -91,24 +99,75 @@ func (w *workspace) raises() int {
 	return n
 }
 
-// shownAtLeast waits until the workspace has been asked for n statuses.
+// WHAT IS PROMISED, AND WHEN — the rule every wait below is written against.
 //
-// WAITED FOR, because no post is made by the goroutine that asked for one: a
-// raise and a phase change are both on a turn's critical path, so they wake the
-// session's own goroutine instead of calling a chat backend inline. A case that
-// read straight after the turn would be asserting the opposite property.
-func (w *workspace) shownAtLeast(t *testing.T, n int) []string {
+// No post is made by the goroutine that asked for one. A raise and a phase
+// change both sit on a turn's critical path, so they write the session's state
+// and wake the session's own goroutine, which makes the request; and the
+// teardown CANCELS that goroutine before it clears, so a post still in flight
+// is abandoned and a post not yet started is skipped. Both are deliberate: the
+// indicator is cosmetic, every one of its failures is swallowed, and a turn
+// must never wait on a chat backend.
+//
+// So what a session promises is this: WHILE IT IS LIVE, its state reaches the
+// backend. Once its last holder has ended, the only post promised is the clear
+// — made synchronously by the ending turn, which is why it is the one thing a
+// case can read straight after [Engine.runTurn].
+//
+// Every case here therefore waits for a raise or a phase line WHILE THE TURN
+// IS STILL RUNNING, which is where a person sees it and the only window the
+// code promises it in. Waiting for one after the turn ended asserts a property
+// the engine deliberately does not have, and measured at GOMAXPROCS=1 it lost
+// the post roughly one run in twelve.
+
+// postDeadline is the failsafe on a post that IS promised — a bound on a hang,
+// never a retry until something passes. Ten seconds is far past a loopback
+// request under any load this suite puts on a machine.
+const postDeadline = 10 * time.Second
+
+// awaitShown blocks until the workspace has been asked for n statuses.
+func (w *workspace) awaitShown(t *testing.T, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	return w.await(t, fmt.Sprintf("%d statuses", n),
+		func(shown []string) bool { return len(shown) >= n })
+}
+
+// awaitAnyOf blocks until the workspace has been shown one of these lines,
+// which is how a case waits for a PHASE rather than for a count.
+func (w *workspace) awaitAnyOf(t *testing.T, want []string) []string {
+	t.Helper()
+	return w.await(t, fmt.Sprintf("one of %v", want), func(shown []string) bool {
+		for _, s := range shown {
+			if slices.Contains(want, s) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// await blocks until the workspace's record satisfies done.
+//
+// The snapshot and the wake channel are taken under ONE lock, so a post
+// landing between them wakes this wait rather than being missed — which is
+// what makes this a synchronisation rather than a poll with a deadline.
+func (w *workspace) await(t *testing.T, want string, done func([]string) bool) []string {
+	t.Helper()
+	timeout := time.NewTimer(postDeadline)
+	defer timeout.Stop()
 	for {
-		if shown := w.shown(); len(shown) >= n {
+		w.mu.Lock()
+		shown := append([]string(nil), w.statuses...)
+		posted := w.posted
+		w.mu.Unlock()
+		if done(shown) {
 			return shown
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the workspace was asked for %v in two seconds, want %d statuses",
-				w.shown(), n)
+		select {
+		case <-posted:
+		case <-timeout.C:
+			t.Fatalf("the workspace was asked for %v, want %s", shown, want)
 		}
-		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -138,18 +197,31 @@ func (refusingProvider) Complete(context.Context, llm.Request) (*llm.Completion,
 // scripted answers each phase with its own submission, chosen from the tools
 // the request offers — the phases are what the offered tools distinguish, and a
 // flat sequence would drift the moment one phase took a round more.
-type scripted struct{}
+//
+// `waiting` is what makes the end-to-end cases deterministic. It runs on the
+// turn's own goroutine, before the phase's answer, so a case can hold the turn
+// open until the indicator it is about to assert on has actually reached the
+// workspace — the window where that post is promised. Without it a case
+// asserts a post the teardown is racing, which is the flake this fixture is
+// written against; see "WHAT IS PROMISED, AND WHEN" above.
+type scripted struct{ waiting func(reviewing bool) }
 
 func (scripted) Model() string { return "scripted" }
-func (scripted) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+
+func (s scripted) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
 	name, args := runner.SubmitWorkTool, map[string]any{
 		"outcome": "blocked", "summary": "nothing to do here",
 		"evidence": "this seat holds no write tool",
 	}
+	reviewing := false
 	for _, tool := range req.Tools {
 		if tool.Name == runner.SubmitReviewTool {
 			name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
+			reviewing = true
 		}
+	}
+	if s.waiting != nil {
+		s.waiting(reviewing)
 	}
 	return &llm.Completion{
 		ToolCalls: []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
@@ -243,24 +315,33 @@ func chatTrigger(channel string) *events.Event {
 // A CHAT-TRIGGERED TURN RAISES AN INDICATOR AND CLEARS IT. The whole of the
 // defect: the subsystem existed, the engine held the driver set, and no turn
 // ever called it — so this is the case that fails on the code as it was.
+//
+// The raise is asserted from INSIDE the turn, which is both where a person
+// sees it and the only window it is promised in: the model's first call
+// happens with the turn running, and it does not answer until the workspace
+// has heard the raise. The clear is asserted after, because the ending turn
+// makes that one itself. See "WHAT IS PROMISED, AND WHEN" above.
 func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
-	e, ws := indicating(t, notify.StatusAddressed)
-
-	res, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-1", Depth: 3,
-		Events: []*events.Event{chatTrigger("D0ANA")},
+	var (
+		e      *Engine
+		ws     *workspace
+		raised []string
+	)
+	e, ws = indicatingWith(t, notify.StatusAddressed, scripted{
+		waiting: func(bool) { raised = ws.awaitShown(t, 1) },
 	})
-	if err != nil {
+
+	if _, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-1",
+		Events: []*events.Event{chatTrigger("D0ANA")},
+	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}
-	if res.Breach == nil {
-		t.Fatalf("the fixture's guard did not fire, so this turn called a model: %+v", res)
-	}
 
-	shown := ws.shownAtLeast(t, 2)
-	if shown[0] == "" {
-		t.Errorf("the first thing the workspace heard was %q, want the indicator raised", shown[0])
+	if len(raised) == 0 || raised[0] == "" {
+		t.Errorf("the running turn showed %v, want the indicator raised", raised)
 	}
+	shown := ws.shown()
 	if last := shown[len(shown)-1]; last != "" {
 		t.Errorf("the workspace last heard %q, want the clear that takes the "+
 			"indicator down — a turn that ended leaves nobody working", last)
@@ -287,19 +368,19 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 	// rotation: the pick is deterministic, which is what lets a test name
 	// the phase a raise came out of.
 	want := notify.NewPhrases(nil).Pick(phase.Execute.String(), "wk-open", 0)
-	if got := ws.shownAtLeast(t, 1)[0]; got != want {
+	if got := ws.awaitShown(t, 1)[0]; got != want {
 		t.Errorf("the indicator opened on %q, want the executor's %q", got, want)
 	}
 	// And the seam's first report costs nothing, because it names the phase
-	// the indicator is already showing.
+	// the indicator is already showing. Proved by what comes NEXT rather than
+	// by a pause: a phase that IS new posts, so if the executor's own report
+	// had cost a request the second status would be another executor line.
 	s.Phase(phase.Execute.String())
-	time.Sleep(20 * time.Millisecond)
-	if got := ws.shown(); len(got) != 1 {
-		t.Errorf("the executor's own phase cost a second request: %v", got)
-	}
-	// A phase that is genuinely new does move it.
 	s.Phase(phase.Review.String())
-	ws.shownAtLeast(t, 2)
+	if got := ws.awaitShown(t, 2)[1]; !slices.Contains(notify.PhasePhrases[phase.Review.String()], got) {
+		t.Errorf("the second status was %q, want the reviewer's — the executor's "+
+			"own phase cost a request to say what the raise already said", got)
+	}
 }
 
 // AND THE SEAM IS WIRED, so the words move as the turn moves. The reviewer is
@@ -307,7 +388,24 @@ func TestTheIndicatorOpensOnTheExecutorsPhase(t *testing.T) {
 // a turn whose indicator never reached a review line is a turn whose phases
 // reached nobody.
 func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
-	e, ws := indicatingWith(t, notify.StatusAlways, scripted{})
+	reviews := notify.PhasePhrases[phase.Review.String()]
+	// The reviewer's own call is what holds the turn open until its phase
+	// line has landed: the seam fires before a phase's first provider call,
+	// so by the time this runs the post it asks for is on its way and
+	// nothing is racing it. A case that waited afterwards would be waiting
+	// on a post the teardown had already cancelled.
+	var (
+		e     *Engine
+		ws    *workspace
+		moved []string
+	)
+	e, ws = indicatingWith(t, notify.StatusAlways, scripted{
+		waiting: func(reviewing bool) {
+			if reviewing {
+				moved = ws.awaitAnyOf(t, reviews)
+			}
+		},
+	})
 
 	res, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-phases",
@@ -320,14 +418,13 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 		t.Fatalf("the turn ran %d rounds, so this case did not exercise its "+
 			"phases: %+v", res.Rounds, res)
 	}
-	reviews := notify.PhasePhrases[phase.Review.String()]
-	var moved bool
-	for _, shown := range ws.shownAtLeast(t, 2) {
-		moved = moved || slices.Contains(reviews, shown)
+	var seen bool
+	for _, shown := range moved {
+		seen = seen || slices.Contains(reviews, shown)
 	}
-	if !moved {
+	if !seen {
 		t.Errorf("the indicator showed %v, none of it the reviewer's wording — "+
-			"the turn's phases never reached the person watching", ws.shown())
+			"the turn's phases never reached the person watching", moved)
 	}
 }
 
@@ -401,7 +498,7 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 	}
 
 	working := raise("wk-suspend", "D0ANA")
-	ws.shownAtLeast(t, 1)
+	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), working, true)
 	if got := ws.shown(); slices.Contains(got, "") {
 		t.Fatalf("a turn whose detached run is still working cleared its indicator: %v", got)
@@ -416,7 +513,7 @@ func TestAnIndicatorSurvivesOnlyWhatIsStillWorking(t *testing.T) {
 	// working any more.
 	before := len(ws.shown())
 	ending := raise("wk-end", "D0END")
-	ws.shownAtLeast(t, before+1)
+	ws.awaitShown(t, before+1)
 	endWorkingStatus(t.Context(), ending, false)
 	if shown := ws.shown(); len(shown) <= before || shown[len(shown)-1] != "" {
 		t.Fatalf("a turn that ended did not clear: %v", shown[before:])
@@ -622,7 +719,7 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 	if coding == nil {
 		t.Fatal("no indicator was raised for a chat trigger")
 	}
-	ws.shownAtLeast(t, 1)
+	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), coding, true)
 
 	// A colleague's ask lands in the same thread while the box runs, and it
@@ -668,7 +765,7 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	if answered == nil {
 		t.Fatal("the answer that resumed a parked run raised no indicator")
 	}
-	if got := ws.shownAtLeast(t, 1)[0]; got == "" {
+	if got := ws.awaitShown(t, 1)[0]; got == "" {
 		t.Errorf("the workspace was asked for %q, want the indicator raised", got)
 	}
 
@@ -689,14 +786,30 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 // that hold when the resumed turn ends, or the indicator this node is
 // re-asserting outlives every turn there is.
 func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
-	e, ws := indicatingWith(t, notify.StatusAlways, scripted{})
+	reviews := notify.PhasePhrases[phase.Review.String()]
+	// The resumed turn's reviewer holds it open until its phase line has
+	// landed, for the reason [TestTheIndicatorFollowsTheTurnsPhases] gives:
+	// the post is promised while the session is live and cancelled by the
+	// teardown, so it is asserted from inside the turn.
+	var (
+		e     *Engine
+		ws    *workspace
+		moved []string
+	)
+	e, ws = indicatingWith(t, notify.StatusAlways, scripted{
+		waiting: func(reviewing bool) {
+			if reviewing {
+				moved = ws.awaitAnyOf(t, reviews)
+			}
+		},
+	})
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
 
 	// The turn that suspended into a detached coding run.
 	suspended := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
 		[]*events.Event{chatTrigger("D0ANA")})
-	ws.shownAtLeast(t, 1)
+	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), suspended, true)
 	if got := ws.raises(); got != 1 {
 		t.Fatalf("the suspended turn raised %d indicators, want one", got)
@@ -726,13 +839,12 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	// And its phases moved the words, which is the resume path's own OnPhase
 	// wiring: without it a resumed turn shows whatever the suspended half
 	// last said, for however long the box's answer takes to work through.
-	reviews := notify.PhasePhrases[phase.Review.String()]
-	var moved bool
-	for _, shown := range ws.shown() {
-		moved = moved || slices.Contains(reviews, shown)
+	var seen bool
+	for _, shown := range moved {
+		seen = seen || slices.Contains(reviews, shown)
 	}
-	if !moved {
-		t.Errorf("the resumed turn's phases reached nobody: %v", ws.shown())
+	if !seen {
+		t.Errorf("the resumed turn's phases reached nobody: %v", moved)
 	}
 	if shown := ws.shown(); shown[len(shown)-1] != "" {
 		t.Errorf("the resumed turn ended without clearing: %v", shown)
@@ -790,7 +902,7 @@ func TestReleasingASeatTakesItsIndicatorDown(t *testing.T) {
 
 	s := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
 		[]*events.Event{chatTrigger("D0ANA")})
-	ws.shownAtLeast(t, 1)
+	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), s, true)
 	if len(e.notify.slack.Status().Live()) != 1 {
 		t.Fatal("the suspended turn's indicator is not live")
@@ -818,7 +930,7 @@ func TestTheClearSurvivesTheCancellationThatEndedTheTurn(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	s := e.beginWorkingStatus(ctx, "swe", "wk-cancel", []*events.Event{chatTrigger("D0ANA")})
-	ws.shownAtLeast(t, 1)
+	ws.awaitShown(t, 1)
 	cancel()
 	endWorkingStatus(ctx, s, false)
 
