@@ -113,6 +113,7 @@ import {
   TURN_STOP,
   type PrefetchBlock,
   type PromptWeight,
+  type Story,
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow, TurnRow } from "~/protocol/index.ts";
@@ -281,6 +282,30 @@ export interface TurnView {
   workerCount: number;
   /** The highest self-iterate round its own phases reached. */
   iterations: number;
+  /**
+   * The turn's own events, sorted into the bands both frames read them in.
+   *
+   * ON THE VIEW rather than on the screen, because the header's state marks
+   * are made from it and the header is one component in two frames. Computed
+   * twice — once here and once beside the page's bands — it would be two
+   * `tellStory` passes over one array on every streamed frame of a running
+   * turn, and the page's own copy is the one that would quietly stop matching
+   * the badge above it.
+   */
+  story: Story;
+  /** How many things went wrong, counted the way [problemCount] counts. */
+  trouble: number;
+  /**
+   * Nothing went wrong, AND this turn is in a position to claim it.
+   *
+   * Only on a FINISHED turn with a record to claim it from, and over the
+   * WHOLE turn: a running turn has not been asked since it started, a turn
+   * whose events fell out of the store's window has nothing to say either
+   * way, and a turn read to the store's cap has rows neither frame saw, any
+   * of which could be the failure. "Nothing went wrong", "nothing was read"
+   * and "not everything was read" must not render alike.
+   */
+  clean: boolean;
   /** Every trace this turn touched, store's list first — see [useTurnView]. */
   traceIds: string[];
   /**
@@ -425,6 +450,12 @@ export function useTurnView(turnId: string): TurnView {
   // the tile ever gave, under a caption claiming otherwise.
   const measured = field(rec.learning, "duration_ms");
 
+  // WHAT WENT WRONG, and whether this turn may say nothing did. Both are read
+  // by the header, which is one component in two frames, so they are derived
+  // once here rather than on each screen — see the fields' own notes above.
+  const story = useMemo(() => tellStory(events), [events]);
+  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
+
   return {
     turnId,
     loading,
@@ -457,6 +488,9 @@ export function useTurnView(turnId: string): TurnView {
     // — and one word over two quantities put "Rounds 1" directly above "3r" for
     // the same turn on the same screen.
     iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
+    story,
+    trouble,
+    clean: trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning),
   };
 }
 
@@ -632,20 +666,89 @@ export function turnFacts(view: TurnView): Fact[] {
 }
 
 /**
- * The one state a turn's facts cannot state.
+ * What state this turn is in, beside its own title.
  *
  * Everything in the fact line is settled when the turn ends — an outcome, a
  * duration, a bill — so a turn still in flight reads as a turn that recorded
- * none of them. The badge is the difference, and it is the only thing in this
- * header that carries a tone, because running is a STATE and a seat, an id and
- * a token count are identity.
+ * none of them. These are the marks that answer the rest, and they carry the
+ * only tones in this header, because each of them is a STATE where a seat, an
+ * id and a token count are identity.
+ *
+ * THEY WERE IN THE PAGE BAR, portalled in beside Copy turn and Download turn,
+ * and that is the mistake this replaces. The bar's own subject is "where you
+ * are, and what you can do about it": five state chips in its action slot are
+ * neither, they pushed a turn page's bar to ten items so it broke onto a
+ * second line at 1587px, and the reader's eye had to travel to the far right
+ * corner and back for a fact about the object named 40px below. `ObjectHeader`
+ * has carried a `status` slot for exactly this all along — "a status glyph or
+ * pill — state, never identity" — and one of these five was already in it.
+ *
+ * TWO OF THEM DID NOT MOVE, THEY WENT: the seat and the phase count were
+ * `Agent CEO` and `7 phases` in the bar directly above `SEAT Agent CEO` and
+ * `PHASES 7` in the fact line. A chip repeating the fact under it is not a
+ * second reading of the turn, it is the same reading twice.
+ *
+ * ON THE VIEW, so the peek gets them too. A rail opened from a turns row
+ * showed no problem badge at all — the one mark a reader opening a rail over
+ * a failed turn is looking for — because the count lived on the page.
  */
 function turnStatus(view: TurnView): ReactNode {
-  if (!view.running) return undefined;
+  const { attempt } = view;
   return (
-    <Tag variant="info" dot>
-      running
-    </Tag>
+    <>
+      {view.running && (
+        <Tag variant="info" dot>
+          running
+        </Tag>
+      )}
+      {/* A RE-RUN SAYS SO, and says where the others are. Neutral, because
+          being a second attempt is a fact about the trigger rather than a
+          fault — the attempt that FAILED carries the problem badge beside
+          this one, which is the pairing a reader needs to see at once. */}
+      {attempt && (
+        <Tag
+          appearance="outline"
+          title={
+            `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
+            `that fails without reaching outside the engine is redelivered and runs again`
+          }
+        >
+          attempt {attempt.index}/{attempt.total}
+        </Tag>
+      )}
+      {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records alone.
+          `phases.some(p => p.failed)` misses every turn the engine killed
+          BETWEEN phases — a refused charge, an exhausted chain, a guard that
+          fired — which are precisely the turns with no failed phase record to
+          find. */}
+      {view.trouble > 0 && (
+        <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
+          {view.trouble === 1 ? "1 problem" : `${view.trouble} problems`}
+        </Tag>
+      )}
+      {view.clean && (
+        <Tag
+          variant="success"
+          leadingIcon={<CheckGlyph size="xs" />}
+          title="no guard fired, no provider fell through, no call was refused"
+        >
+          nothing went wrong
+        </Tag>
+      )}
+      {/* WHAT THE VIEW IS MISSING, in the header, because every other badge
+          beside it is a claim made from these rows. The `trace` answer has
+          carried this flag all along and its screen renders it; `turn` did not
+          carry one at all, so a cut turn looked exactly like a short one. */}
+      {view.cut && (
+        <Tag
+          variant="warning"
+          leadingIcon={<WarningGlyph size="xs" />}
+          title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
+        >
+          middle not shown
+        </Tag>
+      )}
+    </>
   );
 }
 
@@ -1009,9 +1112,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // a bug report.
   const view = useTurnView(turnId);
   const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
-  const { running, durationMs } = view;
+  const { running, durationMs, story } = view;
 
-  const story = useMemo(() => tellStory(events), [events]);
   const prefetch = useMemo(
     () => prefetchBlocks(story.given.find((e) => e.type === "prefetch_summary")),
     [story],
@@ -1035,14 +1137,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   usePageLabels(name ? { [turnId]: name } : {});
 
   const title = turnTitle(view);
-  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
-  // Only claimable on a FINISHED turn with a record to claim it from, and
-  // over the WHOLE turn. A running turn has not been asked about since it
-  // started; a turn whose events fell out of the store's window has nothing
-  // to say either way; and a turn read to the store's cap has rows this page
-  // never saw, any of which could be the failure — "nothing went wrong",
-  // "nothing was read" and "not everything was read" must not render alike.
-  const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
   const traceIds = view.traceIds;
   const traceId = traceIds[0] ?? "";
@@ -1104,69 +1198,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
+      {/* WHAT THIS PAGE CAN DO — and nothing about what the turn IS. Five
+          state chips used to open this slot (the seat, the phase count, the
+          attempt, the problem count, "nothing went wrong"), which took the
+          bar to ten items and broke it onto a second line on a laptop. They
+          are the object header's `status` now; see [turnStatus]. */}
       <PageActions>
-        {
-          <>
-            {role && <Tag appearance="outline">{role}</Tag>}
-            <Tag appearance="outline">{own.length} phases</Tag>
-            {/* A RE-RUN SAYS SO, and says where the others are. Neutral,
-                because being a second attempt is a fact about the trigger
-                rather than a fault — the attempt that FAILED carries the
-                problem badge beside this one, which is the pairing a reader
-                needs to see at once. */}
-            {attempt && (
-              <Tag
-                appearance="outline"
-                title={
-                  `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
-                  `that fails without reaching outside the engine is redelivered and runs again`
-                }
-              >
-                attempt {attempt.index}/{attempt.total}
-              </Tag>
-            )}
-            {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records
-                alone. `phases.some(p => p.failed)` misses every turn the
-                engine killed BETWEEN phases — a refused charge, an exhausted
-                chain, a guard that fired — which are precisely the turns with
-                no failed phase record to find. */}
-            {trouble > 0 && (
-              <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
-                {trouble === 1 ? "1 problem" : `${trouble} problems`}
-              </Tag>
-            )}
-            {/* A HEADER BADGE, not a banner at the foot of the page. "This
-                turn was clean" is a property of the turn, so it belongs where
-                the reader already looks for the turn's state — beside the
-                phase count and in the slot the problem badge would occupy.
-                A full-width banner said the same thing at ten times the
-                weight, after everything, reading as an announcement about
-                nothing. */}
-            {clean && (
-              <Tag
-                variant="success"
-                leadingIcon={<CheckGlyph size="xs" />}
-                title="no guard fired, no provider fell through, no call was refused"
-              >
-                nothing went wrong
-              </Tag>
-            )}
-            {/* WHAT THE VIEW IS MISSING, in the header, because every other
-                badge beside it is a claim made from these rows. The `trace`
-                answer has carried this flag all along and its screen renders
-                it; `turn` did not carry one at all, so a cut turn looked
-                exactly like a short one. */}
-            {cut && (
-              <Tag
-                variant="warning"
-                leadingIcon={<WarningGlyph size="xs" />}
-                title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
-              >
-                middle not shown
-              </Tag>
-            )}
-          </>
-        }
         {
           <>
             {role && (
@@ -1180,8 +1217,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               </Button>
             )}
             {/* THE OTHER ATTEMPTS, reachable rather than merely announced.
-                The badge above says this is attempt 2 of 2; a reader who has
-                landed on the failed one needs to get to the one that worked,
+                The header's badge says this is attempt 2 of 2; a reader who
+                has landed on the failed one needs to get to the one that worked,
                 and a deep link out of a tracker comment or an event payload
                 is exactly how they landed here. Each button says whether that
                 attempt failed, so the pair reads as the story it is. */}

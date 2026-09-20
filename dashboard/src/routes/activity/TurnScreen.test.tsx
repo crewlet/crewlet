@@ -521,6 +521,16 @@ test("a turn that ran once carries no attempt badge", async () => {
     ],
     events: [phase("2026-09-13T10:00:02Z", 1000)],
   });
-  await screen.findByText("1 phases");
+  // THE BARRIER IS THE FACT, not a chip beside it. This waited on the page
+  // bar's "1 phases" tag, which was the `PHASES 1` fact repeated 40px higher
+  // up the screen and went when the header took the turn's state back — so
+  // the wait is on the fact itself, which is where the count was always
+  // stated.
+  // …and the fact rather than the Phases CARD, which is a second element
+  // with the same word in it.
+  const phases = (await screen.findAllByText("Phases")).find((el) =>
+    el.classList.contains("fact-label"),
+  );
+  expect(phases?.parentElement?.textContent).toContain("1");
   expect(screen.queryByText(/attempt \d+\/\d+/)).toBeNull();
 });

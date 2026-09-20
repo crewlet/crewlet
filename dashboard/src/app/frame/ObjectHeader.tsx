@@ -115,7 +115,15 @@ export function ObjectHeader({
   /** The key, handle or id, in the mono face. */
   identifier?: string;
   title: ReactNode;
-  /** A status glyph or pill — state, never identity. */
+  /**
+   * The object's state — glyphs or pills, never identity.
+   *
+   * MORE THAN ONE IS THE ORDINARY CASE, which is what the row below is built
+   * for now: a turn is running, or a retry, or carrying failures, or read to
+   * the store's cap, and any two of those can be true at once. They used to
+   * be a screen's `PageActions`, in a slot whose subject is what the reader
+   * can DO — see `routes/activity/Turn.tsx`'s `turnStatus`.
+   */
   status?: ReactNode;
   facts?: Fact[];
   actions?: ReactNode;
@@ -133,7 +141,12 @@ export function ObjectHeader({
             face is the whole of what this needs, and `.object-id` is it. */}
         {identifier && <span className="mono object-id">{identifier}</span>}
       </div>
-      <div className="row">
+      {/* AND THE HEAD ROW WRAPS. It holds a heading, the object's state marks
+          and the frame's actions, and the first of those is the only one that
+          can be shortened without saying something else — so on a narrow
+          header the marks take a line under the title rather than every pill
+          on the row giving up a few characters each. */}
+      <div className="row wrap">
         {/* TWO LINES, AND THAT IS THE CEILING. Every other object in the
             product heads itself with a NAME — a seat, a work key, a node id, a
             page title — and a turn has none, so `routes/activity/Turn.tsx`
@@ -149,7 +162,9 @@ export function ObjectHeader({
             paragraph. Two is the clamp's own default, so nothing here sets a
             count. */}
         <h1 className="object-title clamp">{title}</h1>
-        {status}
+        {/* ONE GROUP, so the marks travel together when the row above wraps
+            and never split a running turn's pill from its problem count. */}
+        {status && <div className="row gap-1 wrap object-status">{status}</div>}
         <span className="spacer" />
         {actions && <div className="row gap-1 wrap">{actions}</div>}
       </div>
