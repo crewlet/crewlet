@@ -1,10 +1,20 @@
-// Package skills_test guards the documentation links carried by the prose
+// Package docslinks_test guards the documentation links carried by the prose
 // this repository publishes.
 //
 // It has no non-test source because it certifies content rather than code:
-// the skill files beside it and the docs tree they point into are shipped
-// artefacts, and this is the check that says so.
-package skills_test
+// the docs tree and the skill files are shipped artefacts, and this is the
+// check that says so.
+//
+// WHY IT DOES NOT LIVE IN skills/
+//
+// It did, next to the file that prompted it, until that turned out to be the
+// one place it could not go. The docs site copies schema/ and skills/ into its
+// static output verbatim and serves every file in them over HTTP — so this
+// test was published at /next/skills/links_guard_test.go, 200, as
+// text/markdown, with the slashless URL in its own documentation. A guard
+// against publishing redirecting links was publishing one. internal/ is not
+// copied, so nothing here is served.
+package docslinks_test
 
 import (
 	"fmt"
@@ -33,10 +43,15 @@ const docsOrigin = "https://docs.crewlet.ai"
 // verdict below has to tell an extension from a full stop.
 var docsLink = regexp.MustCompile(regexp.QuoteMeta(docsOrigin) + `(/[A-Za-z0-9/._-]*)`)
 
-// publishedTrees are the directories whose markdown is served at
-// docs.crewlet.ai. The docs site syncs docs/ into its pages and copies
-// skills/ through verbatim beside them, so a link written in either one is
-// handed to a reader, to an assistant, and to a crawler exactly as typed.
+// publishedTrees are the directories served at docs.crewlet.ai. The docs site
+// syncs docs/ into its pages and copies skills/ through verbatim beside them,
+// so a link written in either one is handed to a reader, to an assistant, and
+// to a crawler exactly as typed.
+//
+// EVERY file in them is walked, not just the markdown. The site copies these
+// trees wholesale — it does not filter by extension — so whatever is in them
+// is served, and a check that only read .md would be blind to anything else
+// somebody parks here. It was: this very file sat in skills/ and shipped.
 var publishedTrees = []string{"docs", "skills"}
 
 // TestDocumentationLinksCarryTheTrailingSlash fails the build when published
@@ -85,7 +100,7 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			if entry.IsDir() {
 				return nil
 			}
 
@@ -153,7 +168,7 @@ func repoRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot locate this test's own source file")
 	}
-	root := filepath.Dir(filepath.Dir(file))
+	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
 		t.Fatalf("expected the module root at %s: %v", root, err)
 	}
