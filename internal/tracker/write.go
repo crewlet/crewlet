@@ -373,6 +373,14 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	if err := checkTextCaps(id, patch.Title, patch.Body, commentBody); err != nil {
 		return WriteResult{}, err
 	}
+	// A COLLECTION THE PATCH TOUCHES IS CARRIED WHOLE — that is the record's
+	// own rule — so a checklists patch is the complete new tree and this is
+	// the whole of what the task will hold.
+	if patch.Checklists != nil {
+		if err := checkChecklistCaps(id, *patch.Checklists); err != nil {
+			return WriteResult{}, err
+		}
+	}
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
 		// spelling the rows hold rather than the one somebody typed —

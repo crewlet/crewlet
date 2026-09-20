@@ -282,7 +282,7 @@ func checklistAssignees(before, after Task) []string {
 		out = append(out, handle)
 	}
 	sort.Strings(out)
-	return capHandles(out, MaxChecklists)
+	return capHandles(out, MaxChecklistAssignees)
 }
 
 // itemsByID flattens a task's checklists to their items.

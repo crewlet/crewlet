@@ -51,8 +51,8 @@ func TestEverySnapshotCollectionIsBounded(t *testing.T) {
 		{"thread_participants", tracker.MaxThreadParticipants, func(n *tracker.Notify) {
 			n.Snapshot.ThreadParticipants = handlesOf(tracker.MaxThreadParticipants + 1)
 		}},
-		{"checklist_assignees", tracker.MaxChecklists, func(n *tracker.Notify) {
-			n.Snapshot.ChecklistAssignees = handlesOf(tracker.MaxChecklists + 1)
+		{"checklist_assignees", tracker.MaxChecklistAssignees, func(n *tracker.Notify) {
+			n.Snapshot.ChecklistAssignees = handlesOf(tracker.MaxChecklistAssignees + 1)
 		}},
 		{"goal_owners", tracker.MaxGoalOwners, func(n *tracker.Notify) {
 			n.Snapshot.GoalOwners = handlesOf(tracker.MaxGoalOwners + 1)
@@ -304,5 +304,153 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 					"tell which value to shorten: %v", tc.field, err)
 			}
 		})
+	}
+}
+
+// THE CHECKLIST CAPS ARE ENFORCED, and for a long time none of them was.
+//
+// MaxChecklists, MaxChecklistItems and MaxChecklistItemsTotal sat under a
+// header promising "Each is refused at WRITE naming the field, never cut", and
+// nothing in the engine read any of the three: the only code that mentioned
+// them was a test. One cap over, MaxChecklistAssignees is derived from the item
+// total on the reasoning that there cannot be more distinct assignees than
+// items — which is only true while the item total is a bound rather than a
+// sentence.
+func TestTheChecklistCapsAreRefusedAtTheWrite(t *testing.T) {
+	t.Parallel()
+	items := func(n int) []tracker.ChecklistItem {
+		out := make([]tracker.ChecklistItem, 0, n)
+		for i := range n {
+			out = append(out, tracker.ChecklistItem{
+				ID: fmt.Sprintf("i-%04d", i), Name: "step", Order: i,
+			})
+		}
+		return out
+	}
+	lists := func(count, per int) []tracker.Checklist {
+		out := make([]tracker.Checklist, 0, count)
+		for l := range count {
+			out = append(out, tracker.Checklist{
+				ID: fmt.Sprintf("l-%03d", l), Name: fmt.Sprintf("list %d", l),
+				Items: items(per),
+			})
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name  string
+		lists []tracker.Checklist
+		want  string
+	}{
+		{"too many lists", lists(tracker.MaxChecklists+1, 1), "checklists"},
+		{
+			"one list too long",
+			[]tracker.Checklist{{ID: "l-1", Name: "Release",
+				Items: items(tracker.MaxChecklistItems + 1)}},
+			"items",
+		},
+		{
+			// UNDER BOTH OTHER CAPS AND OVER THE TOTAL: sixteen lists of
+			// sixty-four items each is 1024, which no per-list or
+			// per-tree count alone refuses.
+			"too many items across the lists",
+			lists(tracker.MaxChecklists, tracker.MaxChecklistItems),
+			"across its lists",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			created := r.createTask("the release")
+			_, err := r.writer.UpdateTask(t.Context(), "op-lists", created.ID,
+				"ENG", tracker.NoIfMatch,
+				tracker.TaskPatch{Checklists: &tc.lists}, tracker.ChangeChecklist, nil)
+			if err == nil {
+				t.Fatal("the write was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal reads %q, and does not name %q",
+					err.Error(), tc.want)
+			}
+		})
+	}
+
+	// AND A TREE AT EVERY BOUND IS ACCEPTED, so the caps refuse what is past
+	// them rather than what reaches them.
+	t.Run("a maximal tree is accepted", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		created := r.createTask("the release")
+		whole := lists(tracker.MaxChecklists,
+			tracker.MaxChecklistItemsTotal/tracker.MaxChecklists)
+		if _, err := r.writer.UpdateTask(t.Context(), "op-lists", created.ID,
+			"ENG", tracker.NoIfMatch,
+			tracker.TaskPatch{Checklists: &whole}, tracker.ChangeChecklist, nil); err != nil {
+			t.Fatalf("a tree at every bound was refused: %v", err)
+		}
+	})
+}
+
+// EVERY CHECKLIST ASSIGNEE IS NAMED, and the cap that decided otherwise was
+// the wrong one.
+//
+// The assignee set was capped at MaxChecklists — sixteen, the cap on the number
+// of LISTS — while an assignee sits on an ITEM and a task holds
+// MaxChecklistItemsTotal of those. The handles are SORTED before the cap, so
+// past sixteen people the seventeenth by alphabet lost their wake, silently and
+// permanently: a wake is not recoverable by reading the task later, because
+// nothing tells them to look.
+//
+// The cap is now derived from the item total, so it cannot bite — there cannot
+// be more distinct assignees than items, which is what
+// TestTheChecklistCapsAreRefusedAtTheWrite above makes true.
+func TestEveryChecklistAssigneeIsNamed(t *testing.T) {
+	t.Parallel()
+
+	// A task at its ITEM cap, every item held by a different person, named
+	// so the ones past the old bound sort LAST — which is the end the old
+	// cut took them from.
+	items := make([]tracker.ChecklistItem, 0, tracker.MaxChecklistItemsTotal)
+	for i := range tracker.MaxChecklistItemsTotal {
+		items = append(items, tracker.ChecklistItem{
+			ID: fmt.Sprintf("i-%04d", i), Name: "step",
+			Assignee: fmt.Sprintf("seat%04d", i), Order: i,
+		})
+	}
+	perList := tracker.MaxChecklistItemsTotal / tracker.MaxChecklists
+	after := tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG"}
+	for l := range tracker.MaxChecklists {
+		after.Checklists = append(after.Checklists, tracker.Checklist{
+			ID: fmt.Sprintf("l-%02d", l), Name: "list",
+			Items: items[l*perList : (l+1)*perList],
+		})
+	}
+
+	notify := tracker.Wake{
+		Kind: tracker.ChangeChecklist, Before: tracker.Task{ID: "t-1"}, After: after,
+	}.Notify(nil)
+	if notify == nil {
+		t.Fatal("a checklist commit naming every assignee wakes nobody")
+	}
+	named := map[string]bool{}
+	for _, handle := range notify.Snapshot.ChecklistAssignees {
+		named[handle] = true
+	}
+	for i := range tracker.MaxChecklistItemsTotal {
+		if handle := fmt.Sprintf("seat%04d", i); !named[handle] {
+			t.Fatalf("%s holds an item on this change and is not in its "+
+				"routing: the set carries %d of %d people, so it is capped by "+
+				"the number of LISTS rather than by the number of ITEMS",
+				handle, len(notify.Snapshot.ChecklistAssignees),
+				tracker.MaxChecklistItemsTotal)
+		}
+	}
+	// AND THE SNAPSHOT IS STILL ACCEPTED, which is the other half: a cap
+	// raised on the wake side and not on the write side turns a full
+	// checklist into a refused commit.
+	if err := notify.Validate(); err != nil {
+		t.Errorf("a task at its item cap produces a snapshot the write "+
+			"refuses: %v", err)
 	}
 }

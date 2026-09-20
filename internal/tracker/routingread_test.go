@@ -198,7 +198,7 @@ func TestTheRoutingBoundIsTheSumOfTheWriteCaps(t *testing.T) {
 	// truncation.
 	want := tracker.MaxWatchers + tracker.MaxWatchers + tracker.MaxCollaborators +
 		tracker.MaxDependents + tracker.MaxDependents +
-		tracker.MaxThreadParticipants + tracker.MaxChecklists +
+		tracker.MaxThreadParticipants + tracker.MaxChecklistAssignees +
 		tracker.MaxGoalOwners + tracker.MaxGoalMembers +
 		tracker.MaxMentions + 16
 	if tracker.MaxRoutingRows != want {

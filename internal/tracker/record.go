@@ -105,6 +105,30 @@ const (
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
 
+	// MaxChecklistAssignees bounds the people one commit's checklist
+	// changes can name.
+	//
+	// DERIVED FROM THE ITEMS, because an assignee sits on an ITEM and not
+	// on a list: a task holds [MaxChecklistItemsTotal] items across
+	// [MaxChecklists] lists, and every one of them can name a different
+	// person. This was [MaxChecklists] — sixteen, the cap on the number of
+	// LISTS — applied to a set the number of ITEMS bounds, which is the one
+	// cap in the notification family whose stated justification did not
+	// describe what it capped.
+	//
+	// The cost of the wrong knob was not a short list. `checklistAssignees`
+	// sorts the handles before capping them, so past sixteen people the
+	// seventeenth BY ALPHABET lost their wake — silently, and permanently:
+	// a wake is not recoverable by reading the task later, because nothing
+	// tells them to look.
+	//
+	// At the item count the cap can no longer bite — there cannot be more
+	// distinct assignees than items — which is the point. It stays as a
+	// guard on a payload the fleet replicates and holds for the stream's
+	// whole retention window, and it is written as the arithmetic so that
+	// raising the item cap raises it too, exactly as [MaxRoutingRows] is.
+	MaxChecklistAssignees = MaxChecklistItemsTotal
+
 	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
 	// every former key also has an alias row, and the applier never
 	// deletes one on a task apply.
@@ -186,6 +210,50 @@ func checkTextCaps(id string, title, body, comment *string) error {
 			"it, or put the long form where it belongs (a page, or an "+
 			"attachment) and reference it here",
 			c.field, id, len(*c.value), c.limit)
+	}
+	return nil
+}
+
+// checkChecklistCaps refuses a checklist tree past the caps that declare it —
+// [MaxChecklists], [MaxChecklistItems] and [MaxChecklistItemsTotal].
+//
+// IT HAD NO IMPLEMENTATION. The three constants sat under a header promising
+// "Each is refused at WRITE naming the field, never cut", and nothing read any
+// of them: a task could carry any number of lists holding any number of items,
+// and the only code that mentioned the caps was a test.
+//
+// What that cost is one cap over: [MaxChecklistAssignees] is derived from the
+// item total on the reasoning that there cannot be more distinct assignees
+// than items, which is only true while the item total is a bound rather than a
+// sentence. Without this the routing cap sits on an unenforced number and the
+// snapshot that exceeds it is REFUSED at [Notify.checkSnapshot] — turning an
+// unbounded checklist into a failed write on the commit that touches it,
+// which is the worst place to discover it.
+//
+// PURE OVER VALUES, like [checkTextCaps] beside it and for the reason coerce.go
+// gives for the same shape.
+func checkChecklistCaps(id string, lists []Checklist) error {
+	if len(lists) > MaxChecklists {
+		return fmt.Errorf("tracker: task %s carries %d checklists and the "+
+			"maximum is %d — it is refused rather than cut, because a list "+
+			"silently dropped is work somebody filed and will look for later",
+			id, len(lists), MaxChecklists)
+	}
+	total := 0
+	for _, list := range lists {
+		if len(list.Items) > MaxChecklistItems {
+			return fmt.Errorf("tracker: checklist %q on task %s holds %d items "+
+				"and the maximum is %d — split it, or make the long half a "+
+				"subtask of its own",
+				list.Name, id, len(list.Items), MaxChecklistItems)
+		}
+		total += len(list.Items)
+	}
+	if total > MaxChecklistItemsTotal {
+		return fmt.Errorf("tracker: task %s carries %d checklist items across "+
+			"its lists and the maximum is %d — a task whose checklists are "+
+			"that long is a project, and its items are subtasks",
+			id, total, MaxChecklistItemsTotal)
 	}
 	return nil
 }
