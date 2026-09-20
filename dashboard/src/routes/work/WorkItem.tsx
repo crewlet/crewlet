@@ -700,10 +700,15 @@ export function ItemBody({
               count: comments.length,
             },
             {
+              // A COUNT THAT WOULD LIE IS NOT SHOWN. The feed is capped
+              // server-side, so on a long-lived item `history.length` is the
+              // page rather than the total — and a tab reading "50" beside a
+              // thousand real changes is worse than a tab reading none,
+              // because it answers a question nobody asked it.
               value: "history",
               label: "History",
               icon: <TimelineGlyph size="sm" />,
-              count: history.length,
+              count: detail.history_truncated ? undefined : history.length,
             },
             // THE FACT NO OTHER TRACKER RECORDS. Every tracker can say a
             // change notified somebody; this one records, per change and
@@ -713,7 +718,9 @@ export function ItemBody({
               value: "woke",
               label: "Woke",
               icon: <NotificationsGlyph size="sm" />,
-              count: history.filter((entry) => !entry.quiet).length,
+              count: detail.history_truncated
+                ? undefined
+                : history.filter((entry) => !entry.quiet).length,
             },
           ]}
         />
@@ -816,6 +823,15 @@ function History({
   }
   return (
     <div className="work-hist" style={{ paddingTop: "var(--space-2)" }}>
+      {/* SAID, NOT SHOWN AS A SHORT LIST. The same sentence `Thread` carries
+          for the same reason: a capped feed that reports nothing reads as an
+          item with a short life, which is the one thing an activity panel
+          must not claim. */}
+      {detail.history_truncated && (
+        <span className="t-caption">
+          Older changes are on the activity feed — this is the newest page of it.
+        </span>
+      )}
       {history.map((entry) => (
         <div key={entry.id} className="work-hist-row">
           {/* THE KIND, AS A MARK. Every row drew the same timeline glyph, so a

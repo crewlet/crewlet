@@ -2452,6 +2452,12 @@ export interface WorkItemDetail {
   fields?: WorkFieldValue[];
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
+  /** True when `history` was cut at the read's limit and the item has older
+   *  changes. A FLAG rather than a cursor, unlike `comments_cursor` above:
+   *  server-side the history is a cap and not a page, because the reader that
+   *  pages the same rows properly is the activity feed. Without it a count of
+   *  `history.length` reads as the item's whole life. */
+  history_truncated?: boolean;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the

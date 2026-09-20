@@ -635,3 +635,55 @@ test("the history draws a mark per kind and never reprints the thread", async ()
   expect(container.querySelector(".work-hist-what a")).toBeNull();
   expect(container.querySelector(".work-hist-tail a")).toBeTruthy();
 });
+
+// A CAPPED HISTORY DOES NOT PRINT A COUNT IT CANNOT STAND BEHIND.
+//
+// The server caps the feed and now says so. Before that the tab read
+// "History 50" on an item with a thousand changes and the panel showed fifty
+// rows with nothing after them, so the screen asserted a short life for an
+// item that has a long one. The count is dropped rather than guessed — there
+// is no total to render — and the panel says where the rest is.
+test("a capped history says where the rest is and drops the count", async () => {
+  serving({ work_items: { items: [], complete: true } });
+  render(
+    <Router>
+      <ItemBody
+        detail={detail({
+          history_truncated: true,
+          history: [{ id: "h1", kind: "status", at: NOW_ISO, log_seq: 9 }],
+        })}
+        chrome={{}}
+        now={NOW}
+      />
+    </Router>,
+  );
+  // NO DIGIT AT ALL on the tab: the label is the whole of it.
+  const tab = await screen.findByRole("tab", { name: /History/ });
+  expect(tab.textContent).not.toMatch(/\d/);
+
+  fireEvent.click(tab);
+  expect(await screen.findByText(/Older changes are on the activity feed/)).toBeTruthy();
+});
+
+// AND AN UNCAPPED ONE STILL COUNTS. The flag is what suppresses the number,
+// so a bug that suppressed it always would leave every item's history
+// unlabelled and this test is what catches that.
+test("an uncapped history keeps its count and says nothing about a feed", async () => {
+  serving({ work_items: { items: [], complete: true } });
+  render(
+    <Router>
+      <ItemBody
+        detail={detail({
+          history: [{ id: "h1", kind: "status", at: NOW_ISO, log_seq: 9 }],
+        })}
+        chrome={{}}
+        now={NOW}
+      />
+    </Router>,
+  );
+  const tab = await screen.findByRole("tab", { name: /History/ });
+  expect(tab.textContent).toMatch(/\d/);
+
+  fireEvent.click(tab);
+  expect(screen.queryByText(/Older changes are on the activity feed/)).toBeNull();
+});

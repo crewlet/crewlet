@@ -116,6 +116,22 @@ type TaskDetail struct {
 	// life of the task, to tell them something the cursor already says.
 	CommentsCursor string `json:"comments_cursor,omitempty"`
 
+	// HistoryTruncated says the feed was cut at the limit, and is what tells
+	// a reader that this task has a life beyond the rows it was handed.
+	//
+	// A FLAG RATHER THAN A CURSOR, which is the one place this answer
+	// deliberately differs from [TaskDetail.CommentsCursor] beside it: the
+	// history is a CAP and not a page — see [DetailHistoryDefault] — because
+	// the caller that wants more has `work_activity`, which pages the same
+	// rows properly. So the honest bit is "there is more, and that tool is
+	// where it is", and a cursor here would be a second, half-built pager
+	// over rows one already covers.
+	//
+	// Without it a task with five hundred changes and a task with fifty
+	// answered identically, which is exactly what [readGroups] refuses to do
+	// one file over: an overflow is counted and said, never silently cut.
+	HistoryTruncated bool `json:"history_truncated,omitempty"`
+
 	// Fields are the task's custom-field values with the declaration that
 	// explains each one, and with the values nothing explains reported as
 	// exactly that. The raw map stays on [TaskDetail.Task] — it is the
@@ -265,7 +281,8 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			if limit <= 0 {
 				limit = DetailHistoryDefault
 			}
-			if out.History, err = readHistory(ctx, tx, id, limit); err != nil {
+			out.History, out.HistoryTruncated, err = readHistory(ctx, tx, id, limit)
+			if err != nil {
 				return err
 			}
 		}
@@ -560,21 +577,39 @@ func cursorID(cursor string) string {
 	return id
 }
 
-// readHistory is the activity feed, NEWEST FIRST and capped.
-func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
+// readHistory is the activity feed, NEWEST FIRST and capped, and it SAYS when
+// it capped.
+//
+// The second return is what this read was missing. A task with five hundred
+// changes answered fifty of them and reported nothing, so a reader — a model
+// deciding whether anybody has touched this since Tuesday, a person reading the
+// panel — could not tell a task with a long life from one with fifty changes in
+// it. That is the failure [readGroups] names one file over: "a board that drew
+// sixty-four of two hundred columns and reported nothing would look like a
+// company with sixty-four assignees."
+//
+// ONE EXTRA ROW IS THE EVIDENCE, the same shape [readRouting] uses: the page
+// stays at the bound and the caller is told it was cut, rather than paying for
+// a COUNT over a table that grows for the life of the task to learn one bit.
+func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, bool, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, kind, actor, actor_kind, operator_id, comment_id, excerpt,
 		       fields_json, turn_id, notified, effective_at, log_seq
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
-		LIMIT ?`, taskID, limit)
+		LIMIT ?`, taskID, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: read the history of %s: %w", taskID, err)
+		return nil, false, fmt.Errorf("tracker: read the history of %s: %w", taskID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []HistoryEntry
+	truncated := false
 	for rows.Next() {
+		if len(out) == limit {
+			truncated = true
+			break
+		}
 		var e HistoryEntry
 		var actorKind, fields string
 		var notified int
@@ -582,7 +617,7 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		if err := rows.Scan(&e.ID, &e.Kind, &e.Actor, &actorKind, &e.OperatorID,
 			&e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
 			&effective, &seq); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		e.ActorKind = AuthorKind(actorKind)
 		e.Quiet = notified == 0
@@ -597,7 +632,7 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, truncated, rows.Err()
 }
 
 // readLinks is both directions of every relation.

@@ -865,8 +865,11 @@ func (t *getWorkItem) Description() string {
 		"links in both directions, the most recent comments and its recent " +
 		"history. Comment bodies in the thread are EXCERPTS, ending in `…` " +
 		"where one was cut — pass `comment` with that comment's id to read " +
-		"it whole. Take `task.version` from the result and pass it back as " +
-		"`if_match` on update_work_item to make your edit conditional."
+		"it whole. `history` is the newest changes only: when " +
+		"`history_truncated` is true the item has older ones, and " +
+		"`" + tracker.TaskActivityTool + "` pages all of them. Take " +
+		"`task.version` from the result and pass it back as `if_match` on " +
+		"update_work_item to make your edit conditional."
 }
 
 func (t *getWorkItem) Parameters() map[string]any {
