@@ -198,6 +198,17 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		for _, d := range items {
+			// FORGOTTEN FIRST, for the reason [attachment.apply]
+			// gives on the single-message path: a partition that
+			// succeeded after failing must not carry those failures
+			// into a later redelivery of the same sequences, and the
+			// map would otherwise hold every sequence this seat ever
+			// failed for the life of the attachment. That is
+			// ordinary operation here — an answer a parked coding
+			// run is still owed is NAKed and acked on a later pass.
+			if md, err := d.msg.Metadata(); err == nil {
+				a.settled(md.Sequence.Stream)
+			}
 			if err := d.msg.Ack(); err != nil {
 				a.log.Warn("ack_failed", "error", err.Error())
 			}
