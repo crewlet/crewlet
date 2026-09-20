@@ -55,13 +55,23 @@ linters:
       enable:
         - shadow
     staticcheck:
-      # The SA (correctness) and ST (style) families are on, which is the
-      # default. The QF family is NOT: it is quickfix SUGGESTIONS — "you
-      # could remove the embedded field from this selector", "you could use
-      # a tagged switch" — and this tree writes `db.Conn.Begin` rather than
-      # `db.Begin` on purpose, because naming the embedded type is what says
-      # which of two Begins a reader is looking at. A refactoring assistant's
-      # opinions are not a gate.
+      # `all` IS ALL FOUR FAMILIES — SA (correctness), S (simplification),
+      # ST (style) and QF (quickfix) — minus the two named below. It is not
+      # the default set, which switches several ST checks off; naming `all`
+      # turns them on deliberately.
+      #
+      # TWO QUICKFIX CHECKS ARE OFF, and only two. Each is a refactoring
+      # assistant's opinion this tree has already decided against:
+      #   QF1008 — "you could drop the embedded field from this selector".
+      #            This tree writes `db.Conn.Begin` rather than `db.Begin`
+      #            on purpose, because naming the embedded type is what says
+      #            which of two Begins a reader is looking at.
+      #   QF1002 — "you could use a tagged switch". The untagged form is
+      #            what lets a case compare on something other than the one
+      #            value, which several of the switches here do.
+      # The REST of QF is on and has caught real things — QF1001 on a
+      # `!(a && b && c)` that reads as three unrelated refusals. Turning the
+      # family off wholesale would be a wider claim than these two lines.
       checks:
         - all
         - -QF1008
