@@ -493,7 +493,23 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// redelivery get a real pass once the ceiling moves — so no path left
 	// here wants a mark released, and a release on a path that cannot
 	// happen is a release that does nothing.
-	if !r.mark(turn.DedupeKey()) {
+	// A PARKED TURN DOES NOT SPEND IT, and that is the one condition on
+	// this guard. A suspended executor publishes `turn_completed` carrying
+	// the suspend's own self_iterate, and its RESUMED half publishes under
+	// the same run — so marking the park refused the resume as a duplicate,
+	// and a seat that does its work through `run_sandbox` reflected on
+	// nothing, ever: no episode, no diary row, no counterparty profile, no
+	// skill, with an empty memory tab as the only symptom.
+	//
+	// The pass still RUNS for a parked turn, because one worker legitimately
+	// wants it: observing who you talked to does not depend on what the
+	// agent decided to do next, so the counterparty profiler takes no
+	// [Turn.Settled] gate. What a redelivered park can now repeat is that
+	// one worker's auxiliary call — and its own durable guard
+	// (`last_work_key`) still stops the interaction being counted twice,
+	// which is the half that would have been wrong rather than merely
+	// expensive.
+	if turn.Settled() && !r.mark(turn.DedupeKey()) {
 		log.DebugContext(ctx, "reflection_skipped_duplicate", "turn_id", tc.TurnID,
 			"dedupe_key", turn.DedupeKey())
 		return Reflection{Skip: SkipDuplicate}

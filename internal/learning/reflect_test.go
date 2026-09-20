@@ -964,3 +964,41 @@ func TestTwoRunsOfOneTriggerReflectOnce(t *testing.T) {
 		t.Errorf("the worker ran %d times for one unit of work, want 1", w.ran())
 	}
 }
+
+// AND A PARKED TURN DOES NOT SPEND THE MARK, which is what made a seat that
+// works through `run_sandbox` learn nothing at all.
+//
+// A suspended executor publishes `turn_completed` carrying the suspend's own
+// self_iterate. Every worker declines it on [Turn.Settled] — but the mark was
+// taken before they were asked, and it is never released, so the RESUMED
+// half, which publishes under the same run, was refused as a duplicate. No
+// episode, no diary row, no counterparty profile, no skill, and the only
+// symptom is an empty memory tab.
+func TestAParkedTurnLeavesTheMarkForItsResumedHalf(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "diarist"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+
+	parked := settledTurn()
+	parked.TurnID, parked.WorkKey = "run-1", "wk-1"
+	// What a suspend publishes: the turn has not decided anything yet.
+	parked.ReviewOutcome = "self_iterate"
+	if got := reflectOnce(r, parked); got.Skip != "" {
+		t.Fatalf("a parked turn was skipped wholesale as %q — the counterparty "+
+			"profiler asks for exactly these", got.Skip)
+	}
+
+	// The resume: the same run, finished this time.
+	resumed := settledTurn()
+	resumed.TurnID, resumed.WorkKey = "run-1", "wk-1"
+	if got := reflectOnce(r, resumed); got.Skip != "" {
+		t.Errorf("the resumed half was skipped as %q — the seat learns nothing "+
+			"from any turn that used a sandbox", got.Skip)
+	}
+	// Twice: once for the park (a worker that takes no Settled gate wants
+	// it) and once for the resume. What must not happen is the resume being
+	// refused, which is what the mark did.
+	if w.ran() != 2 {
+		t.Errorf("the worker ran %d times, want the park and then the resume", w.ran())
+	}
+}
