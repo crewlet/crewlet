@@ -103,7 +103,7 @@
 
 .palette {
   width: min(620px, 100%);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-3);
@@ -172,13 +172,13 @@
   border-top: 1px solid var(--border-subtle);
   font-size: var(--fs-3xs);
   color: var(--text-muted);
-  background: var(--surface-2);
+  background: var(--surface-raised);
 }
 
 .drawer-veil {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 60%, transparent);
   z-index: calc(var(--z-drawer) - 1);
 }
 

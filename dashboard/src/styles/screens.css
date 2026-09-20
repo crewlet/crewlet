@@ -10,7 +10,7 @@
 .turn-card {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   overflow: hidden;
 }
 .turn-card.live {
@@ -65,7 +65,7 @@
 .phase-card {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   overflow: hidden;
 }
 .phase-card.failed {
@@ -324,7 +324,7 @@
 
 .tool-row {
   border-radius: var(--r-xs);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
 }
 .tool-row.failed {
@@ -403,7 +403,7 @@
   padding: var(--space-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   text-align: left;
   min-width: 0;
   transition: border-color var(--dur-fast) var(--ease);
@@ -441,7 +441,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   padding: var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   min-width: 0;
 }
 .org-unit-head {
@@ -471,7 +471,7 @@
   padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   min-width: 190px;
   text-align: left;
 }
@@ -981,7 +981,7 @@
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text-secondary);
   font-size: var(--fs-2xs);
   cursor: pointer;
@@ -1201,7 +1201,7 @@
 }
 
 .int-card {
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -1275,7 +1275,7 @@
   width: var(--row-h-lg);
   height: var(--row-h-lg);
   border-radius: var(--r-full);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text);
 }
 .vendor-mark {
@@ -1603,7 +1603,9 @@
 .int-seat-form {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  /* THE RUNG ABOVE ITS GROUND. This block lives inside a modal, and a modal
+   paints the panel rung. */
+  background: var(--surface-raised);
 }
 .int-seat-form + .int-seat-form {
   margin-top: calc(var(--space-3) - var(--space-5));
@@ -1637,7 +1639,7 @@
   transform: rotate(90deg);
 }
 .int-seat-summary:hover {
-  background: var(--surface-2);
+  background: var(--surface-raised);
 }
 /* The badge sits at the far end, so a column of blocks reads down its right
    edge as a list of what is left to do. */
@@ -1710,7 +1712,7 @@
   overflow: auto;
   padding: var(--space-3);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -1748,7 +1750,7 @@
   margin: 0;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   font-size: var(--fs-2xs);
   line-height: 1.5;
   color: var(--text-muted);
@@ -1855,7 +1857,10 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 1px var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--surface-1);
+  /* THE RUNG ABOVE ITS GROUND. A chip inside `.int-card`, which is a panel, so
+   at the panel rung it drew nothing — and it drew nothing before this ramp was
+   named either, when both were the page's colour. */
+  background: var(--surface-raised);
   color: var(--text-muted);
   font-size: var(--fs-2xs);
   /* The addresses and URLs this carries have no spaces to break at. */
@@ -1915,7 +1920,7 @@ details > summary.int-summary::-webkit-details-marker {
   flex-wrap: wrap;
   gap: var(--space-4) var(--space-6);
   padding: var(--space-3) var(--space-4);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-1), var(--inset-hairline);
@@ -2045,11 +2050,11 @@ details > summary.int-summary::-webkit-details-marker {
 }
 /* A LANE IS A RECESS IN THE PAGE, and `--surface-inset` is the token whose
    job that is — an overlay that darkens the ground in light and lifts it in
-   dark, so the lane reads as a surface under the cards in BOTH. `--bg-sunken`
-   was the wrong one: it is the app's own ground, BELOW the page in either
-   theme, and in dark that put the lane darker than what surrounds it — an
-   empty column became a hole nobody could see, so the one lane with room in
-   it was the one that looked absent. */
+   dark, so the lane reads as a surface under the cards in BOTH. The retired
+   `--bg-sunken` was the wrong one: it resolved to the panel colour, ABOVE the
+   page in either theme, so a recess in the page was drawn as a thing standing
+   on it — and an empty column read as a hole nobody could see, which made the
+   one lane with room in it the one that looked absent. */
 .work-col {
   flex: 0 0 auto;
   width: min(292px, 82vw);
@@ -2120,7 +2125,7 @@ details > summary.int-summary::-webkit-details-marker {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3) var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-1);
@@ -2327,7 +2332,7 @@ details > summary.int-summary::-webkit-details-marker {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
@@ -2402,18 +2407,18 @@ details > summary.int-summary::-webkit-details-marker {
    — so it is drawn quieter rather than left out, which is what lets a task
    due on the 1st be visible from the month before it.
 
-   THE GROUND IS RUNG 3, AND RUNG 2 WAS A NO-OP. This rule said `--surface-2`
-   and rendered nothing from the day it was written: that token is
-   `--color-surface-topbar-lift`, which is #f4f4f5 light and #1c1e24 dark —
-   byte-identical to `--color-surface-subtle`, the ground every Card in this
-   product paints, in all three states of the cascade. So every cell of the grid
-   came back the card's own colour and the leading 31 was indistinguishable from
-   the 1st. The `--surface-1/2/3` ramp steps off the PAGE and a card already
-   stands on rung 2, so rung 3 is the first step a card can show. See uilet.css's
-   surfaces note; `styles/surfaces.test.ts` resolves both against the installed
-   palette and fails if they collide again. */
+   THE GROUND IS A PANEL, SO THE TINT HAS TO BE THE RUNG ABOVE ONE. This rule
+   said `--surface-2` and rendered nothing from the day it was written: that
+   token was `--color-surface-topbar-lift`, which is #f4f4f5 light and #1c1e24
+   dark — byte-identical to `--color-surface-subtle`, the ground every Card in
+   this product paints, in all three states of the cascade. So every cell of
+   the grid came back the card's own colour and the leading 31 was
+   indistinguishable from the 1st. The ramp is named by rung now and there is
+   exactly one step above a panel; see uilet.css's surfaces note.
+   `styles/surfaces.test.ts` resolves every pair against the installed palette
+   and fails if any of them collide again. */
 .work-cal-cell.out {
-  background: var(--surface-3);
+  background: var(--surface-raised);
 }
 .work-cal-day {
   align-self: flex-start;
@@ -2910,7 +2915,7 @@ a.work-cal-chip {
    ends looks like one rewritten in the middle. */
 .diff-skip {
   padding: var(--space-1) var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text-muted);
   font-family: var(--font-sans);
   font-size: var(--fs-2xs);
@@ -3019,7 +3024,7 @@ a.work-cal-chip {
   overflow-y: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-1);
+  background: var(--surface-panel);
 }
 .tl-inner {
   position: relative;
@@ -3112,7 +3117,7 @@ a.work-cal-chip {
   text-overflow: ellipsis;
 }
 .tl-bar[data-tone="planned"] {
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border-color: var(--border-strong);
   color: var(--text);
 }
@@ -3159,7 +3164,10 @@ a.work-cal-chip {
   left: 0;
   top: 24px;
   z-index: 3;
-  background: var(--surface-1);
+  /* THE RUNG ABOVE ITS GROUND. The frozen name column sits over `.tl-scroll`,
+   which is a panel, and an opaque background is the whole reason it has one —
+   at the same rung the bars scrolled under it invisibly. */
+  background: var(--surface-raised);
   border-right: 1px solid var(--border-subtle);
 }
 .tl-name {
@@ -3374,7 +3382,7 @@ a.work-cal-chip {
   padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--surface-raised);
 }
 /* A DASHED EDGE ON THE IRREVERSIBLE ONE, not a red fill: it is still just
    text on a page, and a block that shouted would be a delete button. */
@@ -3414,7 +3422,7 @@ a.work-cal-chip {
   align-items: stretch;
   gap: var(--space-1) var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
 }
@@ -3486,7 +3494,7 @@ a.work-cal-chip {
   top: var(--sticky-top);
   min-width: 0;
   padding: var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
 }
@@ -3528,7 +3536,7 @@ a.work-cal-chip {
   flex-direction: column;
   gap: 2px;
   padding: var(--space-3);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--r-md);
 }

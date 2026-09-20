@@ -174,7 +174,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border-right: 1px solid var(--border);
 }
 
@@ -275,7 +275,7 @@
   font-weight: var(--fw-semibold);
   line-height: 15px;
   text-align: center;
-  background: var(--bg-sunken);
+  background: var(--surface-raised);
   color: var(--text-muted);
   border: 1px solid var(--border);
   font-variant-numeric: tabular-nums;
@@ -357,7 +357,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border-right: 1px solid var(--border);
 }
 
@@ -570,7 +570,7 @@
   min-height: var(--page-bar-h);
   padding: var(--space-1) var(--space-4);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-1);
+  background: var(--surface-panel);
   flex: 0 0 auto;
 }
 
@@ -925,7 +925,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface-1);
+  background: var(--surface-panel);
   border-left: 1px solid var(--border);
 }
 
@@ -965,7 +965,7 @@
     display: block;
     position: fixed;
     inset: 0;
-    background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+    background: color-mix(in srgb, var(--surface-panel) 60%, transparent);
     z-index: calc(var(--z-drawer) - 1);
   }
 
@@ -1014,7 +1014,7 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   overflow: clip;
-  background: var(--surface-1);
+  background: var(--surface-panel);
 }
 
 /* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
@@ -1054,7 +1054,7 @@
      high, which is the cheaper of the two errors. */
   min-height: var(--row-h);
   border-bottom: 1px solid var(--border);
-  background: var(--bg-sunken);
+  background: var(--surface-raised);
   position: sticky;
   /* NOT 0: `.toolbar` is sticky at the top of the same scroller, opaque and
      at --z-sticky, so a header that stopped at 0 would stop underneath it.
@@ -1201,7 +1201,7 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--bg-sunken);
+  background: var(--surface-raised);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
   position: sticky;
@@ -1226,7 +1226,7 @@
   padding: var(--space-1) var(--space-3);
   font-size: var(--fs-3xs);
   color: var(--text-muted);
-  background: var(--bg-sunken);
+  background: var(--surface-raised);
 }
 
 .grid-foot {
@@ -1235,7 +1235,7 @@
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border);
-  background: var(--bg-sunken);
+  background: var(--surface-raised);
   font-size: var(--fs-2xs);
 }
 
@@ -1318,7 +1318,7 @@
   width: 64px;
   height: 6px;
   border-radius: 3px;
-  background: var(--bg-sunken);
+  background: var(--surface-raised);
   overflow: hidden;
 }
 

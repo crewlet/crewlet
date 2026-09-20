@@ -31,7 +31,7 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border-radius: var(--r-sm);
 }
 
@@ -335,10 +335,12 @@ a.seat-chip:hover {
      otherwise draw a list past the bottom of the dialog. */
   max-height: 12rem;
   overflow-y: auto;
-  /* OPAQUE, and --surface-1 is the token that is: this floats over a dialog
-     that is already a surface, and a translucent one let the help line and
-     the fields beneath show through the names. */
-  background: var(--surface-1);
+  /* OPAQUE, and a rung is: this floats over a dialog that is already a
+     surface, and a translucent one let the help line and the fields beneath
+     show through the names. */
+  /* THE RUNG ABOVE ITS GROUND, not the same one: this opens over a modal, and a
+     modal paints the panel rung. */
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-2);
@@ -397,7 +399,7 @@ a.seat-chip:hover {
    `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
    is how a correct role ships with the selected segment drawn as unselected. */
 .segmented > button[aria-checked="true"] {
-  background: var(--surface-1);
+  background: var(--surface-panel);
   color: var(--text);
   box-shadow: var(--shadow-1);
 }
@@ -538,7 +540,7 @@ kbd {
 .veil {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--bg-sunken) 72%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
   backdrop-filter: blur(3px);
   display: flex;
   align-items: flex-start;

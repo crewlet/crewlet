@@ -18,9 +18,18 @@ import { contrast, paletteStates, parseHex, type Rgb } from "@crewlethq/tokens/t
  * card in the card's own colour, the whole grid came back one flat field, and
  * the leading 31 of the previous month was indistinguishable from the 1st.
  *
- * THE RAMP IS THE ROOT CAUSE, NOT THE CALL SITE: `--surface-1/2/3` steps off the
- * PAGE, and a card already stands on rung 2, so rung 3 is the first step a card
- * can show. That is what this file measures.
+ * THE RAMP IS THE ROOT CAUSE, NOT THE CALL SITE, and it was wrong at both ends.
+ * `--surface-1` was `--color-surface-topbar`, which is the same bytes as
+ * `--color-surface-background` — so the page bar, the rail, the workspace
+ * sidebar, every card and every grid painted THE PAGE'S OWN COLOUR and were
+ * told apart from it by a 1px border. `--surface-2` was the card's colour, as
+ * above. Twenty-two declarations at one end and thirteen at the other, none of
+ * which drew anything.
+ *
+ * The package has exactly three opaque values and the ramp has two names over
+ * the two that are not the page: `--surface-panel` and `--surface-raised`. That
+ * is what this file measures — every pair, not the one cell a reader happened
+ * to notice.
  *
  * ASSERTED IN THE SHEET plus the palette, because jsdom computes no layout and
  * resolves no custom property: no rendered-DOM suite can see a background at
@@ -135,13 +144,53 @@ describe("a screen's tint against the ground it lands on", () => {
     );
   });
 
+  // THE ROOT-CAUSE CASE, and the one that would have caught all thirty-five
+  // dead declarations at once rather than the single cell a reader noticed.
+  //
+  // A ramp is only a ramp if its rungs are different colours. The package
+  // publishes nine surface names over three opaque values, so a name is no
+  // evidence at all: `--surface-1` was `topbar`, which is `background`, and
+  // `--surface-2` was `topbar-lift`, which is `subtle`. Both parsed, both
+  // applied, neither drew anything, and nothing in this suite could tell —
+  // because it measured one call site rather than the ladder.
+  test("every rung of the ramp is a different colour from every other", () => {
+    const alias = aliases();
+    const RAMP = ["--bg", "--surface-panel", "--surface-raised"];
+    for (const [state, values] of themes()) {
+      const seen = new Map<string, string>();
+      for (const rung of RAMP) {
+        const at = hex(resolved(values, alias, rung));
+        const already = seen.get(at);
+        expect(
+          already,
+          `${state}: ${rung} is the same colour as ${already} — a declaration ` +
+            `naming either one draws nothing on the other`,
+        ).toBeUndefined();
+        seen.set(at, rung);
+      }
+    }
+  });
+
+  // AND A CARD STANDS ON RUNG ONE, which is why there is exactly one rung a
+  // card can show. Stated here rather than in prose alone: if the package ever
+  // moves `Card` onto another value, the sentence every surface comment in
+  // this tree rests on stops being true and this is what says so.
+  test("a card paints the panel rung, so only the raised one shows inside it", () => {
+    const alias = aliases();
+    for (const [state, values] of themes()) {
+      expect(hex(resolved(values, alias, "--surface-panel")), state).toBe(
+        hex(resolved(values, alias, CARD_GROUND)),
+      );
+    }
+  });
+
   // A VACUITY FLOOR, the house idiom: an empty resolve satisfies the first case
   // perfectly otherwise.
   test("the palette it measures against is the real one", () => {
     const states = themes();
     expect(states).toHaveLength(3);
     for (const [, values] of states) expect(values.size).toBeGreaterThan(20);
-    expect(aliases().get("--surface-3")).toBe("--color-surface-topbar-active");
+    expect(aliases().get("--surface-raised")).toBe("--color-surface-elevated");
   });
 
   // AND IT CAN TELL. The mutation the cases above are worth nothing without:
