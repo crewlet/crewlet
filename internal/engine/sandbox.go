@@ -478,9 +478,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     revert puts the run back to awaiting THEM. Nothing is working, and
 	//     an indicator over that wait tells the one person who could move it
 	//     that nobody needs them — the same lie the park exists to stop. So
-	//     it is CLEARED, and the retry loses nothing: their next message
-	//     raises a fresh indicator off its own trigger, exactly as this one
-	//     did.
+	//     it is CLEARED, and nothing is left to claim otherwise: the
+	//     dispatcher's offer reports the failure rather than the delivery as
+	//     handled, so the message that carried the answer FALLS THROUGH —
+	//     run as the ordinary chat message it looks like on a seat a parked
+	//     run left free, which raises a fresh indicator off its own trigger,
+	//     or requeued where a second run holds the seat, which brings it
+	//     back. Only the second of those is a redelivery, and neither is the
+	//     coding run getting its answer: that run is awaiting the
+	//     conversation's NEXT message. See [Dispatcher.answered].
 	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
@@ -609,12 +615,13 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// coming back for this turn.
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
-		// Reverted and redelivered, so the turn is not over — a peer, or
-		// this node on the next delivery, resumes the same conversation.
+		// Reverted, so the turn is not over: a completion comes round
+		// again — from a peer or from this node's next delivery — and an
+		// answer-driven resume goes back to awaiting the person who sent
+		// it, for the conversation's next message rather than for a
+		// redelivery of this one.
 		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
-		// same retry rule reached one step later, and the revert it counts
-		// on still puts an answer-driven resume back to awaiting the person
-		// who sent it.
+		// same retry rule reached one step later, over the same revert.
 		working = rejoined
 		return err
 	}

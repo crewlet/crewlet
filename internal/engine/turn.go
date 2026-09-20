@@ -718,6 +718,15 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 //
 // BOTH VALUES GO, because only the store knows which age of row it is
 // matching. See [sandbox.ConversationRef.Answers].
+//
+// AND AN ERROR OUTRANKS `handled`, which is worth stating because the two are
+// not exclusive. The coordinator answers true WITH an error when it claimed a
+// parked run and the resume it drove then failed: on its side the claim is given
+// back, so that run is awaiting the conversation's next message. Reported
+// unhandled here, THIS delivery goes on to whatever the screening said — run as
+// the ordinary chat message it looks like on the free seat a parked run leaves,
+// or requeued behind a seat a second run holds. So the person is answered by a
+// turn rather than by the coding run they were replying to.
 func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) bool {
 	if d.Answer == nil {
 		return false

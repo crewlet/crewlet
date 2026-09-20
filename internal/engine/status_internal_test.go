@@ -1143,9 +1143,13 @@ var resumeRetries = map[string]func(*Company) string{
 // to stop — told to the one human who could move the work, moments after they
 // tried to.
 //
-// Nothing is lost by clearing, which is the asymmetry's other half: their next
-// message raises a fresh indicator off its own trigger, exactly as this one
-// did, where a redelivered completion has only the hold to take back.
+// Nothing is left claiming work, which is the asymmetry's other half: the
+// dispatcher's offer reports the failure rather than the delivery as handled, so
+// the message that carried the answer falls through and is run as the ordinary
+// chat message it looks like — raising a fresh indicator off its own trigger,
+// exactly as this one did — or requeued where a second run holds the seat. A
+// completion has no such second life: it is the run finishing, not a person
+// talking, so a redelivered one has only the hold to take back.
 func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 	for name, derail := range resumeRetries {
 		t.Run(name, func(t *testing.T) {
