@@ -266,8 +266,8 @@ func (r Request) Ask() []*events.Event {
 //     question leaves its seat free, so the reply that resumes it arrives
 //     here as an ordinary message and must be claimed before a turn eats it.
 //     What the offer answers is what happens to the delivery: spent on the
-//     run it resumed, REQUEUED while a run is still owed it, or handed on to
-//     the ordinary route. It is the disposition that decides and never the
+//     run it resumed, HANDED BACK while a run is still owed it, or passed on
+//     to the ordinary route. It is the disposition that decides and never the
 //     error beside it — see [Dispatcher.answered];
 //   - the conversation read comes after that, because it is keyed on a
 //     conversation the surviving events name;
@@ -341,18 +341,27 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		return d.park(ctx, handle, screening.Events, held)
 	case inbox.ActionPark:
-		if screening.OfferAsSandboxAnswer &&
-			d.answered(ctx, handle, screening.Events) == sandbox.AnswerConsumed {
-			// The delivery WAS the answer, and the resume it triggered has
-			// already run. Acking is what stops it being requeued behind
-			// the question it just answered.
-			//
-			// ONLY THAT ONE ANSWER ACKS. The other two both land on the
-			// park below and want exactly what it does — a deferred
-			// answer asks to come back, and a delivery no run is owed is
-			// the held seat's ordinary mail — so this branch needs no
-			// case for them.
-			return queue.Ack()
+		if screening.OfferAsSandboxAnswer {
+			if disposition, _ := d.answered(ctx, handle, screening.Events); disposition == sandbox.AnswerConsumed {
+				// The delivery WAS the answer, and the resume it
+				// triggered has already run. Acking is what stops it
+				// being requeued behind the question it just answered.
+				//
+				// ONLY THAT ONE ANSWER ACKS. The other two both land on
+				// the park below and want exactly what it does — a
+				// deferred answer asks to come back, and a delivery no
+				// run is owed is the held seat's ordinary mail — so this
+				// branch needs no case for them.
+				//
+				// AND THE PARK IS NOT SPACED, unlike the hand-back the
+				// free-seat path makes below: this delivery is being
+				// requeued because a coding job HOLDS the seat, which
+				// outlasts any ack window, so it cannot sit unacked
+				// waiting for a backoff. That is also why the offer
+				// charges no attempt while a run holds the seat — see
+				// [sandbox.MaxAnswerAttempts].
+				return queue.Ack()
+			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
 	}
@@ -393,31 +402,43 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// cannot read the ledger at all — a parked partition is never marked
 	// done — so it offers what it has.
 	if screening.OfferAsSandboxAnswer {
-		switch d.answered(ctx, handle, surviving) {
+		disposition, cause := d.answered(ctx, handle, surviving)
+		switch disposition {
 		case sandbox.AnswerConsumed:
 			// Spent on the run it answered: the resume has already run,
 			// and no turn runs on it here.
 			return queue.Ack()
 		case sandbox.AnswerDeferred:
 			// STILL OWED TO A RUN, so it comes back rather than being
-			// worked. Requeued and acked rather than deferred, which
-			// would stop this seat consuming altogether: one parked
-			// run's failing resume must not wedge the whole mailbox,
-			// and the seat is otherwise free — a run parked on a
-			// question holds nothing.
+			// worked — and it comes back SPACED, which a requeue could
+			// not do. A NAK is the one return that carries the queue's
+			// own backoff (seed, doubling, ceiling), so the attempts
+			// this node's bound allows are spread across minutes
+			// instead of being burned in milliseconds against a
+			// transient that has had no time to clear. It is also
+			// exactly what a completion that cannot be resumed does,
+			// which is the parity the answer route only claimed before.
 			//
-			// A REQUEUE SENDS IT TO THE TAIL, so it can arrive after
-			// messages that followed it on the same conversation. That
-			// cost is taken deliberately: it is the same one every
-			// sandbox park pays, and the alternative on this path is
-			// not an ordering — it is the answer being spent on an
-			// unrelated turn, which nothing recovers.
+			// NOT A DEFERRAL, which would stop this seat consuming
+			// altogether: one parked run's failing resume must not
+			// wedge the whole mailbox, and the seat is otherwise free —
+			// a run parked on a question holds nothing. A NAK returns
+			// this delivery and nothing else.
 			//
-			// The SURVIVORS, not the whole partition: what the
-			// completion ledger has already worked is recorded, and
-			// requeuing it would offer a worked trigger back to the
-			// same match on every redelivery.
-			return d.park(ctx, handle, surviving, held)
+			// NOT A REQUEUE either, which is what this was: a republish
+			// is a NEW message, delivered again the instant it lands,
+			// so nothing spaced the attempts and the broker's own
+			// delivery budget started over on every copy. It sent the
+			// message to the TAIL as well, behind anything that
+			// followed it on the same conversation; a NAK keeps its
+			// place.
+			//
+			// THE WHOLE PARTITION GOES BACK, the ledger's own survivors
+			// included, because a NAK returns the delivery as it
+			// arrived. Nothing is lost by that: the redelivery reads
+			// the completion ledger again and drops what was worked
+			// before the offer is made a second time.
+			return d.handBackAnswer(handle, cause)
 		}
 	}
 
@@ -750,11 +771,12 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // it looks like — which is recoverable, where acking a message nothing handled
 // is not.
 //
-// AND REQUEUED WHERE A RUN IS STILL OWED IT. That is the other half, and the
-// one this frame used to get wrong: a run the coordinator matched and could
-// not resume is still waiting for this exact message, so falling through would
-// spend it on an unrelated turn. [sandbox.AnswerDeferred] is the coordinator
-// saying so, and the caller requeues rather than works the delivery.
+// AND HANDED BACK WHERE A RUN IS STILL OWED IT. That is the other half, and
+// the one this frame used to get wrong: a run the coordinator matched and
+// could not resume is still waiting for this exact message, so falling through
+// would spend it on an unrelated turn. [sandbox.AnswerDeferred] is the
+// coordinator saying so, and the caller returns the delivery rather than
+// working it — see [Dispatcher.handBackAnswer] for why that return is a NAK.
 //
 // THE CONVERSATION IDENTITY is the disambiguation, and the partition travels
 // beside it for the rows parked before an identity existed. The rule — "the
@@ -775,7 +797,9 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // failures — it is the only frame that can, since it holds the run — and hands
 // back both: the disposition to act on and the error to log. Reading the error
 // instead is what spent a person's answer on an unrelated turn on the one
-// route where the run was still owed it.
+// route where the run was still owed it. BOTH TRAVEL OUT of this function for
+// the same reason they travel in: a NAK carries a cause, and the cause a
+// caller would otherwise invent is the one thing it does not know.
 //
 // AN UNUSABLE DISPOSITION FALLS BACK TO [sandbox.AnswerNotMine], not to a
 // requeue. Nothing in this build produces one — the seam has a single
@@ -784,16 +808,16 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // supports and which cannot loop. A defer would requeue with nothing to bound
 // it: the bound lives with the RUN the coordinator matched, and a disposition
 // this frame cannot read names no run.
-func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) sandbox.AnswerDisposition {
+func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) (sandbox.AnswerDisposition, error) {
 	if d.Answer == nil {
-		return sandbox.AnswerNotMine
+		return sandbox.AnswerNotMine, nil
 	}
 	conv := sandbox.ConversationRef{
 		Identity:  conversationIdentityOf(evs),
 		Partition: partitionKeyOf(evs),
 	}
 	if conv.Identity == "" && conv.Partition == "" {
-		return sandbox.AnswerNotMine
+		return sandbox.AnswerNotMine, nil
 	}
 	disposition, err := d.Answer(ctx, handle, conv, DescribeTrigger(evs), first(evs))
 	if err != nil {
@@ -814,9 +838,34 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 			"detail", "the sandbox coordinator answered with no disposition this build "+
 				"knows, so the delivery is handled as it would be on a node with no "+
 				"coordinator at all")
-		return sandbox.AnswerNotMine
+		return sandbox.AnswerNotMine, err
 	}
-	return disposition
+	return disposition, err
+}
+
+// handBackAnswer returns a delivery a parked coding run is still owed, so the
+// broker offers it again.
+//
+// A NAK, which on this path buys two things a requeue could not. It is SPACED
+// — the queue backs a failed delivery off (seed, doubling, ceiling) — so the
+// attempts [sandbox.MaxAnswerAttempts] allows are spread across the minutes a
+// seat handoff, a config apply or a store blip actually take, where a
+// republish handed all of them over in milliseconds. And it keeps the
+// message's IDENTITY and its place: a republish is a new message at the tail
+// of the inbox, behind whatever followed it on the same conversation, and one
+// whose delivery budget starts over on every copy.
+//
+// The cause travels into the NAK because the queue logs it and the
+// dead-letter boundary reads it: "this seat is still owed this answer" with
+// the coordinator's own failure under it is the whole explanation, and it is
+// the one a reader of a dead-lettered inbox event needs.
+func (d *Dispatcher) handBackAnswer(handle string, cause error) queue.Result {
+	if cause == nil {
+		// A deferral always carries one today, and a NAK with no error
+		// would be the one line in the log that says nothing at all.
+		cause = errors.New("the coordinator could not hand it to the run that asked")
+	}
+	return queue.Nak(fmt.Errorf("engine: %s is still owed this answer: %w", handle, cause))
 }
 
 // first is the partition's leading event, which is the one a resume is traced

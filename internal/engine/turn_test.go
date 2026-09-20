@@ -1437,11 +1437,16 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 // come. It is requeued instead, so this node or the seat's next owner is
 // offered it again.
 //
-// REQUEUED AND ACKED rather than deferred, which is the other half: a defer
-// stops the seat consuming altogether, and one parked run's failing resume
-// must not wedge a whole mailbox on a seat that is otherwise free — a run
-// parked on a question holds nothing.
-func TestAnAnswerAParkedRunIsStillOwedIsRequeuedRatherThanRun(t *testing.T) {
+// HANDED BACK WITH A NAK rather than deferred or requeued, and each of those
+// three is a different thing. A DEFERRAL stops the seat consuming altogether,
+// and one parked run's failing resume must not wedge a whole mailbox on a seat
+// that is otherwise free — a run parked on a question holds nothing. A REQUEUE
+// is a republish: a new message, delivered again the instant it lands, so
+// nothing spaced the attempts the bound allows and all of them burned in
+// milliseconds against a transient that had had no time to clear. A NAK is the
+// one return that carries the queue's own backoff, which is exactly what a
+// completion that cannot be resumed already got.
+func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
@@ -1459,26 +1464,37 @@ func TestAnAnswerAParkedRunIsStillOwedIsRequeuedRatherThanRun(t *testing.T) {
 	answer := inThread("notification", "chat:C1")
 	got := d.Dispatch(context.Background(), "swe", []*events.Event{answer})
 
-	if got.Outcome != queue.OutcomeAck {
-		t.Errorf("outcome = %v, want an ack: the delivery was requeued, and a "+
-			"defer would stop the seat consuming at all", got.Outcome)
+	if got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak: that is the one return the queue "+
+			"spaces, and an ack would have to requeue the delivery itself — "+
+			"immediately, which is what burned the whole bound in milliseconds",
+			got.Outcome)
+	}
+	if !errors.Is(got.Err, sandbox.ErrResumeUnavailable) {
+		t.Errorf("the nak carried %v, want the coordinator's own failure: the "+
+			"queue logs this one and a dead-letter boundary reads it", got.Err)
 	}
 	if len(r.reqs) != 0 {
 		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
 	}
-	if len(r.parked) != 1 || len(r.parked[0]) != 1 || r.parked[0][0] != answer {
-		t.Fatalf("the answer was not requeued (%v)", r.parked)
+	if len(r.parked) != 0 {
+		t.Fatalf("the answer was republished as well as handed back (%v): a "+
+			"requeue leaves a second copy for the redelivery to meet", r.parked)
 	}
 }
 
-// AND WHAT IS REQUEUED IS WHAT SURVIVED THE LEDGER.
+// AND WHAT IS OFFERED IS WHAT SURVIVED THE LEDGER.
 //
 // The offer on this path sits after the completion read, so the partition it
-// is handed is already shorter than the one that arrived. Requeuing the whole
-// partition would put a trigger this seat has already worked back on its own
-// inbox, where the next drain offers it to the same match all over again —
-// and the ledger exists precisely so a worked trigger is never worked twice.
-func TestAnAnswerRequeuesOnlyWhatTheLedgerLeft(t *testing.T) {
+// is handed is already shorter than the one that arrived: a trigger this seat
+// has already worked must never be spliced into somebody's coding run as its
+// answer as well.
+//
+// THE NAK STILL RETURNS THE WHOLE DELIVERY, because that is what a nak is, and
+// nothing is lost by it: the redelivery runs this same screening again, reads
+// the same ledger, and drops the worked trigger before the second offer is
+// made. It is the OFFER that has to be narrowed, not the hand-back.
+func TestAnAnswerIsOfferedOnlyWhatTheLedgerLeft(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
 	worked := inThread("notification", "chat:C1")
@@ -1496,17 +1512,22 @@ func TestAnAnswerRequeuesOnlyWhatTheLedgerLeft(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
+	var offered *events.Event
+	d.Answer = func(_ context.Context, _ string, _ sandbox.ConversationRef, _ string,
+		trigger *events.Event,
 	) (sandbox.AnswerDisposition, error) {
+		offered = trigger
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
 
-	if got := d.Dispatch(ctx, "swe", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeAck {
-		t.Errorf("outcome = %v, want an ack", got.Outcome)
+	if got := d.Dispatch(ctx, "swe", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak", got.Outcome)
 	}
-	if len(r.parked) != 1 || len(r.parked[0]) != 1 || r.parked[0][0] != fresh {
-		t.Fatalf("requeued %v, want only the trigger the ledger had not worked", r.parked)
+	if offered != fresh {
+		t.Fatalf("offered %v, want only the trigger the ledger had not worked", offered)
+	}
+	if len(r.parked) != 0 {
+		t.Fatalf("the delivery was republished as well as handed back (%v)", r.parked)
 	}
 }
 

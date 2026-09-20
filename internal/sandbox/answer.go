@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -27,10 +28,10 @@ import (
 //   - [AnswerConsumed] — ack, run no turn. Wrong here, the person's message is
 //     dropped outright: no turn runs, no run was resumed, and nothing ever
 //     tells them so.
-//   - [AnswerDeferred] — requeue the delivery ([inbox.ActionPark]: republish,
-//     then ack), so this node or the seat's next owner offers it again. Wrong
-//     here, the message circles the seat's own inbox instead of being worked —
-//     which is why it is bounded; see [MaxAnswerAttempts].
+//   - [AnswerDeferred] — hand the delivery back so this node or the seat's
+//     next owner is offered it again. Wrong here, the message circles the
+//     seat's own inbox instead of being worked — which is why it is both
+//     bounded and SPACED; see [MaxAnswerAttempts].
 //   - [AnswerNotMine] — fall through to the ordinary route and let it be the
 //     turn it looks like. Wrong here, the answer is SPENT on an unrelated turn
 //     while a coding run is still owed it, which is the defect this type
@@ -85,28 +86,39 @@ func (d AnswerDisposition) Valid() bool {
 }
 
 // MaxAnswerAttempts is how many times ONE delivery is handed to ONE parked
-// run before this node stops requeueing it.
+// run before this node stops offering it and lets it be the ordinary message
+// it looks like.
 //
-// It counts ATTEMPTS, not requeues, so the last of them is not requeued: one
-// message reaches a run at most this many times, which is exactly what the
-// broker’s own budget means by 25 deliveries of one message.
+// It counts ATTEMPTS, not hand-backs, so the last of them is not handed back:
+// one message reaches one run at most this many times.
 //
-// A REQUEUE IS NOT A REDELIVERY, which is what makes this constant necessary.
-// The park path republishes the event onto the seat's own inbox and acks the
-// original ([Engine.park]), so the copy is a NEW message: the broker's
-// delivery budget — 25, in internal/queue/jetstream — counts deliveries of ONE
-// message and starts again on the republish. Nothing else bounds the loop — a run
-// parked on a question stays matchable for ever, since the pause reaper moves
-// it to [StatusReseed], which is still [Awaiting] — so a resume that fails the
-// same way every time would circle the inbox at whatever rate the broker will
-// serve, for the life of the process.
+// WHY A BOUND AT ALL. Nothing else ends the loop: a run parked on a question
+// stays matchable for ever — the pause reaper moves it to [StatusReseed],
+// which is still [Awaiting] — so a resume that fails the same way every time
+// would circle the seat's inbox for the life of the process.
 //
-// 25 IS THAT SAME BUDGET, chosen so the two routes into one resume tolerate an
-// identical failure identically: a completion that cannot be resumed NAKs and
-// is redelivered until the broker's budget is spent, and an answer that cannot
-// be resumed is requeued until this one is. A number of its own would have
-// been a second opinion about how many times a failing resume is worth
-// retrying, and the two would drift.
+// WHY TEN, AND WHAT EACH ATTEMPT NOW COSTS. A deferred answer is handed back
+// with a NAK ([Dispatcher.answered]), which is the same return the completion
+// route takes and therefore carries the same spacing: the queue's own backoff
+// — seed, doubling, ceiling, in internal/queue/jetstream — so ten attempts
+// span about two and a half minutes at the shipped values rather than the
+// milliseconds an immediate republish burned them in. That span is what the
+// failures reaching this path actually need: a seat lease moving to a node
+// that can resume the run takes at most one seat lease TTL (45 s, see
+// internal/seat), a config apply that brings a missing runner arrives on the
+// reconcile poll, and a store blip heals in seconds. And it stays well under
+// the broker's 25-delivery dead-letter budget, which this same message also
+// spends on ordinary handoffs — reaching THAT budget dead-letters the
+// person's reply, which is the one ending this route must never take.
+//
+// IT IS NOT THE BROKER'S NUMBER, and an earlier doc here claimed it was: 25
+// with no spacing is not "the tolerance a completion already had", because a
+// completion's 25 deliveries are spread across minutes by that same backoff
+// while an immediate republish spent all of them against a transient that had
+// not had a millisecond to clear. A count is not a tolerance; the pair of them
+// is.
+//
+// THE SECOND CLAUSE IS TIME, and it is the run's own: see [answerWindow].
 //
 // PER NODE AND PER PROCESS, deliberately: every failure that reaches here is a
 // statement about THIS node — no resumer, a suspended conversation this build
@@ -116,28 +128,87 @@ func (d AnswerDisposition) Valid() bool {
 // budget is spent: the turn is still resumable somewhere, so this node hands
 // the delivery back to the ordinary route rather than destroying work a peer
 // or a later build could still finish.
-const MaxAnswerAttempts = 25
+const MaxAnswerAttempts = 10
 
-// answerAttempt is this node's count of failed handoffs of one delivery to one
-// parked run.
+// maxAnswerDeliveries is how many of one run's deliveries this node keeps a
+// budget for at once.
 //
-// ONE SLOT PER RUN, keyed by turn id, holding the delivery it is counting: a
-// different message is a new attempt at the same question and gets its own
-// budget, so the count resets rather than accumulating across the several
-// replies a person may send. That also bounds the map by the number of parked
-// runs this node has, rather than by every message their conversations ever
-// carried.
-type answerAttempt struct {
-	// handle is the seat the run belongs to, so [Coordinator.ReleaseSeat]
-	// can drop what a seat handed on leaves behind.
+// THE BOUND ON THE TABLE ITSELF. A budget is per (run, delivery), so without
+// this a long-lived parked run on a busy conversation accumulates one entry
+// per message it was ever offered, for as long as the run lives. A parked run
+// has ONE open question, and what can be in hand-back for it at any moment is
+// the replies a person sent while this node was failing to hand the first one
+// over — within one requeue window (minutes) that is a handful. Four covers
+// that and caps one run's whole exposure at four budgets of
+// [MaxAnswerAttempts] attempts.
+//
+// A FULL TABLE DOES NOT EVICT A LIVE BUDGET. Spent entries go first, and when
+// every slot holds a live one the new delivery is refused a budget and handled
+// as the ordinary message it looks like: N live budgets evicting each other is
+// precisely the loop the per-delivery budget replaced, at N messages instead
+// of two. Dropping a SPENT entry is safe by comparison — its delivery has
+// already been let go to the ordinary route, so a copy of it arriving later
+// costs at most one further series.
+const maxAnswerDeliveries = 4
+
+// answerKey names what a delivery is owed to.
+//
+// The handle rides along with the turn id so [Coordinator.releaseAnswerAttempts]
+// can drop what a seat handed on leaves behind with a scan over keys rather
+// than a second index from seat to run.
+type answerKey struct {
 	handle string
+	turnID string
+}
 
-	// delivery is the event id the failures are counted against. Empty is a
-	// legitimate value — a caller with no trigger to name — and it simply
-	// shares one slot, which bounds more tightly rather than less.
-	delivery string
-
+// answerBudget is one delivery's series of failed handoffs to one run.
+//
+// ONE PER (RUN, DELIVERY), which is what a slot per run could not deliver: a
+// single slot holding the delivery it was counting RESET whenever a different
+// message arrived, so two replies circling one parked run reset each other on
+// every pass and neither budget ever ended. Two messages were enough to make
+// the bound unreachable and the loop infinite.
+type answerBudget struct {
+	// failures is how many handoffs of this delivery have failed.
 	failures int
+
+	// first is when the first of them failed, which is what the window in
+	// [answerWindow] is measured from.
+	first time.Time
+}
+
+// live reports whether this delivery is still worth handing back: within the
+// attempt ceiling, and within the run's own awaiting window.
+func (b answerBudget) live(now time.Time, window time.Duration) bool {
+	if b.failures >= MaxAnswerAttempts {
+		return false
+	}
+	// A window of zero is NOT "give up now". pause_ttl_seconds: 0 means
+	// "never hold a paused box", so such a run was torn down and re-seeds
+	// from git when its answer lands — it waits for the person with no
+	// deadline at all, and the attempt ceiling above is the whole bound.
+	return window <= 0 || now.Sub(b.first) < window
+}
+
+// answerWindow is how long this node keeps handing one message back to a run,
+// beside the attempt ceiling.
+//
+// THE RUN'S OWN AWAITING WINDOW, because that is the tolerance the run itself
+// declares: pause_ttl_seconds is how long the engine holds a box paused for
+// the person to reply, the same number [Waiter.reapExpiredPauses] enforces on
+// it. A seat whose role sets a short one has said a reply is worth little
+// after it, and bouncing that reply around the inbox for longer than the
+// engine was willing to wait for it costs the person an answer on a failure
+// that is plainly not transient.
+//
+// Measured from the FIRST FAILED HANDOFF rather than from the park, so a run
+// whose window has already lapsed — reaped, re-seeded, still awaiting — gets
+// the same attempts as any other for the reply that finally arrives.
+func answerWindow(run PendingRun) time.Duration {
+	if run.PauseTTLSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(run.PauseTTLSeconds * float64(time.Second))
 }
 
 // deliveryOf names the message an offer is carrying, for the attempt count.
@@ -161,8 +232,8 @@ func deliveryOf(trigger *events.Event) string {
 // decision: the caller logs it and acts on the disposition.
 func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *events.Event, cause error) (AnswerDisposition, error) {
 	delivery := deliveryOf(trigger)
-	left := c.spendAnswerAttempt(run.AgentHandle, run.TurnID, delivery)
-	if left > 0 {
+	window := answerWindow(run)
+	if c.spendAnswerAttempt(answerKeyFor(run), delivery, window) {
 		return AnswerDeferred, cause
 	}
 	detail := ""
@@ -171,64 +242,105 @@ func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *
 	}
 	log.ErrorContext(ctx, "sandbox_answer_requeue_exhausted",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "delivery", delivery,
-		"attempts", MaxAnswerAttempts, "error", detail,
+		"attempts", MaxAnswerAttempts, "window_s", window.Seconds(), "error", detail,
 		"detail", "this node could not hand this message to the coding run that asked, "+
-			"in every one of its attempts, so the message is run as the ordinary "+
+			"in every one of its spaced attempts, so the message is run as the ordinary "+
 			"message it looks like; the run stays parked on its question and its box "+
 			"is bounded by pause_ttl_seconds")
-	// THE COUNT STAYS, so this delivery is spent for good rather than
-	// starting a second budget if another copy of it reaches this node — a
-	// partial requeue leaves same-id copies behind, and the whole point of
-	// the bound is that ONE message gets one budget. A different message
-	// resets it, and the entry goes when the run ends or the seat does.
+	// THE BUDGET STAYS SPENT, so this delivery does not start a second one
+	// if another copy of it reaches this node — the park a held seat makes
+	// republishes, so same-id copies do exist. A different message gets its
+	// own budget, and the whole table goes when the run ends or the seat
+	// does.
 	return AnswerNotMine, cause
 }
 
-// spendAnswerAttempt charges one failed handoff and reports how many are left.
-//
-// Under the same lock as the seat counts, because both are read on the hot
-// path of a delivery and a second mutex would be a second thing to order.
-func (c *Coordinator) spendAnswerAttempt(handle, turnID, delivery string) (left int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	at := c.attempts[turnID]
-	if at.delivery != delivery {
-		// A DIFFERENT MESSAGE, so the budget starts again: this is a fresh
-		// attempt at the same question rather than another go at the same
-		// answer, and carrying the old count over would spend a new
-		// reply's chances on the last one's failures.
-		at = answerAttempt{handle: handle, delivery: delivery}
-	}
-	at.handle = handle
-	at.failures++
-	c.attempts[turnID] = at
-	return max(MaxAnswerAttempts-at.failures, 0)
+// answerKeyFor is the table key for a matched run.
+func answerKeyFor(run PendingRun) answerKey {
+	return answerKey{handle: run.AgentHandle, turnID: run.TurnID}
 }
 
-// clearAnswerAttempts forgets a run's count, which every outcome but a defer
+// spendAnswerAttempt charges one failed handoff of one delivery to one run and
+// reports whether the delivery should come back.
+//
+// Under the same lock as the seat counts, because both are read on the hot
+// path of a delivery and a second mutex would be a second thing to order —
+// and because the seat counts are what the first branch reads.
+func (c *Coordinator) spendAnswerAttempt(key answerKey, delivery string, window time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// NOTHING IS CHARGED WHILE ANOTHER RUN HOLDS THE SEAT. There the
+	// delivery is parked for the SEAT's sake whatever this offer says — an
+	// immediate republish, at a rate nothing here controls, for as long as
+	// that job runs — so charging would spend a message's whole budget
+	// inside one held run's park loop and leave nothing for the attempts
+	// that are actually spaced: the ones made once the seat is free, which
+	// is the state a parked run leaves it in.
+	if c.runs[key.handle].holding > 0 {
+		return true
+	}
+
+	now := c.now()
+	budgets := c.attempts[key]
+	if budgets == nil {
+		budgets = map[string]answerBudget{}
+		c.attempts[key] = budgets
+	}
+	at, known := budgets[delivery]
+	if !known && !roomForAnswerBudget(budgets, now, window) {
+		// Every slot holds a live budget, so this run already has as many
+		// messages in hand-back as it is allowed. See [maxAnswerDeliveries]
+		// for why a live one is never evicted to make room.
+		return false
+	}
+	if !known {
+		at = answerBudget{first: now}
+	}
+	at.failures++
+	budgets[delivery] = at
+	return at.live(now, window)
+}
+
+// roomForAnswerBudget drops a run's spent budgets and reports whether a new
+// delivery can have one.
+func roomForAnswerBudget(budgets map[string]answerBudget, now time.Time, window time.Duration) bool {
+	if len(budgets) < maxAnswerDeliveries {
+		return true
+	}
+	for delivery, at := range budgets {
+		if !at.live(now, window) {
+			delete(budgets, delivery)
+		}
+	}
+	return len(budgets) < maxAnswerDeliveries
+}
+
+// clearAnswerAttempts forgets a run's budgets, which every outcome but a defer
 // does: the delivery is either spent or handed on, and the next failure is the
 // first of its own series.
-func (c *Coordinator) clearAnswerAttempts(turnID string) {
+func (c *Coordinator) clearAnswerAttempts(handle, turnID string) {
 	if turnID == "" {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.attempts, turnID)
+	delete(c.attempts, answerKey{handle: handle, turnID: turnID})
 }
 
 // releaseAnswerAttempts drops what a seat's runs were counting, for a seat
 // this node no longer holds.
 //
-// A LINEAR SWEEP over a map holding one entry per parked run this node failed
-// to resume, which is a handful at the very most; an index from seat to run
-// would be a second structure to keep true for a scan that costs nothing.
+// A LINEAR SWEEP over a table holding at most [maxAnswerDeliveries] budgets
+// per parked run this node failed to resume, which is a handful at the very
+// most; an index from seat to run would be a second structure to keep true for
+// a scan that costs nothing.
 func (c *Coordinator) releaseAnswerAttempts(handle string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for turnID, at := range c.attempts {
-		if at.handle == handle {
-			delete(c.attempts, turnID)
+	for key := range c.attempts {
+		if key.handle == handle {
+			delete(c.attempts, key)
 		}
 	}
 }

@@ -2574,11 +2574,24 @@ func answerFrom(text string) *events.Event {
 	}, events.TraceContext{})
 }
 
-// answerAttemptsFor is the failed-handoff count this node holds for one run.
-func (c *Coordinator) answerAttemptsFor(turnID string) int {
+// answerBudgetsFor is how many deliveries of one run this node holds a budget
+// for.
+func (c *Coordinator) answerBudgetsFor(handle, turnID string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.attempts[turnID].failures
+	return len(c.attempts[answerKey{handle: handle, turnID: turnID}])
+}
+
+// answerAttemptsFor is the failed-handoff count this node holds across every
+// delivery of one run.
+func (c *Coordinator) answerAttemptsFor(handle, turnID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	total := 0
+	for _, budget := range c.attempts[answerKey{handle: handle, turnID: turnID}] {
+		total += budget.failures
+	}
+	return total
 }
 
 // A DELIVERY ANOTHER INBOUND ALREADY CLAIMED IS SPENT, NOT RUN.
@@ -2701,16 +2714,15 @@ func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail 
 	return run, won, err
 }
 
-// THE REQUEUE IS BOUNDED, and then the message is let go.
+// THE HAND-BACK IS BOUNDED, and then the message is let go.
 //
-// A requeue is a REPUBLISH, so the broker's own delivery budget starts again
-// on every copy and nothing outside this package bounds the loop — a run
-// parked on a question stays matchable for ever, since the pause reaper only
-// moves it to reseed. A resume that fails the same way every time would
-// otherwise circle the seat's inbox for the life of the process. The budget is
-// [MaxAnswerAttempts], and what happens at the end of it is the ordinary
-// route: the run is left parked rather than destroyed, because every failure
-// that gets here is a statement about THIS node.
+// Nothing outside this package bounds the loop: a run parked on a question
+// stays matchable for ever, since the pause reaper only moves it to reseed, so
+// a resume that fails the same way every time would circle the seat's inbox
+// for the life of the process. The budget is [MaxAnswerAttempts], and what
+// happens at the end of it is the ordinary route: the run is left parked
+// rather than destroyed, because every failure that gets here is a statement
+// about THIS node.
 func TestTheRequeueOfAnAnswerIsBounded(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
@@ -2768,7 +2780,7 @@ func TestASecondMessageGetsItsOwnRequeueBudget(t *testing.T) {
 		t.Fatalf("the first message's budget did not run out (%q)", last)
 	}
 	// AND STAYS SPENT: a second copy of the same message does not buy the
-	// same delivery another twenty-five attempts.
+	// same delivery a second budget.
 	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
 		t.Context(), "swe", answerOnTheDM, "use main", first); disposition != AnswerNotMine {
 		t.Fatalf("a further copy of a spent message was requeued again (%q)", disposition)
@@ -2780,6 +2792,189 @@ func TestASecondMessageGetsItsOwnRequeueBudget(t *testing.T) {
 	if disposition != AnswerDeferred {
 		t.Fatalf("disposition = %q, want %q: a different message is a new attempt "+
 			"at the question and starts its own budget", disposition, AnswerDeferred)
+	}
+}
+
+// AND TWO MESSAGES CIRCLING ONE RUN DO NOT RESET EACH OTHER.
+//
+// THE CASE THAT PROVES THE BOUND EXISTS. A budget per RUN — one slot holding
+// the delivery it was counting — reset itself the moment a different message
+// arrived, so two replies alternating on one parked run replaced each other's
+// slot on every pass and neither ever reached [MaxAnswerAttempts]: both kept
+// answering deferred, both kept coming back, and the loop the bound exists to
+// end was reachable with two messages. A budget per (run, delivery) is the
+// only shape that counts what the doc always claimed it counted.
+func TestTwoMessagesCirclingOneRunBothRunOutOfBudget(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
+		ErrResumeUnavailable, "swe")
+
+	first, second := answerFrom("use main"), answerFrom("or the release branch")
+	offer := func(delivery *events.Event) AnswerDisposition {
+		t.Helper()
+		disposition, _ := rig.coordinator.TryResumeFromAnswer(
+			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+		return disposition
+	}
+
+	// INTERLEAVED, which is how they arrive: each message is offered, fails,
+	// is handed back and meets the other one on its way round.
+	for attempt := 1; attempt < MaxAnswerAttempts; attempt++ {
+		for name, delivery := range map[string]*events.Event{
+			"first": first, "second": second,
+		} {
+			if got := offer(delivery); got != AnswerDeferred {
+				t.Fatalf("the %s message on attempt %d of %d: disposition = %q, "+
+					"want %q — its own budget is not spent yet",
+					name, attempt, MaxAnswerAttempts, got, AnswerDeferred)
+			}
+		}
+	}
+	for name, delivery := range map[string]*events.Event{
+		"first": first, "second": second,
+	} {
+		if got := offer(delivery); got != AnswerNotMine {
+			t.Fatalf("the %s message on attempt %d: disposition = %q, want %q — "+
+				"a second message must not buy the first one a fresh budget",
+				name, MaxAnswerAttempts, got, AnswerNotMine)
+		}
+	}
+}
+
+// AND ONE RUN HOLDS ONLY SO MANY BUDGETS AT ONCE.
+//
+// The other half of "per (run, delivery)": a budget each means a table that
+// grows with the messages a conversation carries, for as long as the run
+// lives. [maxAnswerDeliveries] bounds it — and bounds it by REFUSING a new
+// budget rather than by evicting a live one, because budgets evicting each
+// other is the same unreachable bound the per-run slot had, at N messages
+// instead of two. A SPENT budget is different and does make room: its delivery
+// has already been let go to the ordinary route.
+func TestOneRunHoldsABoundedNumberOfAnswerBudgets(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
+		ErrResumeUnavailable, "swe")
+	offer := func(delivery *events.Event) AnswerDisposition {
+		t.Helper()
+		disposition, _ := rig.coordinator.TryResumeFromAnswer(
+			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+		return disposition
+	}
+
+	live := make([]*events.Event, maxAnswerDeliveries)
+	for i := range live {
+		live[i] = answerFrom(fmt.Sprintf("reply %d", i))
+		if got := offer(live[i]); got != AnswerDeferred {
+			t.Fatalf("message %d of the run's %d budgets: disposition = %q, want %q",
+				i, maxAnswerDeliveries, got, AnswerDeferred)
+		}
+	}
+
+	// EVERY SLOT HOLDS A LIVE BUDGET, so this one is handled as the ordinary
+	// message it looks like rather than given a budget that would have to
+	// come out of somebody else's.
+	crowd := answerFrom("and another thing")
+	if got := offer(crowd); got != AnswerNotMine {
+		t.Fatalf("disposition = %q, want %q: a run with %d messages already in "+
+			"hand-back must not open an unbounded number more",
+			got, AnswerNotMine, maxAnswerDeliveries)
+	}
+	if held := rig.coordinator.answerBudgetsFor("swe", "t1"); held != maxAnswerDeliveries {
+		t.Fatalf("the run holds %d budgets, want at most %d", held, maxAnswerDeliveries)
+	}
+
+	// AND A SPENT ONE MAKES ROOM: the first message runs out its attempts,
+	// which frees the slot the next one takes.
+	for attempt := 1; attempt < MaxAnswerAttempts; attempt++ {
+		offer(live[0])
+	}
+	if got := offer(live[0]); got != AnswerNotMine {
+		t.Fatalf("the first message's own budget did not run out (%q)", got)
+	}
+	if got := offer(crowd); got != AnswerDeferred {
+		t.Fatalf("disposition = %q, want %q: a spent budget leaves a slot for a "+
+			"message that has not had one", got, AnswerDeferred)
+	}
+}
+
+// AND THE BOUND IS A TOLERANCE, NOT ONLY A COUNT.
+//
+// The second clause: this node hands a message back for at most the run's own
+// awaiting window — pause_ttl_seconds, the same number the pause reaper
+// enforces on its box. A count on its own said nothing about how long the
+// attempts covered, which is exactly what was wrong with spending 25 of them
+// in milliseconds. Here the attempts are spread by the queue's own backoff
+// (see [Dispatcher.answered]) and the window is what ends them: the ceiling is
+// nowhere near reached and the message is let go all the same, because the
+// engine has stopped being willing to wait for it.
+func TestTheHandBackOfAnAnswerStopsAtTheRunsAwaitingWindow(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
+		ErrResumeUnavailable, "swe")
+	delivery := answerFrom("use main")
+
+	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", answerOnTheDM, "use main", delivery,
+	); disposition != AnswerDeferred {
+		t.Fatalf("the first attempt answered %q, want %q", disposition, AnswerDeferred)
+	}
+
+	// The attempts are spaced, so time passes between them — and this run's
+	// window is DefaultPauseTTL, which is what the rig's box was attached
+	// with.
+	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
+
+	disposition, _ := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", answerOnTheDM, "use main", delivery)
+	if disposition != AnswerNotMine {
+		t.Fatalf("disposition = %q after the run's whole awaiting window, want "+
+			"%q: %d of its %d attempts were still unspent, and a count is not "+
+			"a tolerance", disposition, AnswerNotMine, MaxAnswerAttempts-2,
+			MaxAnswerAttempts)
+	}
+}
+
+// AND NOTHING IS CHARGED WHILE ANOTHER RUN HOLDS THE SEAT.
+//
+// There the delivery is requeued for the SEAT's sake whatever the offer says —
+// an immediate republish, at a rate nothing bounds, for as long as that job
+// runs — so a charge there would spend the whole budget inside a held run's
+// park loop within milliseconds and leave nothing for the attempts that are
+// actually spaced: the ones made once the seat is free, which is the state a
+// parked run leaves it in.
+func TestAHeldSeatsParkSpendsNoAnswerBudget(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	// A SECOND RUN OF THE SAME SEAT, holding it while the first waits for a
+	// person: the one shape where both counts are non-zero at once.
+	rig.launch("t2")
+	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+		Agent: "a-1", AgentHandle: "swe", TurnID: "t2",
+	}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	if held, awaits := rig.coordinator.SeatRuns("swe"); !held || !awaits {
+		t.Fatalf("SeatRuns = %v, %v, want a seat both held and awaiting", held, awaits)
+	}
+	rig.resumer.err = fmt.Errorf("%w: seat %q has no resumer on this node",
+		ErrResumeUnavailable, "swe")
+
+	delivery := answerFrom("use main")
+	for attempt := 1; attempt <= MaxAnswerAttempts*3; attempt++ {
+		disposition, _ := rig.coordinator.TryResumeFromAnswer(
+			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+		if disposition != AnswerDeferred {
+			t.Fatalf("pass %d: disposition = %q, want %q — the park this "+
+				"delivery lands on is the held seat's, and it spaces nothing",
+				attempt, disposition, AnswerDeferred)
+		}
+	}
+	if counted := rig.coordinator.answerAttemptsFor("swe", "t1"); counted != 0 {
+		t.Fatalf("%d attempts were charged to a delivery the seat's own park "+
+			"was requeuing anyway", counted)
 	}
 }
 
@@ -2818,13 +3013,13 @@ func TestAFinishedRunDropsItsRequeueCount(t *testing.T) {
 				answerFrom("use main")); err == nil {
 				t.Fatal("the resume reported success")
 			}
-			if counted := rig.coordinator.answerAttemptsFor("t1"); counted != 1 {
+			if counted := rig.coordinator.answerAttemptsFor("swe", "t1"); counted != 1 {
 				t.Fatalf("the failed handoff was counted %d times, want once", counted)
 			}
 
 			finish(t, rig)
 
-			if counted := rig.coordinator.answerAttemptsFor("t1"); counted != 0 {
+			if counted := rig.coordinator.answerAttemptsFor("swe", "t1"); counted != 0 {
 				t.Fatalf("%d counted failures were left behind for a run nothing "+
 					"will ever offer a delivery to again", counted)
 			}

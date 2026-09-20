@@ -269,9 +269,11 @@ type Coordinator struct {
 
 	// attempts counts the failed handoffs of one delivery to one parked
 	// run, so a resume that fails the same way every time stops circling
-	// the seat's inbox. Keyed by turn id — see [answerAttempt] and
-	// [MaxAnswerAttempts], which is also why it is per process.
-	attempts map[string]answerAttempt
+	// the seat's inbox. One BUDGET PER DELIVERY, under a key naming the
+	// run it is owed to, and both bounds are stated at [MaxAnswerAttempts]
+	// and [maxAnswerDeliveries] — which is also where it says why this is
+	// per process.
+	attempts map[answerKey]map[string]answerBudget
 }
 
 // seatRuns is this node's count of one seat's detached runs, by the question
@@ -337,7 +339,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		stopped:  opts.Stopped,
 		now:      opts.Now,
 		runs:     map[string]seatRuns{},
-		attempts: map[string]answerAttempt{},
+		attempts: map[answerKey]map[string]answerBudget{},
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -554,10 +556,14 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// THE ERROR IS THIS ROUTE'S WHOLE ANSWER, and the disposition beside it
 	// says nothing this caller can act on differently. A completion is
 	// handed back by NAKing it, which spends one of the broker's own 25
-	// deliveries — so the retry is bounded where it stands, and the
-	// requeue budget an answer needs ([MaxAnswerAttempts]) has no
-	// counterpart here. Every disposition that returns an error is the
-	// retry, and every one that does not is an ending.
+	// deliveries — so the retry is bounded where it stands, and the budget
+	// an answer needs ([MaxAnswerAttempts]) has no counterpart here: both
+	// routes now hand a failed resume back the same way and take the same
+	// backoff, and what an answer needs on top is a bound that stops SHORT
+	// of the dead-letter boundary, because the delivery it is spending is a
+	// person's reply rather than an engine-generated completion. Every
+	// disposition that returns an error is the retry, and every one that
+	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
 		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
 	})
@@ -855,7 +861,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 		// Another inbound already claimed it: that delivery is resuming
 		// the run, so this one is spent rather than run as an unrelated
 		// message.
-		c.clearAnswerAttempts(run.TurnID)
+		c.clearAnswerAttempts(run.AgentHandle, run.TurnID)
 		return AnswerConsumed, nil
 	}
 	// FOUR VALUES, BECAUSE THE MATCH HAS TWO ENDS. The delivery's pair and
@@ -888,7 +894,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	}
 	// SPENT OR HANDED ON, either way not a failure in a series, so the next
 	// one starts its own.
-	c.clearAnswerAttempts(claimed.TurnID)
+	c.clearAnswerAttempts(claimed.AgentHandle, claimed.TurnID)
 	return disposition, err
 }
 
@@ -906,8 +912,9 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 // can have run and concluded something (the delivery is spent). Its two
 // callers arrive by different routes and read the pair differently — a
 // completion NAKs on the error and lets the broker's own budget bound the
-// retry, while a person's answer is requeued on [AnswerDeferred] and falls
-// through to an ordinary turn on [AnswerNotMine]. The classification is stated
+// retry, while a person's answer is handed back on [AnswerDeferred] — the same
+// NAK, under this package's own shorter bound — and falls through to an
+// ordinary turn on [AnswerNotMine]. The classification is stated
 // once, at [Coordinator.TryResumeFromAnswer].
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
@@ -1452,15 +1459,15 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, fence Fence
 		// FORGOTTEN ON THE SAME GATE THE STOP TAKES, and for the same
 		// asymmetry: the delete may well have landed, and a count kept
 		// for a run nothing will ever offer a delivery to again is a
-		// map entry this process never drops. See [answerAttempt].
-		c.clearAnswerAttempts(run.TurnID)
+		// map entry this process never drops. See [answerBudget].
+		c.clearAnswerAttempts(run.AgentHandle, run.TurnID)
 		return PendingRun{}, false, err
 	}
 	if !ended {
 		return PendingRun{}, false, nil
 	}
 	c.reportStopped(ctx, settled)
-	c.clearAnswerAttempts(settled.TurnID)
+	c.clearAnswerAttempts(settled.AgentHandle, settled.TurnID)
 	return settled, true, nil
 }
 
