@@ -110,6 +110,7 @@ import {
   prefetchBlocks,
   promptWeights,
   collapseRuns,
+  isFailed,
   tellStory,
   TURN_STOP,
   type PrefetchBlock,
@@ -1066,9 +1067,18 @@ function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
   const from = fmtTime(event.timestamp);
   const to = fmtTime(last.timestamp);
   const span = count > 1 && to !== from ? `${from}–${to}` : from;
+  // `isFailed`, NOT `event.failed`. The band this row is in was chosen by
+  // `bandOf`, which asks `isFailed` — and that reads the payload's own flag as
+  // well as the promoted column, because a LIVE event carries the first and
+  // only history carries the second (see `lib/turnstory.ts`). Read one of the
+  // two here and a failure the panel filed under "What went wrong" rendered
+  // with no red edge and no glyph, which is the same turn drawn two ways on
+  // one screen. `collapseRuns` keys on `isFailed` too, so this is also what
+  // stops two rows it deliberately kept apart from drawing identically.
+  const failed = isFailed(event);
   return (
     <a
-      className={cx("turn-row", event.failed && "failed")}
+      className={cx("turn-row", failed && "failed")}
       href={href(["activity", "events", event.id])}
       title={
         count > 1
@@ -1082,7 +1092,7 @@ function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
         {span}
       </time>
       <span className="what truncate">
-        {event.failed && (
+        {failed && (
           <ErrorGlyph
             size="xs"
             style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
