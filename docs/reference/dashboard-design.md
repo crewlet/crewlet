@@ -636,6 +636,25 @@ the route cannot supply (`usePageLabels`), the coverage of the answer it drew
 from (`usePageCoverage`), and its own controls. Twenty screens each drawing
 their own header is how five of them came to drop the coverage badge.
 
+**Every object screen publishes the name it draws, and it is the same string.**
+A route addresses an object by its identifier — a turn or a trace or an event
+by its id, a seat by its handle, a revision by its ULID — and the frame has
+nowhere else to learn what that object is called. So the one name a screen
+resolves for its `ObjectHeader` is the one it publishes, and it reaches three
+places at once: the last crumb, the browser tab (`Shell` titles it from the
+trail) and the palette's recents. Written a second time for any of them, the
+three drift, and a reader is offered a string the page never showed.
+
+**A screen with no name publishes none, and the id stands.** Every object here
+has an unnamed case — a turn still running, a trace whose spans fell out of the
+window, a revision nobody summarised — and each header fills the slot with a
+placeholder, because a header needs a word. A placeholder must not reach the
+label: "Turn" names no particular turn, and two of them in the recents are two
+identical rows pointing at different places, which is strictly worse than the
+two ids they replaced. The crumb draws an unlabelled segment in the mono face
+for the same reason it draws a handle in it — an identifier has to look like
+one.
+
 ### Moving, and going back
 
 Every screen, section and filter is in the URL, so a view can be refreshed,
@@ -879,7 +898,10 @@ An empty palette offers **recents** — the last few objects this reader opened,
 newest first, per browser. Objects only: anything the rail or a sidebar
 already lists is left out, because a recents list repeating the navigation
 beside it costs a reader a scan and tells them nothing. The label stored is
-the one the **screen** resolved, which lands a render after the route.
+the one the **screen** resolved, which lands a render after the route — so a
+recents row says what a turn did, what a trace began at, what a coding run was
+asked for, and falls back to the id only where nothing has named the object
+yet. See [A screen publishes what the chrome needs](#the-frame).
 
 A `>` command that would change nothing is not offered: the list omits the
 theme and the density already in use, because a control that says "switch to

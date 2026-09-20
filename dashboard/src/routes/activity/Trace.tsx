@@ -24,6 +24,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
 interface Node {
@@ -96,6 +97,15 @@ export function TraceScreen({ traceId }: { traceId: string }) {
   // come first out of [flatten], so `rows[0]` is that span — and where the
   // whole trace begins mid-flight, it is still the earliest thing present.
   const opening = rows[0]?.event;
+  // AND IT IS THE TRACE'S NAME EVERYWHERE, not just in the header below.
+  // The breadcrumb, the browser tab and the palette's recents all read the one
+  // label a screen publishes, and fall back to the raw path segment otherwise
+  // — which for a trace is 32 hexadecimal characters that distinguish it from
+  // nothing a reader can remember. Published only once a span is in hand:
+  // "Trace" in the trail names no particular trace, and two of them in the
+  // recents are two identical rows going to different places.
+  const name = opening?.summary || opening?.type || "";
+  usePageLabels(name ? { [traceId]: name } : {});
   // ABSENT RATHER THAN ZERO until the answer lands. `FactLine` drops an empty
   // value, and "0 spans · 0 failures" over a trace still loading is a claim
   // that the trace is empty — which is the one thing a reader must not
@@ -139,7 +149,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         kind="Trace"
         icon="fork_right"
         identifier={traceId}
-        title={opening?.summary || opening?.type || "Trace"}
+        title={name || "Trace"}
         facts={facts}
       />
       <QueryState

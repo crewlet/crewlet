@@ -24,6 +24,7 @@ import {
 // refused feedback. See the report.
 import { CopyButton } from "~/ui/primitives.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -46,6 +47,18 @@ import type { EventRecord } from "~/protocol/index.ts";
  */
 const noEventHint = (seconds: number | null | undefined) =>
   `An id older than the retained record, or from a different node's store, will not resolve: ${eventHistoryLabel(seconds)}.`;
+
+/**
+ * What an event is called: the sentence the ENGINE wrote for it, or the type
+ * it is known by everywhere else when it wrote none.
+ *
+ * ONE FUNCTION for the page's header, the peek's and the label this screen
+ * publishes — a record wearing two spellings of its own name is how the third
+ * one goes wrong.
+ */
+function eventTitle(event: EventRecord): string {
+  return event.summary || event.type;
+}
 
 /**
  * What an event IS — the five facts, in one order, for the page and the rail.
@@ -146,6 +159,13 @@ export function EventScreen({ eventId }: { eventId: string }) {
   // payload shown honestly rather than being squeezed into a shape it is not.
   const phase = data?.type === "agent_phase_completed" ? fromPhaseEvent(data) : null;
 
+  // AND THAT NAME IS THE EVENT'S EVERYWHERE — the header below, the
+  // breadcrumb, the browser tab and the palette's recents, which all read the
+  // one label a screen publishes and otherwise show the raw path segment: a
+  // uuid, which tells a reader returning to it nothing at all.
+  const name = data ? eventTitle(data) : "";
+  usePageLabels(name ? { [eventId]: name } : {});
+
   return (
     <>
       <PageActions>
@@ -202,7 +222,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
           kind="Event"
           icon="timeline"
           identifier={data.id}
-          title={data.summary || data.type}
+          title={name}
           status={eventStatus(data)}
           facts={eventFacts(data, now)}
         />
@@ -346,7 +366,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           kind="Event"
           icon="timeline"
           identifier={data.id}
-          title={data.summary || data.type}
+          title={eventTitle(data)}
           status={eventStatus(data)}
           facts={eventFacts(data, now)}
         />
