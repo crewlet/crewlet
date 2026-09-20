@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -454,5 +455,78 @@ func seedRun(t *testing.T, log *store.EventLog, runID, workKey string, at time.T
 		Payload: payload,
 	}); err != nil {
 		t.Fatalf("append the completion: %v", err)
+	}
+}
+
+// A TURN THAT DIED WITHOUT A FAILED PHASE IS STILL A FAILED TURN.
+//
+// Four event types ARE a failure by their very type and carry no `failed`
+// field for the writer to stamp a tag from: llm_unavailable,
+// budget_exhausted, turn.guard_breach and sandbox_run_failed. They are
+// exactly what a turn that died BEFORE completing a phase leaves behind —
+// a seat refused at the budget gate, a chain whose every model was down, a
+// breached guard — so the turns list answered "not failed" for the one turn
+// an operator opens the list to find, and `Failed: &yes` never returned it.
+//
+// Driven off [types.FailureEventNames] rather than a list spelled here: the
+// catalogue is the one place the rule lives, and a copy is how this stops
+// covering a type somebody adds to it.
+func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	failures := types.FailureEventNames()
+	for i, eventType := range failures {
+		at := base.Add(time.Duration(i) * time.Minute)
+		id := "t-" + strings.ReplaceAll(eventType, ".", "-")
+		// One ordinary phase, no failed tag anywhere: the TYPE below is
+		// the only thing that says this turn went wrong.
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-p0", Type: "agent_phase_completed", Time: at,
+			Category: "lifecycle", Actor: "CEO",
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+		}); err != nil {
+			t.Fatalf("append the phase: %v", err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-x", Type: eventType, Time: at.Add(time.Second),
+			Category: "system", Actor: "CEO",
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+		}); err != nil {
+			t.Fatalf("append the %s: %v", eventType, err)
+		}
+	}
+
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(rows) != len(failures) {
+		t.Fatalf("listed %d turns, want one per failure type (%d)", len(rows), len(failures))
+	}
+	for _, row := range rows {
+		if !row.Failed {
+			t.Errorf("turn %s reports Failed=false — its record is a failure "+
+				"BY TYPE, which carries no `failed` tag to read", row.TurnID)
+		}
+	}
+
+	yes, no := true, false
+	selected, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO", Failed: &yes})
+	if err != nil {
+		t.Fatalf("Turns(failed=true): %v", err)
+	}
+	if len(selected) != len(failures) {
+		t.Errorf("failed=true selected %d of %d — the filter and the column "+
+			"must answer the same question", len(selected), len(failures))
+	}
+	clean, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO", Failed: &no})
+	if err != nil {
+		t.Fatalf("Turns(failed=false): %v", err)
+	}
+	if len(clean) != 0 {
+		t.Errorf("failed=false returned %d turns, want none — every turn here died",
+			len(clean))
 	}
 }

@@ -25,7 +25,7 @@ const (
 )
 
 // BudgetExhausted fires when an agent or the org exceeds its token budget. Its
-// type is in FailureEventTypes: a refused charge is a failure whatever the
+// type is a failure BY TYPE: a refused charge is a failure whatever the
 // payload says.
 type BudgetExhausted struct {
 	Agent    string `json:"agent_id"`
@@ -42,8 +42,8 @@ type BudgetExhausted struct {
 	MaxTokens  int         `json:"max_tokens"`
 }
 
-// EventType is the "budget_exhausted" wire type, and one of the four names in
-// FailureEventTypes.
+// EventType is the "budget_exhausted" wire type, and one of the four
+// [FailureEventNames].
 func (BudgetExhausted) EventType() string { return "budget_exhausted" }
 
 // Role is the seat whose charge was refused, which is the seat a dashboard

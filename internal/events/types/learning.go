@@ -561,7 +561,7 @@ type SkillTelemetryWriteFailed struct {
 }
 
 // EventType is the "skill_telemetry_write_failed" wire type. Deliberately NOT
-// in FailureEventTypes: the counter write failed, the turn that used the skill
+// a failure BY TYPE: the counter write failed, the turn that used the skill
 // did not.
 func (SkillTelemetryWriteFailed) EventType() string { return "skill_telemetry_write_failed" }
 

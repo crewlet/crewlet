@@ -24,7 +24,7 @@ func init() {
 // Distinct from ProviderFallback, which reports a single attempt failing while
 // the chain is still in progress. This one means no provider in the role's
 // chain succeeded: the agent is effectively AFK and the turn terminates as
-// failed, which is why its type is in FailureEventTypes.
+// failed, which is why its type is a failure BY TYPE — see [Failed].
 type LLMUnavailable struct {
 	Agent         string   `json:"agent_id"`
 	RoleName      string   `json:"role"`
@@ -38,8 +38,8 @@ type LLMUnavailable struct {
 	WorkKey string `json:"work_key,omitempty"`
 }
 
-// EventType is the "llm_unavailable" wire type, and one of the four names in
-// FailureEventTypes.
+// EventType is the "llm_unavailable" wire type, and one of the four
+// [FailureEventNames].
 func (LLMUnavailable) EventType() string { return "llm_unavailable" }
 
 // Role is the seat whose provider chain ran out — the seat that goes AFK.

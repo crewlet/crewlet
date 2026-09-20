@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,6 +44,39 @@ var (
 	phaseCompleted = types.AgentPhaseCompleted{}.EventType()
 	turnCompleted  = types.TurnCompleted{}.EventType()
 )
+
+// failedRow is the per-row predicate "this event reports a failure", and it is
+// [types.Failed]'s rule written for SQL rather than a fourth answer to the same
+// question.
+//
+// THE TAG IS ONLY HALF OF IT. The writer stamps `failed` from a payload field,
+// and the four types that ARE a failure by their very name carry no such field:
+// llm_unavailable, budget_exhausted, turn.guard_breach and sandbox_run_failed.
+// Those are precisely the records a turn that died BEFORE completing a phase
+// leaves behind — a seat refused at the budget gate, a chain whose every model
+// was down, a breached guard — so on the tag alone this aggregate answered "not
+// failed" for a turn that never ran, listing it as clean with no completion
+// record, which the dashboard draws identically to a turn still in flight. The
+// event reader already applies the rule ([EventLog] stamps Failed on read) and
+// so does the live projection, which is the disagreement types.Failed's own doc
+// warns about.
+//
+// The names come from the catalogue rather than a literal, for the reason the
+// two event types above are taken from their payload types: a spelling written
+// here is the one place a wire name silently stops matching. Through
+// [types.FailureEventNames], which is the accessor that exists because this is
+// the caller that has to ENUMERATE the set rather than test one value against
+// it — the map behind it is unexported, so there is no second way in.
+func failedRow() (string, []any) {
+	names := types.FailureEventNames()
+	args := make([]any, 0, len(names))
+	for _, name := range names {
+		args = append(args, name)
+	}
+	holders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
+	return "(json_extract(tags, '$.failed') = 'true' OR event_type IN (" +
+		holders + "))", args
+}
 
 // Turn is one unit of agent work, as a list row.
 type Turn struct {
@@ -226,12 +260,19 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		having = append(having, "MIN(event_time) < ?")
 		args = append(args, EncodeTime(q.Before))
 	}
+	// ONE EXPRESSION FOR THE COLUMN AND THE FILTER. Spelled twice, a turn
+	// could be selected by `failed=true` and then render without the mark,
+	// which is the same defect one layer down from the one [failedRow]
+	// describes.
+	failedExpr, failedArgs := failedRow()
+	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
 	if q.Failed != nil {
+		want := "0"
 		if *q.Failed {
-			having = append(having, "MAX(CASE WHEN json_extract(tags, '$.failed') = 'true' THEN 1 ELSE 0 END) = 1")
-		} else {
-			having = append(having, "MAX(CASE WHEN json_extract(tags, '$.failed') = 'true' THEN 1 ELSE 0 END) = 0")
+			want = "1"
 		}
+		having = append(having, failedAgg+" = "+want)
+		args = append(args, failedArgs...)
 	}
 	havingSQL := ""
 	if len(having) > 0 {
@@ -252,7 +293,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		       MIN(event_time), MAX(event_time),
 		       SUM(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
 		       MAX(iteration),
-		       MAX(CASE WHEN json_extract(tags, '$.failed') = 'true' THEN 1 ELSE 0 END),
+		       `+failedAgg+`,
 		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
 		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
 		       MAX(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
@@ -268,8 +309,12 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		 GROUP BY turn_id`+havingSQL+`
 		 ORDER BY MIN(event_time) DESC
 		 LIMIT ?`,
-		append([]any{phaseCompleted, turnCompleted, turnCompleted,
-			turnCompleted, turnCompleted}, args...)...)
+		// The SELECT list's own placeholders, in the order they appear
+		// in it: the phase count, then the failure predicate, then the
+		// four reads off the completion row.
+		slices.Concat([]any{phaseCompleted}, failedArgs,
+			[]any{turnCompleted, turnCompleted, turnCompleted, turnCompleted},
+			args)...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
 	}
