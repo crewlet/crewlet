@@ -239,7 +239,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		}
 	}
 	if out == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {

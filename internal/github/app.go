@@ -671,7 +671,7 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		detail, _ := io.ReadAll(io.LimitReader(res.Body, errorBodyBytes))
+		detail, _ := io.ReadAll(io.LimitReader(res.Body, httpx.RefusalBytes))
 		return &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
 			Detail: strings.TrimSpace(string(detail)),

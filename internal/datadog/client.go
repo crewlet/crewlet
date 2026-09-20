@@ -195,7 +195,7 @@ func (c *Client) do(
 	}
 	defer func() { _ = res.Body.Close() }()
 
-	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
+	payload, err := httpx.ReadBody(res.Body, maxResponse)
 	if err != nil {
 		return fmt.Errorf("datadog: read %s %s: %w", method, path, err)
 	}
@@ -219,25 +219,21 @@ func (c *Client) do(
 // A list page is a few hundred accounts at most. The cap is what stops a
 // proxy's HTML error page, or a region answering something unexpected, from
 // being read into memory whole.
-const maxResponse = 4 << 20
-
-// maxDetail bounds what a refusal contributes to an error string.
 //
-// 2048 bytes, matching the github and gitlab clients, and it is not a
-// cosmetic limit. This error becomes Finding.Detail, which
-// [integration.Observe] stores WITHOUT truncation into a State the fleet
-// writes to one coordination key shared with every other integration —
-// [integration.MaxLastErrorLength]'s own doc names this exact hazard, "a
-// client that pastes a response body into its error is a megabyte", and
-// Finding.Detail is the field its guard does not cover. Datadog's client was
-// that client: a non-JSON refusal put up to 4 MiB of HTML into it.
-const maxDetail = 2048
+// TIGHTER THAN [httpx.MaxResponseBody] on purpose, and the reason is at the
+// pin rather than in anyone's memory: that ceiling is derived from GitHub's
+// and GitLab's 200-item pages, and nothing this client asks Datadog for is
+// remotely that size. It is REFUSED past it rather than read up to it — a
+// capped read that then unmarshals reports "unexpected end of JSON input",
+// which names neither the endpoint nor the cap, and was how this client
+// answered a 4 MiB HTML page from a gateway.
+const maxResponse = 4 << 20
 
 // detailOf pulls Datadog's own message out of a refusal, so an operator
 // reads what Datadog said rather than a status code.
 //
 // BOUNDED, because the answer to a call that failed is exactly the answer
-// least likely to be the JSON this expects — see [maxDetail]. Cut through
+// least likely to be the JSON this expects — see [httpx.RefusalBytes]. Cut through
 // [textcut] rather than by slicing, so a multi-byte rune straddling the limit
 // does not become invalid UTF-8 that a JSON encoder silently substitutes.
 func detailOf(contentType string, payload []byte) string {
@@ -245,7 +241,7 @@ func detailOf(contentType string, payload []byte) string {
 		Errors []string `json:"errors"`
 	}
 	if err := json.Unmarshal(payload, &body); err == nil && len(body.Errors) > 0 {
-		return textcut.Ellipsis(strings.Join(body.Errors, "; "), maxDetail)
+		return textcut.Ellipsis(strings.Join(body.Errors, "; "), httpx.RefusalBytes)
 	}
 	// ANYTHING ELSE THROUGH [httpx.Refusal], rather than verbatim: a
 	// refusal that is not the JSON this expects is most often an HTML
@@ -255,7 +251,7 @@ func detailOf(contentType string, payload []byte) string {
 	if detail == "" {
 		return "no detail"
 	}
-	return textcut.Ellipsis(detail, maxDetail)
+	return textcut.Ellipsis(detail, httpx.RefusalBytes)
 }
 
 // Org is the organization a credential pair belongs to.

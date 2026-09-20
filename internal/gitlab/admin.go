@@ -52,14 +52,14 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
 			Detail: strings.TrimSpace(string(detail)),
 		}
 	}
 	if out == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {

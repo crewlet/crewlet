@@ -123,13 +123,6 @@ func (c *Client) APIBase() string { return c.base }
 // WebBase is the base a shareable link is built on.
 func (c *Client) WebBase() string { return c.web }
 
-// errorBodyBytes is how much of a refusal is worth quoting back.
-//
-// Enough for GitHub's own message and its documentation link, and bounded for
-// the same reason the success arm is: a refusal is a response from the same
-// endpoint and gets no larger allowance for being one.
-const errorBodyBytes = 2048
-
 // APIError is a refusal from the API.
 //
 // TYPED, so a caller deciding what a refusal MEANS — 404 is "not there or
@@ -196,14 +189,14 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyBytes))
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
 			Detail: httpx.Refusal(resp.Header.Get("Content-Type"), detail),
 		}
 	}
 	if out == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
