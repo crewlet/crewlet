@@ -276,7 +276,7 @@ var wireTags = map[string][]string{
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},
 	"external_notification":           {"addressed", "agent_id", "body", "context_requires_recon", "messages", "metadata", "notification_source", "recipient_email", "salient_body", "sender", "source_event_type", "subject"},
 	"turn_trigger_skipped":            {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
-	"notifications_coalesced":         {"agent_handle", "conversation_key", "count", "first_at", "last_at", "notification_source"},
+	"notifications_coalesced":         {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":            {"handle", "notification_source", "reason"},
 	"a2a_request":                     {"channel_id", "content", "requester", "sender_role"},
 	"a2a_message":                     {"channel_id", "content", "question", "sender", "sender_role"},

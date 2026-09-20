@@ -208,32 +208,43 @@ type NotificationsCoalesced struct {
 	// conversation it belongs to. What this event says is "N deliveries
 	// became one turn", and the batch is the subject of that sentence.
 	//
-	// THE NAME MOVED AND SO DID THE WIRE STRING, which is the opposite of
-	// the trade notify.PartitionField makes for the notification payload
-	// and is why this one is free. There the value is what two builds
-	// partition each other's wakes by, so renaming it would leave every
-	// cross-build wake unkeyed. Here nothing decodes this event to decide
-	// anything: it is published to the event topic, never into a seat's
-	// inbox, so notify.KeyOf never reads it, and its one reader is the tag
-	// promotion in internal/store.
+	// THE NAME MOVED AND SO DID THE WIRE STRING. It was
+	// `conversation_key`, and that field is the conversation IDENTITY on
+	// every other event that spells it — the two sandbox events, both turn
+	// completions and the phase record. One promoted tag therefore meant
+	// the identity or the partition depending on which row a filter
+	// happened to match, on a pair of values that differ exactly where it
+	// matters: a direct message's identity is the bare channel and its
+	// partition can be a thread inside it.
 	//
-	// It was `conversation_key`, and that field is the conversation
-	// IDENTITY on every other event that spells it — the two sandbox
-	// events, both turn completions and the phase record. One promoted tag
-	// therefore meant the identity or the partition depending on which row
-	// a filter happened to match, on a pair of values that differ exactly
-	// where it matters: a direct message's identity is the bare channel and
-	// its partition can be a thread inside it.
+	// CARRYING BOTH SPELLINGS IS NOT THE MILDER FIX IT LOOKS LIKE, because
+	// store.ExtractTags promotes by WIRE KEY ALONE and is type-blind on
+	// purpose — that is what lets a newer node's unknown event type still
+	// be indexed by the dimensions it does carry. A payload spelling both
+	// keys is therefore tagged both, and the `conversation_key` tag goes on
+	// holding a partition for exactly the rows this exists to repair.
 	//
-	// A PEER PREDATING THE RENAME keeps tagging its own rows
-	// `conversation_key`, and that discontinuity is the safe half. A store
-	// row is written by a publish listener inline on the PUBLISHING node,
-	// so no build ever promotes another build's event and no row can be
-	// tagged by a rule its payload was not written for. What a new build
-	// reads on an old event is an ABSENT partition_key — a dimension that
-	// starts at a point in the timeline, exactly as notification_source
-	// did — rather than a conversation tag naming a thread that never
-	// existed, which is the one outcome nothing downstream could detect.
+	// WHAT A ROLLING PEER LOSES, stated rather than waved at, since a
+	// rename is a dropped field on whichever half has not upgraded
+	// (ADR-0006). An older build decoding a newer build's copy of this
+	// event finds nothing under its own ConversationKey, so its Summary
+	// names the seat without the batch — on the LIVE SOCKET only, for the
+	// length of the upgrade. Nothing else reads it: the store row is
+	// written by a publish listener inline on the PUBLISHING node, so the
+	// build that authored a payload is the build that tags it and no row is
+	// ever tagged by a rule its payload was not written for; and the socket
+	// envelope carries the payload verbatim, so the key reaches an older
+	// node's dashboard intact under its new name. A degraded sentence for
+	// one upgrade window is the whole price, against a tag that answers the
+	// wrong question for the life of the deployment.
+	//
+	// Which is the opposite of the trade notify.PartitionField makes for
+	// the notification payload, and why that one kept its wire string:
+	// there the value is what two builds partition each other's wakes by,
+	// so renaming it would leave every cross-build wake unkeyed. Here
+	// nothing DECIDES anything from this event — it is published to the
+	// event topic, never into a seat's inbox, so notify.KeyOf never reads
+	// it.
 	PartitionKey       string `json:"partition_key"`
 	NotificationSource string `json:"notification_source"`
 	// Count is the number of constituent notifications; FirstAt and LastAt
