@@ -129,7 +129,12 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 	}
 	at := w.Now()
 	goal.UpdatedAt = at
-	return w.published(ctx, statelog.Request{
+	// DECLARED OUTSIDE THE DECIDE and assigned inside it, because the
+	// decide runs again on a retry and the LAST run is the one whose
+	// publish was accepted — the same shape the create path uses for its
+	// coerced values and its warnings.
+	var dropped int
+	out, err := w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
 		OpID:     opID,
@@ -171,12 +176,16 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 			// second writer edit a colleague's assessment of how the
 			// quarter is going, and the timestamps would still read as
 			// theirs.
-			updates, err := appendUpdates(current.Updates, goal.Updates,
+			updates, evicted, err := appendUpdates(current.Updates, goal.Updates,
 				w.Actor, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
 			post.Updates = updates
+			// SET FROM INSIDE THE DECIDE, which runs again on a retry —
+			// so this is assigned rather than appended to, exactly as the
+			// coerced values and the task path's own warnings are.
+			dropped = evicted
 			if !held {
 				post.CreatedAt, post.CreatedBy = at, w.Actor
 			} else {
@@ -189,6 +198,18 @@ func (w *Writer) WriteGoal(ctx context.Context, opID string, goal Goal) (WriteRe
 				post, goalWake(current, held, post), at)
 		},
 	})
+	if err != nil {
+		return out, err
+	}
+	if dropped > 0 {
+		out.Warnings = append(out.Warnings, fmt.Sprintf(
+			"the %d oldest update(s) on this goal were dropped: a goal keeps "+
+				"its %d most recent, and an update is the stored value rather "+
+				"than a preview of one — what fell off the front is not "+
+				"readable anywhere",
+			dropped, MaxGoalUpdates))
+	}
+	return out, nil
 }
 
 // goalWake is what a goal save announces, or nil when it announces nothing.
@@ -332,7 +353,7 @@ func boolText(v bool) string {
 // renders and the one anybody reads — a goal that stopped accepting updates at
 // a hundred would freeze its own health at whatever it was that day.
 func appendUpdates(stored, incoming []GoalUpdate, actor string, at time.Time) (
-	[]GoalUpdate, error) {
+	[]GoalUpdate, int, error) {
 	out := slices.Clone(stored)
 	for _, update := range incoming {
 		text := strings.TrimSpace(update.Text)
@@ -346,7 +367,7 @@ func appendUpdates(stored, incoming []GoalUpdate, actor string, at time.Time) (
 			// of somebody's assessment and leave them believing they
 			// had filed it. Cutting is the last resort, and a value
 			// with a cap is refused naming the field.
-			return nil, fmt.Errorf("tracker: a goal update is %d bytes and at "+
+			return nil, 0, fmt.Errorf("tracker: a goal update is %d bytes and at "+
 				"most %d are stored — say it shorter, or put the detail where "+
 				"the work is and link to it", len(text), MaxGoalUpdateText)
 		}
@@ -354,10 +375,25 @@ func appendUpdates(stored, incoming []GoalUpdate, actor string, at time.Time) (
 			At: at, Author: actor, Health: update.Health, Text: text,
 		})
 	}
-	if len(out) > MaxGoalUpdates {
-		out = out[len(out)-MaxGoalUpdates:]
+	// THE ROLLING WINDOW IS RIGHT AND ITS SILENCE WAS NOT.
+	//
+	// A goal must keep accepting updates, so the oldest have to go — but
+	// they went with no warning, no history row and no reader, which is the
+	// argument this same function makes twelve lines up against cutting an
+	// over-long one: "an update is the STORED value rather than a preview
+	// of one — there is nowhere to go and read the rest". That applies word
+	// for word to the update that falls off the FRONT. A quarter's worth of
+	// a goal's health narrative disappeared and the save reported `applied`.
+	//
+	// So the eviction is REPORTED rather than refused: refusing would stop
+	// a goal being updated at all, which is worse, and the warnings channel
+	// is what this package already uses for "the caller should know and was
+	// not refused for it".
+	if dropped := len(out) - MaxGoalUpdates; dropped > 0 {
+		out = out[dropped:]
+		return out, dropped, nil
 	}
-	return out, nil
+	return out, 0, nil
 }
 
 // goalProjects is the projects a stored goal's targets already count.

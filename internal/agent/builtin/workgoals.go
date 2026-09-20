@@ -280,9 +280,18 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(writeFailure(tracker.WriteWorkGoalTool, err)), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	answer := map[string]any{
 		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}
+	// WHAT THE WRITE DID THAT THE CALLER DID NOT ASK FOR. A goal keeps a
+	// rolling window of updates, so a save can evict the oldest — and an
+	// update is the stored value rather than a preview of one, so what
+	// falls off the front is not readable anywhere. It used to go in
+	// silence under `outcome: applied`.
+	if len(result.Warnings) > 0 {
+		answer["warnings"] = result.Warnings
+	}
+	return jsonResult(answer)
 }
 
 // goalParties is who a stored goal already names.
