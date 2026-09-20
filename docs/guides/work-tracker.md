@@ -24,6 +24,45 @@ A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 the two costs a number rather than risking two tasks sharing a key. A key is
 what people paste into chat, so it can never be ambiguous.
 
+### What a project row carries about its work
+
+Beside its own settings, every project carries two facts the engine maintains
+from the work filed into it — so a directory of projects answers "how much" and
+"how recently" without reading a task:
+
+| | What it is |
+|---|---|
+| **task counts** | `open`, `done` and `closed`: how many of the project's tasks are in each status **group**. Moved by the commit that moves a task between groups, that files one, that moves one to another project, or that removes or purges one. |
+| **last change** | when the project's work last changed and **who** changed it — a handle and which of the four author kinds it is (`agent`, `human`, `operator`, `system`), so a seat's write and a person's read differently. |
+
+Both are **maintained, never counted on the fly**: they are written by the same
+commit that changes the work, so drawing thirty projects costs thirty rows
+rather than a pass over every task and every change the company has ever made.
+
+**The last change is the newest entry of that project's own activity feed**
+(`task_activity`) — the same commit, the same instant, the same actor — so the
+two can never disagree. That decides what counts:
+
+- Every commit about a task in the project moves it: filing one, changing any
+  field, commenting, archiving, removing, restoring, purging — loud or quiet.
+- An agent's **turn** does not. A turn records what the work *cost*, not a
+  change to it; counting it would mark every project a seat is thinking in as
+  changing continuously.
+- Re-ordering the **board** does not. The manual order is not a change to any
+  task, and the feed does not carry it either.
+- Editing the **project itself** does not — a new default assignee, a field
+  declaration, an archive. The project's settings changing is not its work
+  changing.
+- A task **moved between projects** counts against the project it moved *to*,
+  which is where a reader following it up will look. Both projects' counts move.
+
+A project nobody has filed work into reports **no last change at all**, rather
+than an instant borrowed from its own creation: "nothing has ever been filed
+here" is the answer, and a made-up date would make an untouched project look
+freshly active. A company upgrading to this gets both columns filled from the
+change history it already holds, so no project reads as untouched because of
+when the engine was updated.
+
 ## Tasks
 
 | Field | What it is |
@@ -471,7 +510,7 @@ CHANGE rather than about state:
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
-| `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
+| `list_projects` | every project work is filed into, with how much open work each holds, when its work last changed and who changed it, and who leads it. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `list_work_goals` | the company's goals, what each is at, and the health updates written against them. A read only — setting a goal is a person's |

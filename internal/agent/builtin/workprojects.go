@@ -70,8 +70,10 @@ func (t *listProjects) Parameters() map[string]any {
 					"false — no new work is filed into one.",
 			},
 			"limit": map[string]any{
-				"type":        "integer",
-				"description": "At most 200, which is also the default.",
+				"type": "integer",
+				"description": "At most 50, which is also the default. A " +
+					"company with more projects than that answers with " +
+					"`total` beside `truncated`: narrow with q or unit.",
 			},
 		},
 	}
@@ -95,11 +97,21 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !ok || t.deps.Reader == nil {
 		return unconfigured(tracker.ListProjectsTool), nil
 	}
+	// THE SEAT'S OWN PAGE, which is smaller than the listing's own cap and
+	// has to be: two hundred rows encode at ≈ 93 KiB and [jsonAnswer]
+	// REFUSES a tool answer past [ToolAnswerBytes] rather than cutting it,
+	// so the tracker's screen-sized cap reached a model as advice to narrow
+	// and no projects at all. A page with `total` beside it is the honest
+	// answer — see [tracker.MaxProjectsPerToolAnswer].
+	limit := argInt(args, "limit", 0)
+	if limit <= 0 || limit > tracker.MaxProjectsPerToolAnswer {
+		limit = tracker.MaxProjectsPerToolAnswer
+	}
 	listing, err := reader.Projects(ctx, tracker.ProjectQuery{
 		Q:        strings.TrimSpace(argString(args, "q")),
 		Unit:     strings.TrimSpace(argString(args, "unit")),
 		Archived: argBool(args, "archived"),
-		Limit:    argInt(args, "limit", 0),
+		Limit:    limit,
 		Units:    t.deps.Units,
 		// THE SEAT'S OWN LEVEL, like every other read here — see
 		// [seatReadLevel] for why it is a name and not a literal.
