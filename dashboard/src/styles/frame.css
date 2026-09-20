@@ -711,6 +711,17 @@
     flex-wrap: wrap;
   }
 
+  /* AND THE TRAIL CLAIMS ITS FLOOR RATHER THAN ITS CONTENT. With the bar
+     wrapping again, the base rule's `flex-basis: auto` puts the trail's whole
+     427px into the line-assignment the wrap runs BEFORE any shrinking — which
+     is the very thing that orphaned the search trigger on a wide bar, except
+     that here it orphans it under the trail on a phone. At `0` the trail
+     claims its `min-width`, the globals stay beside it, and the grow factor
+     still hands it everything the line has left. */
+  .crumbs {
+    flex-basis: 0;
+  }
+
   .page-controls {
     order: 9;
     flex: 0 0 100%;
@@ -736,6 +747,12 @@
      again. */
   .page-controls .page-actions {
     flex-wrap: nowrap;
+    /* AND IT STOPS SHRINKING. On a wide bar the slot gives width so the group
+       above it can wrap; inside a horizontal scroller shrinking is what
+       squashes one button under the next instead of scrolling — measured at
+       500px, "Copy turn" cut to "Copy tu" with "Download turn" drawn over the
+       star. */
+    flex: 0 0 auto;
   }
 }
 
@@ -812,16 +829,18 @@
 }
 
 .fact-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  column-gap: var(--space-4);
+  row-gap: var(--space-3);
   padding-top: var(--space-1);
 }
 
 .fact {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 4;
+  row-gap: 0;
   min-width: 0;
 }
 
@@ -837,30 +856,29 @@
   color: var(--text);
 }
 
-/* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH. `.fact` is a column flex box, so
-   it is as wide as its widest child — and a note is prose where the value
-   above it is a word. Measured on a page header: `v1` under a 146px "set by
-   Agent CEO · 2m ago" and `2m ago` under a 153px "any change, not only a
-   save", beside three note-less facts at 66 to 75px. The gaps between the five
-   labels then ran 85, 162, 90, 169, which reads as five columns placed at
-   random rather than as one row of facts.
+/* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH, and the grid above is what makes
+   that structural rather than capped. `.fact` was a column flex box, so it was
+   as wide as its widest child — and a note is prose where the value above it
+   is a word. Measured on a page header: `v1` under a 146px "set by Agent CEO ·
+   2m ago" and `2m ago` under a 153px "any change, not only a save", beside
+   three note-less facts at 66 to 75px. The gaps between the five labels then
+   ran 85, 162, 90, 169, which reads as five columns placed at random rather
+   than as one row of facts.
 
-   Sixteen characters is about two short words a line at `--fs-3xs`, which
-   holds a footnote to roughly the width of the LABEL above it and brought
-   those gaps to 85, 144, 90, 144. `balance` is what makes the wrap look
-   deliberate rather than broken: at a hard 18ch the same two notes left "2m
-   ago" and "a save" alone on a second line, and an orphan reads as a fault.
-   It is ignored where it is not implemented, which costs nothing — the cap is
-   what does the work.
+   The cap that used to answer it was `max-width: 16ch`, and it could only ever
+   narrow the problem: sixteen characters at `--fs-3xs` is still wider than
+   most values, so a footnote went on setting its column and the pitch went on
+   being irregular. The column is a grid track now and the note wraps inside
+   whatever it is, so there is nothing left to cap.
 
-   This is NOT `--measure`, and the difference is the point: that is a reading
-   measure for prose somebody sits down with, and a caption under a fact is
-   read in one glance beside the thing it qualifies. */
+   `balance` stays, because it is what makes the wrap look deliberate rather
+   than broken — a hard cut left "2m ago" and "a save" alone on a second line,
+   and an orphan reads as a fault. It is ignored where it is not implemented,
+   which costs nothing now that the track does the bounding. */
 .fact-note,
 .fact-setby {
   font-size: var(--fs-3xs);
   color: var(--text-muted);
-  max-width: 16ch;
   text-wrap: balance;
 }
 

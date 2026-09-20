@@ -579,6 +579,37 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
   });
 
+  // A FACT LINE IS A ROW OF FACTS, so it has to have a pitch. This one is a
+  // flex row of column boxes, which means each fact is as wide as its widest
+  // CHILD — and a note is prose where the value above it is a word.
+  test("a footnote cannot set its fact's column or its row", () => {
+    const css = sheet("frame.css");
+    const line = block(css, ".fact-line");
+    // A GRID WITH A REGULAR TRACK, not a flex row that sizes to content.
+    // Measured before: `v1` under a 146px "set by Agent CEO · 2m ago" beside
+    // three note-less facts at 66 to 75px, so the gaps between five labels ran
+    // 85, 162, 90, 169 — five columns placed at random rather than one row.
+    expect(line).toMatch(/display:\s*grid/);
+    expect(line).toMatch(/grid-template-columns:\s*repeat\(/);
+
+    // AND EVERY FACT SITS ON THE SAME FOUR BANDS. Subgrid is what keeps the
+    // labels on one line and the values on the next across the whole row: as
+    // four independent boxes, one three-line note pushed its own value up and
+    // left the rest of the row hanging.
+    const fact = block(css, ".fact");
+    expect(fact).toMatch(/grid-template-rows:\s*subgrid/);
+    expect(fact).toMatch(/grid-row:\s*span 4/);
+
+    // AND THE CAP THAT USED TO STAND IN FOR ALL OF IT IS GONE. `max-width:
+    // 16ch` could only narrow the problem — sixteen characters at `--fs-3xs`
+    // is still wider than most values — and left with the track doing the
+    // bounding it would cut a note the column had room for.
+    expect(
+      rules(css, ".fact-note").join(" "),
+      "the track bounds a note now; a cap on top of it only cuts one early",
+    ).not.toMatch(/max-width:/);
+  });
+
   test("the page bar shrinks, and breaks only where it was told to", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
