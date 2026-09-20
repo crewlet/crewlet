@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -502,6 +503,163 @@ func TestAWaiterIntervalBeyondTheDutyCeilingIsRefusedAtStart(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SandboxPollInterval") {
 		t.Fatalf("the refusal %q does not name the option to change", err)
+	}
+}
+
+// chargeRig is a coordinator whose accountant is the engine's own, over the
+// fleet's real counters, so every charge is asserted where a budget reads it.
+type chargeRig struct {
+	fleet       *memory.Fleet
+	coordinator *sandbox.Coordinator
+	completion  types.SandboxRunCompleted
+}
+
+// chargeAgent is the seat the rig's run belongs to, and the id its counter is
+// keyed on.
+const chargeAgent = "11111111-1111-1111-1111-111111111111"
+
+// discardQueue takes the coordinator's announcements and keeps none of them.
+type discardQueue struct{}
+
+func (discardQueue) Publish(context.Context, string, *events.Event) error { return nil }
+
+// movedSeat fails the first `fails` resumes the way a node that lost the seat
+// does, then resumes.
+type movedSeat struct {
+	mu    sync.Mutex
+	fails int
+}
+
+func (m *movedSeat) Resume(context.Context, sandbox.ResumeRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fails > 0 {
+		m.fails--
+		return fmt.Errorf("%w: the seat moved between the publish and the receive",
+			sandbox.ErrResumeUnavailable)
+	}
+	return nil
+}
+
+// newChargeRig seeds one running coding run whose job has finished having
+// spent `tokens`, charged against the given caps.
+func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resumer) *chargeRig {
+	t.Helper()
+	ctx := t.Context()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	provider, runner := sandbox.NewFakeProvider(), sandbox.NewFakeRunner("claude-code")
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": runner},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: discardQueue{}, Pending: store, Manager: manager, Resume: resume,
+		Account: sandboxAccountant{
+			budgets: fleet,
+			caps:    func(string) (int, int) { return orgCap, seatCap },
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	box, err := provider.Create(ctx, sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: chargeAgent, Role: "SWE",
+		CodingAgent: "claude-code",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := store.AttachSandbox(ctx, "t1", sandbox.BoxRef{
+		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	if suspended, err := store.MarkSuspended(ctx, "t1", map[string]any{
+		"pending_tool_name": "run_sandbox",
+	}); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})
+	run, found, err := store.Get(ctx, "t1")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+
+	return &chargeRig{
+		fleet: fleet, coordinator: coordinator,
+		completion: types.SandboxRunCompleted{
+			TurnID: "t1", LaunchID: run.LaunchID, AgentHandle: "swe", Agent: chargeAgent,
+			RoleName: "SWE", SandboxID: box.ID(), CodingAgent: "claude-code",
+		},
+	}
+}
+
+func (r *chargeRig) deliver(t *testing.T) error {
+	t.Helper()
+	return r.coordinator.OnCompleted(t.Context(), r.completion, events.New(r.completion, events.TraceContext{}))
+}
+
+func (r *chargeRig) used(t *testing.T, scope string) int {
+	t.Helper()
+	got, err := r.fleet.Used(t.Context(), scope)
+	if err != nil {
+		t.Fatalf("Used(%s): %v", scope, err)
+	}
+	return got
+}
+
+// A CODING RUN IS CHARGED TO THE FLEET ONCE, however often its completion
+// comes back. A node that lost the seat answers ErrResumeUnavailable, the
+// claim reverts and the completion is delivered again, and each of those
+// passes collected the same finished job and charged it to both counters: the
+// seat's allowance and the company's shrank by one run per retry.
+func TestARetriedCodingRunIsChargedToTheFleetOnce(t *testing.T) {
+	rig := newChargeRig(t, 1000, 0, 0, &movedSeat{fails: 2})
+	for attempt := range 2 {
+		if err := rig.deliver(t); !errors.Is(err, sandbox.ErrResumeUnavailable) {
+			t.Fatalf("attempt %d = %v, want the completion sent back", attempt+1, err)
+		}
+	}
+	if err := rig.deliver(t); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+
+	if got := rig.used(t, coord.OrgScope); got != 1000 {
+		t.Errorf("the company was charged %d for one run of 1000 delivered three times", got)
+	}
+	if got := rig.used(t, coord.AgentScope(chargeAgent)); got != 1000 {
+		t.Errorf("the seat was charged %d for one run of 1000 delivered three times", got)
+	}
+}
+
+// A CAP THAT REFUSES A COLLECTED RUN MOVES NEITHER COUNTER, which is the answer
+// the shared counter gives every charge it refuses, and the run's turn goes on:
+// the tokens are spent either way.
+func TestARefusedCodingRunChargeMovesNeitherCounter(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		orgCap, seatCap int
+	}{
+		{"the company's cap", 500, 0},
+		{"the seat's cap", 0, 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newChargeRig(t, 1000, tc.orgCap, tc.seatCap, &movedSeat{})
+			if err := rig.deliver(t); err != nil {
+				t.Fatalf("a refused charge stopped the turn: %v", err)
+			}
+			if org, seat := rig.used(t, coord.OrgScope), rig.used(t, coord.AgentScope(chargeAgent)); org != 0 || seat != 0 {
+				t.Errorf("a refused charge moved the counters to org=%d seat=%d", org, seat)
+			}
+		})
 	}
 }
 
