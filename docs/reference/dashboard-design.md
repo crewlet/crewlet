@@ -308,6 +308,20 @@ is where the collapsed rail and the phone's bottom bar send a reader — they ar
 kept in the chrome because a theme switch you can SEE is the reason either is
 there, and what was wrong was a rail too narrow to draw what it was drawing.
 
+**The mark takes one axis and derives the other.** `crewlet-icon.svg` is
+1467×978 — a 3:2 mark, not a square — and it meets its box rather than filling
+it, so the 24px SQUARE it used to be given drew the mark 24px across 16px of
+art and letterboxed the other 8: the declared size was never the size anybody
+saw, and a cell 96px wide held a 24×16 speck. It now stands `--control-h` tall,
+the step every control in the same `--page-bar-h` band takes, and reads its
+width from the file. The width is a `max-width` CLAMP rather than a second rule
+keyed on the collapsed rail, because the 48px column is React state AND a
+breakpoint — under 960 the grid hands the rail `--rail-w-collapsed` with
+`collapsed` still false, which is how `.rail-engine > .truncate` once rendered
+61px of word inside 48px of column — and on a replaced element a clamped width
+rescales the height with it, so the narrow column gets the same mark smaller
+instead of the same mark spilling.
+
 `g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
 `g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
 because every single-modifier combination worth having is already the browser's.

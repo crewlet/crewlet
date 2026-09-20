@@ -187,9 +187,39 @@
   flex: 0 0 auto;
 }
 
+/* THE MARK IS 3:2, NOT A SQUARE. `crewlet-icon.svg` is 1467×978 in its own
+   viewBox and meets its box rather than filling it, so a 24px SQUARE drew the
+   mark 24px across 16px of art and letterboxed the other 8 — the declared
+   size was never the size anybody saw. In a cell 96px wide and
+   `--page-bar-h` tall that left the brand a 24×16 speck with 36px of empty
+   panel on either side of it.
+
+   So the mark takes ONE axis and derives the other from the file. HEIGHT is
+   the one it takes, at the control step of the band it stands in:
+   `.rail-brand`, `.side-head`, `.peek-bar` and `.page-bar` are all one
+   `--page-bar-h` band, and `--control-h` is what a control standing in one
+   of them measures — so the mark is as tall as the chrome beside it and
+   scales with `--density` for the same reason that does. At the default
+   density that is 48×32 of actual art where there were 24×16.
+
+   WIDTH IS THE CLAMP, and it is what lets ONE rule serve both columns. The
+   rail is `--rail-w` open and `--rail-w-collapsed` — 48px — narrow, and 48px
+   of art in a 48px column touches both its edges. `max-width` on a replaced
+   element rescales the height with it (CSS 2.1 § 10.4 gives
+   `h = max-width × h/w` for exactly this constraint), so the ratio survives
+   the clamp and the narrow column gets 40×27 without a second declaration.
+
+   A CLAMP RATHER THAN A `[data-collapsed]` RULE, because that attribute is
+   REACT STATE and the 48px column is also a BREAKPOINT: at 960 and below the
+   grid already hands the rail `--rail-w-collapsed` with `collapsed` still
+   false. That gap is exactly how `.rail-engine > .truncate` came to render
+   61px of word inside a 48px column and spill out of both sides of it. A
+   clamp reads the width it was actually given, so it cannot miss the half it
+   was not told about. */
 .rail-brand img {
-  width: 24px;
-  height: 24px;
+  width: auto;
+  height: var(--control-h);
+  max-width: calc(100% - 2 * var(--space-1));
 }
 
 .rail-rows {
