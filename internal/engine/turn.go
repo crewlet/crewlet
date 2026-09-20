@@ -572,17 +572,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// way, because it is one condition.
 			//
 			// WHAT THE DEFERRAL BUYS IS SPEED AND SILENCE, NOT A FREE
-			// DELIVERY. On the shipped backend it IS a Nak and spends one
-			// of the trigger's twenty-five exactly as a failure does,
-			// which is why that budget is 25 rather than the ~10 a broker
-			// with a free handoff would need; only the in-memory twin
-			// hands a deferral back uncounted, and [queue.OutcomeDefer]
-			// states the difference rather than pretending there is none.
-			// What it does buy is a return in about a millisecond instead
-			// of the failure path's backoff, so the seat's new owner sees
-			// the delivery now rather than waiting out a delay this node
-			// earned, and a quiesced attachment, so this process stops
-			// fetching further work it has equally lost the right to do.
+			// DELIVERY. It spends one of the trigger's twenty-five
+			// exactly as a failure does, on every backend — which is why
+			// that budget is 25 rather than the ~10 a broker with a free
+			// handoff would need. What it does buy is a return in about a
+			// millisecond instead of the failure path's backoff, so the
+			// seat's new owner sees the delivery now rather than waiting
+			// out a delay this node earned, and a quiesced attachment, so
+			// this process stops fetching further work it has equally
+			// lost the right to do.
 			//
 			// BELOW [turn.Abandon] rather than above it: a turn that
 			// panicked or that proved an outward write must not be run

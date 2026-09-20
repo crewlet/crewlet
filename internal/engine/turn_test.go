@@ -462,9 +462,9 @@ func TestABrokenPhaseThatProvedNothingStillNAKsAndRecordsNothing(t *testing.T) {
 // "seat is not owned here" — caught a phase later, because the window is open
 // for the whole length of a turn and only one end of it was ever checked. One
 // condition, so one disposition: a deferral hands the delivery to the seat's
-// new owner at zero accrued redeliveries and quiesces this attachment, where
-// a NAK spends one of the trigger's twenty-five deliveries on a node with no
-// further claim to the seat.
+// new owner AT ONCE and quiesces this attachment, where a NAK returns it on
+// the failure path's doubling spacing and leaves this node consuming a mailbox
+// it has no further claim to. It costs the same delivery either way.
 func TestASeatThatMovedMidTurnIsDeferredToItsNewOwner(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
