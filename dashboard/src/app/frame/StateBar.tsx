@@ -82,7 +82,7 @@ export function degradationOf({
       variant: "warning",
       icon: <TuneGlyph size="md" />,
       message:
-        "No company configuration is active: no seats are running and inbound webhooks are being dropped.",
+        "No company configuration is active: no seats are running, and inbound webhooks are refused with a 503 their sender will retry.",
       action: { label: "Configuration", onClick: onConfig },
     };
   }

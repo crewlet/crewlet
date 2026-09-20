@@ -186,7 +186,9 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 // nodeError turns a non-200 into something an operator can act on.
 func nodeError(status int, body []byte, sentToken bool) error {
 	var payload struct {
-		Error string `json:"error"`
+		Error  string `json:"error"`
+		Detail string `json:"detail"`
+		Hint   string `json:"hint"`
 	}
 	_ = json.Unmarshal(body, &payload)
 	switch status {
@@ -198,10 +200,20 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		return errors.New("the node refused the token: check it against the " +
 			"api.auth.tokens entry you meant to use")
 	case http.StatusServiceUnavailable:
-		return fmt.Errorf("this node cannot serve that: %s", firstNonEmpty(payload.Error,
-			"it is running without the backend the route needs"))
+		// TWO DIFFERENT FACTS on this surface, and the guess below is
+		// only one of them: a node built without the backend a route
+		// needs, and a node DRAINING for a shutdown. The body says
+		// which, so the guess is a fallback rather than the answer, and
+		// the detail and hint beside it are what say where to go
+		// instead — "draining" on its own names what happened and not
+		// what to do about it.
+		return fmt.Errorf("this node cannot serve that: %s", withRefusalDetail(
+			firstNonEmpty(payload.Error,
+				"it is running without the backend the route needs"),
+			payload.Detail, payload.Hint))
 	default:
 		return fmt.Errorf("the node answered %d: %s", status,
-			firstNonEmpty(payload.Error, string(body)))
+			withRefusalDetail(firstNonEmpty(payload.Error, string(body)),
+				payload.Detail, payload.Hint))
 	}
 }

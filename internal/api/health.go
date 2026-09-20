@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/version"
@@ -41,9 +42,9 @@ type Health struct {
 
 	// Configured is true once a company revision is active. It has been on
 	// the wire since this surface existed and nothing rendered it, which
-	// meant an engine with no active revision — one dropping every inbound
-	// webhook — looked exactly like a healthy idle one, just with empty
-	// screens.
+	// meant an engine with no active revision — one refusing every inbound
+	// webhook with a 503 the sender retries, never dropping one — looked
+	// exactly like a healthy idle one, just with empty screens.
 	Configured bool `json:"configured"`
 
 	// Engine says whether the fields below can be known at all.
@@ -89,7 +90,25 @@ type Readiness struct {
 	Configured bool   `json:"configured"`
 	Draining   bool   `json:"draining"`
 	Posture    string `json:"posture"`
+
+	// Reason names what took this node out of rotation, and is absent while
+	// it is in rotation: [ReasonDraining], [ReasonUnconfigured], or the
+	// diverged posture itself. ONE FIELD, decided here in the precedence the
+	// health status uses, so a load balancer's record of a failed probe says
+	// why without its reader re-deriving it from the three fields above.
+	Reason string `json:"reason,omitempty"`
 }
+
+// The reasons a refused /ready names, beside the diverged postures, which are
+// named as themselves.
+//
+// ReasonDraining is the drain gate's own code, spelled once: a node that
+// refuses a webhook because it is draining and a probe that reports it out of
+// rotation are describing one fact.
+const (
+	ReasonDraining     = string(httpjson.CodeDraining)
+	ReasonUnconfigured = StatusUnconfigured
+)
 
 // divergedPostures take a node out of rotation.
 //
@@ -138,9 +157,16 @@ func (a *App) health(ctx context.Context) Health {
 	}
 	body.Seats = state.Seats
 
+	// IN THE PRECEDENCE THE STATUSES DECLARE. The posture case used to be
+	// reached whether or not the node was configured, so a node with no
+	// revision that had also concluded `shed` reported the posture, and the
+	// one fact that matters on such a node, that it refuses every
+	// delivery, was the one its status did not say.
 	switch {
 	case state.ShuttingDown:
 		body.Status = StatusShuttingDown
+	case !configured:
+		// Already StatusUnconfigured, above.
 	case state.Posture != "" && state.Posture != "serve" && state.Posture != "wait":
 		body.Status = state.Posture
 	}
@@ -177,7 +203,15 @@ func (a *App) readiness(ctx context.Context) (Readiness, int) {
 		}
 	}
 	_, diverged := divergedPostures[body.Posture]
-	body.Ready = configured && !body.Draining && !diverged
+	switch {
+	case body.Draining:
+		body.Reason = ReasonDraining
+	case !configured:
+		body.Reason = ReasonUnconfigured
+	case diverged:
+		body.Reason = body.Posture
+	}
+	body.Ready = body.Reason == ""
 	if body.Ready {
 		return body, http.StatusOK
 	}

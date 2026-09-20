@@ -237,7 +237,7 @@ That is the whole exposure, and it is small enough that **the apply does not wai
 | `shed` | 503 | Confirmed: cannot apply an epoch its peers have. |
 | `stuck` | 503 | Retries exhausted. Needs an operator. |
 
-`posture` on `/health` is the only place the *reason* is visible — `/ready` returns a bare 503 either way, and "draining" and "cannot apply epoch 41" call for opposite responses. A drain outranks a posture in `status`, because it is the operator's own action.
+Both probes say *why*, because "draining" and "cannot apply epoch 41" call for opposite responses. `/health` carries the posture itself, and `/ready` names what took the node out of rotation in `reason`: `draining`, `unconfigured`, `shed` or `stuck`. A drain outranks a posture in both, because it is the operator's own action.
 
 ### Reading a stuck node
 

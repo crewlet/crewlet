@@ -1012,7 +1012,7 @@ export interface ScheduleRunsAnswer {
  * `stream` query. The two are deliberately different names so a query can
  * never collide with a push kind; they are also deliberately different
  * shapes, and reading a `stream` field off a `health` push is how an engine
- * with NO ACTIVE CONFIG — dropping every inbound webhook — came to render
+ * with NO ACTIVE CONFIG — refusing every inbound webhook — came to render
  * identically to a healthy idle one.
  */
 export interface HealthPush {

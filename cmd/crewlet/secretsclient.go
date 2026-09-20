@@ -247,10 +247,6 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 	if msg == "" {
 		msg = strings.TrimSpace(string(raw))
 	}
-	for _, extra := range []string{body.Detail, body.Hint} {
-		if extra != "" {
-			msg += "\n  " + extra
-		}
-	}
-	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path, msg)
+	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
+		withRefusalDetail(msg, body.Detail, body.Hint))
 }

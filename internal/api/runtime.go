@@ -32,10 +32,10 @@ type RuntimeState struct {
 	ShuttingDown bool
 
 	// Posture is what this node concluded about its own config lag:
-	// serve, wait, shed, isolated or stuck. The only place an operator can
-	// see WHY a node left rotation — /ready reports a bare 503 either way,
-	// and "draining" and "cannot apply epoch 41" call for opposite
-	// responses.
+	// serve, wait, shed, isolated or stuck. It is WHY a node left rotation
+	// when it was not draining, and the two call for opposite responses:
+	// "draining" is an operator's own stop, "cannot apply epoch 41" is a
+	// fault to go and read.
 	Posture string
 
 	// AppliedEpoch is the config revision this node is running.
@@ -100,6 +100,15 @@ type NodeRuntime interface {
 	// and the only one that reaches the network, and both /health and
 	// /ready spelled the discard as `_ *http.Request` while calling it.
 	Snapshot(ctx context.Context) RuntimeState
+
+	// ShuttingDown reports whether this node has begun to drain: the same
+	// fact as Snapshot's ShuttingDown, read from the same place.
+	//
+	// A SECOND WAY TO READ IT because the drain gate asks on every request
+	// that would start work, and Snapshot reaches the coordination plane on
+	// every call. A write refused for draining must not first wait on a
+	// network read that has nothing to do with the answer.
+	ShuttingDown() bool
 
 	// Tools is the tool catalogue this node serves, for the dashboard's
 	// tool screen.

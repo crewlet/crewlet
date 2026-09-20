@@ -382,8 +382,11 @@ func New(opts Options) *App {
 	// the redirect from `/`, which has an HTML body) are covered without
 	// each needing to remember. A handler serving a page replaces the
 	// policy with its own.
+	//
+	// And the drain gate sits inside all three, next to the routes it
+	// refuses: see [App.drainGate].
 	a.cors = auth.NewCORS(opts.Bootstrap)
-	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(mux)))
+	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(a.drainGate(mux))))
 	return a
 }
 
@@ -546,7 +549,8 @@ func (a *App) Stop() { a.stream.Stop() }
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an
 	// orchestrator watching liveness must not SIGKILL a node that is
-	// finishing its in-flight turns. /ready is what steers traffic.
+	// finishing its in-flight turns. /ready is what steers traffic. That
+	// only holds because the listener outlives the drain; see drain.go.
 	writeJSON(w, http.StatusOK, a.health(r.Context()))
 }
 

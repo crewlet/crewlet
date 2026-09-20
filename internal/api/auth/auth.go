@@ -43,18 +43,6 @@ var log = logging.Get("api.auth")
 //   - /secrets: the fleet's credential store. Even the listing, which carries
 //     no values, says which credentials a company holds and when each last
 //     changed, and one route returns a value outright.
-//   - /operator: the operator MCP surface, which FILES AND MOVES WORK and
-//     writes to the knowledge base. A write is a write whatever
-//     allow_anonymous_read opens, and it is the credential's own name that
-//     lands on each record as the author — so a request with no token has
-//     nobody to attribute the write to. It is deliberately NOT under /mcp/,
-//     which is exempt wholesale for the sandbox bridge: mounting a writable
-//     company surface there would have put it behind no credential at all.
-//
-// A LIST rather than one constant, because the alternative was a second
-// const somewhere else and a second `HasPrefix` beside it — and the two would
-// have drifted the day a third surface was added, each staying
-// self-consistent while one of them stopped being consulted.
 //   - /setup: connecting an integration. It answers with the NAMES of the
 //     credentials a company holds, which of them are unset, and the
 //     third-party app pages an administrator would visit, and it writes
@@ -62,10 +50,20 @@ var log = logging.Get("api.auth")
 //     the same reason /secrets guards its listing: the map of what a
 //     company has not configured is worth as much to an attacker as the
 //     configuration.
-//   - /operator: the operator MCP surface, which writes the company's own
-//     tracker and knowledge base as the TOKEN's name. Its own prefix
-//     rather than /mcp/, which is exempt wholesale so a sandbox box with
-//     no API token can reach its seat's tools.
+//   - /operator: the operator MCP surface, which FILES AND MOVES WORK and
+//     writes the company's own knowledge base. A write is a write whatever
+//     allow_anonymous_read opens, and it is the credential's own name that
+//     lands on each record as the author — so a request with no token has
+//     nobody to attribute the write to. It is deliberately NOT under /mcp/,
+//     which is exempt wholesale for the sandbox bridge, so a box holding no
+//     API token can reach its seat's tools: mounting a writable company
+//     surface there would have put it behind no credential at all.
+//
+// In the order the slice declares, and A LIST rather than one constant,
+// because the alternative was a second const somewhere else and a second
+// `HasPrefix` beside it — and the two would have drifted the day a third
+// surface was added, each staying self-consistent while one of them stopped
+// being consulted.
 var GuardedPrefixes = []string{"/config", "/secrets", "/setup", "/operator"}
 
 // AlwaysGuarded reports whether a path is on one of those surfaces.
@@ -115,11 +113,32 @@ var unguardedExact = map[string]struct{}{
 	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 }
 
-var unguardedPrefixes = []string{"/webhooks/", "/otlp/", mcpbridge.PathPrefix, "/static/"}
+var unguardedPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/"}
+
+// WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
+// reads. Named here, beside the exemption, for the reason [SocketPath] is: the
+// API's drain gate refuses the first and serves the second, and a prefix it
+// spelled for itself could stop matching the one this guard exempts without
+// either rule looking wrong on its own.
+const (
+	WebhookPrefix = "/webhooks/"
+	OTLPPrefix    = "/otlp/"
+)
 
 // readMethods are treated as reads for allow_anonymous_read.
 var readMethods = map[string]struct{}{
 	http.MethodGet: {}, http.MethodHead: {}, http.MethodOptions: {},
+}
+
+// IsRead reports whether a method is a read: GET, HEAD or OPTIONS.
+//
+// Exported because a read is a read to more than the guard. The drain gate
+// serves reads for the same reason allow_anonymous_read may open them: a read
+// changes nothing and starts nothing, and a second list of which methods those
+// are would be a second answer to one question.
+func IsRead(method string) bool {
+	_, ok := readMethods[strings.ToUpper(method)]
+	return ok
 }
 
 // loopbackHosts are bind addresses no other machine can reach. Anonymous reads
@@ -309,8 +328,7 @@ func (g *Guard) Requires(path, method string) bool {
 		return true
 	}
 	if g.anonymousRead {
-		_, isRead := readMethods[strings.ToUpper(method)]
-		return !isRead
+		return !IsRead(method)
 	}
 	return true
 }

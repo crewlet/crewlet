@@ -149,12 +149,8 @@ func (c *configClient) refusal(status int, raw []byte) error {
 		// answer can be as large as maxConfigResponseBytes.
 		msg = textcut.Ellipsis(strings.TrimSpace(string(raw)), maxRefusalTextBytes)
 	}
-	for _, extra := range []string{body.Detail, body.Hint} {
-		if extra != "" {
-			msg += "\n  " + extra
-		}
-	}
-	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status, msg)
+	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
+		withRefusalDetail(msg, body.Detail, body.Hint))
 }
 
 // maxRefusalTextBytes is how much of an answer that is not the engine's JSON

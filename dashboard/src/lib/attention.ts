@@ -6,7 +6,7 @@
  * on the board (and a run whose box had been reclaimed appeared NOWHERE at
  * all), a seat the engine stopped was a card among the healthy ones, a budget
  * refusing charges was a bar on one seat's page, and an engine with no active
- * configuration — dropping every inbound webhook — was a line in a popover.
+ * configuration — refusing every inbound webhook — was a line in a popover.
  *
  * They are one list because they are one question, and it is the question an
  * operator opens this page with. Ordered by what it costs to ignore, and every
@@ -155,7 +155,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
   }
 
   // An engine with no active company revision looks exactly like a healthy
-  // idle one, and drops every inbound webhook. This is the whole reason the
+  // idle one, and refuses every inbound webhook. This is the whole reason the
   // engine carries a `configured` flag.
   if (engine && engine.configured === false) {
     out.push({
@@ -165,7 +165,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "tune",
       title: "No company configuration is active",
       detail:
-        "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import a company revision.",
+        "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import a company revision.",
       path: ["admin", "config"],
     });
   }

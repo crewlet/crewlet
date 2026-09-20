@@ -115,7 +115,7 @@ const ENTITY_KINDS = [
  */
 const NO_REVISION = {
   title: "No company configuration is active",
-  hint: "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import one with crewlet config import, or PUT /config.",
+  hint: "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import one with crewlet config import, or PUT /config.",
 } as const;
 
 /**
