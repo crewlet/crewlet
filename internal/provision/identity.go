@@ -11,9 +11,9 @@ import "sync"
 // `crewlet <vendor> provision`. Unbounded, a company of thirty seats with
 // thirty tokens opened thirty simultaneous connections to one third-party
 // app at every boot and every apply, which is the shape a third-party app's
-// abuse detection is built to notice. engine/github.go's own comment
-// asserted a bound ("bounded by the number of distinct credentials") that is
-// not a bound on anything the host controls.
+// abuse detection is built to notice. The resolvers used to call themselves
+// bounded "by the number of distinct credentials", which is not a bound on
+// anything the host controls: it is a count of what the COMPANY configured.
 //
 // EIGHT, and the arithmetic is the point rather than the number. GitHub's
 // secondary-rate-limit guidance is explicitly to avoid concurrent requests

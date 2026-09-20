@@ -6,13 +6,11 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The Atlassian tracker, wired.
@@ -37,75 +35,41 @@ import (
 // jiraIdentities remembers which account each seat credential authenticates
 // as.
 //
-// KEYED ON THE CREDENTIAL, which is what makes an apply free: identity is a
-// function of the credential, credentials change rarely, and a config
-// revision that touched something else must not spend one request per seat
-// to re-learn what it already knows. A rotated token is a cache miss and
-// costs exactly one request, which is correct — it may well be a different
-// account.
+// KEYED ON THE CREDENTIAL, and the cache's rules — one request per credential
+// however many callers want it, a failed lookup left for the next pass — are
+// [identityCache]'s. What is this surface's own is the client it builds, the
+// account id Jira routes by, and what it logs when a lookup fails.
 //
 // The EMAIL is part of the key, not just the token: Jira Cloud authenticates
 // base64(email:token), so the same token under a different address is a
 // different credential and may well resolve to a different account.
 type jiraIdentities struct {
-	mu     sync.Mutex
-	byCred map[atlassian.Credential]string
+	identityCache[atlassian.Credential]
 }
 
 // resolve fills in the accounts behind any credentials not already known.
 //
-// CONCURRENTLY, bounded by the number of distinct credentials. Sequentially
-// this is one round trip per seat on the boot path, which on a company of
-// thirty seats against a slow instance is thirty timeouts end to end.
-//
-// A seat whose lookup FAILS is left unresolved rather than failing the boot:
-// the instance may be briefly down, and the next apply retries. What that
-// costs is that seat's inbound routing until then, which is the honest
-// consequence and is reported per seat.
+// See [identityCache.resolve] for what "fills in" promises: one request per
+// credential however many callers race it, and a caller that waited holds the
+// answer by the time this returns, which is what the register below depends
+// on.
 func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.Deployment, creds []atlassian.Credential) {
-	j.mu.Lock()
-	if j.byCred == nil {
-		j.byCred = map[atlassian.Credential]string{}
-	}
-	var missing []atlassian.Credential
-	for _, cred := range creds {
-		if _, known := j.byCred[cred]; !known {
-			missing = append(missing, cred)
-		}
-	}
-	j.mu.Unlock()
-	if len(missing) == 0 {
-		return
-	}
-
-	found := make([]string, len(missing))
-	provision.ResolveConcurrently(len(missing), func(i int) {
-		cred := missing[i]
+	j.identityCache.resolve(ctx, creds, func(cred atlassian.Credential) string {
 		client, err := jira.NewClient(jira.ClientOptions{
 			URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
 		})
 		if err != nil {
 			log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
-			return
+			return ""
 		}
 		account, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no tracker events until a lookup "+
-					"succeeds; the reconcile loop retries it on this surface's "+
-					"own pass, so nothing has to be applied")
-			return
+				"detail", unresolvedSeatDetail("tracker events"))
+			return ""
 		}
-		found[i] = account
+		return account
 	})
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	for i, account := range found {
-		if account != "" {
-			j.byCred[missing[i]] = account
-		}
-	}
 }
 
 // register binds each resolved seat to its account in the given registry.
@@ -114,9 +78,7 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.De
 // apply builds a NEW registry from the new company, and a config-derived
 // binding has to be rebuilt into it at that moment.
 func (j *jiraIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) int {
-	j.mu.Lock()
-	known := maps.Clone(j.byCred)
-	j.mu.Unlock()
+	known := j.snapshot()
 
 	var registered int
 	for seat := range c.Org.AllRoles() {
@@ -321,9 +283,7 @@ func jiraPrompt() notify.Prompt { return jira.Prompt{} }
 // choice rather than a fault, and reporting it would put every human seat in
 // the company on the card.
 func (j *jiraIdentities) unresolved(c *Company, env *config.Resolver) []string {
-	j.mu.Lock()
-	known := maps.Clone(j.byCred)
-	j.mu.Unlock()
+	known := j.snapshot()
 
 	var out []string
 	for seat := range c.Org.AllRoles() {
