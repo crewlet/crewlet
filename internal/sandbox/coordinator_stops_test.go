@@ -28,35 +28,37 @@ import (
 //
 // # What it checks, and why the premise is what it is
 //
-// For every exported [Coordinator] entry point, driven once cleanly and then
-// once per store call that drive makes with THAT CALL REFUSED: if the run was
-// still something that would come back before the call and is not after it, and
-// this call did not hand the turn to the resumer, then [CoordinatorOptions.
-// Stopped] must have fired for it.
+// For every exported [Coordinator] entry point, driven once per status a run
+// can hold, and each of those driven once cleanly and then once per store call
+// that drive makes with THAT CALL REFUSED: if the run was still something that
+// would come back before the call and is not after it, and this call did not
+// hand the turn to the resumer, then [CoordinatorOptions.Stopped] must have
+// fired for it.
 //
-//   - COMING BACK is derived from the package's own declarations rather than
-//     restated: a record that exists and holds a [Claimable] status is one the
-//     completion poll, a redelivery or a person's answer can still move, and
-//     [StatusLaunching] is one whose turn has not suspended yet — that frame is
-//     still on the stack and owns whatever it raised. Everything else is a run
-//     nothing will ever pick up: no record at all, or a row stuck in
-//     [StatusResumed], which the poll does not read, a redelivery cannot
-//     re-claim, no answer matches and no pause reaper expires.
-//   - THE TURN ENDED ITS OWN HOLD is the exemption, and the only one. A
-//     re-entry that returned cleanly, or that broke after writing outside the
-//     engine, took down whatever it had raised on its way out, so the run's
-//     record going away afterwards owes nobody anything. A re-entry that failed
-//     any OTHER way did not: the engine KEEPS the hold there, on this package's
-//     promise to give the claim back so the completion comes round again — so
-//     breaking that promise is exactly when a report is still owed, and
-//     "the resumer was reached" would have excused the one path that needs it.
-//   - BEFORE AND AFTER, rather than "not coming back afterwards", because a run
-//     somebody else already ended is not this call's to report — the same gate
-//     the failure announcement takes.
-//   - ONE DIRECTION ONLY. Reporting a stop for a turn that is fine costs a map
-//     lookup against a hold nobody holds; not reporting one costs a person
-//     staring at an indicator for an agent that stopped. So an extra report
-//     never fails here.
+// ALL THREE DIMENSIONS ARE DERIVED, which is the whole mechanism — a path that
+// only misreports from one entry point, under one refusal, out of one starting
+// status is found by the matrix rather than by whoever reads the diff:
+//
+//   - THE ENTRY POINTS are the coordinator's own exported method set, held to
+//     [coordinatorEntries] in both directions by
+//     [TestEveryCoordinatorEntryPointIsDriven].
+//   - THE REFUSALS are OBSERVED, never declared: whatever the drive asked the
+//     store for is what gets refused, so a path that starts calling something
+//     new is injected into on the next run without anybody updating a list.
+//   - THE STARTING STATUS is [Active], every status a record can hold, and
+//     [place] fails rather than skips on one it does not know — so a status
+//     added to the state machine has to say how a run reaches it before
+//     anything here can certify what happens from there. It was hand-written
+//     per drive, which is the same enumeration this file exists to end: a call
+//     that misreports only from a status nobody thought to arrange looks
+//     exactly like a call that is safe.
+//
+// NO (ENTRY, STATUS) PAIR IS SKIPPED, and none needs to be. Every entry point
+// here is reached by something that carries no promise about the row — a
+// broker delivery that is at-least-once and may be hours late, a seat lease
+// changing hands, a retirement — so the status is whatever the store holds
+// when the call lands, including the ones that make the call a no-op. A pair
+// that does nothing costs one cheap rig and proves it does nothing.
 //
 // # What it deliberately does not simulate
 //
@@ -70,15 +72,18 @@ import (
 // entryDrive is one way of reaching a [Coordinator] entry point with a run in
 // front of it.
 //
-// TWO HALVES, because only the second is the subject: setup runs against the
-// REAL store, so a drive can park or claim a run without the refusal under test
-// hitting the arrangement instead of the act.
+// TWO HALVES, because only the second is the subject: arrange runs against the
+// REAL store, so a drive can queue a result or a failure without the refusal
+// under test hitting the arrangement instead of the act.
 type entryDrive struct {
 	name string
 
-	// setup arranges the world with a working store. It runs before the
-	// refusing store is installed and before the row is snapshotted.
-	setup func(t *testing.T, rig *coordRig)
+	// arrange is what this drive needs beyond the run itself — a finished
+	// job to collect, a resumer that breaks. It runs on a run [place] has
+	// already put into the status under test, before the refusing store is
+	// installed and before the row is snapshotted. Nil where the drive
+	// needs nothing of its own.
+	arrange func(t *testing.T, rig *coordRig)
 
 	// call is the entry point, reached with one store call refused.
 	call func(t *testing.T, rig *coordRig)
@@ -94,6 +99,10 @@ type entryDrive struct {
 // mechanism — the next path that ends a suspended run silently is caught by a
 // test rather than by whoever reads the diff.
 //
+// A DRIVE VARIES WHAT IS AROUND THE RUN, NEVER THE RUN'S OWN STATUS, which is
+// [place]'s dimension: two drives differing only in where the run had got to
+// would be a hand-written copy of the one the matrix already derives.
+//
 // Some drives are one line and prove the property trivially, because the method
 // cannot move a run at all (it reads a count, or swaps the manager). That is the
 // honest way to record it: an exemption list would be a second place to state
@@ -101,8 +110,8 @@ type entryDrive struct {
 // is at least visible.
 var coordinatorEntries = map[string][]entryDrive{
 	"OnEvent": {{
-		name:  "a completion routed by type",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
+		name:    "a completion routed by type",
+		arrange: jobFinished,
 		call: func(t *testing.T, rig *coordRig) {
 			payload, _ := rig.completion("t1")
 			ev := events.New(payload, events.TraceContext{})
@@ -112,8 +121,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		},
 	}},
 	"OnStarted": {{
-		name:  "a start event, redelivered or not",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
+		name: "a start event, redelivered or not",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
 				AgentHandle: "swe", TurnID: "t1",
@@ -124,70 +132,43 @@ var coordinatorEntries = map[string][]entryDrive{
 	}},
 	"OnCompleted": {
 		{
-			name:  "a job that finished",
-			setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
-			call:  completes,
+			name:    "a job that finished",
+			arrange: jobFinished,
+			call:    completes,
 		},
 		{
-			name: "a job that asks a person a question",
-			setup: func(t *testing.T, rig *coordRig) {
-				suspendedRun(t, rig)
-				rig.runner.Finish(Result{
-					NeedsInput: true, Question: "which branch?", AskTo: "requester",
-				})
-			},
-			call: completes,
+			name:    "a job that asks a person a question",
+			arrange: jobAsks,
+			call:    completes,
 		},
 		{
-			name: "a job whose box cannot be read back",
-			setup: func(t *testing.T, rig *coordRig) {
-				suspendedRun(t, rig)
-				rig.runner.CollectErr = errors.New("the box died mid-read")
-			},
-			call: completes,
+			name:    "a job whose box cannot be read back",
+			arrange: collectFails,
+			call:    completes,
 		},
 		{
-			name: "a job whose resume fails",
-			setup: func(t *testing.T, rig *coordRig) {
-				suspendedRun(t, rig)
-				rig.resumer.err = errors.New("the node lost the seat mid-resume")
-			},
-			call: completes,
+			name:    "a job whose resume fails",
+			arrange: resumeFails,
+			call:    completes,
 		},
 		{
-			name: "a job whose resume broke after writing outside the engine",
-			setup: func(t *testing.T, rig *coordRig) {
-				suspendedRun(t, rig)
-				rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away",
-					ErrResumeAbandoned)
-			},
-			call: completes,
+			name:    "a job whose resume broke after writing outside the engine",
+			arrange: resumeAbandoned,
+			call:    completes,
 		},
 		{
-			name: "a row carrying no suspended conversation",
-			setup: func(t *testing.T, rig *coordRig) {
-				rig.launching("t1")
-				if err := rig.pending.SetStatus(t.Context(), "t1", StatusRunning, Fence{}); err != nil {
-					t.Fatalf("SetStatus: %v", err)
-				}
-				rig.coordinator.countRun("swe", StatusRunning)
-				rig.runner.Finish(Result{Success: true, Text: "done"})
-			},
-			call: completes,
+			name:    "a row carrying no suspended conversation",
+			arrange: noConversation,
+			call:    completes,
+		},
+		{
+			name:    "a settle whose record cannot be read back",
+			arrange: jobFinished,
+			call:    completesUnreadable,
 		},
 	},
 	"TryResumeFromAnswer": {{
-		name: "the answer to a parked question",
-		setup: func(t *testing.T, rig *coordRig) {
-			suspendedRun(t, rig)
-			rig.runner.Finish(Result{
-				NeedsInput: true, Question: "which branch?", AskTo: "requester",
-			})
-			completes(t, rig)
-			if got := rig.get("t1"); got.Status != StatusAwaiting {
-				t.Fatalf("the run is %q, want it parked before the answer arrives", got.Status)
-			}
-		},
+		name: "a person's reply on the run's own conversation",
 		call: func(t *testing.T, rig *coordRig) {
 			if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
 				answerOnTheDM, "the release branch", nil); err != nil {
@@ -196,8 +177,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		},
 	}},
 	"FailRun": {{
-		name:  "a suspension that never reached the row",
-		setup: func(t *testing.T, rig *coordRig) { rig.launching("t1") },
+		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.FailRun(t.Context(), "t1",
 				types.SandboxFailureSuspensionUnrecorded,
@@ -206,28 +186,12 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
-	"RecoverSeat": {
-		{
-			name:  "a running job the new owner inherits",
-			setup: func(t *testing.T, rig *coordRig) { rig.launch("t1") },
-			call:  recovers,
-		},
-		{
-			name: "a tail the previous owner abandoned mid-resume",
-			setup: func(t *testing.T, rig *coordRig) {
-				rig.launch("t1")
-				run := rig.get("t1")
-				if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
-					CompletionTail(run.LaunchID)); err != nil || !won {
-					t.Fatalf("ClaimForResume = %v, %v", won, err)
-				}
-			},
-			call: recovers,
-		},
-	},
+	"RecoverSeat": {{
+		name: "a seat claimed by a new owner",
+		call: recovers,
+	}},
 	"RetireSeat": {{
-		name:  "the runs of a seat that left the company",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
+		name: "the runs of a seat that left the company",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "node-a:1", 3); err != nil {
 				t.Logf("RetireSeat: %v", err)
@@ -235,41 +199,122 @@ var coordinatorEntries = map[string][]entryDrive{
 		},
 	}},
 	"ReleaseSeat": {{
-		name:  "a seat handed on, whose runs are its successor's",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
-		call:  func(_ *testing.T, rig *coordRig) { rig.coordinator.ReleaseSeat("swe") },
+		name: "a seat handed on, whose runs are its successor's",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.ReleaseSeat("swe") },
 	}},
 	"SeatRuns": {{
-		name:  "the screening's two answers",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
-		call:  func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatRuns("swe") },
+		name: "the screening's two answers",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatRuns("swe") },
 	}},
 	"SeatHeldBySandbox": {{
-		name:  "the busy half of it",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
-		call:  func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
+		name: "the busy half of it",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
 	"Manager": {{
-		name:  "the manager a caller mints a box through",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
-		call:  func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },
+		name: "the manager a caller mints a box through",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },
 	}},
 	"SetManager": {{
-		name:  "a live reload of providers.sandbox",
-		setup: func(t *testing.T, rig *coordRig) { suspendedRun(t, rig) },
-		call:  func(_ *testing.T, rig *coordRig) { rig.coordinator.SetManager(rig.manager) },
+		name: "a live reload of providers.sandbox",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SetManager(rig.manager) },
 	}},
 }
 
-// suspendedRun is the arrangement almost every drive starts from: a job running
-// in a box with the turn that started it suspended into its row, its seat
-// counted as held, and the job finished so a completion has something to
-// collect.
-func suspendedRun(t *testing.T, rig *coordRig) {
+// place puts this rig's run in one status, by the route the engine takes to it,
+// and counts the seat as the engine would.
+//
+// A STATUS IT DOES NOT KNOW FAILS RATHER THAN SKIPS. The matrix drives every
+// status in [Active], so one added to the state machine has to say how a run
+// reaches it before anything here can certify what happens from there — the
+// same roster rule [TestEveryCoordinatorEntryPointIsDriven] applies to the
+// methods, on the other dimension.
+func place(t *testing.T, rig *coordRig, status string) {
 	t.Helper()
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
+	switch status {
+	case StatusLaunching:
+		// The job is started and its box attached; the conversation a
+		// resume re-enters is not on the row yet.
+		rig.launching("t1")
+	case StatusRunning:
+		rig.launch("t1")
+	case StatusResumed:
+		rig.launch("t1")
+		// THROUGH THE COMPLETION'S OWN TAIL, because a claim is scoped
+		// to the launch it is taken for and the status it comes out of
+		// — a claim arranged any other way would be one this package
+		// cannot actually take.
+		run := rig.get("t1")
+		if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
+			CompletionTail(run.LaunchID)); err != nil || !won {
+			t.Fatalf("ClaimForResume = %v, %v", won, err)
+		}
+	case StatusAwaiting:
+		rig.launch("t1")
+		rig.park("t1")
+	case StatusReseed:
+		rig.launch("t1")
+		rig.park("t1")
+		// The pause reaper took the box; the run is not over, because the
+		// answer can still arrive and re-seed from the pushed branch.
+		if won, err := rig.pending.ExpirePause(t.Context(), "t1"); err != nil || !won {
+			t.Fatalf("ExpirePause = %v, %v", won, err)
+		}
+	default:
+		t.Fatalf("no arrangement for status %q: this matrix drives every status in Active, "+
+			"so a new one has to say how a run reaches it before anything can certify "+
+			"what happens to a turn suspended into it", status)
+	}
+	rig.coordinator.countRun("swe", status)
+}
+
+// jobFinished queues the result a finished coding job comes back with, so a
+// completion has something to collect.
+func jobFinished(_ *testing.T, rig *coordRig) {
 	rig.runner.Finish(Result{Success: true, Text: "done"})
+}
+
+// jobAsks is the job that stopped to ask a person something.
+func jobAsks(_ *testing.T, rig *coordRig) {
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+}
+
+// collectFails is the box that died between finishing and being read back.
+func collectFails(t *testing.T, rig *coordRig) {
+	jobFinished(t, rig)
+	rig.runner.CollectErr = errors.New("the box died mid-read")
+}
+
+// resumeFails is the re-entry that broke without reaching outside the engine,
+// which is the one failure that KEEPS the engine's hold.
+func resumeFails(t *testing.T, rig *coordRig) {
+	jobFinished(t, rig)
+	rig.resumer.err = errors.New("the node lost the seat mid-resume")
+}
+
+// resumeAbandoned is the re-entry that must not be re-entered again: it broke
+// after its writes had landed, or it panicked.
+func resumeAbandoned(t *testing.T, rig *coordRig) {
+	jobFinished(t, rig)
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
+}
+
+// noConversation is a row with nothing to resume INTO: what a build predating
+// [StatusLaunching] wrote, read by this one across a rolling upgrade.
+//
+// [PendingStore.BeginLaunch] is the one write that drops a suspension, so the
+// status [place] chose is put back after it.
+func noConversation(t *testing.T, rig *coordRig) {
+	jobFinished(t, rig)
+	run := rig.get("t1")
+	if err := rig.pending.BeginLaunch(t.Context(), run, Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if run.Status == StatusLaunching {
+		return
+	}
+	if err := rig.pending.SetStatus(t.Context(), "t1", run.Status, Fence{}); err != nil {
+		t.Fatalf("SetStatus %s: %v", run.Status, err)
+	}
 }
 
 // completes hands the coordinator the completion its waiter would publish.
@@ -283,6 +328,21 @@ func completes(t *testing.T, rig *coordRig) {
 		// whether a run that stopped said so.
 		t.Logf("OnCompleted: %v", err)
 	}
+}
+
+// completesUnreadable is the same completion with the settle's own read of the
+// row refused, which is the one failure that reaches the coordinator INSIDE a
+// tail it cannot repeat: the turn has been re-entered, so the delivery cannot
+// come round again.
+//
+// Its own drive rather than a refusal of the matrix's, because the refusal
+// dimension refuses a call for the whole drive and the claim reads the row too.
+func completesUnreadable(t *testing.T, rig *coordRig) {
+	t.Helper()
+	rig.coordinator.pending = &refusingStore{
+		inner: rig.coordinator.pending, refuse: []string{"Get"},
+	}
+	completes(t, rig)
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.
@@ -327,26 +387,29 @@ func TestEveryCoordinatorEntryPointIsDriven(t *testing.T) {
 	}
 }
 
-// AND A RUN THAT STOPS REPORTS IT, whichever store call was refused.
+// AND A RUN THAT STOPS REPORTS IT, from whatever status it held and whichever
+// store call was refused.
 //
 // The file comment above is the property; this is the matrix. Each drive runs
-// once against a store that works — which is itself a case, since a path that
-// reports nothing when everything succeeds is the same defect — and then once
-// per store call that drive made, with that one call refused.
-//
-// THE REFUSAL SET IS OBSERVED, NEVER DECLARED: whatever the drive asked the
-// store for is what gets refused, so a path that starts calling something new
-// is injected into on the next run without anybody updating a list.
+// once per status in [Active] against a store that works — which is itself a
+// case, since a path that reports nothing when everything succeeds is the same
+// defect — and then once per store call that drive made from that status, with
+// that one call refused.
 func TestAStoppedRunReportsItUnderEveryRefusedStoreCall(t *testing.T) {
 	t.Parallel()
 	for method, drives := range coordinatorEntries {
 		for _, drive := range drives {
 			t.Run(method+"/"+drive.name, func(t *testing.T) {
 				t.Parallel()
-				for _, call := range drive.run(t, "") {
-					t.Run("with "+call+" refused", func(t *testing.T) {
+				for _, status := range Active {
+					t.Run("from "+status, func(t *testing.T) {
 						t.Parallel()
-						drive.run(t, call)
+						for _, call := range drive.run(t, status, "") {
+							t.Run("with "+call+" refused", func(t *testing.T) {
+								t.Parallel()
+								drive.run(t, status, call)
+							})
+						}
 					})
 				}
 			})
@@ -354,15 +417,16 @@ func TestAStoppedRunReportsItUnderEveryRefusedStoreCall(t *testing.T) {
 	}
 }
 
-// run drives one entry point with one store call refused (or none), asserts the
-// property, and reports the store calls the drive made.
-func (d entryDrive) run(t *testing.T, refused string) []string {
+// run drives one entry point from one status with one store call refused (or
+// none), asserts the property, and reports the store calls the drive made.
+func (d entryDrive) run(t *testing.T, status, refused string) []string {
 	t.Helper()
 	rig := newCoordRig(t)
-	if d.setup != nil {
-		d.setup(t, rig)
+	place(t, rig, status)
+	if d.arrange != nil {
+		d.arrange(t, rig)
 	}
-	store := &refusingStore{inner: rig.pending, refuse: refusals(refused)}
+	store := &refusingStore{inner: rig.coordinator.pending, refuse: refusals(refused)}
 	rig.coordinator.pending = store
 
 	before, found, err := rig.pending.Get(t.Context(), "t1")
