@@ -84,11 +84,15 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	rig := &waiterRig{
 		t:        t,
 		queue:    &recorder{},
-		pending:  NewCoordStore(memory.NewFleet()),
 		provider: NewFakeProvider(),
 		runner:   NewFakeRunner("claude-code"),
 		now:      time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
 	}
+	// ONE CLOCK FOR THE WHOLE WORLD, the store's included. The row's own
+	// last write dates a pause nothing stamped ([PendingRun.HeldSince]), so
+	// a store left on the wall clock would date it years after the instant
+	// a test advances to and no age assertion below would mean anything.
+	rig.pending = NewCoordStore(memory.NewFleet()).WithClock(func() time.Time { return rig.now })
 	manager, err := NewManager(ManagerOptions{
 		Providers: map[Placement]Provider{Direct: rig.provider},
 		Runners:   map[string]Runner{"claude-code": rig.runner},
@@ -637,6 +641,70 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 	}
 	if got := rig.get("t1"); got.Status != StatusResumed {
 		t.Fatalf("status = %q, want the resume's claim to stand", got.Status)
+	}
+}
+
+// The pause instant is a SECOND, warn-only write after the box is already
+// paused. A run whose park then lands holds a snapshot nothing dates — and a
+// reaper that skipped it left that box paused and billed for ever, which on a
+// remote provider is the most expensive way this subsystem fails.
+func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	if err := rig.provider.Box(run.SandboxID).Pause(t.Context()); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	// The park lands; the stamp that would have dated it does not.
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
+		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	if rig.get("t1").Paused() {
+		t.Fatal("the row carries a pause instant, so this case is not the one it is named for")
+	}
+
+	// Dated from the park, which is the row's own last write.
+	rig.now = rig.now.Add(DefaultPauseTTL - time.Second)
+	rig.tick()
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v inside the TTL, measured from the park", killed)
+	}
+
+	rig.now = rig.now.Add(2 * time.Second)
+	rig.tick()
+
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the undated snapshot %q reclaimed", killed, run.SandboxID)
+	}
+	if got := rig.get("t1"); got.Status != StatusReseed {
+		t.Fatalf("status = %q, want %q so the answer still resumes the turn", got.Status, StatusReseed)
+	}
+}
+
+// The fallback is scoped to the wait it exists for. Every other pause lasts one
+// dispatch and is settled by the tail that made it, so an unstamped row there
+// is a LIVE box — dating it from the last write would reclaim a checkout out
+// from under the turn using it.
+func TestAnUnstampedBoxTheEngineIsDrivingIsNotTreatedAsHeld(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+
+	for _, status := range []string{StatusRunning, StatusResumed} {
+		if err := rig.pending.SetStatus(t.Context(), "t1", status, Fence{}); err != nil {
+			t.Fatalf("SetStatus %s: %v", status, err)
+		}
+		if _, held := rig.get("t1").HeldSince(); held {
+			t.Fatalf("a %s run with no pause stamp reads as a held snapshot", status)
+		}
+	}
+	rig.now = rig.now.Add(100 * time.Hour)
+	rig.tick()
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("the reaper killed %v out from under a live tail", killed)
+	}
+	if rig.provider.Box(run.SandboxID) == nil {
+		t.Fatal("the box is gone")
 	}
 }
 

@@ -2449,7 +2449,11 @@ looked exactly like work that had finished.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
-for as a snapshot), not which box it is. `answerable_in_chat` is `false`
+for as a snapshot), not which box it is. `paused_at` is the answer the
+[pause reaper](../concepts/code-sandbox.md#mid-run-clarification-crewlet-ask)
+acts on rather than the raw stamp, so a run parked on a question whose pause
+instant never reached its row still reads as held: that box is being paid for,
+and a board drawing the stamp alone showed it as a live one. `answerable_in_chat` is `false`
 for a run whose turn was triggered by something other than an inbound
 message — a schedule tick, a task assignment, an A2A wake — because the
 resume path matches an inbound message's conversation identity against

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -450,9 +451,16 @@ type PendingRun struct {
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
-	// PausedAt is when this run's box was paused, zero when it is not.
-	// Together with SandboxID it is the engine's record of the box, and
-	// what lets the reaper reclaim a snapshot nothing else would ever free.
+	// PausedAt is when this run's box was paused, zero when nothing
+	// recorded a pause. Together with SandboxID it is the engine's record
+	// of the box, and what lets the reaper reclaim a snapshot nothing else
+	// would ever free.
+	//
+	// ZERO IS NOT "NO SNAPSHOT", which is the reading that leaked boxes:
+	// the stamp is a SECOND write, made after the box is already paused and
+	// warn-only when it fails, so a parked run can hold a snapshot this
+	// field says nothing about. [PendingRun.HeldSince] is the reading every
+	// caller that acts on a held box takes.
 	PausedAt time.Time `json:"paused_at"`
 
 	// ClaimedFrom is TRANSIENT and never persisted — hence `json:"-"` —
@@ -467,11 +475,57 @@ type PendingRun struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Paused reports whether this run's box is currently snapshotted.
+// Paused reports whether a pause was RECORDED for this run's box.
+//
+// The record's own fact, and deliberately not the question "is a box being
+// held" — that is [PendingRun.HeldSince], and it is what a caller acting on a
+// held box reads. The two differ on exactly one row, which is the row this
+// distinction exists for: a run parked on a question whose pause reached the
+// box and whose stamp never reached the row.
 func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 
 // HasBox reports whether a box exists for this run at all.
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
+
+// HeldSince is when this run's box started being held as a snapshot nothing is
+// driving, and whether it is being held at all.
+//
+// THE ROW DESCRIBES THE BOX; THE STAMP ONLY DATES IT. [Coordinator.collect]
+// pauses the box and THEN records the instant, and that record is a second
+// coordination write that fails on its own — warn-only, because the job is
+// over either way and throwing a collected result away over a timestamp would
+// be far worse. So a run PARKED ON A QUESTION can hold a paused box with no
+// stamp on its row, and that row still describes a box being paid for: the
+// park is the one state whose box is deliberately held for an open-ended human
+// wait, the completion poll skips it so nothing refreshes its keepalive, and
+// no tail is coming to settle it. Reading the missing stamp as "no snapshot"
+// is what made such a box invisible to [Waiter.reapExpiredPauses] for good.
+//
+// THE FALLBACK IS THE ROW'S OWN LAST WRITE, because on a parked row that write
+// IS the park — the one write that has to land for the run to be parked at all
+// ([Coordinator.park] gives its claim back where it does not) — and it lands
+// milliseconds after the pause it failed to record. It is therefore never
+// EARLIER than the true pause instant, which is the safe direction to be
+// wrong in: the box is held a moment longer rather than reclaimed out from
+// under a person who is still typing.
+//
+// A RUN THE ENGINE IS DRIVING TAKES NO FALLBACK. Every other pause in the
+// lifecycle lasts one dispatch and is settled by the tail that made it, so
+// there the stamp is the whole answer and its absence means the box is live —
+// dating one of those from the last write would report a running job as a
+// snapshot being billed for.
+func (r PendingRun) HeldSince() (time.Time, bool) {
+	if !r.HasBox() {
+		return time.Time{}, false
+	}
+	if r.Paused() {
+		return r.PausedAt, true
+	}
+	if !slices.Contains(Awaiting, r.Status) || r.UpdatedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return r.UpdatedAt, true
+}
 
 // PendingStore is the persistence surface for detached runs.
 //

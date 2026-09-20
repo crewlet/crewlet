@@ -170,6 +170,37 @@ func TestTheBoardIsToldWhetherABoxExistsAndWhetherItIsHeld(t *testing.T) {
 	}
 }
 
+// The pause instant is a second, warn-only write after the box is already
+// paused, so a run parked on a question can hold a snapshot nothing dated.
+// Drawing the raw stamp put that box on the board as a LIVE one — the single
+// reading that says nobody is being billed for it — while the reaper was
+// counting the same box as held.
+func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	if err := store.AttachSandbox(t.Context(), "t1", sandbox.BoxRef{
+		SandboxID: "box-1", PauseTTLSec: 1800,
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	// The park lands; the stamp that would have dated it does not.
+	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Question: "which branch?", Audience: "requester",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+
+	rows := askRuns(t, store)
+	if rows[0]["box_exists"] != true {
+		t.Fatal("box_exists is false with a box attached")
+	}
+	if rows[0]["paused_at"] == "" {
+		t.Fatal("a box held for an open-ended human wait reads as a live one, so the board " +
+			"shows nothing being paid for")
+	}
+}
+
 // Telling somebody to "reply in the thread" when the run was started by a
 // schedule tick sends them to a thread that does not exist — and such a run
 // stores no conversation at all, which is what the column has to read.

@@ -58,6 +58,13 @@ func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
+	// HELD, NOT STAMPED. A box parked on a question is being paid for
+	// whether or not the pause instant reached the row, and drawing the raw
+	// stamp showed exactly that box as a live one — the one reading that
+	// says nobody is being billed. It is the same answer the pause reaper
+	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
+	// reclaim cannot disagree about which boxes are held.
+	heldSince, _ := run.HeldSince()
 	return map[string]any{
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
@@ -86,7 +93,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// non-empty sandbox id means a box exists, and a set paused_at
 		// means it is currently held as a snapshot and being paid for.
 		"box_exists":         run.SandboxID != "",
-		"paused_at":          isoOrEmpty(run.PausedAt),
+		"paused_at":          isoOrEmpty(heldSince),
 		"pause_ttl_seconds":  run.PauseTTLSeconds,
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),

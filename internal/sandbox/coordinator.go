@@ -564,7 +564,15 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {
-		log.WarnContext(ctx, "sandbox_pause_record_failed", "turn_id", run.TurnID, "error", err.Error())
+		// WARN RATHER THAN FAIL, because the job is over and refusing a
+		// collected result over a timestamp would throw the whole run
+		// away. What the missing stamp does NOT cost any more is the box:
+		// a row that goes on to park names a held box whatever this
+		// write did, and [PendingRun.HeldSince] dates the wait from the
+		// park instead.
+		log.WarnContext(ctx, "sandbox_pause_record_failed", "turn_id", run.TurnID, "error", err.Error(),
+			"detail", "the pause instant was not recorded; a run that parks on a question is "+
+				"expired from its park instead, and one that resumes settles its own box")
 	}
 	return result, nil
 }
