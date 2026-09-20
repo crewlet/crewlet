@@ -277,6 +277,36 @@ var nodeEstatePlacements = []placement{
 	// and rebuilt locally, so every node maintains its own.
 	// -----------------------------------------------------------------
 	{
+		Table: "chat_docs",
+		Why: "The chat keyword index's document side, and it is this node's " +
+			"for the same reason kb_docs is: it is derived from replicated " +
+			"rows by a local walk, so a peer's copy buys nothing a rebuild " +
+			"does not. Chat has no semantic half at all — a year of it needs " +
+			"several times the whole supported vector corpus — so this is the " +
+			"only index over the transcript.",
+	},
+	{
+		Table: "chat_postings",
+		Why:   "The inverted list over the documents above, and it goes where they go.",
+	},
+	{
+		Table: "chat_index_state",
+		Why: "How far THIS node has indexed the chat log, plus the corpus " +
+			"statistics its own scoring reads. A watermark is a fact about " +
+			"one node's progress — two nodes are legitimately at different " +
+			"positions — so an agreed value would destroy the comparison it " +
+			"exists to make, and the statistics describe the index this node " +
+			"actually holds rather than the one the fleet agrees on.",
+	},
+	{
+		Table: "chat_index_pruned",
+		Why: "Which channels this node's index has followed the retention " +
+			"prune into. The prune itself is a committed record every node " +
+			"applies, but FOLLOWING it is local catch-up work, and a node " +
+			"that was down when the prune landed is legitimately behind on " +
+			"it while every peer is not.",
+	},
+	{
 		Table: "kb_docs",
 		Why: "The lexical search index's document side, built asynchronously " +
 			"behind replicated rows and droppable wholesale when the analyzer " +
