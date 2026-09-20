@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -61,8 +62,24 @@ type ResolvedThread struct {
 // "which one" is the whole of the question, and a refusal that does not list
 // them leaves a model guessing at ids it has not read.
 type ErrAmbiguousAnswer struct {
-	Task  string
-	Asks  []AskCandidate
+	Task string
+
+	// Asks is at most [MaxOpenAsksNamed] candidates — the ones the refusal
+	// lists — never the probe row beside them.
+	Asks []AskCandidate
+
+	// More says there are open asks beyond the ones named.
+	//
+	// It is what makes the count honest. The read takes one row more than it
+	// will name so it can tell "five" from "at least five", and that extra
+	// row used to be left on Asks and counted: a seat with nine open asks
+	// was told "6 open questions on this item are addressed to you", a
+	// number that is neither the five it went on to list nor the nine that
+	// exist. A refusal a model reads is the wrong place to state a
+	// fabricated total — it is the one number the model has no way to
+	// check, and its next move is chosen against it.
+	More bool
+
 	Actor string
 }
 
@@ -74,9 +91,21 @@ type AskCandidate struct {
 }
 
 func (e *ErrAmbiguousAnswer) Error() string {
-	return fmt.Sprintf("tracker: %d open questions on task %s are addressed to "+
+	return fmt.Sprintf("tracker: %s open questions on task %s are addressed to "+
 		"%s, so `answers` cannot be inferred — name the one you are answering",
-		len(e.Asks), e.Task, e.Actor)
+		e.count(), e.Task, e.Actor)
+}
+
+// count is how many open asks there are, said as precisely as the read knows.
+//
+// "AT LEAST N" WHERE THE PROBE FIRED, because that is the whole of what one
+// extra row buys: the read stops at [MaxOpenAsksNamed]+1, so past the bound the
+// exact number was never counted and claiming one is inventing it.
+func (e *ErrAmbiguousAnswer) count() string {
+	if e.More {
+		return "at least " + strconv.Itoa(len(e.Asks))
+	}
+	return strconv.Itoa(len(e.Asks))
 }
 
 // Thread resolves a comment's conversation.
@@ -216,7 +245,15 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 	case 1:
 		return found[0].Comment, nil
 	}
-	return "", &ErrAmbiguousAnswer{Task: task, Asks: found, Actor: author}
+	// THE PROBE ROW IS DROPPED HERE, never carried onto the error: it is
+	// evidence that there are more, which is what [ErrAmbiguousAnswer.More]
+	// says, and leaving it on the list made every count past the bound
+	// wrong by exactly one.
+	more := len(found) > MaxOpenAsksNamed
+	if more {
+		found = found[:MaxOpenAsksNamed]
+	}
+	return "", &ErrAmbiguousAnswer{Task: task, Asks: found, More: more, Actor: author}
 }
 
 // askAuthor is who wrote the comment being answered, and the check that it was

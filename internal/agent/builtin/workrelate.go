@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -390,18 +391,28 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 // ambiguousText is the refusal that lists the open questions, because "which
 // one" is the whole of what the caller has to decide.
 func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
+	// "AT LEAST N" WHERE THE READ STOPPED, never a number nobody counted.
+	// This printed len(e.Asks) over a slice that carried the reader's probe
+	// row, so a seat with nine open asks was told "6 open questions" — not
+	// the five it then listed, and not the nine that exist. A model has no
+	// way to check that number and picks its next move against it.
+	count := strconv.Itoa(len(e.Asks))
+	if e.More {
+		count = "At least " + count
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d open questions on this item are addressed to you, so "+
+	fmt.Fprintf(&b, "%s open questions on this item are addressed to you, so "+
 		"which one this answers cannot be inferred. Pass `answers` with one "+
-		"of these comment ids:", len(e.Asks))
-	for i, ask := range e.Asks {
-		if i == tracker.MaxOpenAsksNamed {
-			fmt.Fprintf(&b, "\n  … and more — read the item with "+
-				"get_work_item to see the rest.")
-			break
-		}
+		"of these comment ids:", count)
+	for _, ask := range e.Asks {
 		fmt.Fprintf(&b, "\n  %s — %s: %s", ask.Comment, ask.Author,
 			clip(ask.Excerpt))
+	}
+	if e.More {
+		// THE LIST IS BOUNDED AND THE READER IS TOLD WHERE THE REST IS,
+		// which is the half a bare count never carried.
+		fmt.Fprintf(&b, "\n  … and more — read the item with %s to see the rest.",
+			GetWorkItemTool)
 	}
 	return b.String()
 }
