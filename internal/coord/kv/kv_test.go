@@ -842,6 +842,36 @@ func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
 	}
 }
 
+// A POST-CHARGE IS ALL OR NOTHING, exactly as a charge is.
+//
+// Two keys and no transaction, so the property is built rather than given: the
+// org is written first and taken back when the seat's write fails. Without the
+// compensation a collected coding run whose second write failed would leave the
+// company billed for tokens the seat's own counter never saw, and the caller —
+// which retries — would bill the org again.
+func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
+	store := openFleet(t, embeddedNATS(t))
+	seat := coord.AgentScope("x")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store.budgets = hangUpAfterWriting{
+		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+	}
+
+	if got, err := store.PostCharge(ctx, seat, 10); err == nil {
+		t.Fatalf("PostCharge = %+v, want the seat's write to fail on the cancelled context", got)
+	}
+	used, err := store.Used(t.Context(), coord.OrgScope)
+	if err != nil {
+		t.Fatalf("Used: %v", err)
+	}
+	if used != 0 {
+		t.Errorf("org used = %d after a post-charge that failed, want 0: the "+
+			"unwind ran on the cancelled context and left the company billed "+
+			"for a run its seat never recorded", used)
+	}
+}
+
 // AN ADMITTED CHARGE CLEARS THE STAMP EVEN IF THE CALLER HAS HUNG UP.
 //
 // The clear runs after BOTH counters are written, so the charge is a fact by
