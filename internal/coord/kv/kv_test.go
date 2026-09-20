@@ -804,7 +804,8 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	store, err := OpenFleet(context.Background(), nc, FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		FollowRetention: time.Minute,
+		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
 		BucketPrefix: fmt.Sprintf("f%d", bucketSeq.Add(1)),
 	})
 	if err != nil {
