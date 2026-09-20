@@ -221,8 +221,8 @@ func canonicalKind(raw string) types.ChannelKind {
 func metadata(body map[string]any, seat Seat, post map[string]any, reach notify.Delivery, channelKind string) map[string]string {
 	root := str(post, "root_id")
 	m := map[string]string{
-		"transport": Backend,
-		"channel":   str(post, "channel_id"),
+		notify.TransportField: Backend,
+		"channel":             str(post, "channel_id"),
 		// Mattermost's single-letter channel type: O(pen), P(rivate),
 		// D(irect), G(roup DM). Server-stamped and always present, which
 		// is why this backend needs no channel-id-prefix heuristic — and

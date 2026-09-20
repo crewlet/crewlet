@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
@@ -1463,6 +1464,26 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		attribute.Int("crewlet.delegation_depth", req.Depth))
 	defer span.End()
 
+	// THE WORKING INDICATOR, up before this turn does anything slow. Here
+	// rather than beside turn.Run because everything between the two is
+	// already work a person is waiting through: the prefetch reads a chat
+	// thread and searches the knowledge base over the network, and an
+	// indicator raised after that says "thinking" only once the thinking is
+	// about to start.
+	//
+	// It raises nothing at all for a trigger nobody is watching a composer
+	// for — see [chatMetadataOf] — and a nil session's every method is a
+	// no-op, so there is no branch here and none below.
+	status := e.beginWorkingStatus(ctx, req.Handle, req.WorkKey, req.Ask())
+	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
+	// included: that path raised an indicator and never ran a turn, and
+	// nothing else would ever take it down. `outcome` stays the zero result
+	// until the loop returns one, and a zero result is not suspended — so a
+	// turn that never started clears rather than leaving an indicator up for
+	// a detached run that does not exist. See [endWorkingStatus].
+	var outcome turn.Result
+	defer func() { endWorkingStatus(ctx, status, outcome) }()
+
 	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
 	// that built its runner from one revision and took its round caps from
 	// the next is running a company that never existed — the exact failure
@@ -1525,6 +1546,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// the grant THIS turn was admitted under — a fence built later
 		// would compare a re-claim against itself.
 		Fence: e.seatFence(req.Handle),
+		// The working indicator's phase updates, taken from the one frame
+		// that knows a phase has opened — the same call that publishes
+		// agent_phase_started, so the words a person reads and the event
+		// a dashboard reads can never name different phases.
+		OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A
@@ -1554,6 +1580,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
 		turnInputFor(req, reply))
+	// What the deferred indicator teardown reads. Assigned the moment the
+	// loop returns, so a panic below it still ends on this turn's own
+	// outcome rather than on the zero one.
+	outcome = res
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.

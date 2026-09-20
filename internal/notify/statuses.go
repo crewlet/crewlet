@@ -54,6 +54,40 @@ func (s *Statuses) Begin(ctx context.Context, handle, turnID, phase string, meta
 	return nil
 }
 
+// Rejoin takes back the hold a resumed turn already has, on whichever backend
+// holds it.
+//
+// NEVER NIL-CHECKED BY THE CALLER, on the same terms as Begin: a resume whose
+// session is not on this node — the seat moved, or the process restarted —
+// answers a nil session whose methods are no-ops. At most one driver can hold
+// a given turn's hold, because a turn is woken by exactly one surface.
+func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
+	if s == nil {
+		return nil
+	}
+	for _, d := range s.drivers {
+		if session := d.Rejoin(handle, turnID); session != nil {
+			return session
+		}
+	}
+	return nil
+}
+
+// ClearFor takes down every indicator either backend holds for one seat.
+//
+// Both, unconditionally: a seat can be configured on two chat surfaces at
+// once, and a driver holding nothing for it does nothing. See
+// [StatusDriver.ClearFor] for why a node that stops running a seat has to make
+// this call.
+func (s *Statuses) ClearFor(ctx context.Context, handle string) {
+	if s == nil {
+		return
+	}
+	for _, d := range s.drivers {
+		d.ClearFor(ctx, handle)
+	}
+}
+
 // Backends names the chat surfaces with a live driver, sorted.
 func (s *Statuses) Backends() []string {
 	if s == nil {

@@ -61,6 +61,36 @@ func (p *poster) clears() int {
 	return p.cleared
 }
 
+// shownAtLeast waits until the backend has been asked to show n statuses.
+//
+// WAITED FOR RATHER THAN READ, because no post is made by the goroutine that
+// asked for one: a raise and a phase change both sit on a turn's critical
+// path, so they write the session's state and wake its own goroutine. A test
+// that read straight after Begin would be asserting the property this package
+// deliberately does not have.
+func (p *poster) shownAtLeast(t *testing.T, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if shown := p.shown(); len(shown) >= n {
+			return shown
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the backend was asked to show %d statuses in two seconds, want %d",
+				len(p.shown()), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// quiet is a poster whose heartbeat never fires, so every post a test counts
+// is one something asked for.
+func quiet() *poster {
+	p := newPoster()
+	p.refresh = time.Hour
+	return p
+}
+
 func chatMeta(mutate func(map[string]string)) map[string]string {
 	m := map[string]string{
 		"transport": "chat", "channel": "C1", "ts": "1718.003",
@@ -87,8 +117,7 @@ func TestAnIndicatorGoesUpAndComesDown(t *testing.T) {
 	if s == nil {
 		t.Fatal("no indicator was raised for a direct message")
 	}
-	shown := p.shown()
-	if len(shown) != 1 || shown[0] == "" {
+	if shown := p.shownAtLeast(t, 1); shown[0] == "" {
 		t.Fatalf("the indicator showed %q", shown)
 	}
 	if got := s.Conversation(); got.Channel != "C1" || got.Thread != "1718.003" {
@@ -207,7 +236,7 @@ func TestTheOtherModes(t *testing.T) {
 	}
 	// A nil session's methods are no-ops, so a caller never branches.
 	var none *notify.StatusSession
-	none.Phase(t.Context(), "execute")
+	none.Phase("execute")
 	none.End(t.Context(), false)
 	if got := none.Conversation(); got != (notify.Conversation{}) {
 		t.Fatalf("a nil session has a conversation: %+v", got)
@@ -227,10 +256,11 @@ func TestTheOtherModes(t *testing.T) {
 // share a heartbeat, and the indicator clears only when the LAST finishes.
 // Clearing on the first takes it down while somebody is still waiting.
 func TestTheIndicatorSurvivesUntilTheLastTurnEnds(t *testing.T) {
-	p := newPoster()
+	p := quiet()
 	d := driver(t, p, notify.StatusAddressed)
 
 	first := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil))
+	p.shownAtLeast(t, 1)
 	second := d.Begin(t.Context(), "swe", "turn-2", "plan", chatMeta(nil))
 	if first == nil || second == nil {
 		t.Fatal("a second turn did not join the session")
@@ -272,23 +302,135 @@ func TestASuspendedTurnKeepsItsIndicator(t *testing.T) {
 	}
 }
 
+// A RESUMED TURN TAKES ITS OWN HOLD BACK rather than raising a second
+// indicator over the one it kept alive.
+//
+// It cannot do what a fresh turn does: a parked coding run's row carries no
+// chat metadata — the message that woke the suspended turn may be days gone —
+// so the resume knows its seat and its turn id and nothing about the
+// conversation. And the hold it is taking back is ONE, not two: the pair is a
+// single turn id, so ending the resumed half must clear rather than decrement
+// a count that never reached two.
+func TestAResumedTurnRejoinsRatherThanRaisingAgain(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAddressed)
+
+	s := d.Begin(t.Context(), "swe", "turn-1", "execute", chatMeta(nil))
+	if s == nil {
+		t.Fatal("no indicator was raised")
+	}
+	p.shownAtLeast(t, 1)
+	s.End(t.Context(), true) // the suspend
+
+	back := d.Rejoin("swe", "turn-1")
+	if back == nil {
+		t.Fatal("the resumed turn could not take its hold back")
+	}
+	if got := back.Conversation(); got != s.Conversation() {
+		t.Fatalf("the resume rejoined %+v, want the suspended turn's %+v", got, s.Conversation())
+	}
+	if got := p.shown(); len(got) != 1 {
+		t.Fatalf("the resume raised a second indicator: %v", got)
+	}
+	// A rejoined session is a live one: the phase the box's answer starts
+	// still moves the words.
+	back.Phase("review")
+	p.shownAtLeast(t, 2)
+
+	back.End(t.Context(), false)
+	if p.clears() != 1 {
+		t.Fatalf("the resumed turn cleared %d times", p.clears())
+	}
+	if live := d.Live(); len(live) != 0 {
+		t.Fatalf("the resumed turn left an indicator up: %v", live)
+	}
+}
+
+// Nothing to rejoin is an ORDINARY answer, not a fault: the seat moved node
+// while the box ran, or this process restarted. Neither is a reason to raise
+// an indicator in a conversation this node cannot prove it is in.
+func TestRejoiningWhatThisNodeDoesNotHoldIsNil(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAlways)
+	if d.Begin(t.Context(), "swe", "turn-1", "execute", chatMeta(nil)) == nil {
+		t.Fatal("no indicator was raised")
+	}
+	// The empty cases are here rather than in a guard: the match itself is
+	// what answers them, so an "optimisation" to key on the handle alone
+	// fails here instead of rejoining a stranger's session.
+	for name, args := range map[string][2]string{
+		"another turn on this seat": {"swe", "turn-2"},
+		"this turn on another seat": {"cto", "turn-1"},
+		"no turn at all":            {"swe", ""},
+		"no seat at all":            {"", "turn-1"},
+	} {
+		if s := d.Rejoin(args[0], args[1]); s != nil {
+			t.Errorf("%s rejoined a live session", name)
+		}
+	}
+	if p.clears() != 0 {
+		t.Fatal("a failed rejoin took an indicator down")
+	}
+}
+
+// A NODE THAT STOPS RUNNING A SEAT TAKES THAT SEAT'S INDICATORS DOWN, and the
+// kept-alive session is why it has to.
+//
+// A turn suspended into a detached coding run leaves its indicator up on
+// purpose, and the resume lands on whichever node holds the seat when the box
+// reports. Without this, a node that handed the seat on goes on re-asserting
+// "is thinking…" every refresh interval, for a turn it is not running, for as
+// long as the process lives — and it must take down only that seat's, because
+// the node is still running every other one.
+func TestReleasingASeatClearsItsIndicators(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAlways)
+
+	for _, ch := range []string{"C1", "C2"} {
+		s := d.Begin(t.Context(), "swe", "turn-"+ch, "execute",
+			chatMeta(func(m map[string]string) { m["channel"] = ch }))
+		if s == nil {
+			t.Fatalf("no indicator was raised in %s", ch)
+		}
+		s.End(t.Context(), true) // suspended: kept alive on purpose
+	}
+	if d.Begin(t.Context(), "cto", "turn-3", "execute", chatMeta(nil)) == nil {
+		t.Fatal("no indicator was raised for the other seat")
+	}
+	p.shownAtLeast(t, 3)
+
+	d.ClearFor(t.Context(), "swe")
+	if p.clears() != 2 {
+		t.Fatalf("releasing one seat cleared %d indicators, want its own two", p.clears())
+	}
+	live := d.Live()
+	if len(live) != 1 {
+		t.Fatalf("live = %v, want the seat this node still runs", live)
+	}
+	if d.Rejoin("swe", "turn-C1") != nil {
+		t.Fatal("a released seat's session is still holdable")
+	}
+}
+
 func TestAPhaseChangeChangesTheWords(t *testing.T) {
-	p := newPoster()
+	// No heartbeat: every post below is one a phase change asked for, so
+	// the counts mean what they say.
+	p := quiet()
 	d := driver(t, p, notify.StatusAddressed)
 
 	s := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil))
-	s.Phase(t.Context(), "execute")
-	s.Phase(t.Context(), "review")
-	shown := p.shown()
-	if len(shown) != 3 {
-		t.Fatalf("the backend was asked to show %v", shown)
-	}
+	p.shownAtLeast(t, 1)
+	s.Phase("execute")
+	p.shownAtLeast(t, 2)
+	s.Phase("review")
+	shown := p.shownAtLeast(t, 3)
 	if shown[0] == shown[1] || shown[1] == shown[2] {
 		t.Fatalf("the words did not move between phases: %v", shown)
 	}
 	// Re-asserting the SAME phase costs nothing: the heartbeat already
 	// keeps it alive, and a re-post would reset the text a reader is on.
-	s.Phase(t.Context(), "review")
+	s.Phase("review")
+	time.Sleep(20 * time.Millisecond)
 	if len(p.shown()) != 3 {
 		t.Fatalf("a repeated phase cost a request: %v", p.shown())
 	}
@@ -298,10 +440,52 @@ func TestAPhaseChangeChangesTheWords(t *testing.T) {
 	// and repeating reads as though nothing moved. That is what the
 	// rotation is for, and it is invisible in a walk that never revisits a
 	// phase, because different phases draw from different pools anyway.
-	s.Phase(t.Context(), "execute")
-	shown = p.shown()
+	s.Phase("execute")
+	shown = p.shownAtLeast(t, 4)
 	if shown[len(shown)-1] == shown[1] {
 		t.Fatalf("a revisited phase repeated its earlier line: %v", shown)
+	}
+}
+
+// NEITHER A RAISE NOR A PHASE CHANGE WAITS ON THE BACKEND, and that is the
+// property the whole session goroutine exists for.
+//
+// Both sit on a turn's critical path — the raise runs before the turn
+// assembles its context, a phase change immediately before that phase's first
+// provider call — so a chat instance taking its client timeout to answer would
+// delay the agent's actual work by that long, on a surface whose every other
+// failure is deliberately swallowed.
+func TestRaisingNeverWaitsOnTheBackend(t *testing.T) {
+	g := &gatedPoster{
+		poster:  poster{backend: "chat", text: true, refresh: time.Hour},
+		entered: make(chan struct{}), release: make(chan struct{}),
+		armed: true,
+	}
+	d := notify.NewStatusDriver(notify.StatusOptions{Poster: g, Mode: notify.StatusAlways})
+	// LIFO: the blocked post is released first, so the driver's own Stop —
+	// which waits for that goroutine — can finish.
+	t.Cleanup(func() { d.Stop(context.Background()) })
+	t.Cleanup(func() { close(g.release) })
+
+	done := make(chan *notify.StatusSession, 1)
+	go func() {
+		s := d.Begin(context.Background(), "swe", "turn-1", "execute", chatMeta(nil))
+		s.Phase("review")
+		done <- s
+	}()
+
+	select {
+	case <-g.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the raise never reached the backend at all")
+	}
+	select {
+	case s := <-done:
+		if s == nil {
+			t.Fatal("no session was raised")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a turn was still waiting on a backend that had not answered")
 	}
 }
 
@@ -309,16 +493,18 @@ func TestAPhaseChangeChangesTheWords(t *testing.T) {
 // session still runs and the indicator stays alive, but a phase change stops
 // costing a request, because there is nothing about it a reader could see.
 func TestPhrasesAreInertWhereTextIsNotRendered(t *testing.T) {
-	p := newPoster()
+	// No heartbeat, so the one post counted below is the raise.
+	p := quiet()
 	p.text = false
 	d := driver(t, p, notify.StatusAddressed)
 
 	s := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil))
-	if shown := p.shown(); len(shown) != 1 || shown[0] != "" {
+	if shown := p.shownAtLeast(t, 1); shown[0] != "" {
 		t.Fatalf("a text-less backend was sent %q", shown)
 	}
-	s.Phase(t.Context(), "execute")
-	s.Phase(t.Context(), "review")
+	s.Phase("execute")
+	s.Phase("review")
+	time.Sleep(20 * time.Millisecond)
 	if len(p.shown()) != 1 {
 		t.Fatalf("phase changes cost %d requests on a text-less backend", len(p.shown()))
 	}
@@ -432,7 +618,10 @@ func TestTheClearIsTheLastThingTheBackendHears(t *testing.T) {
 	if s == nil {
 		t.Fatal("no session")
 	}
-	// Arm AFTER the opening post, so it is a HEARTBEAT that blocks.
+	// Arm AFTER the opening post has landed, so it is a HEARTBEAT that
+	// blocks — the raise is made by the session's own goroutine, so waiting
+	// for it is what makes "after" mean anything.
+	g.shownAtLeast(t, 1)
 	g.omu.Lock()
 	g.armed = true
 	g.omu.Unlock()
@@ -479,6 +668,7 @@ func TestStopAlsoClearsLast(t *testing.T) {
 	if s := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil)); s == nil {
 		t.Fatal("no session")
 	}
+	g.shownAtLeast(t, 1)
 	g.omu.Lock()
 	g.armed = true
 	g.omu.Unlock()
@@ -516,10 +706,16 @@ func TestAPosterWithNoRefreshDoesNotSpin(t *testing.T) {
 	d := driver(t, p, notify.StatusAddressed)
 
 	s := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil))
+	p.shownAtLeast(t, 1)
 	time.Sleep(30 * time.Millisecond)
 	if got := len(p.shown()); got != 1 {
 		t.Fatalf("a refresh-less poster was called %d times", got)
 	}
+	// A PHASE CHANGE STILL REACHES IT. The missing interval costs the
+	// heartbeat, not the session: the indicator lapses between phases, and
+	// each phase still says what it is.
+	s.Phase("execute")
+	p.shownAtLeast(t, 2)
 	s.End(t.Context(), false)
 }
 
@@ -534,7 +730,7 @@ func TestAFailedPostDoesNotBreakTheSession(t *testing.T) {
 	if s == nil {
 		t.Fatal("a failing backend refused the session")
 	}
-	s.Phase(t.Context(), "execute")
+	s.Phase("execute")
 	s.End(t.Context(), false)
 	if p.clears() != 1 {
 		t.Fatal("the clear was not attempted")
@@ -581,7 +777,7 @@ func TestConcurrentSessionsAreSafe(t *testing.T) {
 			ch := "C" + string(rune('a'+i%4))
 			s := d.Begin(t.Context(), "swe", "turn-"+string(rune('a'+i)), "plan",
 				chatMeta(func(m map[string]string) { m["channel"] = ch }))
-			s.Phase(t.Context(), "execute")
+			s.Phase("execute")
 			_ = d.Live()
 			s.End(t.Context(), false)
 		})

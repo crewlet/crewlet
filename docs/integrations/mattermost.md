@@ -720,6 +720,20 @@ slower leaves a visible gap. Tune the server setting and the engine follows.
 | `always` *(default)* | every Mattermost-triggered turn |
 | `addressed` | a DM, a direct mention, or a thread the agent already follows |
 
+The lifecycle is the turn's, and it is the same on both chat backends — see
+[Turn Engine § The working status](../concepts/turn-engine.md#the-working-status)
+for the table. It is raised at the start of the turn, before the thread read
+and the knowledge search; it is held across a detached
+[sandbox](../concepts/code-sandbox.md) run, because a coding job the agent is
+waiting on is the longest it ever looks idle; and it is cleared when the turn
+ends however it ends — a reply, a decision to stay silent, a failure, an
+exhausted budget. A trigger that is not a chat message raises nothing: a
+schedule tick or a work-item assignment has no channel to raise it in.
+
+What differs here is what a phase change does: **nothing**. The engine still
+tracks which phase a turn is in, but this indicator has no text to move, so a
+phase boundary costs no request at all — where on Slack it redraws the line.
+
 > **There is no `off`.** What it bought was a company whose agents think in
 > silence for minutes at a time, which is the state this feature exists to
 > remove. `addressed` is the same judgement made per message rather than once

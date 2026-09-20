@@ -93,6 +93,23 @@ const ConversationField = "conversation_identity"
 // org, not by the payload.
 const RecipientField = "recipient_handle"
 
+// TransportField carries the name of the chat backend a message arrived on.
+//
+// THE DISCRIMINATOR FOR EVERY CHAT-ONLY DECISION, and the reason it is a
+// constant rather than a literal: a company can run two chat surfaces, and
+// four places have to agree on this key for a turn to reach the right one —
+// each chat parser stamps it, [ConversationOf] matches a working indicator's
+// driver on it, [ThreadOf] matches the thread reader on it, and the engine
+// reads it to tell a chat-triggered turn from a schedule tick. Written as a
+// literal in each, a rename in one of them makes a backend silently deaf on
+// the surfaces that still spell it the old way: every driver refuses the
+// trigger, and refusing is indistinguishable from "nobody is waiting". See
+// ADR-0008.
+//
+// A source with no chat concept stamps nothing, which is what makes "was this
+// turn woken by a chat message" answerable without asking each backend.
+const TransportField = "transport"
+
 // ChannelKindField carries the CANONICAL shape of the surface a message
 // arrived on — one of [types.ChannelKind].
 //

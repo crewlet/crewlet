@@ -534,18 +534,27 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 
 ---
 
-## Slack working status
+## The working status
 
-A turn triggered by a Slack message raises a **working status** in that
+A turn triggered by a chat message raises a **working status** in that
 thread — "*Agent SWE is thinking…*" under the composer — for as long as the
-agent is on it. The turn engine owns the lifecycle:
+agent is on it. The turn engine owns the lifecycle, and it is the same on both
+chat backends; what differs is only what the indicator can *say* (see
+[Mattermost § Working status](../integrations/mattermost.md#working-status),
+whose indicator carries no text):
 
 | Point in the turn | Effect |
 |---|---|
-| Turn start (before the agent / concurrency gates) | Indicator raised, so a ping to a *busy* agent is acknowledged while the turn queues |
-| Each phase boundary | Next line drawn from that phase's pool — *is getting crewleted in…* → *is crewleting…* → *is marking its own homework…* (see [Slack § Behaviour](../integrations/slack.md#behaviour)) |
-| Turn end (reply, a skipped turn, failure, budget exhaustion, shutdown refusal) | Indicator cleared |
+| Turn start, before the turn assembles anything | Indicator raised, so the thread read, the knowledge search and the runner build all happen with the agent visibly on it |
+| Each phase opening | Next line drawn from that phase's pool — *is getting crewleted in…* → *is crewleting…* → *is marking its own homework…* (see [Slack § Behaviour](../integrations/slack.md#behaviour)) |
+| Turn end (a reply, a skipped turn, a failure, a guard breach, budget exhaustion, a runner that could not be built) | Indicator cleared |
 | The executor suspended for a detached sandbox run | Indicator **held** — the agent has neither replied nor given up, and the same `turn_id` resumes when the job completes |
+| That run's resume | The same hold taken back, never a second indicator over the first — and cleared when the resumed turn ends |
+| This node hands the seat to a peer, or shuts down | Indicator cleared, because a kept-alive one would otherwise be re-asserted by a node that is no longer running the turn |
+
+A trigger that is not a chat message raises nothing at all: a schedule tick, an
+`a2a_ask`, a work-item assignment and a sandbox completion carry no channel and
+no thread, so there is no composer for an indicator to appear under.
 
 The mechanism is Slack's
 [`assistant.threads.setStatus`](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/)
@@ -553,17 +562,31 @@ The mechanism is Slack's
 [slackapi/bolt-js#885](https://github.com/slackapi/bolt-js/issues/885)),
 driven by `internal/notify` and posted with the
 agent's own bot token. Sessions are keyed by `(handle, channel, thread_ts)`
-and reference-counted by `turn_id`, so a suspend/resume pair shares one
-heartbeat. Every call is best-effort — the indicator is cosmetic and can
-never fail a turn — and a liveness probe drops it within one refresh if the
-owning turn dies without clearing.
+and reference-counted by `turn_id`, so two *different* turns for one agent in
+one thread — a queued follow-up, a colleague's ask arriving mid-conversation —
+share one heartbeat and the indicator comes down when the last of them
+finishes. A suspend/resume pair is one `turn_id` rather than two, so the
+resumed half takes that single hold back instead of counting it twice.
 
-Whether it appears at all is the org-wide `integrations.slack.typing_status`
-setting (`always` by default, and the only other value is `addressed` — there
-is no `off`, because a reader who sees nothing cannot tell an agent working
-from an agent that is dead); the wording comes from per-phase pools
+Every call is best-effort — the indicator is cosmetic and can never fail a
+turn, and it never delays one either: a raise and a phase change write the
+session's state and wake its own goroutine, so a chat instance that is slow to
+answer costs the agent's work nothing. What bounds an indicator whose turn
+never came back is the backend's own expiry (about two minutes on Slack) plus
+the two points above where this node takes its own down — a seat handed to a
+peer, and shutdown. A process that is killed outright leaves the last one to
+lapse.
+
+Whether it appears at all is the org-wide `typing_status` setting on the chat
+block that triggered the turn (`always` by default, and the only other value is
+`addressed` — there is no `off`, because a reader who sees nothing cannot tell
+an agent working from an agent that is dead). The decision is the backend
+driver's, not the turn's: the turn says who it is and what woke it, and each
+chat surface answers for its own conversations, so a company running both is
+one wiring rather than two. On Slack the wording comes from per-phase pools
 that `integrations.slack.status_phrases` can replace. See
-[Slack § Working Status](../integrations/slack.md#working-status-is-thinking).
+[Slack § Working Status](../integrations/slack.md#working-status-is-thinking)
+and [Mattermost § Working status](../integrations/mattermost.md#working-status).
 
 ---
 

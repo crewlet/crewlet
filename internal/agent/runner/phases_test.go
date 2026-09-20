@@ -188,6 +188,8 @@ type buildOpts struct {
 	// context is the turn's frozen prefetch, for the cases about what
 	// reaches a prompt rather than what a phase decides.
 	context prefetch.Blocks
+	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
+	onPhase func(phase.Phase)
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -265,6 +267,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		AgentRun:  opts.agentRun,
 		Resume:    opts.resume,
 		Publisher: opts.pub,
+		OnPhase:   opts.onPhase,
 		Turn:      runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"},
 	})
 	if err != nil {

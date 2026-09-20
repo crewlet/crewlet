@@ -420,9 +420,9 @@ func metadata(body, event map[string]any, seat Seat, msg notify.ChatMessage,
 	kind, ts, thread string, reach notify.Delivery,
 ) map[string]string {
 	m := map[string]string{
-		"transport":    Backend,
-		"channel":      msg.Channel,
-		"channel_type": kind,
+		notify.TransportField: Backend,
+		"channel":             msg.Channel,
+		"channel_type":        kind,
 		// The canonical shape beside the third-party app's own word. Both,
 		// because the raw one is what a prompt and an operator
 		// recognise and the canonical one is what the learning workers

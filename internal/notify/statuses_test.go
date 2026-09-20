@@ -43,9 +43,9 @@ func TestTheIndicatorGoesUpOnTheBackendThatTriggeredTheTurn(t *testing.T) {
 	}
 	defer session.End(context.Background(), true)
 
-	if len(secondPoster.shown()) == 0 {
-		t.Error("the Slack indicator was not raised")
-	}
+	// Waited for: the raise is made by the session's own goroutine so that
+	// no turn ever waits on a chat backend. See [poster.shownAtLeast].
+	secondPoster.shownAtLeast(t, 1)
 	if len(firstPoster.shown()) != 0 {
 		t.Errorf("a Slack trigger raised the Mattermost indicator: %v", firstPoster.shown())
 	}
@@ -64,7 +64,7 @@ func TestATriggerFromNoChatBackendRaisesNothing(t *testing.T) {
 		t.Fatal("a tracker event raised a chat indicator")
 	}
 	// Every method on that nil session is a no-op.
-	session.Phase(context.Background(), "execute")
+	session.Phase("execute")
 	session.End(context.Background(), false)
 }
 

@@ -115,6 +115,10 @@ type emitter struct {
 	role  string
 	tally *Spend
 
+	// onPhase is the working indicator's hook, or nil. See
+	// [Config.OnPhase]; it is called from [emitter.started].
+	onPhase func(phase.Phase)
+
 	// mu guards the delegation counters on tally, which several workers
 	// write concurrently. Nil on an emitter that publishes nothing.
 	mu *sync.Mutex
@@ -136,6 +140,7 @@ func (r *Runner) emitter() emitter {
 	return emitter{
 		pub: r.cfg.Publisher, turn: r.cfg.Turn,
 		role: r.cfg.Seat.Role.Name, tally: &r.spend, mu: &r.mu,
+		onPhase: r.cfg.OnPhase,
 	}
 }
 
@@ -312,6 +317,15 @@ func (e emitter) on() bool { return e.pub != nil }
 func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 	system, user string, seed []llm.Message, surface *tools.Surface,
 ) {
+	// BEFORE THE PUBLISHER GATE, and off the same `ph` the event below
+	// carries. The working indicator is not telemetry: a runner whose phases
+	// are silent — a test, an embedded runner, a node whose broker refused
+	// every publish — still has a person watching a chat thread, so gating
+	// this on whether anything is listening to the stream would be gating a
+	// reader's own view on the engine's observability. See [Config.OnPhase].
+	if e.onPhase != nil {
+		e.onPhase(ph)
+	}
 	if !e.on() {
 		return
 	}
@@ -551,7 +565,7 @@ const emptyArgsBytes = len(`{}`)
 // chain moved a seat between providers — which is the question this figure
 // exists for.
 //
-// WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolChars] where a
+// WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
 // reader of the row will find it: every backend sends MORE than this. OpenAI
 // wraps each entry as {"type":"function","function":{…}}, Anthropic spells
 // the schema `input_schema` and puts a cache breakpoint on the last entry,

@@ -529,14 +529,12 @@ func (t *Transport) DMChannelPrefix() string { return "" }
 // The status text is ignored, and that is what SupportsStatusText declares:
 // there is nothing here to render it with.
 //
-// NOTHING IN PRODUCTION REACHES IT. The only way in is notify.Statuses.Begin,
-// which has no caller outside tests — on either chat backend — so no agent has
-// ever raised an indicator on a running company. Said here, at the
-// declaration, because the absence is invisible from this side: the method is
-// complete and tested, and every doc comment that cited the indicator as
-// something a seat's client DOES was describing wiring rather than behaviour.
-// What is missing is the call at a turn's own start, which is a product
-// decision rather than a gap to close on the way past.
+// REACHED ONCE PER TURN AND THEN EVERY FEW SECONDS. The engine raises the
+// indicator at the start of every chat-triggered turn and the session's
+// heartbeat re-asserts it at the interval this instance itself declares (see
+// [Transport.StatusRefresh]), so on this backend it is the most frequent call
+// the transport makes — which is what `typing_status: addressed` exists to
+// bound, and why a failure here is a DEBUG line rather than anything louder.
 func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ string) bool {
 	t.mu.Lock()
 	s, ok := t.seats[handle]

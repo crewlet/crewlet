@@ -437,6 +437,24 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.work_key", in.Run.UnitOfWork()))
 	defer span.End()
 
+	// THE INDICATOR THIS TURN LEFT UP. The suspended half ended with
+	// keepAlive, so the box's minutes are visible to whoever is waiting; this
+	// takes that same hold back rather than raising a second one over it, and
+	// ends it below however the resumed turn goes.
+	//
+	// REJOIN RATHER THAN BEGIN, because a resume has nothing to raise from: a
+	// parked run's row carries no chat metadata by design — the message that
+	// woke the suspended turn may be days gone and was never this node's to
+	// keep — and the conversation keys it does carry are partition keys, not
+	// addresses in a channel. Nil where the session is not on this node (the
+	// seat moved while the box ran, or this process restarted): the indicator
+	// that node raised lapses on the backend's own expiry, and a resumed turn
+	// that raised a fresh one would be asserting a conversation it cannot
+	// prove it is in.
+	status := e.Status().Rejoin(in.Turn.Handle(), in.Run.TurnID)
+	var outcome turn.Result
+	defer func() { endWorkingStatus(ctx, status, outcome) }()
+
 	company := in.Company
 	if company == nil {
 		// Not a second read of the epoch, which is the one thing this
@@ -485,6 +503,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is the correct anchor, since the resume is what this node is
 			// admitted for.
 			Fence: e.seatFence(in.Turn.Handle()),
+			// The working indicator's phase updates, on the same terms as
+			// the dispatch path: the resumed Execute loop opens a phase
+			// like any other, and a reader watching the thread should see
+			// it move when the box's answer lands.
+			OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
 			// THE SKILL REGISTRY, which this call site omitted. With nil
 			// Skills the runner's guardFor returns nil, so the load-before-use
 			// gate was disarmed for every resumed turn: a seat could call a
@@ -532,6 +555,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// end in silence.
 		Reply: resumedReply,
 	})
+	// What the deferred indicator teardown reads — and on this path a
+	// resumed turn that suspended AGAIN keeps its indicator, because the
+	// same box is still working. See [endWorkingStatus].
+	outcome = res
 	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	if err != nil {
 		if reason, abandon := turn.Abandon(res, err); abandon {
@@ -1348,6 +1375,24 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// with them, so nothing here can serve a turn through a dead client.
 	// stopSeatServers drops the registry with the bridge, in one step.
 	e.stopSeatServers(ctx, handle)
+
+	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
+	// exists: a seat that went away with no signal leaves its last state
+	// standing, and on a chat surface that state is a live re-assertion
+	// rather than a stale row. A turn that suspended into a detached coding
+	// run deliberately leaves its indicator up, and the resume lands on
+	// whichever node holds the seat when the box reports — so a node that has
+	// handed the seat on would otherwise go on saying "is thinking…" every
+	// refresh interval, for a turn it is not running, until the process died.
+	//
+	// DETACHED AND BOUNDED, the same shape the memory flush below takes: the
+	// clear has to go out even when the release is a cancelled drain, and a
+	// chat instance that has stopped answering must cost the drain seconds
+	// rather than a client timeout per seat. See [statusClearTimeout].
+	clearCtx, stopClear := context.WithTimeout(
+		context.WithoutCancel(ctx), statusClearTimeout)
+	e.Status().ClearFor(clearCtx, handle)
+	stopClear()
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last

@@ -121,7 +121,7 @@ type Thread struct {
 // thread-grained wherever a thread exists, so a coalesced burst can never
 // straddle two threads) and the detached-sandbox round trip.
 func ThreadOf(metadata map[string]string) (Thread, bool) {
-	backend := metadata["transport"]
+	backend := metadata[TransportField]
 	channel := metadata["channel"]
 	root := metadata["thread_ts"]
 	if backend == "" || channel == "" || root == "" {

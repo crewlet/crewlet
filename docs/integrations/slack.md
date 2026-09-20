@@ -385,12 +385,12 @@ movement rather than a fixed label:
 | Turn phase | Drawn from |
 |---|---|
 | First-turn onboarding | *is getting crewleted in…* · *is settling in…* · *is finding the coffee machine…* · … |
-| Plan | *is crewleting…* · *is thinking…* · *is mulling it over…* · … |
-| Execute | *is crewing…* · *is cracking on…* · *is executing the cunning plan…* · … |
+| Execute | *is crewleting…* · *is thinking it through…* · *is cracking on…* · … |
 | Review | *is re-crewleting…* · *is double-checking…* · *is marking its own homework…* · … |
 
-The full pools are `PHASE_PHRASES` in
-`internal/notify/status.go`; replace any of them with
+Those are the phases a turn has: the executor decides *and* acts in one pass,
+so there is no separate planning line. The full pools are `PhasePhrases` in
+`internal/notify/phrases.go`; replace any of them with
 your own wording via [`status_phrases`](#custom-status-phrases) below.
 
 Every line describes the **phase**, never a specific action. The pick is
@@ -402,32 +402,46 @@ indicator. Generic ("is thinking…") or plainly figurative ("is finding
 the coffee machine…") is safe; plausible-and-specific is not.
 
 - **One line per phase, held for that phase.** The pick is deterministic
-  in `(handle, channel, thread_ts, turn_id, phase)`, so the 45 s heartbeat
-  re-asserts the *same* words — text that churned mid-phase would read as
-  the agent restarting. Moving to the next phase draws the next line, and
-  a `self_iterate` loop back through Plan draws a different one than the
-  turn opened with, so a second pass is visible instead of looking stuck.
-- **Raised before the work starts** — including while the turn is queued
-  behind a busy agent, so a ping to a working agent is acknowledged
-  immediately.
+  in `(turn_id, phase, how many phases the turn has been through)`, so the
+  45 s heartbeat re-asserts the *same* words — text that churned mid-phase
+  would read as the agent restarting. Moving to the next phase draws the
+  next line, and a `self_iterate` loop back into Execute draws a different
+  one than that phase showed the first time, so a second pass is visible
+  instead of looking stuck. Two turns in one thread start from different
+  points in the pool, because the seed is the turn's own id.
+- **Raised at the start of the turn**, before it reads the thread, searches
+  the knowledge base or builds its runner — so the slowest part of getting
+  going happens with the agent visibly on it. It is *not* raised while a
+  trigger waits on the broker behind a busy agent: nothing is running yet,
+  and the indicator says an agent is working.
 - **Kept alive across long turns.** Slack expires a status after 2
   minutes; the engine re-asserts it every 45 s (two attempts inside every
   expiry window, ~1.3 requests/min against Slack's 600/min per-app limit).
 - **Cleared when the turn ends** — a posted reply, a `no_action` outcome
-  decision ("not addressed to me"), a failure, or an exhausted budget all
-  clear it. Slack also clears it by itself the instant the agent posts
+  decision ("not addressed to me"), a failure, a guard breach or an
+  exhausted budget all clear it, as does a turn whose runner could not be
+  built at all. Slack also clears it by itself the instant the agent posts
   into the thread; the engine re-asserts only while a later phase is still
   running, which is what keeps the indicator honest across a
   `self_iterate` loop.
 - **Held across a detached [sandbox](../concepts/code-sandbox.md)
   run.** When Execute suspends for a background coding job the agent has
   neither replied nor given up, so the indicator stays up until the
-  resumed turn finishes.
-- **Self-healing.** If a turn dies without clearing, a liveness probe
-  drops the indicator within one refresh once the agent stops being busy;
-  an absolute one-hour cap bounds the pathological case. Every Slack call
-  is best-effort — a failed or rate-limited `setStatus` is logged and the
-  status simply expires.
+  resumed turn finishes — and the resume takes that same hold back rather
+  than raising a second one over it.
+- **Never in the way of the work.** A raise and a phase change hand the
+  request to the session's own goroutine, so an unreachable or slow
+  workspace cannot delay the turn; a refused or rate-limited `setStatus`
+  is logged and the status simply expires. Nothing about the indicator can
+  fail a turn.
+- **Bounded when a turn does not come back.** A held indicator is taken
+  down when this node hands the seat to a peer or shuts down, so a
+  suspended turn whose resume lands on another node does not leave one
+  being re-asserted for ever. A process killed outright leaves its last
+  indicator to Slack's own two-minute expiry, and a `PUT /config` that
+  rebuilds the Slack transport clears the ones it was holding — turns in
+  flight then run without an indicator until they end, and their replies
+  land as usual.
 
 ### `typing_status` modes
 
@@ -471,8 +485,7 @@ integrations:
     typing_status: addressed
     status_phrases:
       onboarding: ["is getting nimbused in...", "is settling in..."]
-      plan:       ["is nimbusing...", "is thinking very hard...", "is scheming..."]
-      execute:    ["is nimbusing it...", "is on the case...", "is cracking on..."]
+      execute:    ["is nimbusing...", "is on the case...", "is cracking on..."]
       review:     ["is re-nimbusing...", "is double-checking..."]
 ```
 
@@ -496,8 +509,9 @@ Rules that keep the indicator readable:
   need it.
 
 Like `typing_status`, this is live-editable — a `PUT /config` swaps the
-wording without a restart. Turns already in flight keep the line they
-opened with.
+wording without a restart. The apply rebuilds the Slack transport, which
+clears the indicators it was holding: a turn already in flight finishes
+without one, and the next turn in that thread opens on the new wording.
 
 ---
 

@@ -252,7 +252,7 @@ func (e PromptSize) AgentID() string { return e.Agent }
 // a bare "prompt ~N tokens" is what made this meter read as authoritative for
 // as long as it was blind to the array.
 //
-// ONLY WHEN THE ROW CARRIES IT. ToolChars and ToolCount are newer than this
+// ONLY WHEN THE ROW CARRIES IT. ToolBytes and ToolCount are newer than this
 // event type, so a `prompt.size` published by a peer that predates them — an
 // ordinary state during a rolling upgrade — carries neither key and decodes
 // to zero. Rendered unconditionally that row reads "(0 tool definitions, 0

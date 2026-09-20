@@ -58,14 +58,14 @@ func TestSummaries(t *testing.T) {
 		name: "a prompt measurement names the tool array it was offered",
 		payload: PromptSize{
 			RoleName: "CTO", Phase: PhaseExecute, ApproximateTokens: 7400,
-			SystemChars: 21000, UserChars: 800, ToolCount: 12, ToolChars: 8200,
+			SystemBytes: 21000, UserBytes: 800, ToolCount: 12, ToolBytes: 8200,
 		},
 		want: "CTO execute prompt ~7400 tokens (12 tool definitions, 8200 chars)",
 	}, {
 		name: "a phase that was offered no tools claims none",
 		payload: PromptSize{
 			RoleName: "CTO", Phase: PhaseExecute, ApproximateTokens: 5400,
-			SystemChars: 21000, UserChars: 800,
+			SystemBytes: 21000, UserBytes: 800,
 		},
 		want: "CTO execute prompt ~5400 tokens",
 	}, {
@@ -217,7 +217,7 @@ func TestAPromptSizeFromBeforeTheToolTermAssertsNoZero(t *testing.T) {
 
 	// AND THE MEASURED SHAPE STILL REPORTS IT — the clause is conditional
 	// on the row, never dropped.
-	row.ToolCount, row.ToolChars = 12, 8200
+	row.ToolCount, row.ToolBytes = 12, 8200
 	want := "CTO execute prompt ~5400 tokens (12 tool definitions, 8200 chars)"
 	if got := summaryOf(row, ""); got != want {
 		t.Fatalf("a measured row reads %q, want %q", got, want)

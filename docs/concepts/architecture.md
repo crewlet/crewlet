@@ -50,7 +50,9 @@ servers, and each seat's server carries *that seat's* credentials
 (`role.mcp_env`), so a comment on an issue is written by the agent, not by a
 service account fronting for it. The engine's own integration packages exist for the
 *inbound* half — verifying a delivery, parsing it, deciding whose it is — plus
-provisioning and the chat working-indicator. See [Tool
+provisioning and the two calls a chat transport makes on the seat's own bot
+token: the working indicator it raises while the seat thinks, and the thread it
+reads back at the start of a turn woken in one. See [Tool
 capabilities](tool-capabilities.md) for why no engine prompt names a vendor tool.
 
 The second picture is the supply — what a node reaches out to while a turn runs.
