@@ -1,5 +1,5 @@
-// Package opsmcp serves the company's own tracker and knowledge base to an
-// operator's AI assistant, over MCP.
+// Package opsmcp serves the company's own tracker, knowledge base and chat to
+// an operator's AI assistant, over MCP.
 //
 // # Why this exists
 //
@@ -24,6 +24,12 @@
 // separate facts on the record and an audit can tell an operator's edit from
 // an agent's.
 //
+// CHAT IS THE ONE EXCEPTION, and it is a property of that surface rather than
+// a second opinion about attribution: a message's author is a SEAT, so the
+// token is resolved to the `kind: human` seat it is bound to and the message
+// is the person's own. A token bound to no seat writes nothing there and
+// reads nothing either. See [ChatActor].
+//
 // # It is ALWAYS authenticated
 //
 // Unlike the sandbox bridge at [mcpbridge.PathPrefix], which authenticates
@@ -46,6 +52,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -70,11 +77,12 @@ const serverName = "crewlet-operator"
 
 // Options configure the surface.
 type Options struct {
-	// Work and Pages are the native backends. Both nil serves nothing and
-	// the route is ABSENT — which is the honest shape for a company on
-	// Jira and Confluence: there is nothing here it could manage.
+	// Work, Pages and Chat are the native backends. All nil serves nothing
+	// and the route is ABSENT — which is the honest shape for a company on
+	// Jira, Confluence and Slack: there is nothing here it could manage.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
+	Chat  builtin.ChatDeps
 
 	// Knowledge is the company's ranked search, or nil.
 	Knowledge builtin.KnowledgeSearcher
@@ -115,8 +123,9 @@ type Server struct {
 // while one that is not there matches what their config says.
 func New(opts Options) *Server {
 	catalogue := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
-		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
+		Work: opts.Work, Pages: opts.Pages, Chat: opts.Chat,
+		Knowledge: opts.Knowledge,
+		Org:       opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
 	})
 	if len(catalogue) == 0 {
 		return nil
@@ -291,4 +300,76 @@ func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
 		return pages.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
 	}
 	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
+}
+
+// ChatActor resolves the request's credential to the SEAT it is bound to, and
+// is the one place on this surface where the token's own name is not the
+// answer.
+//
+// # A person in chat IS a seat
+//
+// The tracker and the wiki record a credential as an author of its own kind,
+// because a token genuinely is not a colleague there: it files work, and the
+// row says a token filed it. Chat has no such reading. A message's author is
+// whoever spoke, the room renders that name beside the words, and a room where
+// `ci` or `ops-bot` can appear as a speaker is one where "who said this" has
+// two vocabularies. So this walks the chain Tier A already provides —
+// `api.auth.tokens` maps a presented credential to an operator id, and a seat
+// binds one with `contact.crewlet_operator_id` — and writes as that seat, with
+// kind [chat.AuthorHuman] and the credential recorded beside it so an audit
+// can still ask what one token did.
+//
+// # An unbound token gets nothing, reads included
+//
+// It is refused NAMING THE FIELD, because the remedy is a line of company
+// configuration rather than a different credential. Refusing the READS too is
+// the part worth stating: a private room's contents are decided by its
+// membership, and a caller the engine cannot resolve to a seat has no
+// membership — so serving it "everything public" would be inventing a
+// viewer the company never declared. The alternative the tracker rejects for
+// writes is worse here in both directions: letting the caller name a seat to
+// read as would hand anybody with the token every private conversation in the
+// company.
+//
+// # And it must be a HUMAN seat
+//
+// A token bound to an AGENT seat is refused rather than accepted quietly. The
+// binding exists so a person's own credential is recognised as theirs; aimed
+// at an agent it would let whoever holds the token speak in that agent's
+// voice, and every colleague in the room would read the message as the agent's
+// own words.
+func ChatActor(company func() *org.Organization) func(
+	context.Context, *turnctx.Turn) (chat.Actor, error) {
+
+	return func(ctx context.Context, _ *turnctx.Turn) (chat.Actor, error) {
+		id, ok := auth.OperatorFrom(ctx)
+		if !ok || id == "" {
+			return chat.Actor{}, fmt.Errorf("opsmcp: no operator on this request")
+		}
+		var seat *org.Role
+		if company != nil {
+			if o := company(); o != nil {
+				// NIL LOOKUP, so a `${VAR}` binding resolves
+				// against this process's own environment — where
+				// every other Tier B pointer is resolved.
+				seat = o.SeatByOperatorID(id, nil)
+			}
+		}
+		switch {
+		case seat == nil:
+			return chat.Actor{}, fmt.Errorf("the token %q is bound to no seat, "+
+				"and a message's author is a seat — set "+
+				"`contact.crewlet_operator_id: %s` on the `kind: human` seat "+
+				"this person is, because a caller may never name one", id, id)
+		case !seat.IsHuman():
+			return chat.Actor{}, fmt.Errorf("the token %q is bound to %q, "+
+				"which is an agent seat — move "+
+				"`contact.crewlet_operator_id: %s` onto the `kind: human` seat "+
+				"this person is, or this credential would speak in that "+
+				"agent's own voice", id, seat.Handle(), id)
+		}
+		return chat.Actor{
+			Handle: seat.Handle(), Kind: chat.AuthorHuman, OperatorID: id,
+		}, nil
+	}
 }

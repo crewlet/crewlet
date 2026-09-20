@@ -38,6 +38,13 @@ type OperatorDeps struct {
 	Pages     PageDeps
 	Knowledge KnowledgeSearcher
 
+	// Chat is the company's own chat, and its [ChatDeps.Actor] is what
+	// makes this surface a PERSON rather than a credential: a message's
+	// author is a seat, so an operator writes as the `kind: human` seat
+	// their token is bound to, and a token bound to none is refused every
+	// call including the reads.
+	Chat ChatDeps
+
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
 	// org to read from one, so search_knowledge takes it from here — and
@@ -111,6 +118,20 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&commentOnPage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
 		{&searchKnowledge{search: deps.Knowledge, org: deps.Org},
 			deps.Knowledge != nil && deps.Org != nil},
+		// THE CHAT TOOLS A PERSON'S ASSISTANT NEEDS: read the rooms,
+		// find what was said, and say something. Not the whole seat
+		// catalogue — `react_to_message`, `join_channel` and
+		// `leave_channel` are left out on [listWorkViews]'s reasoning
+		// from the other direction: an emoji and a room's membership
+		// are furniture somebody arranges in their own client while
+		// they are looking at it, and an assistant that could rearrange
+		// them is one more thing to supervise for no answer delivered.
+		{&listChannels{deps: deps.Chat}, deps.Chat.Reader != nil},
+		{&readChannel{deps: deps.Chat}, deps.Chat.Reader != nil},
+		{&searchMessages{deps: deps.Chat}, deps.Chat.Search != nil},
+		{&postMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&replyInThread{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&sendDM{deps: deps.Chat}, deps.Chat.Writer != nil},
 	}
 	var out []tools.Callable
 	for _, c := range candidates {
