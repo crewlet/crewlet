@@ -401,6 +401,26 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 	case jetstream.BudgetAccount:
 		return "that limit is the NATS account's own JetStream storage limit, " +
 			"which whoever operates the broker sets"
+	case jetstream.BudgetAccountNoTier:
+		// NOT A CAPACITY SENTENCE, which is why it is not folded into the
+		// one above. The account grants this node's replica class nothing
+		// at all, so the broker refuses every create on it before it
+		// compares a byte, and waiting for room is the one thing that
+		// will never help.
+		return "that limit is zero because the NATS account is TIERED and declares no " +
+			"tier for the replica class stream.replicas puts this node in, so the " +
+			"broker refuses every stream on it — `no JetStream default or applicable " +
+			"tiered limit present` — whatever ceiling is asked for. Set " +
+			"stream.replicas to a class the account declares, or have the cluster's " +
+			"operator declare that tier"
+	case jetstream.BudgetUnstated:
+		// REACHED ONLY IF A CALLER STOPS BRANCHING ON THE LIMIT FIRST, an
+		// unstated one being negative and read as "no limit this node can
+		// see" before it gets here. Written anyway, because "unreachable"
+		// is a claim about every caller rather than about this function,
+		// and the cost of being wrong is the fallthrough below.
+		return "the account states no limit this node can read, so what refused this " +
+			"is a cap on a server it does not run; ask whoever operates that cluster"
 	}
 	return fmt.Sprintf("the broker's limit comes from %q, which this build does "+
 		"not know", source)

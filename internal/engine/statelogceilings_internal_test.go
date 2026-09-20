@@ -334,3 +334,62 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// EVERY BUDGET SOURCE SAYS WHO SETS THE LIMIT, IN THE TERMS THAT CHANGE IT.
+//
+// The sentence is what an operator acts on after a refused boot, and the source
+// is the only thing that decides it. A source this build does not know falls
+// through to a sentence naming the value itself, which is honest and useless —
+// so the assertion is over the CLOSED SET rather than over the cases somebody
+// remembered, and a source added to the queue package fails here rather than
+// on a node whose boot just failed.
+func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
+	t.Parallel()
+	// The lever each source's sentence has to reach, and the volume for
+	// the one whose answer depends on it.
+	const volume = "/var/lib/crewlet/stream"
+	levers := map[jetstream.BudgetSource]string{
+		jetstream.BudgetServerStore:   "stream.store_max_bytes",
+		jetstream.BudgetServerMemory:  "stream.store_dir",
+		jetstream.BudgetAccount:       "whoever operates the broker",
+		jetstream.BudgetAccountNoTier: "stream.replicas",
+		// UNSTATED HAS NO SETTING TO NAME — the account declares no
+		// limit and a client cannot read the server's — so what it owes
+		// a reader is who to ask.
+		jetstream.BudgetUnstated: "whoever operates that cluster",
+	}
+	for _, source := range jetstream.BudgetSources {
+		t.Run(string(source), func(t *testing.T) {
+			t.Parallel()
+			said := limitSource(source, volume)
+			if strings.Contains(said, "which this build does not know") {
+				t.Fatalf("%q reaches an operator as an unknown source, so a "+
+					"refused boot names no lever at all: %s", source, said)
+			}
+			lever, named := levers[source]
+			if !named {
+				t.Fatalf("%q has no lever written down here, so this test "+
+					"passes it without checking anything: add the one its "+
+					"sentence names", source)
+			}
+			if !strings.Contains(said, lever) {
+				t.Errorf("%q does not name %q, so an operator is sent to the "+
+					"wrong setting: %s", source, lever, said)
+			}
+		})
+	}
+	// AND THE NO-TIER SENTENCE IS NOT A CAPACITY ONE. Its limit is zero,
+	// which is also what an exhausted account reports, and the two send an
+	// operator to opposite places: one waits for room, the other edits a
+	// field. A reader told to free space on an account that grants this
+	// node's class nothing waits for something that will never happen.
+	noTier := limitSource(jetstream.BudgetAccountNoTier, volume)
+	if !strings.Contains(noTier, "no JetStream default or applicable tiered limit present") {
+		t.Errorf("the no-tier sentence does not quote what the broker will "+
+			"actually say, so nobody can match the two: %s", noTier)
+	}
+	if strings.Contains(limitSource(jetstream.BudgetAccount, volume), "stream.replicas") {
+		t.Error("an ordinary account limit sends an operator to stream.replicas, " +
+			"which changes nothing about how full their account is")
+	}
+}

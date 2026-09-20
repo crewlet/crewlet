@@ -78,6 +78,19 @@ const (
 	// operates the broker.
 	BudgetAccount BudgetSource = "account"
 
+	// BudgetAccountNoTier is a TIERED account that declares no tier for the
+	// replica class this node's streams are created at — `R1` and `R5`
+	// declared while `stream.replicas` is 3.
+	//
+	// ITS OWN SOURCE rather than [BudgetAccount] with a zero, because the
+	// zero is the same number an exhausted account reports and the two
+	// send an operator to opposite places: one waits for room, the other
+	// changes a setting. The server refuses every create on such an
+	// account with `no JetStream default or applicable tiered limit
+	// present` before it compares a single byte, so a refusal has two
+	// levers to name and neither is capacity.
+	BudgetAccountNoTier BudgetSource = "account_no_tier"
+
 	// BudgetUnstated is an external broker whose account states no limit.
 	// Every server still has a cap of its own, and a client cannot read it.
 	BudgetUnstated BudgetSource = "unstated"
@@ -85,7 +98,8 @@ const (
 
 // BudgetSources is the closed set.
 var BudgetSources = []BudgetSource{
-	BudgetServerStore, BudgetServerMemory, BudgetAccount, BudgetUnstated,
+	BudgetServerStore, BudgetServerMemory, BudgetAccount,
+	BudgetAccountNoTier, BudgetUnstated,
 }
 
 // Valid reports whether a source is one this build knows.
@@ -196,7 +210,18 @@ func tighter(a, b StorageBudget) StorageBudget {
 //
 // A tiered account with no tier for this replica count grants nothing, and the
 // broker refuses such a stream outright; zero says so rather than "unstated",
-// which would read as a limit nobody set.
+// which would read as a limit nobody set. It carries [BudgetAccountNoTier]
+// rather than [BudgetAccount], because the same zero from an account that is
+// merely full is a different instruction to whoever reads the refusal.
+//
+// THE DISCRIMINATOR IS WHETHER TIERS ARE PRESENT AT ALL, never whether the one
+// named for this node is. The two are different questions, and the server
+// answers the first: `Account.JetStreamUsage` fills `Tiers` OR the un-tiered
+// `Limits` on the two arms of one either-or, and `JetStreamAccountStats`
+// says so in the comment on the tier it embeds — "in case tiers are used,
+// reflects totals with limits not set". Asked the second question, a tiered
+// account missing this node's class fell through to the un-tiered branch and
+// read a MaxStore of 0 as a limit somebody had set.
 //
 // The reservation the broker reports is the sum of ceilings, NOT multiplied by
 // replicas, which is why only the limit is divided.
@@ -205,7 +230,7 @@ func accountBudget(info *jetstream.AccountInfo, replicas int, memory bool) Stora
 	if len(info.Tiers) > 0 {
 		held, found := info.Tiers[fmt.Sprintf("R%d", replicas)]
 		if !found {
-			return StorageBudget{Limit: 0, Source: BudgetAccount}
+			return StorageBudget{Limit: 0, Source: BudgetAccountNoTier}
 		}
 		tier, perCeiling = held, 1
 	}

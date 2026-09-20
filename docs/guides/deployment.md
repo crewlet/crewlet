@@ -483,6 +483,26 @@ many servers answer behind it is yours to know. Asking for more replicas than
 the cluster has members fails at boot, on the first stream the engine tries to
 create.
 
+**On an external cluster `stream.replicas` also picks which storage limit the
+engine is held to.** There is no `store_max_bytes` on that topology — the limit
+is the *account's*, and the engine reads it back — and a NATS account states
+that limit in one of two shapes, never both. An ordinary account has a single
+limit, which the server charges `replicas × ceiling` against, so the engine
+divides it by `stream.replicas` before it sizes anything. A **tiered** account
+states one limit per replica class (`R1`, `R3`, `R5`, …), already counting
+replication, so the engine takes the tier for `stream.replicas` whole.
+
+A tiered account that has **no tier for the class you asked for** — `R1` and
+`R5` declared while `stream.replicas: 3` — is neither. The server refuses every
+stream and bucket create on such an account with `no JetStream default or
+applicable tiered limit present`, before it compares a single byte, so the
+engine reports a budget of **zero** and says on the `statelog_ceilings` line
+that it came from `account_no_tier` rather than from an account that is merely
+full. The two report the same number and mean opposite things — one clears by
+waiting for room, the other only by a change of setting — so the refusal names
+this case for what it is. Set `stream.replicas` to a class the account
+declares, or have the cluster's operator declare that tier.
+
 ---
 
 ## Running the Engine + API
