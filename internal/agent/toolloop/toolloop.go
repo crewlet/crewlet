@@ -288,6 +288,23 @@ type Result struct {
 	// may extend the cap rather than accept a truncated phase.
 	ExhaustedRounds bool
 
+	// Truncated means a round ended because the model hit its OUTPUT cap
+	// rather than because it had finished — see [llm.Completion.Truncated].
+	//
+	// IT WAS INVISIBLE. Both backends set the stop reason and nothing in the
+	// engine read it, so a sentence that stopped mid-word, a submission
+	// missing the field it was called for, and a model's considered final
+	// answer were the same value to every frame above this one. The
+	// reviewer then judged a half-written answer as the seat's work, and the
+	// one signal that would have said otherwise was on the completion the
+	// whole time.
+	//
+	// Reported rather than raised, for the reason [llm.Completion.Truncated]
+	// gives: a round that emitted whole tool calls before it ran out has
+	// done real work, and whether a cut answer is fatal is the phase's
+	// question. What the loop owes is that the fact reaches it.
+	Truncated bool
+
 	// EmptyAnswers counts the rounds that produced neither prose nor a tool
 	// call — a model that spent its output on hidden reasoning and stopped.
 	//
@@ -458,6 +475,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	forcedRetries := 0
 	emptyRetries := 0
 	emptyAnswers := 0
+	truncated := false
 
 	var partial *Partial
 	publish := func(rounds int) {
@@ -612,6 +630,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		inTokens += completion.InputTokens
 		outTokens += completion.OutputTokens
+		if completion.Truncated() {
+			// LATCHED, never per-round: the phase's question is whether
+			// anything it is about to stand behind was cut, and a round
+			// whose prose was severed taints the phase's own text
+			// however many clean rounds follow it. This package logs
+			// nothing by design — the frame that publishes the phase
+			// event is the one that says so.
+			truncated = true
+		}
 
 		// Charge BEFORE running the tools this round asked for. A round
 		// whose spend is refused must not also have fired its side
@@ -738,6 +765,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 		if suspended {
 			return &Result{
+				Truncated:         truncated,
 				Text:              assistantText(msgs),
 				InputTokens:       inTokens,
 				OutputTokens:      outTokens,
@@ -771,6 +799,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		Messages:        msgs,
 		ExhaustedRounds: exhausted,
 		EmptyAnswers:    emptyAnswers,
+		Truncated:       truncated,
 	}, nil
 }
 

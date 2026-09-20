@@ -1070,3 +1070,83 @@ func TestTheFailureViewCarriesTheRoundsItManagedToNarrate(t *testing.T) {
 		t.Errorf("snapshot narration = %#v, want the round that ran", snap.Narration)
 	}
 }
+
+// A CUT ROUND REACHES THE PHASE, and a clean one does not claim to be cut.
+//
+// Both backends have always set the stop reason on the completion and nothing
+// in the engine read it, so a phase whose prose stopped mid-word and a phase
+// that finished were the same value to every frame above the loop — and the
+// reviewer judged the first as the seat's considered work. The loop is the
+// frame that sees every completion, so it is where the fact is latched.
+func TestACutRoundIsReportedToThePhase(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		turns  []llm.Completion
+		cut    bool
+		rounds int
+	}{
+		{
+			name: "the final answer was cut",
+			turns: []llm.Completion{
+				{Content: "a long answer that stops mid-", FinishReason: llm.FinishMaxTokens},
+			},
+			cut: true, rounds: 1,
+		},
+		{
+			// LATCHED, not last-round-wins: a first round whose prose was
+			// severed leaves that prose in the record however cleanly the
+			// rest of the phase runs.
+			name: "an earlier round was cut and a later one was not",
+			turns: []llm.Completion{
+				{
+					Content:      "thinking out loud and running out of room",
+					FinishReason: llm.FinishLength,
+					ToolCalls:    []llm.ToolCall{{ID: "1", Name: "peek"}},
+				},
+				{Content: "done", FinishReason: "stop"},
+			},
+			cut: true, rounds: 2,
+		},
+		{
+			name: "nothing was cut",
+			turns: []llm.Completion{
+				{Content: "done", FinishReason: "end_turn"},
+			},
+			cut: false, rounds: 1,
+		},
+		{
+			// A BACKEND THAT FILLS NOTHING IN is not a cut one. The
+			// cli-agent path sets "stop" explicitly, but a stub or a
+			// compatible endpoint may send nothing, and reading an absent
+			// reason as a truncation would mark every one of those phases.
+			name: "the backend named no stop reason",
+			turns: []llm.Completion{
+				{Content: "done"},
+			},
+			cut: false, rounds: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &scriptedProvider{turns: tc.turns}
+			s := &fakeSurface{tools: []llm.ToolDef{{Name: "peek"}}}
+			res, err := toolloop.Run(t.Context(), toolloop.Config{
+				Provider: p, Surface: s, MaxRounds: 5,
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.RoundsUsed != tc.rounds {
+				t.Fatalf("rounds = %d, want %d — the case is not exercising "+
+					"what it says", res.RoundsUsed, tc.rounds)
+			}
+			if res.Truncated != tc.cut {
+				t.Errorf("Truncated = %v, want %v: the phase cannot tell an "+
+					"answer the model finished from one it was cut off in",
+					res.Truncated, tc.cut)
+			}
+		})
+	}
+}
