@@ -45,6 +45,15 @@ actually the answer. There is no phrase query, no proximity and no query
 language, because the seam deliberately does not have one: an agent writes a
 keyword line and a person types into a box.
 
+A hit's snippet is cut from the page's **real body**, centred on the first
+query term it contains — not from the index's stored opening. A window over a
+document's first 600 bytes cannot centre on a match that is deeper in, so
+every hit on a long page used to come back as the page's preamble, and a
+snippet that does not contain the search term reads as a wrong result even
+when the ranking is right. The bodies are read per query for the ranked hits
+alone, never for the corpus, and a read that cannot be taken falls back to the
+stored opening rather than failing the search.
+
 One term contributes at most **5 000 documents** to a query. A word in nearly
 every page — the company's own name, or "the" — otherwise makes one query a
 scan of the whole corpus for a term whose weight is near zero, and the

@@ -1066,3 +1066,64 @@ type stuckSource struct{ search.LexicalSource }
 func (stuckSource) Versions(context.Context, *sql.Tx, string, int) ([]search.DocVersion, error) {
 	return []search.DocVersion{{ID: "same", Version: 1}}, nil
 }
+
+// A SNIPPET THAT DOES NOT CONTAIN THE SEARCH TERM READS AS A WRONG RESULT.
+//
+// [textindex.Snippet] centres on the match for exactly that reason, and it
+// can only do so over text that HOLDS the match. It was handed the stored
+// excerpt — the document's first 600 bytes — so every hit that matched deeper
+// than that got the page's preamble instead, under an ellipsis that says text
+// was cut but not that the match is in the part that was. A planner reading
+// those results sees a list of openings and no reason any of them is a hit.
+//
+// The Confluence backend behind the same knowledge seam snippets from the
+// whole body, so which searcher a company ran decided whether its hits showed
+// why they were hits.
+func TestASnippetShowsTheMatchEvenDeepInALongPage(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	// The term sits well past the stored excerpt, behind enough preamble
+	// that no window over the opening could reach it.
+	page(t, db, "p.deep", "ENG", "Platform Handbook",
+		strings.Repeat("This handbook covers the platform and its many procedures. ", 40)+
+			"The quarterly budget is approved by the finance lead.", 1)
+	indexAll(t, x)
+
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "budget"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits = %v, want the handbook", titles(hits))
+	}
+	if !strings.Contains(strings.ToLower(hits[0].Snippet), "budget") {
+		t.Errorf("the snippet does not contain the term that made it a hit: %q\n"+
+			"a reader cannot tell this from a ranking mistake", hits[0].Snippet)
+	}
+}
+
+// A SHORT PAGE IS UNAFFECTED, which is the half a body read could break: the
+// excerpt already held the whole document there, so recutting from the source
+// must produce the same answer rather than a different one.
+func TestASnippetOverAShortPageIsUnchangedByTheBodyRead(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+
+	page(t, db, "p.short", "ENG", "Rollback",
+		"To roll back a deploy, run the rollback command against the release.", 1)
+	indexAll(t, x)
+
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "rollback"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits = %v, want the page", titles(hits))
+	}
+	if got := hits[0].Snippet; !strings.Contains(got, "roll back a deploy") {
+		t.Errorf("snippet = %q, want the whole short body", got)
+	}
+}

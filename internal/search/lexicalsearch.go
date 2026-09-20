@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -281,6 +282,7 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
+	x.resnippet(ctx, byID, terms)
 	out := make([]LexicalHit, 0, len(top))
 	for _, id := range top {
 		// A hit whose row vanished between the posting scan and this read
@@ -291,6 +293,68 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 		}
 	}
 	return out, nil
+}
+
+// resnippet recuts the top hits' snippets FROM THEIR BODIES.
+//
+// A SNIPPET THAT DOES NOT CONTAIN THE SEARCH TERM READS AS A WRONG RESULT,
+// which is [textindex.Snippet]'s own reason for centring on the match — and
+// the excerpt it was handed guarantees the failure for every hit that matched
+// deeper than [excerptLimit] into its body. The stored excerpt is the
+// document's OPENING, so `firstTermIndex` found nothing, the window stayed at
+// zero, and the answer was the page's preamble under an ellipsis that says
+// text was cut but not that the match is in it. The Confluence backend behind
+// the same [knowledge] seam snippets from the whole body, so which searcher a
+// company ran decided whether its hits showed why they were hits.
+//
+// THROUGH THE SOURCE'S OWN [LexicalSource.Fetch], batched per source, for the
+// TOP N ONLY — twenty rows by primary key, never the corpus — and in the
+// replicated estate's own transaction, because a body lives beside the
+// document and the index is this node's. It is the seam the indexer already
+// uses to read a body it is about to tokenise; nothing new crosses the
+// boundary.
+//
+// IT DEGRADES TO WHAT IT WAS. Every failure here — a read that could not be
+// taken, a source that no longer has the row, a body that is now empty —
+// leaves the excerpt-cut snippet in place and logs. A hit is still a hit, and
+// a search that died because one body was unreadable is strictly worse than
+// one whose snippet is a preamble.
+func (x *Indexer) resnippet(ctx context.Context, byID map[string]LexicalHit, terms []string) {
+	// BY SOURCE, because an id is only unique within one: `kb_docs.id` is
+	// source-qualified for exactly that reason, and the source's Fetch
+	// takes its own unqualified ids.
+	wanted := map[string][]string{}
+	for _, hit := range byID {
+		wanted[hit.Source] = append(wanted[hit.Source], hit.ID)
+	}
+	for _, source := range x.sources {
+		ids := wanted[source.Source()]
+		if len(ids) == 0 {
+			continue
+		}
+		if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+			docs, err := source.Fetch(ctx, tx, ids)
+			if err != nil {
+				return err
+			}
+			for _, d := range docs {
+				key := docKey(d.Source, d.ID)
+				hit, ok := byID[key]
+				// AN EMPTY BODY IS NOT AN IMPROVEMENT: a page
+				// whose text is only its title keeps the
+				// excerpt's snippet rather than getting none.
+				if !ok || strings.TrimSpace(d.Body) == "" {
+					continue
+				}
+				hit.Snippet = textindex.Snippet(d.Body, terms, snippetBytes)
+				byID[key] = hit
+			}
+			return nil
+		}); err != nil {
+			log.WarnContext(ctx, "search_snippet_body_unavailable",
+				"source", source.Source(), "documents", len(ids), "error", err)
+		}
+	}
 }
 
 // snippetBytes is the window a hit's snippet is cut to.
