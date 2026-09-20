@@ -518,6 +518,14 @@ was read — and spend its turn on work somebody else had taken. It takes **no
 handle**: the seat is the turn's own, because a tool that named whose day to
 read could read a colleague's queue.
 
+Each list is bounded at **twenty rows**, the same for all seven so no block can
+crowd out another — and `truncated` names the ones that hold more than they
+show, so a seat with two hundred assignments does not read as a seat with
+twenty. `list_work_items` is what lists the rest, with a filter of the reader's
+own. The flag matters because this answer is the one a turn opens on: the
+question it settles is *what is on my plate*, and without it the number came
+back as something the reader could neither check nor doubt.
+
 `task_activity` is the only way to ask what CHANGED. A board is about what is
 there now, and a task that was reassigned twice and back looks exactly like
 one nobody touched. Its order is the **log's**, not a clock's, so its `since`

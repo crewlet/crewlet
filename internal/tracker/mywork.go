@@ -106,12 +106,50 @@ type MyWork struct {
 	WatchingRecent  []TaskRow      `json:"watching_recent"`
 	UnblockedRecent []TaskRow      `json:"unblocked_recent"`
 
+	// Truncated names the blocks that hold more than they carry.
+	//
+	// WITHOUT IT THE ANSWER IS UNFALSIFIABLE. Every block is capped at
+	// [MyWorkRows] and a seat with two hundred assignments rendered exactly
+	// like a seat with twenty, so the one question this answer exists to
+	// settle — what is on my plate — was answered with a number the reader
+	// could neither check nor doubt. It is the rule this package states
+	// against itself everywhere else and did not apply here: an overflow is
+	// counted and said, never silently cut (see [readGroups], [readHistory],
+	// [readRoutingRecipients], [Projects] and [readWorkload]).
+	//
+	// PER BLOCK, because the seven are seven different claims and "you have
+	// more than this" is a different fact about each: a full `assigned` is a
+	// queue problem and a full `watching_recent` is ordinary.
+	//
+	// FLAGS RATHER THAN COUNTS, on the reason [Group.SubgroupsTruncated]
+	// gives: every one of these reads takes a single row past the bound as
+	// evidence, so a count derived from it could only ever be 1.
+	Truncated MyWorkTruncated `json:"truncated,omitzero"`
+
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
 	AppliedThrough uint64             `json:"applied_through"`
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+}
+
+// MyWorkTruncated says which of the seven blocks was cut at [MyWorkRows].
+type MyWorkTruncated struct {
+	Priorities      bool `json:"priorities,omitempty"`
+	Assigned        bool `json:"assigned,omitempty"`
+	AskedOfMe       bool `json:"asked_of_me,omitempty"`
+	ChecklistItems  bool `json:"checklist_items,omitempty"`
+	Collaborating   bool `json:"collaborating,omitempty"`
+	WatchingRecent  bool `json:"watching_recent,omitempty"`
+	UnblockedRecent bool `json:"unblocked_recent,omitempty"`
+}
+
+// Any reports whether any block was cut, which is what a renderer that shows
+// one sentence for the whole answer asks.
+func (m MyWorkTruncated) Any() bool {
+	return m.Priorities || m.Assigned || m.AskedOfMe || m.ChecklistItems ||
+		m.Collaborating || m.WatchingRecent || m.UnblockedRecent
 }
 
 // MyWorkQuery asks for one person's own day.
@@ -190,16 +228,20 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	dayStart := anchor.At
 	open := openGroups()
 
-	priorities, err := readPriorityRows(ctx, tx, handle, dayStart)
+	// THE CUT FLAG COMES FROM THE READ ITSELF. [readTasks] already fetches
+	// one row past its limit and mints a cursor when it finds one, so "is
+	// there more" was computed on every one of these blocks and thrown away
+	// four times over. Nothing here costs a second query.
+	priorities, cut, err := readPriorityRows(ctx, tx, handle, dayStart)
 	if err != nil {
 		return err
 	}
-	out.Priorities = priorities
+	out.Priorities, out.Truncated.Priorities = priorities, cut
 
 	// ASSIGNED, in the queue's own order — priority then due, which is
 	// exactly what `tracker_tasks_queue_idx` is built in, so the block a
 	// turn opens on is the query the index is named for.
-	assigned, _, err := readTasks(ctx, tx,
+	assigned, assignedMore, err := readTasks(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
 			placeholders(len(open))+")",
 		append([]any{handle}, open...),
@@ -210,25 +252,25 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	if err != nil {
 		return err
 	}
-	out.Assigned = assigned
+	out.Assigned, out.Truncated.Assigned = assigned, assignedMore != ""
 
-	asks, err := readAsks(ctx, tx, handle, dayStart)
+	asks, asksMore, err := readAsks(ctx, tx, handle, dayStart)
 	if err != nil {
 		return err
 	}
-	out.AskedOfMe = asks
+	out.AskedOfMe, out.Truncated.AskedOfMe = asks, asksMore
 
-	items, err := readChecklistClaims(ctx, tx, handle)
+	items, itemsMore, err := readChecklistClaims(ctx, tx, handle)
 	if err != nil {
 		return err
 	}
-	out.ChecklistItems = items
+	out.ChecklistItems, out.Truncated.ChecklistItems = items, itemsMore
 
 	// COLLABORATING EXCLUDES WHAT THIS SEAT OWNS, because a task already
 	// in `assigned` listed again here is one row spending two of the seven
 	// blocks — and the distinction the block exists for is precisely
 	// "brought on without owning".
-	collaborating, _, err := readTasks(ctx, tx,
+	collaborating, collaboratingMore, err := readTasks(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee <> ? AND t.status_group IN ("+
 			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
 			"tracker_collaborators c WHERE c.task_id = t.id AND c.handle = ?)",
@@ -238,12 +280,12 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	if err != nil {
 		return err
 	}
-	out.Collaborating = collaborating
+	out.Collaborating, out.Truncated.Collaborating = collaborating, collaboratingMore != ""
 
 	// WATCHING, MINUS THE MUTED. A mute is how somebody says "keep me on
 	// this but stop telling me", and a block that ignored it would put
 	// every muted task back in front of them once a turn.
-	watching, _, err := readTasks(ctx, tx,
+	watching, watchingMore, err := readTasks(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee <> ? AND EXISTS (SELECT 1 FROM "+
 			"tracker_watchers w WHERE w.task_id = t.id AND w.handle = ? "+
 			"AND w.muted = 0)",
@@ -253,7 +295,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	if err != nil {
 		return err
 	}
-	out.WatchingRecent = watching
+	out.WatchingRecent, out.Truncated.WatchingRecent = watching, watchingMore != ""
 
 	// UNBLOCKED: this seat's open work that HAD a blocker and no longer
 	// has an open one. The only block about a CHANGE rather than a state,
@@ -264,7 +306,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	// leg every task that never had a dependency qualifies, which is most
 	// of the board; without the second, a task with one blocker cleared
 	// and another still open reads as workable and is not.
-	unblocked, _, err := readTasks(ctx, tx,
+	unblocked, unblockedMore, err := readTasks(ctx, tx,
 		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
 			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
 			"tracker_task_deps d WHERE d.task_id = t.id "+
@@ -276,7 +318,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	if err != nil {
 		return err
 	}
-	out.UnblockedRecent = unblocked
+	out.UnblockedRecent, out.Truncated.UnblockedRecent = unblocked, unblockedMore != ""
 	return nil
 }
 
@@ -303,17 +345,17 @@ func openGroups() []any {
 // is a person's own object and a read must not write to it: the next write to
 // the list drops it for good.
 func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time) ([]TaskRow, error) {
+	dayStart time.Time) ([]TaskRow, bool, error) {
 
 	person, held, err := readPerson(ctx, tx, handle)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !held || len(person.Priorities) == 0 {
 		// EMPTY, NOT NIL — see [readTasksJoined]. A person with no
 		// stored list has an empty one, and the block renders as
 		// absent rather than throwing on its own length.
-		return []TaskRow{}, nil
+		return []TaskRow{}, false, nil
 	}
 	// EVERY STORED ID GOES TO THE FILTER, and the cut comes after it.
 	//
@@ -348,7 +390,7 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 			") AND t.status_group IN ("+placeholders(len(open))+")",
 		args, []sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	byID := make(map[string]TaskRow, len(rows))
 	for _, row := range rows {
@@ -364,8 +406,9 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 	// order rather than the top of an order nothing here meant.
 	if len(out) > MyWorkRows {
 		out = out[:MyWorkRows]
+		return out, true, nil
 	}
-	return out, nil
+	return out, false, nil
 }
 
 // readAsks reads the questions waiting on this person.
@@ -374,7 +417,7 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 // ask is open until somebody answers it or resolves it, and a removed comment
 // is not an ask at all.
 func readAsks(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time) ([]AskRow, error) {
+	dayStart time.Time) ([]AskRow, bool, error) {
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT c.id, c.task_id, c.author, c.body, c.created_at
@@ -383,9 +426,9 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		WHERE c.ask = ? AND c.resolved = 0 AND c.answered_by IS NULL
 		  AND c.removed = 0 AND t.removed_at IS NULL
 		ORDER BY c.created_at DESC
-		LIMIT ?`, handle, MyWorkRows)
+		LIMIT ?`, handle, MyWorkRows+1)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
+		return nil, false, fmt.Errorf("tracker: read the asks waiting on %s: %w",
 			handle, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -399,17 +442,23 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		var a ask
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at); err != nil {
-			return nil, fmt.Errorf("tracker: scan an ask: %w", err)
+			return nil, false, fmt.Errorf("tracker: scan an ask: %w", err)
 		}
 		pending = append(pending, a)
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
+		return nil, false, fmt.Errorf("tracker: read the asks waiting on %s: %w",
 			handle, err)
 	}
+	// THE PROBE ROW IS EVIDENCE, never an answer: the page stays at the
+	// bound and the caller is told there is more.
+	more := len(pending) > MyWorkRows
+	if more {
+		pending = pending[:MyWorkRows]
+	}
 	if len(pending) == 0 {
-		return []AskRow{}, nil
+		return []AskRow{}, false, nil
 	}
 
 	ids := make([]any, 0, len(pending))
@@ -420,7 +469,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		"t.id IN ("+placeholders(len(ids))+")", ids,
 		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	byID := make(map[string]TaskRow, len(tasks))
 	for _, row := range tasks {
@@ -444,12 +493,12 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 				CommentOnWorkTool, row.Key, a.comment),
 		})
 	}
-	return out, nil
+	return out, more, nil
 }
 
 // readChecklistClaims reads the sub-items this person owns.
 func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
-	[]ChecklistRow, error) {
+	[]ChecklistRow, bool, error) {
 
 	// THE OPEN ONES, on live tasks. A done item is not a claim, and an
 	// item on a removed task is an item nobody can act on.
@@ -460,9 +509,9 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 		JOIN tracker_tasks t ON t.id = i.task_id
 		WHERE i.assignee = ? AND i.done = 0 AND t.removed_at IS NULL
 		ORDER BY t.key, i.ord
-		LIMIT ?`, handle, MyWorkRows)
+		LIMIT ?`, handle, MyWorkRows+1)
 	if err != nil {
-		return nil, fmt.Errorf("tracker: read the checklist items of %s: %w",
+		return nil, false, fmt.Errorf("tracker: read the checklist items of %s: %w",
 			handle, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -473,14 +522,18 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 		var done int
 		if err := rows.Scan(&row.Task, &row.TaskKey, &row.TaskTitle,
 			&row.Checklist, &row.Item, &row.Name, &done); err != nil {
-			return nil, fmt.Errorf("tracker: scan a checklist item: %w", err)
+			return nil, false, fmt.Errorf("tracker: scan a checklist item: %w", err)
 		}
 		row.Done = done != 0
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("tracker: read the checklist items of %s: %w",
+		return nil, false, fmt.Errorf("tracker: read the checklist items of %s: %w",
 			handle, err)
 	}
-	return out, nil
+	// THE PROBE ROW IS EVIDENCE, never an answer — see [readAsks].
+	if len(out) > MyWorkRows {
+		return out[:MyWorkRows], true, nil
+	}
+	return out, false, nil
 }

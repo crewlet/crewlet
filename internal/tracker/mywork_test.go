@@ -317,3 +317,103 @@ func TestAnEmptyDayCarriesEmptyCollectionsRatherThanNulls(t *testing.T) {
 		t.Errorf("an empty day marshals a null: %s", raw)
 	}
 }
+
+// A CUT BLOCK SAYS SO, on every one of the seven.
+//
+// Each block is bounded at MyWorkRows and none of them said when it filled, so
+// a seat with two hundred assignments rendered exactly like a seat with twenty
+// — and "what is on my plate", the one question this answer exists to settle,
+// came back as a number the reader could neither check nor doubt. Every other
+// bounded read in this package already refuses that: the board counts its
+// dropped columns, the history feed flags its cut, routing, workload and the
+// project listing all carry a marker.
+//
+// The evidence was already being computed and thrown away: readTasks fetches
+// one row past its limit and mints a cursor when it finds one, and four of the
+// seven blocks discarded it.
+func TestEveryMyWorkBlockSaysWhenItWasCut(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// One task more than a block holds, in every claim at once: assigned to
+	// ana, collaborated on by her, watched by her, with an open ask to her
+	// and a checklist item she holds — and a cleared blocker, so it lands
+	// in `unblocked` too.
+	over := tracker.MyWorkRows + 1
+	for i := range over {
+		// HERS: assigned, asked of her, with a checklist item she holds.
+		id := fmt.Sprintf("m%02d", i)
+		task := newTask(id)
+		task.Assignee = "ana"
+		task.Checklists = []tracker.Checklist{{ID: "l-1", Name: "steps",
+			Items: []tracker.ChecklistItem{{ID: "i-1", Name: "step", Assignee: "ana"}}}}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+		askOn(t, r, "op-ask-"+id, id, tracker.Comment{
+			ID: "cm-" + id, Task: id, Author: "bo", AuthorKind: tracker.AuthorHuman,
+			Body: "which region?", Ask: "ana", CreatedAt: wednesday, UpdatedAt: wednesday,
+		})
+
+		// SOMEBODY ELSE'S, with her on it. Both blocks exclude what this
+		// seat OWNS — "brought on without owning" is the distinction they
+		// exist for — so they cannot be filled by the tasks above.
+		other := fmt.Sprintf("o%02d", i)
+		theirs := newTask(other)
+		theirs.Assignee = "bo"
+		theirs.Collaborators = []string{"ana"}
+		theirs.Watchers = []string{"ana"}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+other, theirs, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", other, err)
+		}
+		r.drain()
+	}
+	// And a priority list longer than the block, over the same tasks.
+	stored := make([]string, 0, tracker.MaxPriorities)
+	for i := range min(over, tracker.MaxPriorities) {
+		stored = append(stored, fmt.Sprintf("m%02d", i))
+	}
+	if _, err := r.writer.WritePriorities(t.Context(), "op-prio", "ana",
+		stored, tracker.PersonAuthority{}); err != nil {
+		t.Fatalf("WritePriorities: %v", err)
+	}
+	r.drain()
+
+	got := r.myWork("ana")
+	for _, block := range []struct {
+		name string
+		rows int
+		cut  bool
+	}{
+		{"priorities", len(got.Priorities), got.Truncated.Priorities},
+		{"assigned", len(got.Assigned), got.Truncated.Assigned},
+		{"asked_of_me", len(got.AskedOfMe), got.Truncated.AskedOfMe},
+		{"checklist_items", len(got.ChecklistItems), got.Truncated.ChecklistItems},
+		{"collaborating", len(got.Collaborating), got.Truncated.Collaborating},
+		{"watching_recent", len(got.WatchingRecent), got.Truncated.WatchingRecent},
+	} {
+		if block.rows != tracker.MyWorkRows {
+			t.Errorf("%s holds %d rows, want the bound of %d — the case is not "+
+				"exercising this block", block.name, block.rows, tracker.MyWorkRows)
+			continue
+		}
+		if !block.cut {
+			t.Errorf("%s is full and does not say it was cut, so it reads as "+
+				"a seat with exactly %d", block.name, tracker.MyWorkRows)
+		}
+	}
+	if !got.Truncated.Any() {
+		t.Error("Any() says nothing was cut while six blocks were")
+	}
+
+	// AND A QUIET DAY CLAIMS NOTHING. A flag that were always on would pass
+	// every assertion above and tell an operator their whole company is
+	// behind on everything.
+	quiet := newRoundTrip(t)
+	assign(t, quiet, "one", "ana")
+	day := quiet.myWork("ana")
+	if day.Truncated.Any() {
+		t.Errorf("a one-task day reports blocks cut: %+v", day.Truncated)
+	}
+}
