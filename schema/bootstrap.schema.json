@@ -331,7 +331,7 @@
           "type": "string"
         },
         "tracker_log_max_bytes": {
-          "description": "Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB.",
+          "description": "Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB.",
           "maximum": 1099511627776,
           "minimum": 1073741824,
           "type": "integer"

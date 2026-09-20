@@ -915,8 +915,14 @@ type Stream struct {
 	// TrackerLogMaxBytes is the byte ceiling on the mutation log — the
 	// ordered stream a state-log domain writes through.
 	//
-	// UNSET DERIVES IT from the volume the stream is stored on: a quarter
-	// of its free space, clamped to 4 GiB..64 GiB. A fixed default is
+	// UNSET DERIVES IT from the volume the STREAMS live on: a quarter of
+	// that volume's free space, clamped to 4 GiB..64 GiB. That is the one
+	// holding StoreDir where an embedded broker has one, and the one
+	// holding Store.Path otherwise — an external cluster writes its
+	// streams on a disk this node cannot measure at all, so the volume it
+	// CAN measure is the honest bound there. The two are the same disk in
+	// every layout but one an operator built deliberately, which is why
+	// the field says which. A fixed default is
 	// wrong in both directions — the same number is five years of history
 	// on the modelled write rate and one boot on a small disk — and the
 	// boot that creates the stream logs what it derived the value from
@@ -941,7 +947,7 @@ type Stream struct {
 	// CROSSING IT REFUSES; IT DOES NOT SHED. There is no age bound on this
 	// stream, so a full log drops no history — the append is refused,
 	// loudly, naming this field and whatever is blocking the trim.
-	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the stream volume's free space, clamped to 4 GiB..64 GiB."`
+	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB."`
 
 	// TrackerVectorsMaxBytes is the byte ceiling on the vector changelog.
 	//
