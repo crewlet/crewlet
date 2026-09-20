@@ -61,9 +61,10 @@ const (
 	AnswerDeferred AnswerDisposition = "deferred"
 
 	// AnswerNotMine — nothing here is owed this delivery: no run was
-	// awaiting the conversation, the lookup failed open, or the run it
-	// matched is terminally gone — settled, deleted, unresumable for good.
-	// It is an ordinary message and is handled as one.
+	// awaiting the conversation, the lookup failed and this seat has no
+	// awaiting run for one to have matched, or the run it matched is
+	// terminally gone — settled, deleted, unresumable for good. It is an
+	// ordinary message and is handled as one.
 	AnswerNotMine AnswerDisposition = "not_mine"
 )
 
@@ -253,6 +254,73 @@ func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *
 	// own budget, and the whole table goes when the run ends or the seat
 	// does.
 	return AnswerNotMine, cause
+}
+
+// answerLookupFailed decides a delivery whose match could not be READ.
+//
+// A failed lookup is exactly the state this type's own asymmetry is about —
+// the coordinator could not establish that nothing is owed the delivery — and
+// it was classified [AnswerNotMine] anyway, so on the one failure where a
+// retry seconds later would have matched the run, the person's reply was spent
+// on an ordinary turn instead. The original fail-open reasoning is right too:
+// an unreadable store must not swallow a message that has nothing to do with
+// any coding run, which on a company with no parked runs at all is every
+// message the seat receives. Both hold, and they resolve on a question this
+// node can answer WITHOUT the store that just failed.
+//
+// THE SEAT'S OWN AWAITING COUNT is that question — [Coordinator.SeatRuns]'s
+// second value. It is in memory: seeded from the store when this node claimed
+// the seat, and moved since by the transitions this process itself made. That
+// is precisely why it is the right source here — it needs no read from the
+// store the read just failed against, so it still answers when the alternative
+// is a guess.
+//
+//   - NO AWAITING RUN ON THIS SEAT: [AnswerNotMine], as before. Nothing is
+//     owed the delivery, so there would be nothing for a hand-back to come
+//     back to, and the message is the ordinary one it looks like. The error is
+//     resolved here rather than reported, because the caller has nothing left
+//     to decide about it.
+//   - AN AWAITING RUN: [AnswerDeferred]. Something on this seat IS waiting for
+//     somebody's reply and only WHICH row could not be read — an answer that
+//     arrives twice is recoverable and an answer that is spent is not.
+//
+// The bound is the ordinary one, under a key naming the SEAT rather than a
+// run, because the run is the thing this path could not read. Its window is
+// the run's, and no run was read, so the attempt ceiling is the whole of it —
+// the same ceiling, reached at the same spacing.
+func (c *Coordinator) answerLookupFailed(ctx context.Context, handle string,
+	trigger *events.Event, cause error,
+) (AnswerDisposition, error) {
+	if _, awaits := c.SeatRuns(handle); !awaits {
+		return AnswerNotMine, nil
+	}
+	delivery := deliveryOf(trigger)
+	if c.spendAnswerAttempt(lookupAnswerKey(handle), delivery, 0) {
+		return AnswerDeferred, cause
+	}
+	log.ErrorContext(ctx, "sandbox_answer_lookup_exhausted",
+		"agent", handle, "delivery", delivery, "attempts", MaxAnswerAttempts,
+		"error", cause.Error(),
+		"detail", "this node could not read which of this seat's runs is awaiting an "+
+			"answer, in every one of its spaced attempts, so the message is run as "+
+			"the ordinary message it looks like; a run still parked on a question "+
+			"keeps waiting, bounded by pause_ttl_seconds")
+	return AnswerNotMine, cause
+}
+
+// lookupAnswerKey is the budget key for a delivery whose run could not be
+// read: the seat is all this node knows about what is owed it.
+func lookupAnswerKey(handle string) answerKey {
+	return answerKey{handle: handle}
+}
+
+// clearLookupAttempts forgets a seat's unreadable-lookup budgets, which a
+// lookup that ANSWERED does: the store is readable again, so the next failure
+// is the first of its own series.
+func (c *Coordinator) clearLookupAttempts(handle string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.attempts, lookupAnswerKey(handle))
 }
 
 // answerKeyFor is the table key for a matched run.

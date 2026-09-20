@@ -3167,7 +3167,15 @@ func TestTheResumeAnswerIsRedacted(t *testing.T) {
 	}
 }
 
-// An unreadable store must not swallow an ordinary message.
+// An unreadable store must not swallow an ordinary message — ON A SEAT WITH
+// NOTHING AWAITING AN ANSWER, which is the half of that rule that survived.
+//
+// The fail-open is conditional now, and this is the condition: nothing here is
+// owed the delivery, so there would be nothing for a hand-back to come back
+// to, and on a company with no parked runs at all that is every message a seat
+// receives. The other half — an awaiting run the store could not name — is
+// deferred instead; see [Coordinator.answerLookupFailed] and the dispatcher
+// case that drives both.
 func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
@@ -3176,6 +3184,9 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
+	if _, awaits := coordinator.SeatRuns("swe"); awaits {
+		t.Fatal("the seat reports a run awaiting an answer, which is the other half")
+	}
 	disposition, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "hello", nil)
 	if err != nil {
 		t.Fatalf("TryResumeFromAnswer: %v", err)
@@ -3183,6 +3194,42 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	if disposition != AnswerNotMine {
 		t.Fatalf("an unreadable store answered %q rather than %q, and swallowed "+
 			"an ordinary message", disposition, AnswerNotMine)
+	}
+}
+
+// AND A SEAT THAT IS OWED ONE HANDS THE MESSAGE BACK INSTEAD.
+//
+// The budget is the matched run's, under a key naming the SEAT, because the
+// run is the thing this path could not read: the count is what stops a store
+// that is down for good holding a person's reply for ever, and the message is
+// let go to the ordinary route at the end of it exactly as a matched run's is.
+func TestAnUnreadableLookupOnAnAwaitingSeatIsBounded(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.coordinator.pending = &refusingStore{
+		inner: rig.pending, refuse: []string{"FindAwaitingByConversation"},
+	}
+	delivery := answerFrom("use main")
+
+	for attempt := 1; attempt < MaxAnswerAttempts; attempt++ {
+		disposition, err := rig.coordinator.TryResumeFromAnswer(
+			t.Context(), "swe", answerOnTheDM, "use main", delivery)
+		if disposition != AnswerDeferred {
+			t.Fatalf("attempt %d of %d: disposition = %q, want %q — a run on "+
+				"this seat is awaiting an answer and only the row could not be "+
+				"read", attempt, MaxAnswerAttempts, disposition, AnswerDeferred)
+		}
+		if err == nil {
+			t.Fatalf("attempt %d reported no error: the hand-back is a nak, and "+
+				"a nak with no cause says nothing at all", attempt)
+		}
+	}
+	if disposition, _ := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", answerOnTheDM, "use main", delivery,
+	); disposition != AnswerNotMine {
+		t.Fatalf("disposition = %q on attempt %d, want %q: a store that never "+
+			"answers must not hold a person's reply for ever",
+			disposition, MaxAnswerAttempts, AnswerNotMine)
 	}
 }
 

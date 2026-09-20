@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -2273,3 +2274,132 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 		t.Fatalf("the ledger holds %d entries under the DM line, want the turn's", len(filed))
 	}
 }
+
+// AN ANSWER THE STORE COULD NOT PLACE IS HANDED BACK, NOT SPENT.
+//
+// The one failure the classification stopped short on. A lookup that cannot be
+// made is precisely the state the offer's asymmetry is about — the coordinator
+// could not establish that nothing is owed the delivery — and it was answered
+// "not mine" anyway, so the person's reply was spent on an ordinary turn on
+// the one class of failure where a retry seconds later would have matched the
+// run that asked.
+//
+// AND THE FAIL-OPEN IS STILL RIGHT, which is why this is not simply inverted:
+// on a seat with no parked run at all, an unreadable store must not swallow a
+// message that has nothing to do with any coding run — which there is every
+// message the seat receives. The two resolve on the seat's own awaiting count,
+// which this node holds in memory and needs no store to read.
+//
+// Driven through the dispatcher with the REAL coordinator behind it, because
+// the fact under test is the pair: what the coordinator concludes from an
+// unreadable lookup, and what the dispatcher then does with the delivery.
+func TestAnAnswerTheStoreCouldNotPlaceIsHandedBackRatherThanRun(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		awaiting bool
+		outcome  queue.Outcome
+		turns    int
+	}{
+		// Something on this seat IS waiting for somebody's reply and only
+		// WHICH row could not be read: the delivery comes back.
+		"a run is awaiting an answer on this seat": {
+			awaiting: true, outcome: queue.OutcomeNak, turns: 0,
+		},
+		// Nothing is owed the delivery, so there is nothing for a
+		// hand-back to come back to: it is the ordinary message it looks
+		// like.
+		"no run is awaiting anything here": {
+			awaiting: false, outcome: queue.OutcomeAck, turns: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := &recorder{result: turn.Result{Decision: phase.Done}}
+			d := dispatcher(t, r)
+			d.Conditions = func(string) inbox.Conditions {
+				// FREE, with a question open on it: the shape a parked
+				// run leaves, and the shape this seat is screened in
+				// whether or not the store can still say which run.
+				return inbox.Conditions{Owned: true, TurnEngineReady: true,
+					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+			}
+			d.Answer = unreadableAnswerLookup(t, tc.awaiting).TryResumeFromAnswer
+
+			got := d.Dispatch(context.Background(), "swe",
+				[]*events.Event{inThread("notification", "chat:C1")})
+
+			if got.Outcome != tc.outcome {
+				t.Errorf("outcome = %v, want %v", got.Outcome, tc.outcome)
+			}
+			if len(r.reqs) != tc.turns {
+				t.Errorf("%d turns ran, want %d: a reply a parked run is owed "+
+					"must not be worked as an unrelated message, and one no run "+
+					"is owed must not be held back for ever", len(r.reqs), tc.turns)
+			}
+		})
+	}
+}
+
+// unreadableAnswerLookup is a real coordinator whose store cannot answer which
+// of a seat's runs is awaiting a reply — optionally with one that is.
+func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
+	t.Helper()
+	ctx := context.Background()
+	store := sandbox.NewCoordStore(coordmemory.NewFleet())
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if !awaiting {
+		return coordinator
+	}
+	run := sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		CodingAgent: "claude-code", ConversationKey: "chat:C1", PartitionKey: "chat:C1",
+	}
+	if err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{
+		Question: "which branch?", Audience: "requester",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	// The seat's counts come from the store ONCE, here, exactly as a node
+	// claiming the seat seeds them — which is the point: from now on they
+	// are this process's own memory, and that is what still answers when
+	// the lookup cannot.
+	if err := coordinator.OnStarted(ctx, types.SandboxRunStarted{
+		Agent: "a-1", AgentHandle: "swe", TurnID: "t1",
+	}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	if _, awaits := coordinator.SeatRuns("swe"); !awaits {
+		t.Fatal("the seat does not report the run parked on its question")
+	}
+	return coordinator
+}
+
+// blindLookupStore is a store that works except for the one read the answer
+// match turns on.
+type blindLookupStore struct{ sandbox.PendingStore }
+
+func (blindLookupStore) FindAwaitingByConversation(context.Context, string,
+	sandbox.ConversationRef,
+) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, errors.New("the coordination store refused the call")
+}
+
+// discardPublisher stands in for the queue: this case publishes nothing.
+type discardPublisher struct{}
+
+func (discardPublisher) Publish(context.Context, string, *events.Event) error { return nil }

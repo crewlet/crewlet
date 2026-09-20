@@ -792,10 +792,14 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 //
 //   - No conversation keys at all, and no run awaiting this one:
 //     [AnswerNotMine]. Nothing was matched, so nothing is owed.
-//   - The lookup itself failed: [AnswerNotMine], and deliberately — an
-//     unreadable store must not swallow an ordinary message, and nothing was
-//     matched, so nothing is owed. The one error resolved rather than
-//     reported.
+//   - The lookup itself failed: whichever answer THIS NODE'S OWN COUNT
+//     supports, because the store that could not say which row is awaiting is
+//     not the only thing here that knows whether one is — see
+//     [Coordinator.answerLookupFailed]. No awaiting run on the seat:
+//     [AnswerNotMine], the original fail-open, because nothing is owed the
+//     delivery and an unreadable store must not swallow an ordinary message.
+//     An awaiting run: [AnswerDeferred], because something IS owed an answer
+//     here and only WHICH row could not be read.
 //   - The claim could not be written: [AnswerDeferred]. The claim MAY have
 //     landed, so this is the ambiguous case, and the ambiguity is resolved
 //     towards the run — an answer arriving twice is recoverable and an answer
@@ -825,13 +829,6 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	}
 	run, found, err := c.pending.FindAwaitingByConversation(ctx, handle, conv)
 	if err != nil {
-		// FAIL OPEN. An unreadable store must not swallow an ordinary
-		// message: handling it as a normal inbound is recoverable, dropping
-		// it is not. NOT a defer, and the reasoning is the same one the
-		// line below states — nothing was MATCHED, so no run is owed this
-		// delivery and there is nothing for a requeue to come back to.
-		// The error is resolved here rather than reported, because the
-		// caller has nothing left to decide about it.
 		// BOTH KEYS. The match turns on the identity and falls back to
 		// the partition for a row parked before an identity was
 		// written, so a line naming one of them cannot say which read
@@ -840,11 +837,17 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
 			"agent", handle, "conversation", conv.Identity,
 			"partition", conv.Partition, "error", err.Error())
-		return AnswerNotMine, nil
+		return c.answerLookupFailed(ctx, handle, trigger, err)
 	}
 	if !found {
+		// NOTHING WAS MATCHED, so nothing is owed the delivery: it is an
+		// ordinary message and is handled as one.
+		c.clearLookupAttempts(handle)
 		return AnswerNotMine, nil
 	}
+	// THE LOOKUP ANSWERED, so whatever this seat was counting against a
+	// store that would not read is spent.
+	c.clearLookupAttempts(handle)
 	// THE JOB THAT ASKED, still waiting. The lookup is a snapshot, and a
 	// claim that took whatever the row held by now would hand this answer
 	// to the next job, which asked nothing.
