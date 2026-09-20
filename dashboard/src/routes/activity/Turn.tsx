@@ -619,15 +619,29 @@ function turnStatus(view: TurnView): ReactNode {
  * had nowhere else on this screen to be. So the summary comes back the moment
  * `lead` left something behind, and stays away when it did not.
  *
- * The same guard covers the trigger: where a turn has no plan summary the
- * title takes THIS sentence, and the prose here is dropped rather than printed
- * again — while the source and the way out to the trigger stay, because they
- * are the half a title cannot carry.
+ * THE TRIGGER FOLLOWS THE SAME RULE, and that is a change from what this
+ * comment used to claim. It said the prose here is "dropped rather than
+ * printed again" where the title took this sentence, which was true while the
+ * title was the WHOLE string: `woke === omit` matched exactly, and the
+ * paragraph went. Now that the title is a LEAD, that comparison only matches a
+ * trigger which is one sentence long — so a multi-sentence trigger prints its
+ * prose here, with the title's own sentence at the front of it.
+ *
+ * That is the answer, not an oversight, and it is the same one the summary
+ * gets four lines up: the panel prints the whole prose under its own label,
+ * and the title is an entry point into it rather than a replacement for it.
+ * Dropping the paragraph instead would lose everything the lead did not take,
+ * and on a turn with no plan summary the trigger's prose is the only account
+ * of it this screen has. What is still dropped is the case the original rule
+ * was written for — a trigger the title says ALL of — where printing it would
+ * be one sentence twice in the space of two lines and nothing more.
  */
 function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
   const trigger = view.trigger;
   const woke = wokeBy(view);
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
+  // Only when the title says ALL of it. See the note above for why a title
+  // that says only its lead does not count as having said it.
   const repeated = woke !== "" && woke === omit;
   // What the title could not take. Compared against the WHOLE summary rather
   // than recomputing the lead, so the two can never disagree about where the
