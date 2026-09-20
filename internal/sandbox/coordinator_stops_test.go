@@ -386,7 +386,7 @@ func completes(t *testing.T, rig *coordRig) {
 // of it. The settle this reaches ([Coordinator.settleClaimed]) has two call
 // sites and both sit behind a resume that returned nil or [ErrResumeActed] —
 // every other resume failure gives the claim back instead, which is
-// [Coordinator.revertClaim]'s path and not this one. Both of those count as an
+// [Coordinator.unclaim]'s path and not this one. Both of those count as an
 // OWNED re-entry, so from the three statuses whose claim is won
 // ([StatusRunning], [StatusAwaiting], [StatusReseed]) [entryDrive.run] takes
 // the turn-ended-its-own-hold exemption before it asks whether a stop was

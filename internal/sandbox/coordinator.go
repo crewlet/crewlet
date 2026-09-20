@@ -242,7 +242,7 @@ type CoordinatorOptions struct {
 //     and everything else follows it: a park whose write does not land gives
 //     the claim it holds back instead, and ends the run where even that
 //     cannot be written — because a row left in the claim is picked up by
-//     nothing at all ([Coordinator.revertClaim]).
+//     nothing at all ([Coordinator.unclaim]).
 //   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs held,
 //     inherits its open questions, and reaps any tail the previous owner
 //     abandoned mid-resume.
@@ -1088,7 +1088,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 // the one a caller must not read as either of the others. It was a bool, and
 // both callers read the false as "settle nothing" — which leaves the row in
 // [StatusResumed], the one state nothing recovers from (see
-// [Coordinator.revertClaim]). What a caller does with the error instead is
+// [Coordinator.unclaim]). What a caller does with the error instead is
 // [Coordinator.settleClaimed].
 func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, error) {
 	latest, found, err := c.pending.Get(ctx, run.TurnID)
@@ -1114,8 +1114,8 @@ var claimedOnly = []string{StatusResumed}
 // [StatusResumed] row, a redelivery cannot re-claim one, no answer matches one
 // and no reaper expires one. So "leave it for the next pass" is a turn
 // destroyed in silence beside a paused box billed until the seat happens to
-// change hands — exactly what [Coordinator.revertClaim] settles a run rather
-// than accept.
+// change hands — exactly what [Coordinator.unclaim] ends a run rather than
+// accept.
 //
 // THE CONDITION MOVES TO THE STORE, which is what makes acting without the
 // read safe. The only hazard the read ever guarded was killing a job the

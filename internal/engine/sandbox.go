@@ -481,7 +481,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     it is CLEARED, and this is the only place that clear happens: the
 	//     coordinator's revert reports no stop, deliberately, because the
 	//     same revert on the completion route puts a run back to a box that
-	//     is still working. See [sandbox.Coordinator.revertClaim].
+	//     is still working. See [sandbox.Coordinator.unclaim].
 	//
 	//     THE MESSAGE ITSELF IS HANDED BACK, not spent. The offer reports
 	//     [sandbox.AnswerDeferred] — the run is awaiting THIS answer again
