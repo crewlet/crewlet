@@ -2180,11 +2180,12 @@ function useSetupRuns(kinds: string[]): {
  * ONE pass, read fresh.
  *
  * WHY NOT THE ROW THAT WAS CLICKED: the listing is a snapshot of the moment it
- * answered, and it is capped at ten (`setupapi.MaxRunsListed`) against the
- * runner's own memory of thirty-two. This route answers a single pass —
- * including one the listing has already dropped, and including one that is
- * still going, which is what makes a running pass readable WHILE it runs
- * rather than by fetching every other pass's findings again beside it.
+ * answered, and it serves what the node still holds — the runner remembers its
+ * last thirty-two passes across every surface and forgets the rest. This route
+ * answers a single pass — including one the listing has since dropped, and
+ * including one that is still going, which is what makes a running pass
+ * readable WHILE it runs rather than by fetching every other pass's findings
+ * again beside it.
  *
  * `missing` is the engine's own 404 and is NOT an error to draw in red: a run
  * is remembered by the node that executed it and only for its last few passes,

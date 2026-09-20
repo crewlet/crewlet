@@ -477,3 +477,50 @@ func TestAPassOnASpentContextIsAFault(t *testing.T) {
 		t.Fatalf("the pass ran %d times on a dead context", pass.count())
 	}
 }
+
+// EVERY PASS THE NODE STILL HOLDS IS LISTABLE.
+//
+// The HTTP listing asked for ten against a runner that remembers 32, so
+// twenty-two passes the node could answer for were unreachable by any route —
+// and because that listing is the only place a run id comes from, they were
+// unreachable through the single-run route too. That route exists precisely
+// because "an operator opening a Findings tab had no way in at all", which a
+// cap over its only index re-creates one layer up.
+//
+// The bound that keeps this finite is the runner's own, and it is the one that
+// should decide: `maxRuns` across every surface, so what one kind holds is well
+// under ten in the ordinary case.
+func TestEveryRememberedPassIsListable(t *testing.T) {
+	done := newGate(integration.KindGitHub)
+	close(done.release)
+	r := NewRunner([]Pass{done}, nil, pinnedNow)
+
+	// More than the listing used to serve, and inside what the runner
+	// remembers, which is the window that was unreachable.
+	const ran = 12
+	for i := range ran {
+		if _, err := runPass(t, r, integration.KindGitHub, PassInput{},
+			"run-"+string(rune('a'+i))); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+
+	// ZERO IS EVERY RUN THIS NODE HOLDS, which is what the route asks for.
+	all := r.Recent(integration.KindGitHub, 0)
+	if len(all) != ran {
+		t.Fatalf("the runner lists %d of %d passes it remembers, so an "+
+			"operator cannot reach the rest — and the listing is the only "+
+			"place their ids come from", len(all), ran)
+	}
+	// AND EVERY ID RESOLVES, which is the half that makes the listing an
+	// index rather than a display.
+	for _, run := range all {
+		if _, ok := r.Get(run.ID); !ok {
+			t.Errorf("run %s is listed and cannot be read", run.ID)
+		}
+	}
+	// AN EXPLICIT LIMIT STILL BOUNDS, so the parameter is not dead.
+	if got := r.Recent(integration.KindGitHub, 3); len(got) != 3 {
+		t.Errorf("an explicit limit of 3 returned %d", len(got))
+	}
+}

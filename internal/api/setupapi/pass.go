@@ -323,13 +323,20 @@ func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, bas
 	}
 }
 
-// MaxRunsListed bounds the run listing.
+// The run listing serves WHAT THE NODE HOLDS, and the cap it used to carry is
+// gone rather than marked.
 //
-// TEN, against the runner's own 32-run memory: this is a "what happened
-// recently here" list beside a Findings tab, and a pass is a heavy record —
-// every finding it observed, each with its own remedy. Ten is more history
-// than an operator scrolls and small enough that the list is one screen.
-const MaxRunsListed = 10
+// It asked for ten against a runner that remembers 32, so twenty-two passes
+// the node could answer for were unreachable by any route — and because this
+// listing is the only place an id comes from, they were unreachable through
+// `GET /setup/integrations/{kind}/runs/{id}` too. That route exists precisely
+// because "an operator opening a Findings tab had no way in at all", which a
+// cap over its only index re-creates one layer up.
+//
+// Nothing is unbounded by dropping it. The runner's own memory is 32 runs
+// ACROSS ALL EIGHT INTEGRATION KINDS, so what one kind holds is well under
+// ten in the ordinary case and at most 32 in the worst — a bound this does
+// not need to restate, and restating it is how the two would drift.
 
 // runs serves GET /setup/integrations/{kind}/runs.
 //
@@ -348,7 +355,9 @@ func (s *Service) runs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	recent := s.passes.Recent(kind, MaxRunsListed)
+	// ZERO IS EVERY RUN THIS NODE HOLDS — see [Runner.Recent], whose own
+	// bound is what keeps that finite.
+	recent := s.passes.Recent(kind, 0)
 	if recent == nil {
 		// AN EMPTY LIST, never null: a client rendering `runs.length`
 		// should not have to guard the field as well.
