@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -109,11 +110,41 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: read %s's current ceiling: %w", req.Stream, err)
 	}
-	op, err := e.openCapacity(ctx, req, stats.MaxBytes)
+	op, err := e.openCapacity(ctx, req, stats, e.growthRoom(ctx))
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
 	}
 	return e.driveCapacity(ctx, running, op)
+}
+
+// growthBudgeter is the broker's answer to how far a running log's ceiling may
+// be raised, which a new capacity window is decided against.
+type growthBudgeter interface {
+	GrowthBudget(ctx context.Context) (jetstream.StorageBudget, error)
+}
+
+// growthRoom is how far the broker will let a running log's ceiling grow, as
+// far as this node can read it, and unstated where it cannot.
+//
+// UNREAD IS UNSTATED, and the window still opens. The check this feeds only
+// spares an operator the restarts of learning a refusal late; the broker is the
+// authority either way and still refuses a raise it cannot reserve, while a
+// window refused because a read failed would block a raise it would grant.
+func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
+	unstated := jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated}
+	host, ok := e.backends.Queue.(growthBudgeter)
+	if !ok {
+		return unstated
+	}
+	room, err := host.GrowthBudget(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "capacity_growth_room_unread", "error", err.Error(),
+			"detail", "a raise is not checked against the broker before the "+
+				"window opens; the broker still refuses one it cannot reserve "+
+				"when the window applies it")
+		return unstated
+	}
+	return room
 }
 
 // openCapacity takes the exclusion, or resumes the operation already holding
@@ -124,7 +155,7 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 // still be outstanding, so a retry with a fresh id would open a SECOND window
 // on a stream that may already have one.
 func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
-	originalMaxBytes uint64) (coord.MaintenanceOperation, error) {
+	current jetstream.LogStats, room jetstream.StorageBudget) (coord.MaintenanceOperation, error) {
 
 	held, found, err := e.backends.Fleet.Maintenance(ctx, req.Stream)
 	if err != nil {
@@ -143,6 +174,41 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		// THE SAME TARGET is a resume, which is the ordinary path after
 		// a restart into the next mode.
 		return held, nil
+	}
+
+	// A TARGET AT OR BELOW WHAT THE LOG HOLDS IS A FULL LOG the moment it
+	// applies: every append and every linearizable read refused, fleet-wide,
+	// after three restarts spent reaching it. The usage is what a resize is
+	// decided against, and in this mode nothing moves it, so it is decided
+	// here, once, before the exclusion is taken. A resume is not asked
+	// again: its target was accepted when the window opened, and refusing
+	// it now would strand a window whose request may already be in flight.
+	if req.TargetMaxBytes <= current.Bytes {
+		return coord.MaintenanceOperation{}, fmt.Errorf(
+			"engine: %s holds %d bytes, so a %d-byte ceiling would refuse every "+
+				"append the moment it applied. Choose a target above what the log "+
+				"holds, or let the trim release some of it first",
+			req.Stream, current.Bytes, req.TargetMaxBytes)
+	}
+
+	// AND A RAISE THE BROKER CANNOT RESERVE, for the same reason at the other
+	// end. The broker refuses that update when the window applies it, and an
+	// apply that returned an error is an unknown only the seal retires, so the
+	// operator would spend the window's restarts, and its attempts, learning
+	// a number this node can read now. Only a limit read exactly is held
+	// against the target ([jetstream.Queue.GrowthBudget]); an unstated one
+	// opens the window and leaves the broker to answer.
+	if req.TargetMaxBytes > current.MaxBytes {
+		grow := req.TargetMaxBytes - current.MaxBytes
+		if left := room.Available(); left >= 0 && grow > uint64(left) {
+			return coord.MaintenanceOperation{}, fmt.Errorf(
+				"engine: raising %s from %d to %d bytes reserves %d more, and "+
+					"the broker has %d left to reserve (%d of its %d-byte limit "+
+					"already reserved). Choose a target of at most %d bytes, or "+
+					"give the broker more room first",
+				req.Stream, current.MaxBytes, req.TargetMaxBytes, grow, left,
+				room.Committed, room.Limit, current.MaxBytes+uint64(left))
+		}
 	}
 
 	// EVERY ADMISSION BLOCKS. A node that read the operation absent and
@@ -170,7 +236,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		Stream:           req.Stream,
 		OperationID:      config.NewIncarnation("capacity"),
 		TargetMaxBytes:   req.TargetMaxBytes,
-		OriginalMaxBytes: originalMaxBytes,
+		OriginalMaxBytes: current.MaxBytes,
 		Phase:            coord.PhaseOpened,
 		Attempt:          1,
 		Participants:     participants,

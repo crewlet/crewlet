@@ -21,7 +21,10 @@ type Domain struct{}
 // Name is the register key, the manifest key and the operator's own column.
 func (Domain) Name() string { return "tracker" }
 
-// TrackerLogMaxBytes is the mutation stream's default ceiling.
+// TrackerLogMaxBytes is the ceiling this domain declares for its log, which is
+// what the framework's own suites provision the stream with. A node sizes the
+// stream from Tier A (`stream.tracker_log_max_bytes`) instead, together with
+// every other state log, inside what the broker can actually grant.
 //
 // Crossing it REFUSES an append rather than dropping the oldest record —
 // nothing on this stream is derivable from anything else, so shedding history

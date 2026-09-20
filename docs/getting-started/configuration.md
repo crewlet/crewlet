@@ -391,14 +391,13 @@ stream:
                                     #   code either way, so it is a connection
                                     #   choice rather than a second backend
   store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
-                                    #   and nothing published survives a restart
-                                    #   — which on the default native tracker
-                                    #   and knowledge base means every item and
-                                    #   every page, not just queued events. The
-                                    #   engine logs that at error level on each
-                                    #   boot rather than refusing it, because a
-                                    #   test and an ingress-only node run this
-                                    #   way on purpose
+                                    #   and nothing published survives a
+                                    #   restart. A company on the engine's own
+                                    #   tracker or knowledge base (the
+                                    #   defaults) keeps every item and every
+                                    #   page there, so the engine refuses to
+                                    #   boot it on an in-memory stream rather
+                                    #   than lose them at the first restart
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
@@ -498,7 +497,21 @@ stream:
                                     #   not shed: there is no age bound on this
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
-                                    #   whatever is blocking the trim
+                                    #   whatever is blocking the trim. ONE
+                                    #   BUDGET FOR ALL THREE LOGS: the broker
+                                    #   reserves each ceiling in full when it
+                                    #   creates the stream, so the derived
+                                    #   ceilings of this field and the two below
+                                    #   are scaled down together to fit half of
+                                    #   what the broker can grant them (never
+                                    #   below 1 GiB each). A value you set is
+                                    #   never scaled, and a boot that cannot
+                                    #   reserve it fails naming the field, the
+                                    #   bytes it needed and the bytes the broker
+                                    #   had. Every one of the three is the value
+                                    #   a stream is CREATED with: editing it
+                                    #   later changes nothing until
+                                    #   `crewlet retention set-capacity` does
   # tracker_vectors_max_bytes: 17179869184
                                     #   the vector changelog's ceiling (default
                                     #   16 GiB). SIZED FOR THE PEAK: the stream
@@ -510,6 +523,17 @@ stream:
                                     #   ceiling sized from the steady state would
                                     #   refuse the one operation it exists to
                                     #   survive
+  # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
+                                    #   stream every native page write goes
+                                    #   through (1..256 GiB). UNSET DERIVES a
+                                    #   quarter of the mutation log's derived
+                                    #   value, so 1..16 GiB: a knowledge base is
+                                    #   a few thousand pages against a tracker's
+                                    #   hundreds of thousands of items, so its
+                                    #   log grows at about a quarter of the rate
+                                    #   and a blocked trim fills either one in
+                                    #   the same time. Crossing it refuses the
+                                    #   append, like the mutation log's
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -1024,7 +1048,7 @@ tracker:
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
 
-**A native tracker needs a stream that survives a restart.** Its write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve the tracker permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. A company on a vendor tracker starts no log at all and is unaffected, which is why the rule needs both files to see.
+**A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
 
 ---
 

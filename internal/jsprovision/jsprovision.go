@@ -218,16 +218,35 @@ const LookupBudget = 30 * time.Second
 //
 // # And the window is this function's, not the caller's
 //
-// It owns the [ReadBack] deadline and hands each attempt a context carrying
-// it, which is the only arrangement where both halves are bounded: a window
-// the caller built separately would still be running when a lookup blocked
-// past it, and a lookup with no deadline of its own would outlive the window
-// entirely and hang until the boot's context expired.
+// It owns the [ReadBack] deadline, which bounds the WHOLE read-back and not
+// one attempt of it: what is being waited out is a single propagation delay
+// and not N independent requests, so a window per attempt would multiply the
+// time a genuinely absent object takes to be reported by however many times it
+// was re-asked. A window the caller built separately would still be running
+// when a lookup blocked past it, and a lookup with no deadline of its own
+// would outlive the window entirely and hang until the boot's context expired.
 //
-// One window across all the attempts rather than one per attempt, because what
-// is being waited out is a single propagation delay and not N independent
-// requests: a per-attempt budget would multiply the time a genuinely absent
-// object takes to be reported by however many times it was re-asked.
+// # An attempt nobody answered is not an answer, and gets its own cadence
+//
+// Inside that window each attempt gets its own short term ([SettleAsk]), for
+// [Ask]'s reason arriving on the read-back path: a request put to a group that
+// has no leader yet is DROPPED rather than refused, so handing one attempt the
+// whole window spends all of it waiting for a reply nobody is going to send —
+// and returning what that produced reports "the object is not there" on the
+// strength of having heard nothing, which is the collapse [Unanswered] exists
+// to prevent. Measured on three members creating one stream at three ceilings:
+// the loser of each race read back once, was never answered, and failed its
+// boot over a stream that existed a moment later.
+//
+// So this loop now serves TWO conditions, and they keep the two cadences
+// [ReAsk] states rather than sharing one. A not-yet-visible is an ANSWER, and
+// it clears on this member's next metadata update: [PlacementRetry], four
+// times a second. A request nobody replied to was DESTROYED, and what has to
+// change is which member holds the group: [ReAsk]. Merging them is not
+// academic — `nats.ErrNoResponders` comes back in microseconds, so at the
+// placement cadence a broker whose JetStream is not serving yet is asked four
+// times a second, for every object a boot provisions, which is the load ReAsk
+// exists to remove.
 //
 // The ERROR IT RETURNS IS THE ASK'S OWN, never a deadline of this function's:
 // "stream not found" names the object and "deadline exceeded" does not. That
@@ -238,29 +257,102 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 	window, cancel := context.WithTimeout(ctx, ReadBack)
 	defer cancel()
 
-	var absent error
+	var absent, unanswered error
 	for {
-		switch err := ask(window); {
+		attempt, endAttempt := context.WithTimeout(window, SettleAsk)
+		err := ask(attempt)
+		endAttempt()
+		// THE CADENCE FOLLOWS THE CONDITION, never the loop: see the
+		// section above, and [ReAsk] for why the two must not merge.
+		pause := PlacementRetry
+		switch {
 		case err == nil:
 			return nil
 		case NotYetVisible(err):
 			absent = err
-		case absent != nil && errors.Is(err, context.DeadlineExceeded):
+		case Unanswered(window, err):
+			// NOBODY REPLIED, which is the third answer and not the
+			// second: re-asked at a destroyed request's own
+			// interval, and kept in case the window closes with the
+			// object never having said anything at all.
+			unanswered, pause = namedSilence(unanswered, err), ReAsk
+		case heard(absent, unanswered) != nil && errors.Is(err, context.DeadlineExceeded):
 			// THE WINDOW CLOSED MID-ASK, so what came back describes
 			// this function's patience rather than the object. The
-			// last thing the object said is the honest answer, and
-			// it is the one that names it.
-			return absent
+			// last thing that was heard is the honest answer, and it
+			// is the one that names something.
+			return heard(absent, unanswered)
 		default:
 			return err
 		}
 		select {
 		case <-window.Done():
-			return absent
-		case <-time.After(PlacementRetry):
+			return heard(absent, unanswered)
+		case <-time.After(pause):
 		}
 	}
 }
+
+// namedSilence keeps whichever of two unanswered errors NAMES something.
+//
+// An attempt that expires on [SettleAsk] is unanswered, and it is also a bare
+// [context.DeadlineExceeded] — which names neither the object nor the broker,
+// and is the shape [Settle] promises never to report. [nats.ErrNoResponders]
+// and [nats.ErrTimeout] say WHY nobody replied, so once one of those has been
+// heard it is what the caller is told, however many terms expire after it.
+//
+// Without this the retained silence was overwritten by the next term to
+// expire, and a read-back that began with "the broker's JetStream is not
+// serving yet" ended as "context deadline exceeded" — the undiagnosable answer
+// [LookupBudget] records having produced, arriving by a different route.
+func namedSilence(held, err error) error {
+	if held != nil && errors.Is(err, context.DeadlineExceeded) {
+		return held
+	}
+	return err
+}
+
+// heard is what [Settle] reports when its window closes: what the object said,
+// or the silence, in that order.
+//
+// AN ANSWER OUTRANKS SILENCE. A not-found is the object speaking and names it;
+// an unanswered request names only the broker that would not route to it. Both
+// beat this function's own deadline, which names neither, and BOTH EXITS TAKE
+// THE SAME RULE from here — written at each of them, the mid-ask exit is
+// exactly where it drifted.
+func heard(absent, unanswered error) error {
+	if absent != nil {
+		return absent
+	}
+	return unanswered
+}
+
+// SettleAsk is how long ONE of [Settle]'s attempts waits for a reply before
+// it is presumed dropped and re-issued inside the same window.
+//
+// ONE SECOND, the vendored server's hbInterval (server/raft.go) and [ReAsk]'s
+// own anchor: the shortest interval over which the group's leadership can
+// have changed, so an attempt shorter than it abandons a request just as the
+// state that would answer it might change.
+//
+// WHAT IT BUYS IS THAT ONE HUNG ASK IS NOT THE WHOLE READ-BACK, which is what
+// the single lookup this replaced amounted to. A hung ask costs this term and
+// then waits [ReAsk], so two of them complete inside [ReadBack] and a third
+// begins — stated as the relation rather than as a count, because all three
+// constants are tuned against the server and a count restated here is the
+// thing that goes stale. The test holds the relation, not the number.
+//
+// Deliberately NOT [AskTerm], and not because that term is for a different
+// KIND of request — five of [Ask]'s call sites are lookups exactly like this
+// one. It is that [AskTerm] is sized to span a complete election, at fifteen
+// seconds clustered, and [ReadBack] is five: one such attempt would be the
+// whole window three times over. The two windows differ because the QUESTIONS
+// do. [Ask] is asking a group that may be electing, and waits that out. This
+// is asking after an object somebody has just committed, against a group that
+// has therefore just proven it works — so a reply either arrives in a round
+// trip or is not being routed, and the wait is for the routing rather than
+// for a leader.
+const SettleAsk = time.Second
 
 // Place runs create until the cluster stops refusing to place the object, for
 // as long as ctx allows.

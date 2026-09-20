@@ -228,6 +228,51 @@ var allowed = []Allowance{
 			"of it; the table cases check the bytes written, which is what a wrong quoting " +
 			"rule would agree with.",
 	},
+
+	// -----------------------------------------------------------------
+	// Environment: enough free disk for the scenario's own headroom. The
+	// state logs' ceilings are sized against a REAL embedded broker, whose
+	// cap is three quarters of the volume it stores on — a number a test
+	// cannot choose. What it can choose is how much of that cap is already
+	// reserved, so each case reserves all but the headroom it needs and
+	// skips, naming the figures, on a machine whose disk cannot hold even
+	// that. It does not fire on any machine the gates run on; an entry is
+	// what makes the day it starts firing visible rather than a quiet loss
+	// of the only cases that hold the arithmetic against a broker.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/engine",
+		Test:    "TestTheStateLogsFitTheBrokerTheyBootOn",
+		When:    Environment,
+		Why: "Needs a volume whose broker can reserve 5.7 GiB plus a gibibyte to spend " +
+			"around it. It is the only case that proves the three logs fit one budget " +
+			"against a real broker; fitCeilings' table covers the arithmetic with no " +
+			"broker in it, and would agree with a ceiling reserved outside the budget.",
+	},
+	{
+		Package: "internal/engine",
+		Test:    "TestARestartSizesTheLogsAsTheFirstBootDid",
+		When:    Environment,
+		Why: "Needs a broker that can reserve 12 GiB plus a gibibyte. It is the only " +
+			"case that proves a restart divides the pool the first boot divided, which " +
+			"is a property of what the running streams hold and has no unit form.",
+	},
+	{
+		Package: "internal/engine",
+		Test:    "TestARefusedReservationNamesWhatItNeededAndHad/a_derived_ceiling_at_its_floor",
+		When:    Environment,
+		Why: "Needs a broker that can reserve 2.5 GiB plus a gibibyte. It is the only " +
+			"case that reads the refusal a real broker gives a derived ceiling already " +
+			"at its floor, including which remedies it must not offer.",
+	},
+	{
+		Package: "internal/engine",
+		Test:    "TestARefusedReservationNamesWhatItNeededAndHad/an_explicit_ceiling",
+		When:    Environment,
+		Why: "Needs a broker that can reserve 3.5 GiB plus a gibibyte. Same refusal " +
+			"against an operator's own ceiling, which is never scaled and is told what " +
+			"would have fitted instead.",
+	},
 }
 
 // Measurement is one test whose OUTPUT reaches the log even when it PASSES.
