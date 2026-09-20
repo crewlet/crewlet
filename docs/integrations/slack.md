@@ -420,9 +420,12 @@ the coffee machine…") is safe; plausible-and-specific is not.
 - **Cleared when the turn ends** — a posted reply, a `no_action` outcome
   decision ("not addressed to me"), a failure, a guard breach or an
   exhausted budget all clear it, as does a turn whose runner could not be
-  built at all. The exception is a RESUMED turn that never got that far:
-  its completion is put back for another attempt, so the indicator stays up
-  for the attempt that follows — nothing else could raise it again. Slack also clears it by itself the instant the agent posts
+  built at all. The exception is a RESUMED turn that never got that far and
+  was driven by a BOX's completion: that completion is put back for another
+  attempt and nothing else could raise the indicator again, so it stays up
+  for the attempt that follows. A resume a PERSON's answer drove clears
+  instead — it reverts to awaiting that same person, and their redelivered
+  message raises a fresh indicator of its own. Slack also clears it by itself the instant the agent posts
   into the thread; the engine re-asserts only while a later phase is still
   running, which is what keeps the indicator honest across a
   `self_iterate` loop.

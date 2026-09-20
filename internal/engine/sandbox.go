@@ -451,16 +451,28 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// that node raised lapses on the backend's own expiry, and a resumed turn
 	// that raised a fresh one would be asserting a conversation it cannot
 	// prove it is in.
-	status := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
-	// TRUE UNTIL THE TURN ACTUALLY RUNS, because every early return below is
-	// a RETRY rather than an ending: a reply this build cannot read and a
-	// runner that could not be built both leave the coordinator to revert
-	// its claim, and the completion comes back to be resumed again. Clearing
-	// there says the agent stopped, and — unlike the dispatch path, where a
-	// redelivered trigger simply raises a fresh indicator — nothing can put
-	// this one back: the run's row carries no chat metadata, so a later
-	// resume has only the hold to take back.
-	working := true
+	status, rejoined := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
+	// TRUE UNTIL THE TURN ACTUALLY RUNS, BUT ONLY ON ONE OF THE TWO ROUTES.
+	// Every early return below is a RETRY rather than an ending — a reply
+	// this build cannot read and a runner that could not be built both leave
+	// the coordinator to revert its claim — but the claim reverts to exactly
+	// the status it was taken FROM, and the two routes came from opposite
+	// facts:
+	//
+	//   - A BOX'S COMPLETION was claimed from a live run, so the revert puts
+	//     it back and the completion comes round again. Nothing else could
+	//     re-raise this indicator — the run's row carries no chat metadata,
+	//     so a later resume has only the hold to take back — where on the
+	//     dispatch path a redelivered trigger simply raises a fresh one. So
+	//     it is KEPT.
+	//   - A PERSON'S ANSWER was claimed from a question still open, so the
+	//     revert puts the run back to awaiting THEM. Nothing is working, and
+	//     an indicator over that wait tells the one person who could move it
+	//     that nobody needs them — the same lie the park exists to stop. So
+	//     it is CLEARED, and the retry loses nothing: their next message
+	//     raises a fresh indicator off its own trigger, exactly as this one
+	//     did.
+	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
 	company := in.Company
@@ -590,7 +602,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		}
 		// Reverted and redelivered, so the turn is not over — a peer, or
 		// this node on the next delivery, resumes the same conversation.
-		working = true
+		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
+		// same retry rule reached one step later, and the revert it counts
+		// on still puts an answer-driven resume back to awaiting the person
+		// who sent it.
+		working = rejoined
 		return err
 	}
 	// A resumed turn that suspended AGAIN persists its new conversation the

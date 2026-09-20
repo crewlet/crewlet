@@ -175,7 +175,8 @@ func (e *Engine) releaseWorkingStatus(ctx context.Context, handle, turnID string
 	e.Status().Release(clearCtx, handle, turnID)
 }
 
-// resumeWorkingStatus is the indicator a RESUMED turn shows.
+// resumeWorkingStatus is the indicator a RESUMED turn shows, and which of the
+// two routes it came up on.
 //
 // TWO SOURCES, tried in this order, because a resume arrives by two routes and
 // only one of them has an indicator still standing:
@@ -195,11 +196,19 @@ func (e *Engine) releaseWorkingStatus(ctx context.Context, handle, turnID string
 // Nil where neither holds: a completion whose session is not on this node (the
 // seat moved while the box ran, or this process restarted) raises nothing, and
 // a trigger that is not a chat message has no conversation to raise in.
+//
+// REJOINED IS THE ROUTE, reported rather than re-derived, and it is what the
+// caller's retry rule turns on: a resume that never reaches its turn reverts
+// the coordinator's claim to the status it was claimed FROM, which is a live
+// box on the first route and the same person's answer still pending on the
+// second. A caller asking the run's row that question instead would be a
+// second way of telling the routes apart, and the two would eventually
+// disagree about which indicator is a lie.
 func (e *Engine) resumeWorkingStatus(ctx context.Context, handle, turnID string,
 	trigger *events.Event,
-) *notify.StatusSession {
+) (session *notify.StatusSession, rejoined bool) {
 	if kept := e.Status().Rejoin(handle, turnID); kept != nil {
-		return kept
+		return kept, true
 	}
-	return e.beginWorkingStatus(ctx, handle, turnID, []*events.Event{trigger})
+	return e.beginWorkingStatus(ctx, handle, turnID, []*events.Event{trigger}), false
 }

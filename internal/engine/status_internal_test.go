@@ -834,9 +834,16 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	e, ws := indicating(t, notify.StatusAlways)
 
-	answered := e.resumeWorkingStatus(t.Context(), "swe", "wk-code", chatTrigger("D0ANA"))
+	answered, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "wk-code", chatTrigger("D0ANA"))
 	if answered == nil {
 		t.Fatal("the answer that resumed a parked run raised no indicator")
+	}
+	// AND IT SAYS SO. The park released the hold, so there was none to take
+	// back, and the caller's retry rule reads exactly this answer — see
+	// [TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator].
+	if rejoined {
+		t.Error("the answer route reported a rejoined hold, so a retry would keep " +
+			"an indicator up over a wait on the person who just answered")
 	}
 	if got := ws.awaitShown(t, 1)[0]; got == "" {
 		t.Errorf("the workspace was asked for %q, want the indicator raised", got)
@@ -846,8 +853,9 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	// take back there is nothing to raise: a parked run's row deliberately
 	// keeps no chat metadata.
 	completion := events.New(types.SandboxRunCompleted{TurnID: "wk-box"}, events.TraceContext{})
-	if s := e.resumeWorkingStatus(t.Context(), "swe", "wk-box", completion); s != nil {
-		t.Errorf("a box's completion raised an indicator in %v", s.Conversation())
+	if s, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "wk-box", completion); s != nil || rejoined {
+		t.Errorf("a box's completion raised %v (rejoined %v), want neither",
+			s.Conversation(), rejoined)
 	}
 }
 
@@ -1001,25 +1009,24 @@ func (p *deadlinePoster) clearBudget() (time.Duration, bool) {
 
 // A RESUME THAT NEVER REACHED ITS TURN KEEPS THE INDICATOR IT TOOK BACK.
 //
-// Every early return before the loop is a RETRY, not an ending: a reply this
-// build cannot read routes the completion back to a peer, and a runner that
-// could not be built — an unbuildable provider chain, an MCP registry error,
-// an exhausted credential pool — leaves the coordinator to revert its claim so
-// the same conversation is resumed again. The box's work is intact and
-// somebody is still waiting on it.
+// Three ways a resume ends without ending its turn, and every one is a RETRY:
+// a reply this build cannot read routes the completion back to a peer, a
+// runner that could not be built — no provider registry, an unbuildable
+// chain, an MCP registry error — returns before the loop, and a turn that
+// broke without writing outside the engine returns after it. All three leave
+// the coordinator to revert its claim so the same conversation is resumed
+// again. The box's work is intact and somebody is still waiting on it.
 //
 // And unlike the dispatch path, nothing here can put a cleared indicator back:
 // a redelivered TRIGGER raises a fresh one, where a redelivered COMPLETION has
 // only the hold to take back, because a parked run's row carries no chat
 // metadata.
+//
+// THE COMPLETION ROUTE ONLY, which is what the kept-alive hold below makes
+// this: the answer route has the opposite answer on all three, and
+// [TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator] is that half.
 func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
-	for name, tc := range map[string]struct {
-		reply       string
-		breakRunner bool
-	}{
-		"a reply this build cannot read":   {reply: "nonsense"},
-		"a runner that could not be built": {reply: "tool", breakRunner: true},
-	} {
+	for name, derail := range resumeRetries {
 		t.Run(name, func(t *testing.T) {
 			e, ws := indicating(t, notify.StatusAlways)
 			company := e.Company()
@@ -1032,14 +1039,11 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 			}
 			ws.awaitShown(t, 1)
 			endWorkingStatus(t.Context(), suspended, true)
-			if tc.breakRunner {
-				seat.LLM = org.ProviderKeys{"a key this company does not have"}
-			}
 
 			err := e.resumeTurn(t.Context(), resumeInput{
 				Company: company,
 				Run: sandbox.PendingRun{
-					TurnID: "wk-1", AgentHandle: "swe", Reply: tc.reply,
+					TurnID: "wk-1", AgentHandle: "swe", Reply: derail(company),
 					TaskDescription: "fix the failing test",
 				},
 				Turn:   &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org},
@@ -1053,6 +1057,85 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 			}
 			if live := e.notify.slack.Status().Live(); len(live) != 1 {
 				t.Errorf("live = %v, want the indicator the retry will take back", live)
+			}
+		})
+	}
+}
+
+// resumeRetries are the three ways [Engine.resumeTurn] ends without ending its
+// turn, each derailing the company it is handed and reporting the run's Reply
+// to use.
+//
+// NAMED BY THE RETURN EACH ONE ACTUALLY TAKES, because for a while two of them
+// were one: an unresolvable provider chain does not fail the runner BUILD —
+// the chain is assembled and the phase's first call is what has nothing to
+// dial — so a case named for the build was in fact exercising the turn that
+// broke, and the return before the loop was covered by nothing at all.
+var resumeRetries = map[string]func(*Company) string{
+	"a reply this build cannot read": func(*Company) string { return "nonsense" },
+	"a runner that could not be built": func(c *Company) string {
+		// No provider registry at all, which is the one shape RunnerFor
+		// itself refuses: a resume landing after a revision removed every
+		// provider.
+		c.Models = nil
+		return "tool"
+	},
+	"a turn that broke without writing outside the engine": func(c *Company) string {
+		// The chain builds and answers nothing, so the failure is the
+		// executor's first round rather than the build.
+		c.Org.AgentSeatByHandle("swe").LLM = org.ProviderKeys{"a key this company does not have"}
+		return "tool"
+	},
+}
+
+// AND A RESUME THAT HANDS THE WORK BACK TO A PERSON CLEARS ITS OWN.
+//
+// The other half of the retry rule, and the two are opposites because the
+// claim reverts to where it came FROM. A completion was claimed from a live
+// run, so a retry finds a box still working; a person's ANSWER was claimed
+// from a question still open, so the revert puts the run back to awaiting that
+// same person. Holding an indicator over that wait is the lie the park exists
+// to stop — told to the one human who could move the work, moments after they
+// tried to.
+//
+// Nothing is lost by clearing, which is the asymmetry's other half: their next
+// message raises a fresh indicator off its own trigger, exactly as this one
+// did, where a redelivered completion has only the hold to take back.
+func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
+	for name, derail := range resumeRetries {
+		t.Run(name, func(t *testing.T) {
+			e, ws := indicating(t, notify.StatusAlways)
+			company := e.Company()
+			seat := company.Org.AgentSeatByHandle("swe")
+
+			// NO HOLD TO TAKE BACK, which is what makes this the answer
+			// route: the park released it, and the answer is an ordinary
+			// chat message that raises a fresh one.
+			err := e.resumeTurn(t.Context(), resumeInput{
+				Company: company,
+				Run: sandbox.PendingRun{
+					TurnID: "wk-code", AgentHandle: "swe", Reply: derail(company),
+					TaskDescription: "fix the failing test",
+					// Where the coordinator's claim will put it back.
+					ClaimedFrom: sandbox.StatusAwaiting,
+				},
+				Turn:    &turnctx.Turn{ID: "wk-code", Seat: seat, Org: company.Org},
+				Answer:  "use the release branch",
+				Trigger: chatTrigger("D0ANA"),
+			})
+			if err == nil {
+				t.Fatal("the resume did not fail, so this case asserts nothing")
+			}
+			// The clear is the one post promised after the session's last
+			// holder ends — the raise may still have been in flight and
+			// been cancelled, so the record's END is what this reads.
+			if shown := ws.shown(); len(shown) == 0 || shown[len(shown)-1] != "" {
+				t.Errorf("the workspace last heard %v, want the clear: the run is "+
+					"awaiting the same person again", shown)
+			}
+			if live := e.notify.slack.Status().Live(); len(live) != 0 {
+				t.Errorf("live = %v, want nothing: nothing is working behind an "+
+					"indicator over a question a person has yet to answer", live)
 			}
 		})
 	}
