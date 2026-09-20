@@ -52,14 +52,27 @@ var (
 // THE TAG IS ONLY HALF OF IT. The writer stamps `failed` from a payload field,
 // and the four types that ARE a failure by their very name carry no such field:
 // llm_unavailable, budget_exhausted, turn.guard_breach and sandbox_run_failed.
-// Those are precisely the records a turn that died BEFORE completing a phase
-// leaves behind — a seat refused at the budget gate, a chain whose every model
-// was down, a breached guard — so on the tag alone this aggregate answered "not
-// failed" for a turn that never ran, listing it as clean with no completion
-// record, which the dashboard draws identically to a turn still in flight. The
-// event reader already applies the rule ([EventLog] stamps Failed on read) and
-// so does the live projection, which is the disagreement types.Failed's own doc
-// warns about.
+// The event reader already applies the rule ([EventLog] stamps Failed on read)
+// and so does the live projection; on the tag alone this aggregate was the one
+// reader with an answer of its own, which is the disagreement types.Failed's
+// doc warns about.
+//
+// WHICH RECORDS THE TAG ACTUALLY MISSED is narrower than it looks, and worth
+// stating exactly because the obvious three are not it. A chain that ran out,
+// a refused charge and a guard the turn loop tripped all publish through
+// [Engine.publishTurnCompleted], which publishes `agent_turn_completed` with
+// its own `failed` field set ONE STATEMENT EARLIER and `turn_completed` two
+// later — so the tag was already there and so was the completion record. Two
+// records reach the store with no such companion:
+//
+//   - the PANIC breach, published by the dispatcher's own recovery and by the
+//     sandbox resume, neither of which reaches publishTurnCompleted at all; and
+//   - `sandbox_run_failed`, which carries no `failed` field in any payload.
+//
+// So the rule is right for the reason the other three make vivid rather than
+// because of them: an aggregate that reads a failure off the SUMMARY event's
+// own flag is an aggregate that answers correctly only while every failure
+// path remembers to publish one.
 //
 // The names come from the catalogue rather than a literal, for the reason the
 // two event types above are taken from their payload types: a spelling written
@@ -72,6 +85,13 @@ func failedRow() (string, []any) {
 	args := make([]any, 0, len(names))
 	for _, name := range names {
 		args = append(args, name)
+	}
+	// AN EMPTY CATALOGUE IS A TAG-ONLY PREDICATE, not `IN ()`, which is a
+	// syntax error rather than a clause matching nothing. The set has four
+	// members and is unlikely to empty, but the alternative to this line is
+	// a query that stops parsing the day somebody empties it.
+	if len(names) == 0 {
+		return "(json_extract(tags, '$.failed') = 'true')", nil
 	}
 	holders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
 	return "(json_extract(tags, '$.failed') = 'true' OR event_type IN (" +

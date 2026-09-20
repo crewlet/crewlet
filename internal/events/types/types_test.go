@@ -533,6 +533,64 @@ func TestFailed(t *testing.T) {
 	}
 }
 
+// THE ACCESSOR'S TWO PROMISES, because a doc comment is what the map it
+// replaced was protected by, and that is the mistake this function exists to
+// stop repeating.
+//
+// [FailureEventNames] is documented as SORTED and as A COPY. Both were
+// deletable with nothing going red: the only caller seeds events from the
+// result and compares set membership, which is order-blind, and never writes
+// to the slice. Mutation-checked in both directions — `slices.Collect` in
+// place of `slices.Sorted` fails the order case, and returning a cached
+// package-level slice fails the copy case.
+//
+// The literal list is spelled here ON PURPOSE rather than derived from the
+// catalogue: derived, this would assert that a map equals itself. Spelled, a
+// typo in a wire name fails here as well as in [TestFailed], and the count
+// check below is what fails when a member is added to the set and not to the
+// rule's documented four.
+func TestFailureEventNames(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		"budget_exhausted",
+		"llm_unavailable",
+		"sandbox_run_failed",
+		"turn.guard_breach",
+	}
+	got := FailureEventNames()
+	if !slices.Equal(got, want) {
+		t.Errorf("FailureEventNames() = %q, want exactly %q in that order", got, want)
+	}
+	if !slices.IsSorted(got) {
+		t.Errorf("FailureEventNames() = %q, which is not sorted — a caller that "+
+			"reads the set twice binds two orders into one statement", got)
+	}
+	if len(got) != len(failureEventTypes) {
+		t.Errorf("FailureEventNames() answered %d names for a set of %d: the "+
+			"catalogue gained or lost a member and this test's own list did not",
+			len(got), len(failureEventTypes))
+	}
+	// Every name it hands out is one Failed agrees with, so the enumerating
+	// accessor and the per-value predicate cannot describe different sets.
+	for _, name := range got {
+		if !Failed(name, false, false) {
+			t.Errorf("FailureEventNames() lists %q but Failed(%q, false, false) "+
+				"is false — one set, two answers", name, name)
+		}
+	}
+
+	// A COPY: what the caller does to the slice it is handed must not reach
+	// the catalogue, and must not reach the next caller.
+	got[0] = "clobbered"
+	slices.Reverse(got)
+	if second := FailureEventNames(); !slices.Equal(second, want) {
+		t.Errorf("after a caller wrote to the result, FailureEventNames() = %q, "+
+			"want %q — the accessor handed out the catalogue rather than a copy",
+			second, want)
+	}
+}
+
 func TestDescribeTriggerWithNoTrigger(t *testing.T) {
 	t.Parallel()
 	trigger := DescribeTrigger(nil)

@@ -143,7 +143,8 @@ export function bandOf(event: EventRecord): Band {
  * event is live, and the `failed` TAG the event-store writer stamps, which is
  * all that survives into history. Reading only one of them makes the same turn
  * red on one surface and not on another, which is the exact reason
- * `events.FailureEventTypes` is declared once in Go.
+ * `events.Failed` is declared once in Go — with `events.FailureEventNames` for
+ * the callers that have to enumerate the set rather than test one value.
  */
 export function isFailed(event: EventRecord): boolean {
   if (event.failed) return true;
