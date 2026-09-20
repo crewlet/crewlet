@@ -179,6 +179,10 @@ type buildOpts struct {
 	// the phase a real fallback chain rather than the single key the
 	// fixture's seat runs on.
 	execChain org.ProviderKeys
+	// task overrides the brief, which is the one piece of the prompt a test
+	// can put arbitrary text into — so a case about how the prompt is
+	// MEASURED can make it carry multi-byte runes.
+	task string
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -240,12 +244,17 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	role.LLMReview = org.ProviderKeys{"reviewer"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
+	task := opts.task
+	if task == "" {
+		task = "post the weekly summary"
+	}
+
 	r, err := runner.New(runner.Config{
 		Seat:      prompts.Seat{Org: organization, Role: role},
 		Registry:  reg,
 		Models:    models,
 		Caps:      runner.Caps{ExecutorRounds: 6},
-		Task:      "post the weekly summary",
+		Task:      task,
 		Reply:     waiting,
 		AgentRun:  opts.agentRun,
 		Resume:    opts.resume,

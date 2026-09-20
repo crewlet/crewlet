@@ -3,7 +3,9 @@ package runner_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
@@ -206,11 +208,71 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 			user += len(msg.Content)
 		}
 	}
-	if m.SystemChars != system || m.UserChars != user {
-		t.Errorf("measured %d/%d chars, provider received %d/%d",
-			m.SystemChars, m.UserChars, system, user)
+	if m.SystemBytes != system || m.UserBytes != user {
+		t.Errorf("measured %d/%d bytes, provider received %d/%d",
+			m.SystemBytes, m.UserBytes, system, user)
 	}
 	if m.ApproximateTokens == 0 {
 		t.Error("approximate_tokens = 0 for a prompt with a system message in it")
 	}
+}
+
+// THE MEASUREMENT IS IN BYTES, which is what the fields are named for and what
+// every reader of them renders.
+//
+// The case above cannot see this: it compares len() against len(), so it holds
+// just as well for a build that counted runes. The two quantities only diverge
+// on a prompt carrying multi-byte runes — a roster of non-Latin names, a chat
+// thread with emoji in it, a CJK knowledge block — which is why the brief here
+// is one, and why a prompt whose byte count equalled its rune count would make
+// this case prove nothing.
+func TestAPhaseMeasuresItsPromptInBytesRatherThanRunes(t *testing.T) {
+	t.Parallel()
+	// Eight runes, twenty-four bytes: every one of them is three bytes in
+	// UTF-8, so the two readings of "size" differ by 16 on this phrase alone.
+	const brief = "投稿してください"
+	pub := newCapture()
+	prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
+	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: prov}},
+		buildOpts{pub: pub, task: brief})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	got := pub.sizes()
+	if len(got) != 1 {
+		t.Fatalf("published %d prompt.size events for one phase, want 1", len(got))
+	}
+	sent := prov.requestsFor("execute")[0]
+	var user int
+	for _, msg := range sent.Messages {
+		if msg.Role == llm.RoleUser {
+			user += len(msg.Content)
+		}
+	}
+	if !strings.Contains(userText(sent), brief) {
+		t.Fatalf("the brief never reached the user prompt, so this case measures nothing")
+	}
+	if utf8.RuneCountInString(userText(sent)) == user {
+		t.Fatalf("the user prompt is pure ASCII at %d bytes, so bytes and runes "+
+			"agree and this case cannot tell them apart", user)
+	}
+	if got[0].UserBytes != user {
+		t.Errorf("user_bytes = %d, want %d (the bytes the provider received); "+
+			"a rune count would report %d",
+			got[0].UserBytes, user, utf8.RuneCountInString(userText(sent)))
+	}
+}
+
+// userText is every user message of a request, joined as the measurement sums
+// them.
+func userText(req llm.Request) string {
+	var b strings.Builder
+	for _, msg := range req.Messages {
+		if msg.Role == llm.RoleUser {
+			b.WriteString(msg.Content)
+		}
+	}
+	return b.String()
 }

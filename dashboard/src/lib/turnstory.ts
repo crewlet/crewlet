@@ -204,8 +204,14 @@ export interface PromptWeight {
   iteration: number;
   /** The engine's own approximation, off `prompt.size`. */
   approximateTokens: number;
-  systemChars: number;
-  userChars: number;
+  /**
+   * BYTES, which is what the engine measures — `len()` of a Go string. The
+   * fields said `chars` and carried bytes, so the panel printed "24 KB" under
+   * a tooltip claiming it had counted characters; the two only agree on
+   * ASCII. See `PromptSize` in internal/events/types/turn.go.
+   */
+  systemBytes: number;
+  userBytes: number;
 }
 
 /**
@@ -233,8 +239,8 @@ export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
       phase: String(p.phase ?? ""),
       iteration: Number(p.iteration ?? 0),
       approximateTokens: Number(p.approximate_tokens ?? 0),
-      systemChars: Number(p.system_chars ?? 0),
-      userChars: Number(p.user_chars ?? 0),
+      systemBytes: Number(p.system_bytes ?? 0),
+      userBytes: Number(p.user_bytes ?? 0),
     });
   }
   return out;

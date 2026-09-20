@@ -94,9 +94,20 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // A SEPARATE ROW rather than a derivation, and that is the whole reason it
 // exists: AgentPhaseCompleted carries both prompts verbatim, so the size is
 // technically already stored — and reading it back means hauling every phase's
-// whole prompt and response across the driver to count characters in Go, which
-// is exactly the cost schema/0015 promoted the spend columns out of the payload
+// whole prompt and response across the driver to measure it in Go, which is
+// exactly the cost schema/0015 promoted the spend columns out of the payload
 // to avoid. Six small integers per phase answer the question at a scan.
+//
+// BYTES, NOT CHARACTERS, and the two fields said characters while carrying
+// len() of a Go string — which is bytes. Nothing rounded it back: the
+// dashboard renders both with a byte formatter, so a panel headed "System"
+// printed "24 KB" under a tooltip asserting it had counted characters. The
+// units coincide on ASCII and diverge on exactly the prompts worth measuring
+// — a roster of non-Latin names, a Slack thread with emoji in it, a CJK
+// knowledge block — where a UTF-8 rune is two to four bytes and the "count"
+// silently became a different quantity per company. The byte is the honest
+// one here anyway: it is what a vendor's request body is bounded in and what
+// this engine can measure without a tokenizer.
 //
 // Addressed like every other phase event, so the size a turn actually paid is
 // readable on that turn rather than only in aggregate.
@@ -110,8 +121,8 @@ type PromptSize struct {
 	Iteration         int    `json:"iteration"`
 	Phase             Phase  `json:"phase"`
 	ApproximateTokens int    `json:"approximate_tokens"`
-	SystemChars       int    `json:"system_chars"`
-	UserChars         int    `json:"user_chars"`
+	SystemBytes       int    `json:"system_bytes"`
+	UserBytes         int    `json:"user_bytes"`
 }
 
 // EventType is the "prompt.size" wire type.
@@ -123,8 +134,8 @@ func (e PromptSize) Role() string { return e.RoleName }
 // AgentID is the instance the measurement belongs to.
 func (e PromptSize) AgentID() string { return e.Agent }
 
-// SummaryFor reports the approximate token count and leaves the character
-// splits on the payload — the split is for someone comparing builds, not for a
+// SummaryFor reports the approximate token count and leaves the system/user
+// split on the payload — the split is for someone comparing builds, not for a
 // feed.
 func (e PromptSize) SummaryFor(actor string) string {
 	return lead(subject(actor, e.Phase),

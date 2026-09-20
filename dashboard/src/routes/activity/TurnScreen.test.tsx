@@ -197,15 +197,15 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
           phase: "execute",
           iteration: 1,
           approximate_tokens: 7400,
-          system_chars: 24000,
-          user_chars: 1200,
+          system_bytes: 24000,
+          user_bytes: 1200,
         },
       }),
     ],
   });
   expect(await screen.findByText("Prompt sent")).toBeTruthy();
   expect(screen.getByTitle("the engine's own approximation").textContent).toBe("7,400");
-  expect(screen.getByTitle("characters in the system prompt")).toBeTruthy();
+  expect(screen.getByTitle("bytes in the system prompt")).toBeTruthy();
 });
 
 // A TURN THAT ANSWERED WITH NOTHING IS AN EMPTY STATE, not a blank page — and

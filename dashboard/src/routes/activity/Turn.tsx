@@ -865,11 +865,11 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             </span>
           )}
           <span className="spacer" />
-          <span className="mono t-num t-caption num-col" title="characters in the system prompt">
-            {fmtBytes(w.systemChars)}
+          <span className="mono t-num t-caption num-col" title="bytes in the system prompt">
+            {fmtBytes(w.systemBytes)}
           </span>
-          <span className="mono t-num t-caption num-col" title="characters in the user message">
-            {fmtBytes(w.userChars)}
+          <span className="mono t-num t-caption num-col" title="bytes in the user message">
+            {fmtBytes(w.userBytes)}
           </span>
           <span className="mono t-num t-caption num-col" title="the engine's own approximation">
             {fmtCount(w.approximateTokens)}
