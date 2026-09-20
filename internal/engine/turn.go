@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -629,8 +628,20 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 			AgentHandle: handle,
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
+			// THROUGH [events.ClipDiagnostic], like the other eight
+			// diagnostic sites in the tree, rather than through a bare
+			// 200 that was the only one of its kind.
+			//
+			// A wrapped Go error reads OUTERMOST FIRST, so 200 bytes
+			// bought the dispatch wrappers and cut the innermost cause —
+			// on this path of all paths, since this event is the record
+			// of a trigger that will NEVER be redelivered and therefore
+			// the only durable statement of why the work was dropped.
+			// `abandon` logs the same error WHOLE a few lines up, where
+			// it scrolls away, which had the two bounds exactly the
+			// wrong way round.
 			Reason: reason + ", so it was not redelivered: " +
-				textcut.Ellipsis(cause.Error(), 200),
+				events.ClipDiagnostic(cause.Error()),
 		}, triggerTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
