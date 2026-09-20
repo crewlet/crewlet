@@ -25,13 +25,16 @@
 -- gone it is a delete-and-rewrite of a task's whole size history on every
 -- apply that nothing selects from.
 --
--- # `tracker_status_spans` STAYS, minus its sprint half
+-- # `tracker_status_spans` STAYS HERE, minus its sprint half
 --
--- The table is recomputed from `tracker_history` and its own comment names
--- cycle time and lead time over a window — questions about a task's own life
--- rather than about a sprint's. What goes is the `sprint_number` column and
--- the two indexes that led with it (the burndown, the burnup, the cumulative
--- flow); `tracker_status_spans_group_idx` is untouched.
+-- Only its sprint half leaves in this migration: the `sprint_number` column
+-- and the two indexes that led with it (the burndown, the burnup, the
+-- cumulative flow). `tracker_status_spans_group_idx` is untouched.
+--
+-- The table itself is out of scope HERE rather than justified — it is
+-- recomputed from `tracker_history` and belongs to no sprint, so removing it
+-- is a separate question from removing sprints. 0014 asks that question and
+-- drops it: the reader its remaining index comment names has never existed.
 --
 -- # The columns are DROPped rather than left in place
 --

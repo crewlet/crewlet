@@ -393,8 +393,12 @@ func TestTheUnblockedScanIsIndexServed(t *testing.T) {
 // `tracker_history_kind_seq_idx` named this repair, which stopped selecting on
 // `kind`, and `tracker_history_kind_idx` named "every report's window
 // predicate" when no query in the tree filters or orders on `effective_at` at
-// all. The reports read `tracker_status_spans`, which the applier derives FROM
-// this table.
+// all.
+//
+// A COMMENT NAMING A READER IS A CLAIM. The same failure outlived these two:
+// `tracker_status_spans_group_idx` named cycle time and lead time, neither of
+// which has ever existed here, and migration 0013 kept a whole table on the
+// strength of it before 0014 checked and dropped it.
 func TestTheDeadHistoryIndexesAreGone(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

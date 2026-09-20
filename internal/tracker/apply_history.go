@@ -3,14 +3,15 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The history row, the effective instant, the spans and the inbox — the four
-// things every commit produces besides its own object's row.
+// The history row, the effective instant, the entered stamp and the inbox —
+// the four things every commit produces besides its own object's row.
 //
 // # A QUIET COMMIT WRITES A HISTORY ROW LIKE EVERY OTHER
 //
@@ -168,104 +169,62 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 	return rows, nil
 }
 
-// recomputeSpans rebuilds a task's status spans WHOLESALE from its history.
+// stampStatusEntered rewrites a task's `status_entered_at` from its history.
 //
-// Wholesale rather than incrementally, and sorted by the COMPOSED POSITION
-// rather than by any clock, which is what makes a late reprocess and a
-// redelivery both no-ops: the input is a set and an order the log itself
-// defines, so the output is a function of what has been applied and nothing
-// else. Both endpoints are the EFFECTIVE instant, which is also what makes a
-// duration non-negative — an authored clock can run backwards between two
-// nodes and a max over broker instants cannot.
-func (a *Applier) recomputeSpans(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM tracker_status_spans WHERE task_id = ?`, taskID); err != nil {
-		return 0, fmt.Errorf("tracker: clear the spans of %s: %w", taskID, err)
-	}
-	// THE ROW'S OWN STATUS DELTA DECIDES, not its kind.
-	//
-	// A row CARRYING a status delta is a status change, whatever it was
-	// filed under — and the kind cannot be trusted for this: a quiet
-	// commit's kind is the operation, and a loud one's is whichever single
-	// word the writer chose to announce, so a patch that moved the status
-	// AND the assignee is filed under `assignee` and would have been
-	// invisible here. The predicate is over the same rows the subject
-	// index already selects, so it costs nothing beyond them.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT h.id, h.effective_at,
-		       json_extract(h.fields_json, '$.status.to') AS status
+// # Why the history rather than the record in hand
+//
+// SORTED BY THE COMPOSED POSITION rather than by any clock, which is what
+// makes a late reprocess and a redelivery both no-ops: the input is an order
+// the log itself defines, so the output is a function of what has been applied
+// and nothing else. The instant is the EFFECTIVE one, which is what keeps a
+// duration measured against this column non-negative — an authored clock can
+// run backwards between two nodes and a max over broker instants cannot.
+//
+// It is rewritten HERE rather than on the object row because a reprocessed
+// record below an applied successor is skipped on the object row, and the
+// column would then hold the instant of whichever record happened to be
+// applied last rather than of the newest status change.
+//
+// # Why only the newest row is read
+//
+// This derived the whole `tracker_status_spans` table until migration 0014
+// dropped it — one DELETE, a walk of the task's entire status history and one
+// INSERT per historical status change, to maintain rows nothing selected from.
+// What survived that table is this single column, and the column is the NEWEST
+// status change's instant, so the read is one seek on
+// `tracker_history_subject_idx` rather than a walk. The rows the spans held
+// are still derivable: they were a function of `tracker_history`, which is
+// never swept.
+//
+// THE STATUS'S OWN VALIDITY IS NOT CHECKED, deliberately and unlike the spans
+// this replaced. A span with no group was a span no report could read, so an
+// unknown status was skipped; this column is an INSTANT, it needs no group,
+// and skipping would leave it naming an older change than the one the task
+// actually last made.
+func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
+	var at int64
+	switch err := tx.QueryRowContext(ctx, `
+		SELECT h.effective_at
 		FROM tracker_history h
 		WHERE h.subject_id = ?
 		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
-		ORDER BY h.log_seq`, taskID)
-	if err != nil {
-		return 0, fmt.Errorf("tracker: read the status history of %s: %w", taskID, err)
+		ORDER BY h.log_seq DESC
+		LIMIT 1`, taskID).Scan(&at); {
+	case errors.Is(err, sql.ErrNoRows):
+		// NO STATUS CHANGE IN THE HISTORY AT ALL, which is not an error:
+		// a task whose every applied record was quiet about its status
+		// has nothing to stamp, and the column keeps what it holds.
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("tracker: read the newest status of %s: %w", taskID, err)
 	}
-	type entry struct {
-		record string
-		at     int64
-		status string
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`,
+		at, taskID); err != nil {
+		return 0, fmt.Errorf("tracker: stamp the entered instant of %s: %w",
+			taskID, err)
 	}
-	var entries []entry
-	for rows.Next() {
-		var e entry
-		var status sql.NullString
-		if err := rows.Scan(&e.record, &e.at, &status); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("tracker: read a status row of %s: %w", taskID, err)
-		}
-		e.status = status.String
-		entries = append(entries, e)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return 0, fmt.Errorf("tracker: walk the status history of %s: %w", taskID, err)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("tracker: close the status history of %s: %w", taskID, err)
-	}
-
-	written := 0
-	for i, e := range entries {
-		status := Status(e.status)
-		if !status.Valid() {
-			// A status this build does not know cannot be grouped, and
-			// a span with no group is a span no report can read. It is
-			// skipped rather than guessed, and the record that wrote it
-			// is still in the history for a later build to re-derive
-			// from.
-			continue
-		}
-		var left any
-		if i+1 < len(entries) {
-			left = entries[i+1].at
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tracker_status_spans
-				(task_id, record_id, status, grp, entered_at, left_at,
-				 project_key)
-			SELECT ?, ?, ?, ?, ?, ?, t.project_key
-			FROM tracker_tasks t WHERE t.id = ?`,
-			taskID, e.record, string(status), string(status.Group()), e.at, left,
-			taskID); err != nil {
-			return 0, fmt.Errorf("tracker: write a span of %s: %w", taskID, err)
-		}
-		written++
-	}
-	// AND THE TASK'S OWN ENTERED INSTANT IS THE OPEN SPAN'S START. It is
-	// rewritten here rather than on the object row for the reason the whole
-	// recompute hangs here: a reprocessed record below an applied successor
-	// is skipped on the object row.
-	if len(entries) > 0 {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`,
-			entries[len(entries)-1].at, taskID); err != nil {
-			return 0, fmt.Errorf("tracker: stamp the entered instant of %s: %w",
-				taskID, err)
-		}
-		written++
-	}
-	return written, nil
+	return 1, nil
 }
 
 // InboxRetentionDefaultDays is how long a person's inbox rows are kept.

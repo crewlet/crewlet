@@ -60,8 +60,8 @@ var ReproducibleTables = []string{
 	"tracker_references", "tracker_checklist_items", "tracker_goal_owners",
 	"tracker_goal_targets", "tracker_goal_target_refs",
 
-	// The four history tables.
-	"tracker_history", "tracker_turns", "tracker_status_spans",
+	// The three history tables.
+	"tracker_history", "tracker_turns",
 	"tracker_notifications",
 
 	// And the deletion marker, which is how a node that was away tells a

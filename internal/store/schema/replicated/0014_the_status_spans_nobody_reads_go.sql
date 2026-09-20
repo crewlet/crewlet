@@ -1,0 +1,82 @@
+-- `tracker_status_spans` goes: a derived table that 0013 kept on a claim, and
+-- the claim does not survive being checked.
+--
+-- # What 0013 said, and why it was wrong
+--
+-- The sprint removal deleted the table's only two readers — `burndown.go` and
+-- `sprintsread.go`, both sprint-scoped — and then kept the table, reasoning
+-- that "its own comment names cycle time and lead time, which are questions
+-- about a task's own life rather than about a sprint's".
+--
+-- That comment is the trailing annotation on `tracker_status_spans_group_idx`
+-- in 0002, and it names a reader that has NEVER EXISTED in this repository:
+-- there is no cycle-time, lead-time or cumulative-flow query at any commit, in
+-- any language. So the keep rested on an index comment describing a reader
+-- somebody intended rather than one anybody wrote — which is the exact failure
+-- the tree's own plan gate is built around, that a trailing comment naming a
+-- reader is a CLAIM and not a caller.
+--
+-- 0013 states the rule it then broke, fourteen lines above breaking it:
+-- "keeping any one of them would leave a table written on every apply, on
+-- every node, to answer no question — which is exactly what 0010 removed."
+-- This is that sentence applied to the one table it exempted.
+--
+-- # No task history is lost, and none ever was at risk
+--
+-- The spans are DERIVED, and strictly poorer than what they derive from.
+-- `recomputeSpans` rebuilt a task's whole span set wholesale from
+-- `tracker_history` on every status change, so the table could never hold
+-- anything the history does not; a status this build cannot name was SKIPPED
+-- from the spans while its history row was kept; and a purge deleted a task's
+-- spans while leaving every one of its history rows behind.
+--
+-- `tracker_history` is the task history, it is never swept by anything, and it
+-- cannot be: no sweep in `internal/maintenance` names a tracker table, no
+-- DELETE against it exists in the tree, and the config layer refuses the two
+-- retired knobs that would have expired it with the words "The history is
+-- kept". What `stream.tracker_retention` trims is the LOG'S REPLAY WINDOW,
+-- which is a different thing from this SQL table — the table outlives the trim
+-- and travels in every donated snapshot. Every history surface a person or a
+-- seat reaches — `task_activity`, `GET /work/activity`, the item page's
+-- History and Woke tabs, the admin audit — reads `tracker_history` and has
+-- never read these spans.
+--
+-- # What the recompute was also doing, and still does
+--
+-- It was the SOLE writer of `tracker_tasks.status_entered_at`, which is live:
+-- the `status_entered` sort key, a date filter, and published API surface.
+-- `upsertTask` binds a literal 0 on insert and omits the column from its
+-- conflict update, so deleting the function with its table would have zeroed
+-- that column on every task in the company with nothing failing anywhere.
+--
+-- So the function stays and shrinks: `stampStatusEntered` reads the NEWEST
+-- status row and writes that one column. What goes is the DELETE, the walk of
+-- the task's entire status history and the one INSERT per historical status
+-- change — the read is now a single seek on `tracker_history_subject_idx`,
+-- whose leading columns are `(subject_id, log_seq DESC)`.
+--
+-- # Rebuilding it, if a duration report is ever wanted
+--
+-- The rows are a pure function of `tracker_history`, so nothing has to be
+-- preserved for that day. But the rebuild is a GO job rather than a migration:
+-- a span's `grp` comes from the status table in `internal/tracker/policy.go`,
+-- so SQL could only reach it by hard-coding a CASE that drifts from the Go —
+-- and a DML backfill against the replicated estate is what the applier's
+-- exclusivity rule forbids. The way back is the way `tracker_measure_spans`
+-- arrived in 0011: a CREATE TABLE plus an applier that fills it, with no
+-- backfill, because every collection here is rebuilt wholesale on apply.
+--
+-- Which is the same thing the node estate's 0014 already says in as many
+-- words: a durable report "will be built deliberately — writer, reader and
+-- retention in one change — rather than resurrected as a schema with a hope
+-- attached".
+--
+-- 0002 AND 0013 ARE NOT EDITED. `schema_migrations` keys on the filename, so a
+-- file that has already run never runs again: a fresh database and an upgraded
+-- one converge here, by the same route.
+
+-- The indexes go with the table; naming them is belt-and-braces for an engine
+-- that would keep an index over a dropped one.
+DROP INDEX IF EXISTS tracker_status_spans_group_idx;
+
+DROP TABLE IF EXISTS tracker_status_spans;

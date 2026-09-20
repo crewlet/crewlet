@@ -361,11 +361,11 @@ func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
 // EXPORTED AND SHARED, because two frames need the same answer and a second
 // copy is how one stops matching the other: the WRITER computes it for the
 // notification card, and the APPLIER computes it for the history row — which
-// every quiet commit also writes, and which the status spans are rebuilt
+// every quiet commit also writes, and which the entered stamp is derived
 // from. While this was a method on [Wake] the applier had no way to reach it,
-// so a quiet status change wrote a history row with NO deltas and produced NO
-// span, and every report derived from the spans — cumulative flow, cycle time
-// — silently omitted it.
+// so a quiet status change wrote a history row with NO deltas, and
+// `status_entered_at` went on naming an older change than the task had
+// actually last made.
 func TaskDeltas(before, after Task) map[string]Delta {
 	moved := map[string]Delta{}
 	add := func(field, from, to string) {

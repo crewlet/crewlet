@@ -99,7 +99,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	}
 	// WHAT THE APPLY ACTUALLY DID, computed from the two documents this
 	// frame holds — which is the only frame that can, and the one the
-	// history row and the spans below are both derived from.
+	// history row and the entered stamp below are both derived from.
 	before := current
 	if !held {
 		before = Task{}
@@ -110,12 +110,12 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	spans := 0
+	entered := 0
 	// THE STATUS MOVED, not "somebody was told the status moved". Gated on
-	// the notification, a quiet status change produced no span at all —
-	// and every report derived from the spans omitted it silently.
+	// the notification, a quiet status change left the entered instant
+	// naming an older change than the task had actually last made.
 	if _, moved := applied["status"]; moved {
-		if spans, err = a.recomputeSpans(ctx, tx, id); err != nil {
+		if entered, err = a.stampStatusEntered(ctx, tx, id); err != nil {
 			return 0, err
 		}
 	}
@@ -123,7 +123,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	return rows + children + thread + counts + history + spans + told, nil
+	return rows + children + thread + counts + history + entered + told, nil
 }
 
 // stampUnblocked records that this commit told a dependent it is workable.
@@ -1003,7 +1003,6 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_status_spans WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
 	} {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
