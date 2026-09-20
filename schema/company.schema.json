@@ -2005,15 +2005,8 @@
           "minimum": 0,
           "type": "integer"
         },
-        "non_working_weekdays": {
-          "description": "Days this company does not work — used by the calendar and the burndown guideline. Full English names, e.g. saturday.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "timezone": {
-          "description": "IANA timezone for authored dates and sprint boundaries (default UTC).",
+          "description": "IANA timezone for authored dates (default UTC).",
           "type": "string"
         }
       },

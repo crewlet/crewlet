@@ -10,8 +10,8 @@ import (
 
 // The objects, and the two shapes a record carries them in.
 //
-// A small whole-document object — a view, a goal, a sprint, a tag set, a
-// person, a project, a generation, an eviction — travels as FULL POST-STATE:
+// A small whole-document object — a view, a goal, a tag set, a person, a
+// project, a generation, an eviction — travels as FULL POST-STATE:
 // one document field, one upsert, and no patch semantics to get wrong. A task
 // and the field catalogue travel as a TYPED PATCH, because full post-state
 // would put a 64 KiB body on the wire for a status flip, and the catalogue is
@@ -104,24 +104,6 @@ const (
 	MaxChecklists          = 16
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
-
-	// MaxSprintStays bounds a task's sprint history; past it the OLDEST
-	// closed stay is dropped and the count kept, so a report can say how
-	// many it is not showing.
-	MaxSprintStays = 16
-
-	// MaxMeasureSpans bounds a task's SIZE history, dropped oldest-closed
-	// first like the sprint stays above.
-	//
-	// SIXTY-FOUR, which is four times the sprint cap and deliberately so:
-	// a task is re-estimated far more often than it changes sprint, and
-	// the span the figures need is the one covering an instant a REPORT
-	// asks about. Dropping the oldest closed span makes the measure
-	// before it unreadable, and the oldest instant any reader asks about
-	// is a sprint's start — so the history has to outlive the stays that
-	// point into it, not merely match them. At 64 a task re-estimated
-	// once a working day keeps a quarter of them.
-	MaxMeasureSpans = 64
 
 	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
 	// every former key also has an alias row, and the applier never
@@ -238,37 +220,6 @@ type Tombstone struct {
 	RemovedWith *string    `json:"removed_with,omitempty"`
 }
 
-// SprintStay is one interval a task spent in one sprint.
-//
-// EVERY SPRINT REPORT IS DERIVED FROM THESE — committed, added, removed,
-// remaining and velocity — which is why they travel in the record rather than
-// being recomputed from a status history that does not carry them.
-type SprintStay struct {
-	Sprint   int        `json:"sprint"`
-	From     time.Time  `json:"from"`
-	To       *time.Time `json:"to,omitempty"`
-	RolledTo *int       `json:"rolled_to,omitempty"`
-}
-
-// MeasureStay is what a task was WORTH over one span of its life: the pair of
-// instants a size held for, and the size itself in both measures.
-//
-// BOTH MEASURES ON ONE SPAN, because a project's measure is `points` or
-// `estimate_min` and a company may change which. One span per change to
-// EITHER means the boundaries are the same set whichever measure is read, so
-// switching a project's measure re-reads the same history rather than
-// revealing a differently-shaped one.
-//
-// A ZERO IS A REAL SIZE HERE — it is what "nobody has estimated this" is
-// stored as, and `unestimated` counts it — so the span for a task created
-// without an estimate exists and carries zeros rather than being absent.
-type MeasureStay struct {
-	From        time.Time  `json:"from"`
-	To          *time.Time `json:"to,omitempty"`
-	Points      float64    `json:"points,omitempty"`
-	EstimateMin int        `json:"estimate_min,omitempty"`
-}
-
 // RelationKind is what one task is to another.
 type RelationKind string
 
@@ -369,18 +320,6 @@ type Task struct {
 	// RoutingUnit is the mutable half — whose lead hears about this task
 	// NOW — and is the only unit field any write touches.
 	RoutingUnit string `json:"routing_unit,omitempty"`
-
-	Sprint             *int         `json:"sprint,omitempty"`
-	SprintHistory      []SprintStay `json:"sprint_history,omitempty"`
-	SprintStaysDropped int          `json:"sprint_stays_dropped,omitempty"`
-
-	// MeasureHistory is what this task was WORTH over each span of its
-	// life, and every sprint figure about a past instant reads it rather
-	// than the current `Points`/`EstimateMinutes` above. Derived by the
-	// applier beside the sprint stays and for the same reason — see
-	// [stampMeasure].
-	MeasureHistory      []MeasureStay `json:"measure_history,omitempty"`
-	MeasureSpansDropped int           `json:"measure_spans_dropped,omitempty"`
 
 	// Parent and Depth: Depth is a HINT. The applier derives the real
 	// depth from the closure and enforces the cap against the subtree's
@@ -665,7 +604,6 @@ type TaskPatch struct {
 	Assignee    *string   `json:"assignee,omitempty"`
 	RoutingUnit *string   `json:"routing_unit,omitempty"`
 	Parent      *string   `json:"parent,omitempty"`
-	Sprint      *int      `json:"sprint,omitempty"`
 	Project     *string   `json:"project,omitempty"`
 
 	// Mint is the counter value this record took, and THE ONLY WAY A
@@ -756,17 +694,15 @@ type TaskPatch struct {
 	Depend *DependentIntent `json:"-"`
 
 	// The collections, carried WHOLE when touched.
-	Collaborators  *[]string                   `json:"collaborators,omitempty"`
-	Watchers       *[]string                   `json:"watchers,omitempty"`
-	Muted          *[]string                   `json:"muted,omitempty"`
-	Tags           *[]string                   `json:"tags,omitempty"`
-	Fields         *map[string]json.RawMessage `json:"fields,omitempty"`
-	Relations      *[]Relation                 `json:"relations,omitempty"`
-	Dependents     *[]string                   `json:"dependents,omitempty"`
-	Checklists     *[]Checklist                `json:"checklists,omitempty"`
-	SprintHistory  *[]SprintStay               `json:"sprint_history,omitempty"`
-	MeasureHistory *[]MeasureStay              `json:"measure_history,omitempty"`
-	FormerKeys     *[]string                   `json:"former_keys,omitempty"`
+	Collaborators *[]string                   `json:"collaborators,omitempty"`
+	Watchers      *[]string                   `json:"watchers,omitempty"`
+	Muted         *[]string                   `json:"muted,omitempty"`
+	Tags          *[]string                   `json:"tags,omitempty"`
+	Fields        *map[string]json.RawMessage `json:"fields,omitempty"`
+	Relations     *[]Relation                 `json:"relations,omitempty"`
+	Dependents    *[]string                   `json:"dependents,omitempty"`
+	Checklists    *[]Checklist                `json:"checklists,omitempty"`
+	FormerKeys    *[]string                   `json:"former_keys,omitempty"`
 
 	// Comment rides a task write, because a comment is a mutation of the
 	// task and shares its arbitration.
@@ -1107,115 +1043,7 @@ type FieldCatalogue struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// SprintPolicy is how a project runs sprints, and nil means it runs none.
-type SprintPolicy struct {
-	LengthDays   int          `json:"length_days"`
-	StartWeekday time.Weekday `json:"start_weekday"`
-
-	// StartMinutes is minutes after midnight in the company's ONE
-	// timezone. A number rather than a time, because the value is a
-	// calendar boundary and not an instant.
-	StartMinutes int  `json:"start_minutes,omitempty"`
-	Ahead        int  `json:"ahead"`
-	AutoStart    bool `json:"auto_start,omitempty"`
-	AutoRoll     bool `json:"auto_roll"`
-
-	// ArchiveAfter is zero for off. The CLOSE is not a policy value at
-	// all: every sprint closes when its end arrives.
-	ArchiveAfter int           `json:"archive_after,omitempty"`
-	Next         int           `json:"next"`
-	NameFormat   string        `json:"name_format,omitempty"`
-	Measure      SprintMeasure `json:"measure,omitempty"`
-	PointScale   []float64     `json:"point_scale,omitempty"`
-
-	Capacity map[string]Capacity `json:"capacity,omitempty"`
-}
-
-// SprintMeasure is what a sprint's figures are summed in.
-//
-// A NAMED TYPE rather than a string, because every figure a sprint report
-// carries — committed, added, removed, done, remaining, each assignee's total
-// and the capacity it is compared against — is a sum over ONE of two columns,
-// and an unrecognised spelling would silently pick neither. The zero value is
-// meaningful and is [MeasurePoints]: a project that says nothing about the
-// knob runs on points, which is what the applier's own default column already
-// says.
-type SprintMeasure string
-
-const (
-	// MeasurePoints sums `tracker_tasks.points`, the builtin float.
-	MeasurePoints SprintMeasure = "points"
-
-	// MeasureEstimate sums `tracker_tasks.estimate_min`, the builtin
-	// minute count. Named for the FIELD rather than for "time", because
-	// that is the column, the query grammar's own spelling and the
-	// capacity key beside it.
-	MeasureEstimate SprintMeasure = "estimate_min"
-)
-
-// SprintMeasures is every measure a project may run in.
-var SprintMeasures = []SprintMeasure{MeasurePoints, MeasureEstimate}
-
-// Valid reports whether a measure off the wire is one this build knows.
-//
-// THE EMPTY STRING IS VALID and means [MeasurePoints] — see the type doc. A
-// value that is neither is a value, not a panic: [SprintMeasure.Or] resolves
-// it, and the write side refuses it naming both spellings.
-func (m SprintMeasure) Valid() bool {
-	if m == "" {
-		return true
-	}
-	for _, known := range SprintMeasures {
-		if m == known {
-			return true
-		}
-	}
-	return false
-}
-
-// Or resolves a measure to the column a report sums.
-//
-// An UNKNOWN measure resolves to points rather than to nothing, because this
-// is a read path: a project whose policy carries a spelling a newer build
-// wrote must still report figures, and reporting them in the default measure
-// — which the answer NAMES — is better than reporting zero in silence.
-func (m SprintMeasure) Or() SprintMeasure {
-	if m == MeasureEstimate {
-		return MeasureEstimate
-	}
-	return MeasurePoints
-}
-
-// Column is the task column this measure sums.
-func (m SprintMeasure) Column() string {
-	if m.Or() == MeasureEstimate {
-		return "t.estimate_min"
-	}
-	return "t.points"
-}
-
-// SpanColumn is the same measure on a task's SIZE HISTORY rather than on its
-// current row — `tracker_measure_spans`, aliased `v`.
-//
-// Beside [SprintMeasure.Column] rather than anywhere near its callers,
-// because the pair has to name the same measure and there is nothing else
-// that would notice if it stopped: a figure valued from `points` at one
-// instant and `estimate_min` at another is not a number anybody could read,
-// and both spellings are strings a compiler never sees.
-func (m SprintMeasure) SpanColumn() string {
-	if m.Or() == MeasureEstimate {
-		return "v.estimate_min"
-	}
-	return "v.points"
-}
-
-// Capacity is one person's sprint capacity.
-type Capacity struct {
-	Points      float64 `json:"points,omitempty"`
-	EstimateMin int     `json:"estimate_min,omitempty"`
-}
-
-// Project is a container's identity, policy and active-sprint pointer.
+// Project is a container's identity and its policy.
 type Project struct {
 	V             int    `json:"v"`
 	Version       uint64 `json:"version"`
@@ -1235,71 +1063,10 @@ type Project struct {
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty"`
 
-	Sprints *SprintPolicy `json:"sprints,omitempty"`
-
-	// ActiveSprint is THE pointer, arbitrated by this object's own
-	// version, and the authority for "is another sprint running". Writing
-	// it alone leaves UpdatedAt untouched and carries no notification.
-	ActiveSprint *int `json:"active_sprint,omitempty"`
-
-	// PolicyVersion moves on a fields or sprint-policy edit — NOT on
-	// tags, and NOT on the pointer.
+	// PolicyVersion moves on a fields edit — NOT on tags.
 	PolicyVersion int `json:"policy_version,omitempty"`
 
 	Archived  bool      `json:"archived,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-// SprintState is where a sprint is in its one-way life.
-type SprintState string
-
-// The three, in the one order a sprint moves through them. A sprint is minted
-// future, started once and closed once, and never goes back — which is what
-// lets a transition be refused against the state it read rather than against a
-// policy that could have changed underneath it.
-const (
-	SprintFuture SprintState = "future"
-	SprintActive SprintState = "active"
-	SprintClosed SprintState = "closed"
-)
-
-// Sprint is a per-project record whose SUBJECT IS ITS IDENTITY.
-//
-// A mint is therefore a create-only append at an expectation of zero, and two
-// nodes minting number seven collide harmlessly at the broker — there is
-// nothing to repair and no claim class at all.
-type Sprint struct {
-	V       int    `json:"v"`
-	Version uint64 `json:"version"`
-
-	Project string `json:"project"`
-	Number  int    `json:"number"`
-	Name    string `json:"name"`
-	Goal    string `json:"goal,omitempty"`
-
-	StartAt time.Time `json:"start_at"`
-	EndAt   time.Time `json:"end_at"`
-
-	// State is ONE-WAY and the record enforces it: a start moves future to
-	// active and refuses any other state, so a closed sprint can never be
-	// restarted whatever a project's pointer says.
-	State    SprintState `json:"state"`
-	ClosedAt *time.Time  `json:"closed_at,omitempty"`
-	ClosedBy string      `json:"closed_by,omitempty"`
-
-	OpenAtClose int `json:"open_at_close,omitempty"`
-
-	// RolloverTo is EMPTY while the spillover is pending, which is what
-	// makes "pending" a state rather than an absence somebody has to
-	// interpret.
-	RolloverTo   string `json:"rollover_to,omitempty"`
-	RolloverDone bool   `json:"rollover_done,omitempty"`
-
-	Archived  bool      `json:"archived,omitempty"`
-	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -1549,8 +1316,8 @@ type Position struct {
 // that touches every collection at every cap — a 32 KiB body at six-fold JSON
 // escaping (192 KiB) plus 128 field values at 4 KiB (512 KiB) plus four
 // textareas at 16 KiB (64 KiB) plus 256 checklist items (100 KiB) plus 192
-// relations (22.5 KiB) plus watchers, tags and sprint stays, plus a maximal
-// notification at 120 KiB.
+// relations (22.5 KiB) plus watchers and tags, plus a maximal notification
+// at 120 KiB.
 //
 // THE NUMBER DID NOT COME DOWN WITH [MaxBody], and that is deliberate: three
 // constants are sized from this one — the applier's fetch, its ack-pending

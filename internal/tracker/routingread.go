@@ -16,7 +16,7 @@ import (
 // # The fact no other tracker records
 //
 // Every work tracker can tell you that somebody was notified. This one records,
-// per change and per recipient, the ONE reason of twenty that reached them,
+// per change and per recipient, the ONE reason of nineteen that reached them,
 // whether it ASKS something of them, and whether they were reached only because
 // nobody better was found. The applier has written exactly that set since the
 // domain landed — it is what [Candidates] resolved — and its only trace on any
@@ -223,7 +223,6 @@ const MaxRoutingRows = MaxWatchers + // watchers
 	MaxChecklists + // checklist_assignees
 	MaxGoalOwners +
 	MaxGoalMembers +
-	MaxSprintWakeParties +
 	MaxMentions +
 	16 // the role handles, which have no cap of their own
 

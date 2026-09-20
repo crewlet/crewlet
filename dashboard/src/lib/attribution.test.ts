@@ -54,9 +54,9 @@ describe("the latest change to each property", () => {
 
   test("one change attributes every field it moved", () => {
     const who = attribution([
-      change({ actor: "ada", fields: { due: {}, points: {}, sprint: {} } }),
+      change({ actor: "ada", fields: { due: {}, points: {}, estimate: {} } }),
     ]);
-    expect([...who.keys()].sort()).toEqual(["due", "points", "sprint"]);
+    expect([...who.keys()].sort()).toEqual(["due", "estimate", "points"]);
   });
 
   test("a create attributes what it set, which is why a fresh task has lines", () => {
@@ -109,7 +109,6 @@ test("every field name is one the engine writes, spelled its way", () => {
     "project",
     "type",
     "tags",
-    "sprint",
     "due",
     "start",
     "estimate",

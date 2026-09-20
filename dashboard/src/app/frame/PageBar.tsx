@@ -3,7 +3,7 @@
  *
  * Sticky, 52 px, on every screen. It replaces a topbar that carried a single
  * `<h1>` derived from the route's first segment — so an item page said "Work",
- * a sprint said "Work", and a page nested four levels deep said "Knowledge".
+ * a project said "Work", and a page nested four levels deep said "Knowledge".
  *
  * # The breadcrumb is the address, not a title
  *

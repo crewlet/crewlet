@@ -222,18 +222,20 @@ func TestANamedRouteAgreesWithTheGenericForm(t *testing.T) {
 
 // A DOCUMENTED PATH UNDER A WILDCARD IS THE ONE THAT FAILS SILENTLY.
 //
-// `work_burndown` shipped registered on the query channel and listed in
-// docs/reference/api-endpoints.md as `GET /work/burndown`, with no entry in
-// the route table. Nothing failed: `/work/{id}` matches that path, so the
-// request was answered as a TASK whose key is "burndown" — a 404 naming a
-// record nobody asked for, from a route the reader believed they were on.
+// Every literal `/work/<word>` route in the table sits above `/work/{id}`, and
+// one that is registered on the query channel and listed in
+// docs/reference/api-endpoints.md but MISSING from the table fails without a
+// sound: the wildcard matches that path, so the request is answered as a TASK
+// whose key is that word — a 404 naming a record nobody asked for, from a
+// route the reader believed they were on. `work_burndown` shipped in exactly
+// that state for as long as it existed.
 //
 // That is why this asserts the CODE rather than merely a non-404. Only
-// [queries.Sources.workBurndown] can refuse for a missing `project`, so
-// `bad_params` is proof the path reached the burndown and not the wildcard
-// below it; a route that is absent again would answer `not_found` here and a
-// status-only check would pass on it.
-func TestTheBurndownIsServedAtThePathTheTableDocuments(t *testing.T) {
+// [queries.Sources.workViews] can refuse for a missing `container`, so
+// `bad_params` is proof the path reached the view strip and not the wildcard
+// below it; a route that went missing again would answer `not_found` here and
+// a status-only check would pass on it.
+func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
@@ -241,12 +243,12 @@ func TestTheBurndownIsServedAtThePathTheTableDocuments(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/burndown", nil))
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/views", nil))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /work/burndown = %d, want 400: the query refuses a "+
-			"missing `project`, and any other status means the path was "+
+		t.Fatalf("GET /work/views = %d, want 400: the query refuses a "+
+			"missing `container`, and any other status means the path was "+
 			"answered by /work/{id} instead", res.StatusCode)
 	}
 	var body map[string]string
@@ -255,14 +257,14 @@ func TestTheBurndownIsServedAtThePathTheTableDocuments(t *testing.T) {
 	}
 	if body["error"] != "bad_params" {
 		t.Errorf("error = %q, want bad_params; `not_found` is the wildcard "+
-			"answering about a task called \"burndown\"", body["error"])
+			"answering about a task called \"views\"", body["error"])
 	}
 }
 
 // AND IT CARRIES ITS PARAMETERS, so the route is wired to the answer rather
 // than merely present. A path that reached the query and dropped the query
-// string would refuse for the same `project` it was handed.
-func TestTheBurndownRouteCarriesItsQueryString(t *testing.T) {
+// string would refuse for the same `container` it was handed.
+func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
 		Runtime: &fakeRuntime{},
@@ -271,15 +273,14 @@ func TestTheBurndownRouteCarriesItsQueryString(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/work/burndown?project=ENG&sprint=3", nil))
+		"/work/views?container=project:ENG", nil))
 	if got := rec.Result().StatusCode; got != http.StatusOK {
-		t.Errorf("GET /work/burndown?project=ENG&sprint=3 = %d, want 200", got)
+		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
 	}
 }
 
-// stubWorkReader answers the burndown and nothing else. Every other method is
-// here because the seam is one interface, and each returns its zero value: a
-// route test must not depend on what a tracker would have said.
+// stubWorkReader answers every method of the seam with its zero value: a route
+// test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
 func (stubWorkReader) Inbox(context.Context, tracker.InboxQuery, time.Time) (
@@ -319,24 +320,14 @@ func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (stubWorkReader) Projects(context.Context, tracker.ProjectQuery, time.Time) (
+func (stubWorkReader) Projects(context.Context, tracker.ProjectQuery) (
 	tracker.ProjectListing, error) {
 	return tracker.ProjectListing{}, nil
 }
 
-func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery, time.Time) (
+func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery) (
 	tracker.ProjectDetail, error) {
 	return tracker.ProjectDetail{}, nil
-}
-
-func (stubWorkReader) Sprints(context.Context, tracker.SprintQuery, time.Time) (
-	tracker.SprintListing, error) {
-	return tracker.SprintListing{}, nil
-}
-
-func (stubWorkReader) Burndown(_ context.Context, q tracker.BurndownQuery, _ time.Time) (
-	tracker.Burndown, error) {
-	return tracker.Burndown{Project: q.Project, Sprint: q.Sprint}, nil
 }
 
 func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time) (

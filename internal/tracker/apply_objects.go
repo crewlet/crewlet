@@ -12,8 +12,8 @@ import (
 
 // The whole-document objects, and why they take one upsert each.
 //
-// A view, a goal, a sprint, a tag set, a person, a project and the two
-// catalogues are small enough to travel as FULL POST-STATE — one document
+// A view, a goal, a tag set, a person, a project and the two catalogues are
+// small enough to travel as FULL POST-STATE — one document
 // field, one upsert, and no patch semantics to get wrong. What that buys is
 // that a replay of one of them is a single statement whose result cannot
 // depend on what the row held before, which is the property a task's patch has
@@ -72,8 +72,6 @@ func documentTable(s Subject) (table, key string, err error) {
 	switch s.Kind {
 	case KindProject:
 		return "tracker_projects", s.ID, nil
-	case KindSprint:
-		return "tracker_sprints", s.ID, nil
 	case KindTags:
 		return "tracker_tagsets", s.ID, nil
 	case KindCatalogue:
@@ -119,58 +117,22 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,
-				 sprint_policy_json, sprint_next, active_sprint, sprint_measure,
 				 policy_version, archived, rank_respread_pending,
 				 rank_duplicate_pending, open_count, done_count, closed_count,
 				 created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,0,0,0,?,?,?,?)
+			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,?,?,?,?)
 			ON CONFLICT (key) DO UPDATE SET
 				name = excluded.name, purpose = excluded.purpose,
 				unit = excluded.unit, chart_epoch = excluded.chart_epoch,
 				default_assignee = excluded.default_assignee,
-				sprint_policy_json = excluded.sprint_policy_json,
-				sprint_next = excluded.sprint_next,
-				active_sprint = excluded.active_sprint,
-				sprint_measure = excluded.sprint_measure,
 				policy_version = excluded.policy_version,
 				archived = excluded.archived, updated_at = excluded.updated_at,
 				version = excluded.version, document = excluded.document
 			WHERE excluded.version > tracker_projects.version`,
 			key, project.Name, project.Purpose, project.Unit, project.ChartEpoch,
-			project.DefaultAssignee, jsonOf(project.Sprints), sprintNext(project),
-			nullableInt(project.ActiveSprint), string(measureOf(project)),
+			project.DefaultAssignee,
 			project.PolicyVersion, boolInt(project.Archived),
 			store.EncodeTime(project.CreatedAt), store.EncodeTime(project.UpdatedAt),
-			c.packed, []byte(c.record.Mutation))
-	case "tracker_sprints":
-		var sprint Sprint
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := decodePayload(c.record.Mutation, &sprint); err != nil {
-			return 0, fmt.Errorf("tracker: decode the sprint at %s: %w", c.position, err)
-		}
-		res, err = tx.ExecContext(ctx, `
-			INSERT INTO tracker_sprints
-				(project_key, number, name, goal, start_at, end_at, state,
-				 closed_at, closed_by, open_at_close, rollover_to, rollover_done,
-				 archived, created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-			ON CONFLICT (project_key, number) DO UPDATE SET
-				name = excluded.name, goal = excluded.goal,
-				start_at = excluded.start_at, end_at = excluded.end_at,
-				state = excluded.state, closed_at = excluded.closed_at,
-				closed_by = excluded.closed_by,
-				open_at_close = excluded.open_at_close,
-				rollover_to = excluded.rollover_to,
-				rollover_done = excluded.rollover_done,
-				archived = excluded.archived, updated_at = excluded.updated_at,
-				version = excluded.version, document = excluded.document
-			WHERE excluded.version > tracker_sprints.version`,
-			sprint.Project, sprint.Number, sprint.Name, sprint.Goal,
-			store.EncodeTime(sprint.StartAt), store.EncodeTime(sprint.EndAt),
-			string(sprint.State), nullableTime(sprint.ClosedAt), sprint.ClosedBy,
-			sprint.OpenAtClose, nullableString(sprint.RolloverTo),
-			boolInt(sprint.RolloverDone), boolInt(sprint.Archived),
-			store.EncodeTime(sprint.CreatedAt), store.EncodeTime(sprint.UpdatedAt),
 			c.packed, []byte(c.record.Mutation))
 	case "tracker_tagsets":
 		var set TagSet
@@ -526,20 +488,6 @@ func boolInt(b bool) int {
 	return 0
 }
 
-func nullableInt(v *int) any {
-	if v == nil {
-		return nil
-	}
-	return *v
-}
-
-func nullableString(v string) any {
-	if v == "" {
-		return nil
-	}
-	return v
-}
-
 func nullableTime(t *time.Time) any {
 	if t == nil {
 		return nil
@@ -560,17 +508,3 @@ func jsonOf(v any) string {
 }
 
 func jsonUnmarshal(raw []byte, into any) error { return json.Unmarshal(raw, into) }
-
-func sprintNext(p Project) int {
-	if p.Sprints == nil {
-		return 1
-	}
-	return p.Sprints.Next
-}
-
-func measureOf(p Project) SprintMeasure {
-	if p.Sprints == nil {
-		return MeasurePoints
-	}
-	return p.Sprints.Measure.Or()
-}

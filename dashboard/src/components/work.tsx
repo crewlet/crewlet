@@ -2,14 +2,14 @@
  * The pieces every tracker surface draws.
  *
  * A board card, a list row, a calendar chip, a peek panel, an item page, My
- * work and a sprint's own breakdown all render the same task, and before this
+ * work and a peek panel all render the same task, and before this
  * file existed each of them rendered it slightly differently: the board showed
  * a key and a title, the list showed six columns, My work showed four, and
  * only one of the three knew a task could be blocked. Every one of those is
  * the same object, so it gets one renderer and the screens choose the density.
  *
  * NONE OF THESE NEEDS A ROUTER. A card takes an `href` and an `onOpen`, so it
- * renders in a test — and in a peek panel, and in a sprint report — without a
+ * renders in a test — and in a peek panel — without a
  * routing context being the price of drawing one.
  */
 
@@ -226,7 +226,6 @@ export function BoardCard({
   selected,
   now,
   chrome = {},
-  showSprint,
 }: {
   row: WorkSummary;
   href: string;
@@ -234,7 +233,6 @@ export function BoardCard({
   selected?: boolean;
   now: number;
   chrome?: RowChrome;
-  showSprint?: boolean;
 }) {
   return (
     <a
@@ -258,7 +256,6 @@ export function BoardCard({
         )}
         <DueMark due={row.due} overdue={row.overdue} now={now} />
         <SizeMark points={row.points} minutes={row.estimate_min} />
-        {showSprint && row.sprint !== undefined && <span className="work-size">S{row.sprint}</span>}
         <span className="spacer" />
         <Assignee handle={row.assignee} seatName={chrome.seatName} />
       </div>

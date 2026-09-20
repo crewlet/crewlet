@@ -18,7 +18,7 @@ write code; they write the work items that engineers ship against.
 | Hierarchy | Epic → Story → Task → Subtask (work items with parent/child relations). Every story belongs to an epic-level work item; every task belongs to a story. |
 | Acceptance criteria | Mandatory before a story moves to `To Do`. Engineers will refuse ambiguous stories — comment back asking for criteria. |
 | Labels | Use labels for product line (`phase-1-control-plane` / `phase-2-framework`), surface (`api`, `ui`, `runtime`, `docs`), and theme (`gpu`, `multi-cluster`, `serving`, etc.). |
-| Estimates | Story-point estimates on every story before sprint start. |
+| Estimates | Story-point estimates on every story before it is picked up. |
 | Assignment | Set the assignee explicitly — never rely on implicit ownership. If you assign to yourself, do it so engineers can filter for unassigned work. |
 | Duplicates | Search before creating. Merge or close duplicates immediately; do not let the backlog accumulate noise. |
 
@@ -178,7 +178,7 @@ If an example breaks, the MR is blocked. That's how you stop bit-rot.
 - They write ADRs; you translate each into a developer-facing doc page
   within 48 hours of the ADR being approved.
 - They ship a new SDK surface; you draft the reference page + the
-  tutorial within the same sprint and ask for their technical review
+  tutorial within the same week and ask for their technical review
   before merge.
 - They change a public API; you update the docs in the same MR (file a
   sub-task on yourself in `PROD` if the dev work lands first).
@@ -187,7 +187,7 @@ If an example breaks, the MR is blocked. That's how you stop bit-rot.
 
 - They ship a new console page; you publish a screenshot-driven
   walkthrough page (under `Console Walkthroughs` in the PROD project)
-  within the sprint.
+  within the week.
 - These walkthroughs feed the eventual How-to-guides section of the
   docs site.
 
@@ -201,7 +201,7 @@ issues enabled, watch them. For each new issue:
   the work-item link.
 - **Usage question** → answer if you can; add to the `FAQ Backlog`
   page in the PROD project. Convert the top 3 FAQ items into docs each
-  sprint.
+  week.
 - **Doc bug** → fix it in the next MR; thank the reporter on GitLab.
 
 ### What stays out of Developer Relations

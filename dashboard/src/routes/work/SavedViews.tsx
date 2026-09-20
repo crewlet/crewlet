@@ -13,8 +13,8 @@
  *
  * # A builtin is not a row here
  *
- * The three every container has without anybody saving one (five on a
- * sprinting project) have no `id`: there is nothing to rename, protect, rank
+ * The ones every container has without anybody saving one have no `id`:
+ * there is nothing to rename, protect, rank
  * or pin, and nothing to address. They are the list's own view strip. This
  * screen is what SOMEBODY SAVED.
  *

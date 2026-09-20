@@ -33,7 +33,6 @@ const KNOWN = [
   "checklist",
   "collaborator",
   "goal_owner",
-  "sprint",
   "watcher",
   "unwatched",
   "purged",

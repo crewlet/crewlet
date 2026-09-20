@@ -102,22 +102,22 @@ type UnblockScan struct {
 //
 // A row CARRYING a status delta is a status change, whatever it was filed
 // under — and the kind cannot be trusted for this, for exactly the reason
-// [Applier.recomputeSpans] states beside the same predicate. The kind is ONE
+// [Applier.stampStatusEntered] is gated on the same predicate. The kind is ONE
 // word a writer chose for a patch that may have moved several things, so a
 // change that moved the status and something else is filed under the something
 // else and was invisible here.
 //
-// The reachable case was the sprint ROLLOVER CLOSE. It cancels every straggler
-// — `StatusCancelled` is in the `done` group, whose own description names this
-// path — so the apply stamps the task finished and clears every edge naming it
-// as a blocker, and its dependents become workable. The record is quiet by
-// design, and nothing outside [Writer.TellUnblocked] ever fills
-// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
-// hear. Filed under the sprint move, the join never reached them — and the
-// horizon below, computed from the same predicate, then advanced past the
-// record on the next status row anywhere in the log, so it was never
-// reconsidered. "A gap of any length is caught up on the next tick" does not
-// hold for a row the predicate cannot name.
+// The reachable case is a BULK CANCEL — `StatusCancelled` is in the `done`
+// group, whose own description names this path — so the apply stamps each task
+// finished and clears every edge naming it as a blocker, and its dependents
+// become workable. Such a record is quiet by design, and nothing outside
+// [Writer.TellUnblocked] ever fills `Snapshot.Unblocked`, so this scan is the
+// ONLY path by which those people hear. Filed under whatever else the patch
+// moved, the join never reached them — and the horizon below, computed from
+// the same predicate, then advanced past the record on the next status row
+// anywhere in the log, so it was never reconsidered. "A gap of any length is
+// caught up on the next tick" does not hold for a row the predicate cannot
+// name.
 //
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a

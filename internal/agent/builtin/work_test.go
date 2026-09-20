@@ -88,8 +88,6 @@ type fakeTracker struct {
 	projects     tracker.ProjectListing
 	detailQuery  tracker.ProjectDetailQuery
 	project      tracker.ProjectDetail
-	sprintQuery  tracker.SprintQuery
-	sprints      tracker.SprintListing
 
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
@@ -234,25 +232,18 @@ func (f *fakeTracker) Thread(_ context.Context, q tracker.ThreadQuery,
 // The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
 // answers the task questions and not these is a build with no native tracker,
 // and the registration turns on exactly that.
-func (f *fakeTracker) Projects(_ context.Context, q tracker.ProjectQuery,
-	_ time.Time) (tracker.ProjectListing, error) {
+func (f *fakeTracker) Projects(_ context.Context, q tracker.ProjectQuery) (
+	tracker.ProjectListing, error) {
 
 	f.projectQuery = q
 	return f.projects, f.readErr
 }
 
-func (f *fakeTracker) Project(_ context.Context, q tracker.ProjectDetailQuery,
-	_ time.Time) (tracker.ProjectDetail, error) {
+func (f *fakeTracker) Project(_ context.Context, q tracker.ProjectDetailQuery) (
+	tracker.ProjectDetail, error) {
 
 	f.detailQuery = q
 	return f.project, f.readErr
-}
-
-func (f *fakeTracker) Sprints(_ context.Context, q tracker.SprintQuery,
-	_ time.Time) (tracker.SprintListing, error) {
-
-	f.sprintQuery = q
-	return f.sprints, f.readErr
 }
 
 // The FEED seam — what happened, and what is waiting on somebody. A reader
@@ -639,7 +630,7 @@ func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 	// THE CLOSE REASON IS THE STATUS. The tracker has no separate field:
 	// `cancelled` IS "finished without being delivered", which is what
-	// makes it invisible to velocity with no second value to keep in step.
+	// makes it invisible to a delivery count with no second value to keep in step.
 	for _, tc := range []struct{ field, value, want string }{
 		{"status", "wip", "in_progress"},
 		{"status", "wontfix", "cancelled"},
@@ -953,7 +944,6 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
-		SprintWriter:    func(builtin.Actor) builtin.SprintWriter { return nil },
 		ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range tracker.OperatorOnlyTools() {
@@ -974,7 +964,6 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 			TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
-			SprintWriter:    func(builtin.Actor) builtin.SprintWriter { return nil },
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Inbox:           trk,
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
@@ -1370,17 +1359,15 @@ func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
 	}
 }
 
-// WHEN A TASK IS DUE, HOW BIG IT IS AND WHICH SPRINT IT IS IN.
+// WHEN A TASK IS DUE AND HOW BIG IT IS.
 //
-// All five columns have existed since migration 0002, the query grammar
+// All four columns have existed since migration 0002, the query grammar
 // filters on every one and sorts on three, a row's `overdue` flag is derived
-// from the due date, and every sprint figure is a sum over the sizing pair.
-// NOTHING COULD SET ANY OF THEM: the only producer of a sprint patch in the
-// tree was the rollover, which moves work already in a sprint — so a sprint
-// could never come to hold anything, an estimate could never exist, and both
-// the overdue predicate and the whole sprint report were dead surface that
-// looked like an empty company.
-func TestACreateSetsWhenAndHowBigAndWhichSprint(t *testing.T) {
+// from the due date, and every total is a sum over the sizing pair. NOTHING
+// COULD SET ANY OF THEM — so an estimate could never exist, and both the
+// overdue predicate and every size total were dead surface that looked like
+// an empty company.
+func TestACreateSetsWhenAndHowBig(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
@@ -1388,7 +1375,7 @@ func TestACreateSetsWhenAndHowBigAndWhichSprint(t *testing.T) {
 	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "ship the planner", "project": "ENG",
 		"due": "2031-04-16", "start": "2031-04-01",
-		"estimate_minutes": 240, "points": 8, "sprint": 4,
+		"estimate_minutes": 240, "points": 8,
 	})
 	if got.Failed {
 		t.Fatalf("create failed: %s", got.Output)
@@ -1411,10 +1398,6 @@ func TestACreateSetsWhenAndHowBigAndWhichSprint(t *testing.T) {
 	if task.EstimateMinutes != 240 || task.Points != 8 {
 		t.Errorf("sizing is %d minutes / %v points, want 240 and 8",
 			task.EstimateMinutes, task.Points)
-	}
-	if task.Sprint == nil || *task.Sprint != 4 {
-		t.Errorf("sprint is %v, want 4 — nothing else in the tree can put a "+
-			"task into one", task.Sprint)
 	}
 }
 
@@ -1456,7 +1439,7 @@ func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
-		"item": "ENG-1", "due": "2031-05-02", "points": 13, "sprint": 7,
+		"item": "ENG-1", "due": "2031-05-02", "points": 13,
 	}); got.Failed {
 		t.Fatalf("update failed: %s", got.Output)
 	}
@@ -1467,45 +1450,24 @@ func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 	if patch.Points == nil || *patch.Points != 13 {
 		t.Errorf("the patch's points are %v, want 13", patch.Points)
 	}
-	if patch.Sprint == nil || *patch.Sprint != 7 {
-		t.Errorf("the patch's sprint is %v, want 7", patch.Sprint)
-	}
-	// A SPRINT MOVE IS ITS OWN KIND, because that is what the change is TO
-	// everybody downstream: the team is told their commitment moved, where
-	// `fields` would tell them a column changed.
-	if kind := trk.kinds[len(trk.kinds)-1]; kind != tracker.ChangeSprint {
-		t.Errorf("a sprint move was filed as %q, want %q", kind, tracker.ChangeSprint)
-	}
 
 	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
-		"item": "ENG-1", "due": nil, "sprint": nil,
+		"item": "ENG-1", "due": nil,
 	}); got.Failed {
 		t.Fatalf("clearing failed: %s", got.Output)
 	}
 	cleared := trk.patched[len(trk.patched)-1]
 	// A CLEAR IS A VALUE, not an absent field: nil on a patch means "not
-	// named". The applier reads the zero instant and the zero sprint as
-	// empty, exactly as the rollover already spells a clear.
+	// named". The applier reads the zero instant as empty.
 	if cleared.DueAt == nil || !cleared.DueAt.IsZero() {
 		t.Errorf("a cleared due date is %v, want the zero instant the applier "+
 			"reads as empty", cleared.DueAt)
 	}
-	if cleared.Sprint == nil || *cleared.Sprint != 0 {
-		t.Errorf("a cleared sprint is %v, want 0", cleared.Sprint)
-	}
-	// AND TAKING A TASK OUT IS A SPRINT CHANGE, like putting one in. The
-	// gate read only the SET half, so a removal was filed as `fields` — and
-	// a removal is the half a sprint's team most needs to hear, since it is
-	// commitment leaving their window. The writer's own rollover already
-	// files a cleared sprint under this kind.
-	if kind := trk.kinds[len(trk.kinds)-1]; kind != tracker.ChangeSprint {
-		t.Errorf("a sprint CLEAR was filed as %q, want %q", kind, tracker.ChangeSprint)
-	}
 }
 
-// A SIZE IS NOT NEGATIVE AND A SPRINT IS NUMBERED FROM ONE, and both are
-// refused naming the rule rather than stored — a negative estimate would be
-// subtracted from its own sprint's total.
+// A SIZE IS NOT NEGATIVE, and one is refused naming the rule rather than
+// stored — a negative estimate would be subtracted from its own board's
+// total.
 func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1514,7 +1476,6 @@ func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"title": "x", "project": "ENG", "points": -3},
 		{"title": "x", "project": "ENG", "estimate_minutes": -60},
-		{"title": "x", "project": "ENG", "sprint": 0},
 	} {
 		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); !got.Failed {
 			t.Errorf("create(%v) was accepted, want a refusal naming the rule", args)
@@ -1525,8 +1486,8 @@ func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 // AN UNREADABLE SIZE IS REFUSED, NOT READ AS ZERO.
 //
 // This is the date rule above applied to the half of `readSchedule` that was
-// not written to it. Every one of these fields is a POINTER because its zero
-// is a setting — zero minutes and zero points both mean UNESTIMATED — so a
+// not written to it. Each of these fields is a POINTER because its zero is a
+// setting — zero minutes and zero points both mean UNESTIMATED — so a
 // value the parser could not read became `&0`, the write succeeded, and the
 // answer said `applied` while the estimate had been WIPED. A model reads that
 // as having set one.
@@ -1545,7 +1506,6 @@ func TestAnUnreadableSizeIsRefusedRatherThanReadAsZero(t *testing.T) {
 		{"an estimate with a unit", "estimate_minutes", "2 days"},
 		{"a fractional minute", "estimate_minutes", 1.5},
 		{"points in words", "points", "five"},
-		{"a sprint by name", "sprint", "next"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1609,7 +1569,7 @@ func TestAnExplicitZeroEstimateIsSet(t *testing.T) {
 // A SIZE THAT IS NOT A NUMBER IS REFUSED, and NaN is the one that gets past a
 // range check by definition: every comparison with it is false, so the
 // `points < 0` guard said nothing about it and it reached the writer. An
-// infinity passed the same guard honestly. Neither is a value a sprint's
+// infinity passed the same guard honestly. Neither is a value a total's
 // figures can be summed from, and JSON cannot encode either — so the failure
 // would have surfaced somewhere downstream with no memory of who typed it.
 func TestANonFiniteSizeIsRefused(t *testing.T) {
@@ -1650,7 +1610,7 @@ func TestANonFiniteSizeIsRefused(t *testing.T) {
 
 // THE UPDATE SCHEMA ADMITS THE NULL ITS OWN DESCRIPTION PROMISES.
 //
-// Clearing a date, a size or a sprint is done by passing null; `readSchedule`
+// Clearing a date or a size is done by passing null; `readSchedule`
 // reads it and the description says so. The declared type said `string` and
 // `integer` alone, so a caller that VALIDATES against this schema refuses the
 // null before the tool is reached — a gesture documented, implemented, and
@@ -1674,7 +1634,7 @@ func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
 		return prop["type"]
 	}
 
-	for _, field := range []string{"due", "start", "estimate_minutes", "points", "sprint"} {
+	for _, field := range []string{"due", "start", "estimate_minutes", "points"} {
 		update := typeOf(builtin.UpdateWorkItemTool, field)
 		types, ok := update.([]string)
 		if !ok {
@@ -1707,7 +1667,7 @@ func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
 // reimplementation of the writer's own merge, and it never learned the
 // schedule fields — so the durable row took the new due date while the
 // snapshot kept the old one, `TaskDeltas` compared a task against itself on
-// exactly those fields, and every date, estimate, size and sprint a seat moved
+// exactly those fields, and every date, estimate and size a seat moved
 // arrived as a change that changed nothing.
 //
 // The snapshot is the writer's merge now, so this asserts the CONSEQUENCE

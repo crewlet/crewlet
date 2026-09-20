@@ -9,7 +9,7 @@
  *
  * The components take an `href` and an `onOpen` rather than reaching for a
  * router, so every one of them renders here with no routing context — which is
- * also why the board can be drawn inside a peek panel and a sprint report.
+ * also why the board can be drawn inside a peek panel.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -892,7 +892,7 @@ test("the filter bar declares itself the screen's toolbar", async () => {
 });
 
 // AND ITS CONTROLS TRAVEL IN GROUPS. What the bar draws varies by shape — the
-// type, sprint, group-by and sort pickers each appear on some tabs and not
+// type, group-by and sort pickers each appear on some tabs and not
 // others — and as one flat wrapping row that put the scope control at x≈345 on
 // List, x≈1338 on Board and x≈1155 on Calendar, with the Overdue chip wrapping
 // to a line of its own ~1,200px from the count. A group is the wrap unit, so a

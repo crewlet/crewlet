@@ -16,12 +16,11 @@ import (
 func TestATrackerSubjectRoundTripsThroughItsInverse(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ kind, id string }{
-		"a task":                       {"task", "b1b2b3b4-0000-4000-8000-000000000001"},
-		"a project":                    {"project", "ENG"},
-		"a sprint, whose id has a dot": {"sprint", "ENG.7"},
-		"an alias claim, likewise":     {"alias", "ENG-142.2"},
-		"a catalogue leaf":             {"catalogue", "fields"},
-		"the barrier, which has no id": {"barrier", ""},
+		"a task":                             {"task", "b1b2b3b4-0000-4000-8000-000000000001"},
+		"a project":                          {"project", "ENG"},
+		"an alias claim, whose id has a dot": {"alias", "ENG-142.2"},
+		"a catalogue leaf":                   {"catalogue", "fields"},
+		"the barrier, which has no id":       {"barrier", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -179,7 +179,6 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// model could have skipped by looking the container up first.
 		{&listProjects{deps: deps.Work}, projectReads(deps.Work)},
 		{&describeProject{deps: deps.Work}, projectReads(deps.Work)},
-		{&sprintReport{deps: deps.Work}, projectReads(deps.Work)},
 		// AND THE ONE PROJECT WRITE a seat holds, for one facet: a
 		// create refuses a label the project has not declared, so a
 		// seat without this could never use `labels` at all.
@@ -313,7 +312,7 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
 		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
-		tracker.DescribeProjectTool, tracker.SprintReportTool,
+		tracker.DescribeProjectTool,
 		tracker.TaskActivityTool, tracker.MyWorkTool,
 		tracker.ListWorkGoalsTool, tracker.SearchWorkItemsTool,
 		tracker.GetPersonTool, tracker.WorkInboxTool,
@@ -357,16 +356,6 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
-		}
-	case tracker.ManageSprintTool:
-		// A WRITE EVERYBODY SEES — a start changes what a whole team is
-		// expected to work on — so OpenWorld is Yes. Not destructive: a
-		// close destroys nothing and the tasks keep their rows. And NOT
-		// idempotent, which is the one that matters: a second `rollover`
-		// call moves whatever arrived since, and a second `close` is
-		// refused rather than free.
-		return tools.Annotations{
-			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
 		}
 	case tracker.MergeWorkItemTool:
 		// A WRITE EVERYBODY SEES: the duplicate is closed on every board

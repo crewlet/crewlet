@@ -503,11 +503,16 @@ func (c Class) Valid() bool {
 
 // Resource names the lease for one member of this class.
 //
-// Variadic because a claim is sometimes addressed by more than one part — a
-// sprint rollover names a project AND a number — and every part is a segment,
-// so such a claim is still filterable by its class and by its project.
-func (c Class) Resource(parts ...string) string {
-	return string(c) + ResourceSeparator + strings.Join(parts, ResourceSeparator)
+// ONE PART RATHER THAN A VARIADIC. It was variadic for exactly one caller — a
+// sprint rollover naming a project AND a number — and that caller left with
+// sprints, so every remaining one passes a single segment. Generality with no
+// caller is indistinguishable to the next reader from generality whose caller
+// they failed to find, and this particular variadic also spells `Resource()`
+// with no parts at all: the EMPTY RESOURCE, a key nothing can decode, so the
+// lease lands and no listing ever returns it — which every node reads as a
+// free seat.
+func (c Class) Resource(part string) string {
+	return string(c) + ResourceSeparator + part
 }
 
 // Prefix is what every resource in this class starts with.

@@ -95,7 +95,6 @@ func operatorCatalogue() map[string]servedTool {
 			Search:          work,
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return &projectSpy{} },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return &personSpy{} },
-			SprintWriter:    func(builtin.Actor) builtin.SprintWriter { return &sprintSpy{} },
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			GoalWriter:      func(builtin.Actor) builtin.GoalWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
@@ -187,9 +186,9 @@ func offeredCalls(t *testing.T) map[string][]string {
 // topLevel blanks out everything nested inside an args object, so only the
 // object's OWN keys are read.
 //
-// `write_project` fills `sprints: {length_days: 14}`, and without this the
-// gate reports `length_days` as an argument `write_project` does not take —
-// which it does not, because it is an argument `sprints` takes. The limit is
+// `mark_inbox` fills `read: [{record_id: …, position: …}]`, and without this
+// the gate reports `record_id` as an argument `mark_inbox` does not take —
+// which it does not, because it is a key inside `read`. The limit is
 // stated rather than hidden: this gate checks the TOP-LEVEL arguments of each
 // call against the tool's top-level properties, and a wrong name nested inside
 // one is not something it can see. Checking those would mean walking each

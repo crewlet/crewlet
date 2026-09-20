@@ -106,14 +106,10 @@ type WorkReader interface {
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
 	Goals(ctx context.Context, q tracker.GoalQuery) (tracker.GoalListing, error)
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
-	Projects(ctx context.Context, q tracker.ProjectQuery, now time.Time) (
+	Projects(ctx context.Context, q tracker.ProjectQuery) (
 		tracker.ProjectListing, error)
-	Project(ctx context.Context, q tracker.ProjectDetailQuery, now time.Time) (
+	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 		tracker.ProjectDetail, error)
-	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
-		tracker.SprintListing, error)
-	Burndown(ctx context.Context, q tracker.BurndownQuery, now time.Time) (
-		tracker.Burndown, error)
 	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
 		tracker.WorkloadAnswer, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
@@ -637,7 +633,7 @@ func RetryAfter(err error) time.Duration {
 	return 0
 }
 
-// ---- projects and sprints ----------------------------------------------- //
+// ---- projects ----------------------------------------------------------- //
 
 // workProjects answers the company's projects with their maintained counts.
 func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
@@ -654,7 +650,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 		// THE CALLER'S OWN — see [freshness].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
@@ -683,7 +679,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	})
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
 		// NOT FOUND, NOT UNAVAILABLE, and the message survives the
@@ -696,41 +692,12 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	return detail, nil
 }
 
-// workSprints answers a project's sprints with every figure computed.
-func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
-	project := strings.TrimSpace(p.String("project"))
-	if project == "" {
-		return nil, badParams("project", "", nil)
-	}
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	listing, err := s.Work.Sprints(ctx, tracker.SprintQuery{
-		Project:     project,
-		Number:      p.Int("sprint", 0),
-		Sprints:     p.Int("sprints", 0),
-		Archived:    p.Bool("archived", false),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
-	switch {
-	case errors.Is(err, tracker.ErrNoProject):
-		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-	case err != nil:
-		return nil, unavailableIfBehind(err)
-	}
-	return listing, nil
-}
-
-// workWorkload answers who is carrying how much, against what they can take.
+// workWorkload answers who is carrying how much.
 //
 // NO VIEWER AND NO HANDLE. Every other read of somebody's load is about ONE
 // person and resolves the viewer from the caller's own credential; this one is
-// about everybody at once, which is the whole question — "who is overloaded"
-// has no answer that names a person in advance.
+// about everybody at once, which is the whole question — "who is carrying the
+// most" has no answer that names a person in advance.
 func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 	fresh, err := freshness(p)
 	if err != nil {
@@ -742,54 +709,6 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
-		return nil, unavailableIfBehind(err)
-	}
-	return out, nil
-}
-
-// workBurndown answers one sprint's day-by-day series.
-//
-// TWO REQUIRED KEYS AND NO DEFAULT FOR EITHER. A sprint is numbered per
-// project, so a number with no key names one sprint per team; and defaulting
-// the number to "the active one" would make a saved link mean a different
-// sprint every fortnight, which is the one thing a chart somebody bookmarked
-// must not do.
-func (s Sources) workBurndown(ctx context.Context, p Params) (any, error) {
-	project := strings.TrimSpace(p.String("project"))
-	if project == "" {
-		return nil, badParams("project", "", nil)
-	}
-	number := p.Int("sprint", 0)
-	if number <= 0 {
-		return nil, badParams("sprint", strings.TrimSpace(p.String("sprint")),
-			[]string{"a sprint number this project has minted"})
-	}
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.Work.Burndown(ctx, tracker.BurndownQuery{
-		Project: project,
-		Sprint:  number,
-		// THE WHOLE FRESHNESS, as every other native read hands it over.
-		// `MinPosition` was the one field this call dropped, so a caller
-		// that had just written and passed the position back was told
-		// its burndown was served — at a checkpoint that need not have
-		// included the write. A floor silently ignored is the one shape
-		// a read level cannot be audited from the answer.
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
-	switch {
-	case errors.Is(err, tracker.ErrNoProject), errors.Is(err, tracker.ErrNoSprint):
-		// BOTH ARE NOT-FOUND and the message survives the
-		// classification, which is what tells a caller which of the two
-		// they got: a mistyped key and a sprint nobody has minted are
-		// different repairs.
-		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-	case err != nil:
 		return nil, unavailableIfBehind(err)
 	}
 	return out, nil

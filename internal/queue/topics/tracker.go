@@ -39,7 +39,7 @@ const (
 	TrackerVectorsWildcard = TrackerVectorsPrefix + ".>"
 )
 
-// The FIFTEEN object kinds are NOT constants here, and that is deliberate.
+// The FOURTEEN object kinds are NOT constants here, and that is deliberate.
 //
 // A kind is one bare word — "task", "project", "turn" — and the guard that
 // makes this package worth having derives its markers from these constants:
@@ -70,10 +70,10 @@ func TrackerLogSubject(kind, id string) string {
 // log, reporting whether the subject was one.
 //
 // The exact inverse of [TrackerLogSubject]: true only for a subject that
-// function could have produced. The ID keeps its dots — a sprint's id is
-// "<PROJECT>.<n>" and an alias claim's is "<OLDKEY>.<n>" — so only the FIRST
-// segment is the kind, and splitting on every dot would recover a kind of
-// "sprint" and an id of "ENG" from a subject naming ENG's seventh sprint.
+// function could have produced. The ID keeps its dots — an alias claim's is
+// "<OLDKEY>.<n>" — so only the FIRST segment is the kind, and splitting on
+// every dot would recover a kind of "alias" and an id of "ENG" from a subject
+// naming ENG-4's second claim.
 func TrackerLogPath(subject string) (kind, id string, ok bool) {
 	rest, found := strings.CutPrefix(subject, TrackerLogPrefix+".")
 	if !found || rest == "" {

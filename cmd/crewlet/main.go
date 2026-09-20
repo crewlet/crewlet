@@ -2530,14 +2530,6 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
-			// AND THE SPRINT SIDE. A sprint is a commitment a team made
-			// together, so starting or closing one is a lead's decision
-			// — which is why this surface has it and no seat does, and
-			// why the tool is additionally gated on leading the project.
-			SprintWriter: func(actor builtin.Actor) builtin.SprintWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
 			// THE ROSTER, so an operator's assistant is refused a
 			// handle nobody has rather than silently filing work for
 			// one — the same check every seat's tools make.

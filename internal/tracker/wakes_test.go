@@ -27,20 +27,16 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 	// The kinds that are NOT about a task's own routing. Everything else
 	// must be a task commit.
 	notTasks := map[tracker.ChangeKind]bool{
-		// The three object wakes, each routed off its own snapshot
+		// The two object wakes, each routed off its own snapshot
 		// field rather than off a task's assignee or watchers.
-		tracker.ChangeGoalUpdated:   true,
-		tracker.ChangeSprintStarted: true,
-		tracker.ChangeSprintClosed:  true,
-		tracker.ChangePrioritised:   true,
+		tracker.ChangeGoalUpdated: true,
+		tracker.ChangePrioritised: true,
 
-		// Bookkeeping and surfaces of their own. A project's settings,
-		// a saved view and the catalogue are read where they live; a
-		// minted sprint is a policy tick eight weeks out.
+		// Bookkeeping and surfaces of their own: a project's settings,
+		// a saved view and the catalogue are read where they live.
 		tracker.ChangeProjectCreated: true,
 		tracker.ChangeProjectUpdated: true,
 		tracker.ChangePolicyChanged:  true,
-		tracker.ChangeSprintMinted:   true,
 		tracker.ChangeViewSaved:      true,
 		tracker.ChangeCatalogue:      true,
 
@@ -92,10 +88,8 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 		kind   tracker.ChangeKind
 		want   string
 	}{
-		"a goal":            {tracker.KindGoal, tracker.ChangeGoalUpdated, "**Goal:**"},
-		"a sprint starting": {tracker.KindSprint, tracker.ChangeSprintStarted, "**Sprint:**"},
-		"a sprint closing":  {tracker.KindSprint, tracker.ChangeSprintClosed, "**Sprint:**"},
-		"a priority list":   {tracker.KindPerson, tracker.ChangePrioritised, "**Your priorities:**"},
+		"a goal":          {tracker.KindGoal, tracker.ChangeGoalUpdated, "**Goal:**"},
+		"a priority list": {tracker.KindPerson, tracker.ChangePrioritised, "**Your priorities:**"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := tracker.Prompt{}.Build(objectWake(tc.object, tc.kind), nil)
@@ -106,9 +100,9 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 				t.Errorf("%s rendered as a TASK:\n%s", name, body)
 			}
 			// AND IT NEVER SENDS THE SEAT TO get_work_item FOR ITSELF.
-			// A goal's uuid and a sprint's `KEY.n` are not task keys,
-			// and a pointer at one costs the seat a round and a failed
-			// tool call to discover.
+			// A goal's uuid is not a task key, and a pointer at one
+			// costs the seat a round and a failed tool call to
+			// discover.
 			if tc.object != tracker.KindPerson &&
 				strings.Contains(body, tracker.GetWorkItemTool) {
 
@@ -121,7 +115,7 @@ func TestANonTaskWakeIsNotRenderedAsATask(t *testing.T) {
 
 // THE PRIORITISED WAKE NAMES THE TASK AND ASKS FOR AN ANSWER.
 //
-// It is the one Addressed wake of the four — the spec's "a seat starts it, or
+// It is the one Addressed wake of the three — the spec's "a seat starts it, or
 // says why not" — and Addressed is ENFORCED: the turn is sent back for more
 // rounds until a tool call delivered. A seat obliged to deliver on a task it
 // was never told the identity of is the worst shape this change could take.
@@ -152,9 +146,8 @@ func TestThePrioritisedWakeIsActionable(t *testing.T) {
 // A WAKE ABOUT A NON-TASK OBJECT KEYS ITS CONVERSATION ON THAT OBJECT.
 //
 // Falling through to an empty key would put every goal update in the company
-// into ONE ledger with every sprint close and every priorities write — a
-// conversation key is what separates threads, and a shared empty one merges
-// them all.
+// into ONE ledger with every priorities write — a conversation key is what
+// separates threads, and a shared empty one merges them all.
 func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{}
@@ -189,8 +182,6 @@ func objectWake(object tracker.ObjectKind, kind tracker.ChangeKind) notify.Inbou
 		switch object {
 		case tracker.KindGoal:
 			kind = tracker.ChangeGoalUpdated
-		case tracker.KindSprint:
-			kind = tracker.ChangeSprintClosed
 		case tracker.KindPerson:
 			kind = tracker.ChangePrioritised
 		default:
@@ -198,12 +189,11 @@ func objectWake(object tracker.ObjectKind, kind tracker.ChangeKind) notify.Inbou
 		}
 	}
 	meta := map[string]string{
-		tracker.MetaObject:      string(object),
-		tracker.MetaObjectID:    "obj-1",
-		tracker.MetaChangeKind:  string(kind),
-		tracker.MetaProject:     "ENG",
-		tracker.MetaVia:         string(reasonFor(kind)),
-		tracker.MetaProjectLead: "lead",
+		tracker.MetaObject:     string(object),
+		tracker.MetaObjectID:   "obj-1",
+		tracker.MetaChangeKind: string(kind),
+		tracker.MetaProject:    "ENG",
+		tracker.MetaVia:        string(reasonFor(kind)),
 	}
 	if object == tracker.KindPerson {
 		meta[tracker.MetaTaskKey] = "ENG-1"
@@ -220,8 +210,6 @@ func reasonFor(kind tracker.ChangeKind) tracker.Reason {
 	switch kind {
 	case tracker.ChangeGoalUpdated:
 		return tracker.ReasonGoalOwner
-	case tracker.ChangeSprintStarted, tracker.ChangeSprintClosed:
-		return tracker.ReasonSprint
 	case tracker.ChangePrioritised:
 		return tracker.ReasonPrioritised
 	}
@@ -230,8 +218,8 @@ func reasonFor(kind tracker.ChangeKind) tracker.Reason {
 
 // A ROUTABLE KIND AND A PROMPT FRAME ARE THE SAME SET, stated from the other
 // side: a kind the prompt can render and the parser drops is a wake nobody
-// receives, which is the state all four of these were in.
-func TestTheRoutableSetIsExactlyTheFourKinds(t *testing.T) {
+// receives, which is the state all of these were in.
+func TestTheRoutableSetIsExactlyTheThreeKinds(t *testing.T) {
 	t.Parallel()
 	var routable []tracker.ObjectKind
 	for _, kind := range tracker.ObjectKinds {
@@ -240,7 +228,7 @@ func TestTheRoutableSetIsExactlyTheFourKinds(t *testing.T) {
 		}
 	}
 	want := []tracker.ObjectKind{
-		tracker.KindTask, tracker.KindProject, tracker.KindSprint,
+		tracker.KindTask, tracker.KindProject,
 		tracker.KindGoal, tracker.KindPerson,
 	}
 	want = slices.DeleteFunc(want, func(k tracker.ObjectKind) bool {
@@ -340,68 +328,6 @@ func TestAGoalHealthUpdateCarriesItsProse(t *testing.T) {
 	}
 }
 
-// A SPRINT CLOSE WAKES THE SEATS WITH WORK IN IT, and the project's lead.
-func TestASprintCloseWakesItsAssigneesAndLead(t *testing.T) {
-	r := newRoundTrip(t)
-	r.writer.Leads = fixedLeads{project: "lead"}
-	number := r.startedSprintWithWork("alice")
-	r.drainForClose()
-
-	if _, err := r.writer.CloseSprint(t.Context(), "op-close", "ENG", number); err != nil {
-		t.Fatalf("close the sprint: %v", err)
-	}
-	wake := r.lastWake()
-	if wake == nil {
-		t.Fatal("a sprint close published no notification — the one moment a " +
-			"sprint has something to report, and nobody is told")
-	}
-	if wake.Kind != tracker.ChangeSprintClosed {
-		t.Fatalf("kind = %q, want %q", wake.Kind, tracker.ChangeSprintClosed)
-	}
-	handles := candidateHandles(wake)
-	for _, who := range []string{"alice", "lead"} {
-		if !slices.Contains(handles, who) {
-			t.Errorf("%s is not woken by the close: %v", who, handles)
-		}
-	}
-	if !strings.Contains(wake.Excerpt, "closed") {
-		t.Errorf("the card does not say what happened: %q", wake.Excerpt)
-	}
-	// AND IT COUNTS WHAT IT CLOSED WITH. `open_at_close` has been a column
-	// on the row and a field in the applier's INSERT since the tracker
-	// landed, and no writer ever set it — so every sprint this engine has
-	// closed reported 0, `rollover_pending` could never be true, and the
-	// card read "closed with 0 open task(s)" over a fortnight's unfinished
-	// work.
-	if !strings.Contains(wake.Excerpt, "1 open task") {
-		t.Errorf("the sprint held one unfinished task and its card says %q",
-			wake.Excerpt)
-	}
-	// THE SPILLOVER IS PENDING AT THE CLOSE, which is not a bug: the
-	// rollover runs after, and a close that claimed to know where the work
-	// went would be reporting a decision nobody had made.
-	if !strings.Contains(wake.Excerpt, "rollover pending") {
-		t.Errorf("the card does not say the spillover is unsettled: %q",
-			wake.Excerpt)
-	}
-}
-
-// AND A START WAKES THEM TOO, under the same reason.
-func TestASprintStartWakesItsAssignees(t *testing.T) {
-	r := newRoundTrip(t)
-	r.writer.Leads = fixedLeads{project: "lead"}
-	r.startedSprintWithWork("alice")
-
-	wake := r.lastWake()
-	if wake == nil || wake.Kind != tracker.ChangeSprintStarted {
-		t.Fatalf("a sprint start published %+v, want a %q wake",
-			wake, tracker.ChangeSprintStarted)
-	}
-	if handles := candidateHandles(wake); !slices.Contains(handles, "alice") {
-		t.Errorf("the seat with work in the sprint is not woken: %v", handles)
-	}
-}
-
 // WRITING SOMEBODY ELSE'S PRIORITIES WAKES THEM, and it is ADDRESSED: being
 // told what to do next by somebody above you is an instruction.
 func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
@@ -497,36 +423,6 @@ func candidateHandles(wake *tracker.Notify) []string {
 	}
 	return out
 }
-
-// startedSprintWithWork mints a sprint, puts one assigned task in it and
-// starts it, returning the sprint's number.
-func (r *roundTrip) startedSprintWithWork(assignee string) int {
-	r.t.Helper()
-	const number = 1
-	seedNamedSprint(r.t, r, number, "Kickoff", tracker.SprintFuture)
-
-	task := newTask("t-sprint-work")
-	task.Key = ""
-	task.Assignee = assignee
-	sprint := number
-	task.Sprint = &sprint
-	if _, err := r.writer.CreateTask(r.t.Context(), "op-sprint-task", task, nil); err != nil {
-		r.t.Fatalf("file work into the sprint: %v", err)
-	}
-	r.drain()
-
-	if _, err := r.writer.StartSprint(r.t.Context(), "op-start", "ENG", number); err != nil {
-		r.t.Fatalf("start the sprint: %v", err)
-	}
-	// NOT DRAINED. The caller that wants the START's own wake reads it off
-	// the log before anything else lands on it, and the caller that closes
-	// drains first — see [roundTrip.drainForClose].
-	return number
-}
-
-// drainForClose applies the start so the sprint is `active` in this node's own
-// rows, which is what the close's state machine reads.
-func (r *roundTrip) drainForClose() { r.drain() }
 
 // AN OPERATOR MAY WRITE ANYBODY'S PRIORITIES, and a SEAT may not.
 //
@@ -726,13 +622,12 @@ func clipForTest(s string) string {
 
 // A SCHEDULE CHANGE CARRIES WHAT IT CHANGED.
 //
-// A due date, a start, an estimate, a size and a sprint had no producer in
-// this tree until the write tools gained one, so their absence from
+// A due date, a start, an estimate and a size had no producer in this tree
+// until the write tools gained one, so their absence from
 // [tracker.TaskDeltas] was invisible: nothing could move them, so nothing
-// reported the move. With a producer, a sprint change or a re-estimate wrote a
-// history row and a notification card carrying NO deltas at all — which every
-// renderer falls back on the bare KIND for, so a feed showed "sprint" under a
-// badge already reading "sprint" and a card announced a change with nothing in
+// reported the move. With a producer, a re-estimate wrote a history row and a
+// notification card carrying NO deltas at all — which every renderer falls
+// back on the bare KIND for, so a card announced a change with nothing in
 // it.
 //
 // It also matters beyond display: the applier rebuilds a task's spans from the
@@ -747,13 +642,12 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 		}
 		return &at
 	}
-	one, two := 1, 2
 	before := tracker.Task{
-		ID: "t-1", Title: "the same title", Sprint: &one,
+		ID: "t-1", Title: "the same title",
 		DueAt: day("2031-04-16T00:00:00Z"), EstimateMinutes: 90, Points: 3,
 	}
 	after := tracker.Task{
-		ID: "t-1", Title: "the same title", Sprint: &two,
+		ID: "t-1", Title: "the same title",
 		DueAt: day("2031-04-23T00:00:00Z"), EstimateMinutes: 120, Points: 5.5,
 		StartAt: day("2031-04-17T00:00:00Z"),
 	}
@@ -770,7 +664,6 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 		// A HALF POINT STILL PRINTS: a scale with halves in it is a
 		// scale somebody chose.
 		"points": {From: "3", To: "5.5"},
-		"sprint": {From: "1", To: "2"},
 	} {
 		if got := moved[field]; got != want {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
@@ -785,8 +678,8 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 //
 // [tracker.Task.Points] and [tracker.Task.EstimateMinutes] are a plain float64
 // and a plain int over NOT NULL columns, so nothing anywhere in this package
-// can tell "never sized" from "sized at nothing" — a workload sums the zero, a
-// burndown adds it, a sprint's capacity map skips the handle — and a card
+// can tell "never sized" from "sized at nothing" — a workload sums the zero
+// and a total adds it — and a card
 // printing "0" would be the one surface claiming a fact the rest of the engine
 // does not hold. What makes the clearing visible is not a distinction between
 // two zeroes: it is that the FROM side is a number and the TO side is not, so

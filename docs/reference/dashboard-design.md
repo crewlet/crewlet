@@ -231,7 +231,7 @@ what they did, what it cost, the machine.
 
 | Row | Route prefix | Badge |
 |---|---|---|
-| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a sprint you are in started), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
+| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a goal you own was updated), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
 | **My work** | `#/me` | — |
 | **Work** | `#/work`, `#/goals` | — |
 | **Company** | `#/company` | — |
@@ -297,7 +297,6 @@ because every single-modifier combination worth having is already the browser's.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
-| `#/work/{KEY}/sprints` · `#/work/{KEY}/sprints/{n}` | **Sprints** — figures, velocity, burndown | |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/goals` · `#/goals/{id}` | **Goals** | |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
@@ -336,7 +335,7 @@ been able to answer.** Search is the ranking a seat gets from `search_work` —
 BM25 over the engine's own index — which the operator reading the same company
 had no access to at all; the board's `q=` is an escaped substring over an
 excerpt and answers something else. The item's **Woke** tab is who one change
-actually reached and under which of twenty reasons, which is the fact no
+actually reached and under which of nineteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
 say why. And a seat's **Conversations** tab is its own thread ledger — the only
 account of what a seat said on a surface this engine does not own. Every one of
@@ -608,8 +607,8 @@ sorted, filtered and paged as they left it — and a rail that stepped through
 anything else would be walking a different set from the one on screen. A
 screen that publishes nothing gets a rail with no stepper, which is honest.
 
-The id is split on its FIRST colon only, so `sprint:ENG/3` and
-`page:ENG/Deploy runbook` survive being carried in a query value.
+The id is split on its FIRST colon only, so `page:ENG/Deploy runbook`
+survives being carried in a query value.
 
 ### The frame
 
@@ -672,9 +671,8 @@ company where nothing is wrong renders as a blank page, and a reader cannot
 tell that from a dashboard that is broken.
 
 **So the first fold is the company, and the queue is under it.** The pulse
-strip is eight facts on one line — seats working, runs parked, open, overdue,
-blocked, the active sprint closing soonest and its days left, tokens, alarms —
-each a link into the workspace that owns it, each carrying the scope of its own
+strip is seven facts on one line — seats working, runs parked, open, overdue,
+blocked, tokens, alarms — each a link into the workspace that owns it, each carrying the scope of its own
 claim in its title. Every one of them is true whatever the queue holds, so an
 empty band below then MEANS something: nothing is waiting on you, on a company
 that is visibly running. A figure whose query has not answered draws an em
@@ -742,7 +740,7 @@ that has re-decided what counts as primary gets its own badge without the
 client knowing anything about it.
 
 **The wake reason opens every row.** The applier records, per change and per
-recipient, the ONE reason of twenty under which that person heard about it.
+recipient, the ONE reason of nineteen under which that person heard about it.
 Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
 Jira and ClickUp can all tell you that you were notified, and none can tell you
 why. The client carries no copy of the split — that is a property of the person,
@@ -1716,8 +1714,8 @@ is one of the rules on this page applied to a tracker.
   fetched differently would be a second idea of what the filters mean. The
   timeline's own window is derived from the rows on screen, which is why it
   asks for a big unpaged page: a second page would redraw the first one's axis.
-  Sprint, Backlog and **Trash** are the other three tabs, and each is a saved
-  QUERY rather than a shape — which is the distinction the strip is built on. A
+  **Trash** is the other tab, and it is a saved QUERY rather than a shape —
+  which is the distinction the strip is built on. A
   tab whose meaning is a parameter is a view; a tab whose meaning is a drawing
   is a type. The trash is a Table carrying `removed=true`, so every view saved
   with that parameter is read as one: the removal's actor and instant come from
@@ -1769,13 +1767,11 @@ is one of the rules on this page applied to a tracker.
   1280 — an ordinary laptop — one board column was left beside a detail
   panel, which is not a board.
 - **The charts answer the questions the numbers cannot.** A census bar says
-  the shape of a project where three counts say only their sizes; a velocity
-  bar list is read in SPRINT order, never sorted by size, because the
-  question is a trend; a burndown draws remaining against an ideal, where
-  remaining is an OPEN STATUS GROUP rather than "not delivered" — counting
-  cancelled work as remaining makes a descoped sprint run flat. All of them
-  wear STATUS tones rather than the categorical hues, so one fact is never
-  two colours on one screen.
+  the shape of a project where three counts say only their sizes; a load bar
+  is drawn against the HEAVIEST QUEUE on screen rather than an absolute
+  ceiling, because a queue of thirty is heavy in one company and a quiet week
+  in another. All of them wear STATUS tones rather than the categorical hues,
+  so one fact is never two colours on one screen.
 
 ---
 

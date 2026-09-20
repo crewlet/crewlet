@@ -158,7 +158,7 @@ const MaxInboxRows = 50
 // THE ADDRESSED ONES PLUS THE OWNERSHIP ONES. A mention, a question, an answer
 // to a question you asked, work assigned to you, work you reported, and work
 // that became unblocked are all things that change what you should do next.
-// Everything else — a thread you are in, a sprint you are on, a task you watch
+// Everything else — a thread you are in, a goal you own, a task you watch
 // — is context, and context that competes with action turns an inbox into a
 // feed nobody reads.
 //

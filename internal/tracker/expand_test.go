@@ -301,7 +301,7 @@ func TestThePersonalPresets(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"a", "b", "c"} {
-		inSprint(t, r, id, nil)
+		filedTask(t, r, id)
 	}
 	mine := newTask("mine")
 	mine.Assignee = "ana"

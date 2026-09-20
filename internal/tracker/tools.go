@@ -59,8 +59,8 @@ const (
 	// There is no companion that WRITES. A project's name, purpose and
 	// owning unit are chart-owned — written by the epoch apply and by
 	// nothing else — so a seat editing them would be editing the company's
-	// structure through the back door; its sprint policy and its field
-	// declarations are a lead's.
+	// structure through the back door; its field declarations are a
+	// lead's.
 	ListProjectsTool    = "list_projects"
 	DescribeProjectTool = "describe_project"
 
@@ -84,11 +84,6 @@ const (
 	// hold. Every other facet it carries is gated inside, on the project's
 	// lead or on a person's own credential, and the refusals name which.
 	WriteProjectTool = "write_project"
-
-	// SprintReportTool is how a sprint went, which a seat asking "what did
-	// we take on and what landed" needs and cannot derive from the board:
-	// every figure is over a PAST window, and the board is about now.
-	SprintReportTool = "sprint_report"
 
 	// TaskActivityTool is what HAPPENED, which no board can answer: a
 	// board is about what is there now, and every question about a change
@@ -155,13 +150,6 @@ const (
 	// write is not a freeze.
 	RemoveWorkItemTool  = "remove_work_item"
 	RestoreWorkItemTool = "restore_work_item"
-
-	// ManageSprintTool is the two sprint decisions a policy cannot make:
-	// ending one early, and settling a spillover the policy declined to
-	// decide. Lead-gated, and an operator's — a sprint is a COMMITMENT a
-	// team made together, and a seat that could start or close one would
-	// be deciding its own team's plan.
-	ManageSprintTool = "manage_sprint"
 )
 
 // GetWorkCatalogueTool is the one catalogue verb a SEAT does hold.
@@ -179,16 +167,16 @@ func OperatorOnlyTools() []string {
 		WriteWorkGoalTool, WriteWorkCatalogueTool,
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
 		WorkInboxTool,
-		RemoveWorkItemTool, RestoreWorkItemTool, ManageSprintTool,
+		RemoveWorkItemTool, RestoreWorkItemTool,
 	}
 }
 
-// Tools are the fifteen a seat holds, so a caller registering them names one thing.
+// Tools are the fourteen a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool,
 		SearchWorkItemsTool, GetWorkCatalogueTool, ListProjectsTool, DescribeProjectTool,
-		WriteProjectTool, ListWorkGoalsTool, SprintReportTool,
+		WriteProjectTool, ListWorkGoalsTool,
 		TaskActivityTool, MyWorkTool}
 }
 

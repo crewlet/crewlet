@@ -512,6 +512,16 @@ var retiredCompanyFields = map[string]string{
 		"replay window — so they live in Tier A under " +
 		"`stream.tracker_retention`",
 
+	// The working calendar, which was only ever a sprint's calendar. It
+	// shipped in the example company, so it is refused by name rather
+	// than as a misspelling.
+	"TrackerNativeConfig.non_working_weekdays": "`non_working_weekdays` is " +
+		"retired and NOTHING replaced it. It existed so a sprint's " +
+		"burndown guideline could skip the days nobody worked, and sprints " +
+		"are gone — no figure this engine computes is measured against a " +
+		"working week any more, so there is no setting to move it to. " +
+		"Delete the line",
+
 	"Knowledge.confluence_spaces": "`knowledge.confluence_spaces` is now " +
 		"`knowledge.scope`, and it scopes whichever knowledge base the " +
 		"company runs rather than Confluence specifically. The values are " +

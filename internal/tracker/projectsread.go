@@ -3,14 +3,12 @@ package tracker
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Reading a company's projects — the listing, and one project in full.
@@ -27,8 +25,8 @@ import (
 // # Both of these are SET reads
 //
 // A project's listing and its description are dominated by aggregates over
-// TASK rows — the counts here, and `active_sprint {committed, done, …}`,
-// `velocity_avg` and `by_assignee` in the description. A set read cannot
+// TASK rows — the counts here, and `by_assignee` in the description. A set
+// read cannot
 // enumerate the subjects that would have ENTERED its answer, so neither can
 // claim completeness while a deferred record's scope could intersect the
 // project: both carry `complete` with its `incomplete` beside the read level,
@@ -73,26 +71,6 @@ type Units interface {
 	ResolveUnit(name string) (display string, lead LeadRef, found bool)
 }
 
-// SprintSummary is the one-line sprint state a listing row carries.
-type SprintSummary struct {
-	Active            *ActiveSprint `json:"active,omitempty"`
-	Next              *int          `json:"next,omitempty"`
-	PendingSpillovers []int         `json:"pending_spillovers,omitempty"`
-}
-
-// ActiveSprint is the running sprint, with what it is at.
-type ActiveSprint struct {
-	Number  int           `json:"number"`
-	Name    string        `json:"name"`
-	State   SprintState   `json:"state"`
-	EndAt   time.Time     `json:"end_at"`
-	Figures SprintFigures `json:"figures"`
-
-	// DaysRemaining is whole days to the end, floored at zero — a sprint
-	// past its end but not yet closed is late, not negative.
-	DaysRemaining int `json:"days_remaining"`
-}
-
 // TaskCounts is a project's maintained task census.
 type TaskCounts struct {
 	Open   int `json:"open"`
@@ -109,9 +87,8 @@ type ProjectRow struct {
 	Unit UnitRef `json:"unit"`
 	Lead LeadRef `json:"lead"`
 
-	DefaultAssignee string         `json:"default_assignee,omitempty"`
-	Sprints         *SprintSummary `json:"sprints,omitempty"`
-	Counts          TaskCounts     `json:"task_counts"`
+	DefaultAssignee string     `json:"default_assignee,omitempty"`
+	Counts          TaskCounts `json:"task_counts"`
 
 	Archived bool   `json:"archived,omitempty"`
 	Version  uint64 `json:"version"`
@@ -177,7 +154,7 @@ type ProjectQuery struct {
 }
 
 // Projects answers the company's projects with their maintained counts.
-func (r *Reader) Projects(ctx context.Context, q ProjectQuery, now time.Time) (
+func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 	ProjectListing, error) {
 
 	if q.Level == "" {
@@ -200,7 +177,7 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		rows, total, err := readProjectRows(ctx, tx, q, limit, now)
+		rows, total, err := readProjectRows(ctx, tx, q, limit)
 		if err != nil {
 			return err
 		}
@@ -238,7 +215,7 @@ func projectListScope() statelog.ScopeSet {
 
 // readProjectRows reads the projects a query names.
 func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
-	limit int, now time.Time) ([]ProjectRow, int, error) {
+	limit int) ([]ProjectRow, int, error) {
 
 	where := []string{}
 	var args []any
@@ -272,7 +249,7 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.key, p.name, p.purpose, p.unit, p.default_assignee,
-		       p.active_sprint, p.sprint_next, p.open_count, p.done_count,
+		       p.open_count, p.done_count,
 		       p.closed_count, p.archived, p.version
 		FROM tracker_projects p`+clause+`
 		ORDER BY p.key
@@ -286,11 +263,9 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	for rows.Next() {
 		var row ProjectRow
 		var unit string
-		var active sql.NullInt64
-		var next int
 		var archived int
 		if err := rows.Scan(&row.Key, &row.Name, &row.Purpose, &unit,
-			&row.DefaultAssignee, &active, &next, &row.Counts.Open,
+			&row.DefaultAssignee, &row.Counts.Open,
 			&row.Counts.Done, &row.Counts.Closed, &archived,
 			&row.Version); err != nil {
 			return nil, 0, fmt.Errorf("tracker: scan a project: %w", err)
@@ -301,13 +276,6 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("tracker: read the projects: %w", err)
-	}
-	for i := range out {
-		summary, err := readSprintSummary(ctx, tx, out[i].Key, now)
-		if err != nil {
-			return nil, 0, err
-		}
-		out[i].Sprints = summary
 	}
 	return out, total, nil
 }
@@ -327,105 +295,6 @@ func resolveUnit(units Units, name string) (UnitRef, LeadRef) {
 	}
 	display, lead, found := units.ResolveUnit(name)
 	return UnitRef{Key: name, Name: display, Resolved: found}, lead
-}
-
-// readSprintSummary is the sprint state a listing row carries.
-//
-// NIL when the project runs no sprints at all, which is what makes an absent
-// `sprints` block "this team does not work in sprints" rather than "this team
-// has none right now".
-func readSprintSummary(ctx context.Context, tx *sql.Tx, project string,
-	now time.Time) (*SprintSummary, error) {
-
-	var any bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM tracker_sprints WHERE project_key = ?)`,
-		project).Scan(&any); err != nil {
-		return nil, fmt.Errorf("tracker: look for the sprints of %s: %w",
-			project, err)
-	}
-	if !any {
-		return nil, nil
-	}
-	summary := &SprintSummary{}
-
-	// THE SPRINT ROW'S OWN STATE, not the project's pointer: the pointer
-	// is the start guard and can briefly name a sprint the duty has just
-	// closed, and a screen rendering a closed sprint as active is the one
-	// thing this block must not do.
-	var number int
-	var name string
-	var end int64
-	switch err := tx.QueryRowContext(ctx, `
-		SELECT number, name, end_at FROM tracker_sprints
-		WHERE project_key = ? AND state = ? AND archived = 0
-		ORDER BY number LIMIT 1`,
-		project, string(SprintActive)).Scan(&number, &name, &end); {
-	case err == nil:
-		endAt := store.DecodeTime(end)
-		summary.Active = &ActiveSprint{
-			Number: number, Name: name, State: SprintActive,
-			EndAt: endAt, DaysRemaining: daysRemaining(endAt, now),
-		}
-	case errors.Is(err, sql.ErrNoRows):
-	default:
-		return nil, fmt.Errorf("tracker: read the active sprint of %s: %w",
-			project, err)
-	}
-
-	var next sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT MIN(number) FROM tracker_sprints
-		WHERE project_key = ? AND state = ? AND archived = 0`,
-		project, string(SprintFuture)).Scan(&next); err != nil {
-		return nil, fmt.Errorf("tracker: read the next sprint of %s: %w",
-			project, err)
-	}
-	if next.Valid {
-		n := int(next.Int64)
-		summary.Next = &n
-	}
-
-	// PENDING: closed, and nobody has decided where the unfinished work
-	// goes. The shipped partial index `tracker_sprints_unsettled_idx` is
-	// exactly this predicate.
-	pending, err := tx.QueryContext(ctx, `
-		SELECT number FROM tracker_sprints
-		WHERE project_key = ? AND state = 'closed' AND rollover_to IS NULL
-		ORDER BY number`, project)
-	if err != nil {
-		return nil, fmt.Errorf("tracker: read the pending spillovers of %s: %w",
-			project, err)
-	}
-	defer func() { _ = pending.Close() }()
-	for pending.Next() {
-		var n int
-		if err := pending.Scan(&n); err != nil {
-			return nil, fmt.Errorf("tracker: scan a pending spillover of %s: %w",
-				project, err)
-		}
-		summary.PendingSpillovers = append(summary.PendingSpillovers, n)
-	}
-	if err := pending.Err(); err != nil {
-		return nil, fmt.Errorf("tracker: read the pending spillovers of %s: %w",
-			project, err)
-	}
-	return summary, nil
-}
-
-// daysRemaining is whole days from now to an end, floored at zero.
-func daysRemaining(end, now time.Time) int {
-	days := int(end.Sub(now).Hours() / 24)
-	if remainder := end.Sub(now); remainder > 0 && remainder.Hours() < 24 {
-		// A SPRINT ENDING TODAY HAS A DAY LEFT, not none: rounding it to
-		// zero tells a team the sprint is over while they are still in
-		// it.
-		return 1
-	}
-	if days < 0 {
-		return 0
-	}
-	return days
 }
 
 // ---- one project, in full ---------------------------------------------- //
@@ -462,14 +331,6 @@ type ProjectDetail struct {
 	Shadowed []string `json:"shadowed,omitempty"`
 
 	Tags []Tag `json:"tags,omitempty"`
-
-	SprintPolicy *SprintPolicy `json:"sprint_policy,omitempty"`
-
-	// Recent is the last [SprintWindowDefault] sprints with every figure,
-	// and VelocityAvg is their mean delivery — the same arithmetic
-	// `sprint_report` runs, from the same function.
-	Recent      []SprintRow `json:"recent_sprints,omitempty"`
-	VelocityAvg *float64    `json:"velocity_avg,omitempty"`
 
 	// PolicyStamp is what a task's own stamp is compared against: a task
 	// validated below it has not been checked against the current
@@ -510,11 +371,11 @@ type ProjectDetailQuery struct {
 
 // Project answers one project in full.
 //
-// ONE READ TRANSACTION for the project, both catalogues, its tags and its
-// sprints — so the fields a form draws and the policy stamp it validates
-// against come from one apply.
-func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery,
-	now time.Time) (ProjectDetail, error) {
+// ONE READ TRANSACTION for the project, both catalogues and its tags — so the
+// fields a form draws and the policy stamp it validates against come from one
+// apply.
+func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery) (
+	ProjectDetail, error) {
 
 	if q.Level == "" {
 		return ProjectDetail{}, fmt.Errorf("tracker: this project read " +
@@ -537,7 +398,7 @@ func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery,
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		return readProjectDetail(ctx, tx, key, q, now, &out)
+		return readProjectDetail(ctx, tx, key, q, &out)
 	})
 	if err != nil {
 		return ProjectDetail{}, err
@@ -566,7 +427,7 @@ func projectDetailScope(project string) statelog.ScopeSet {
 }
 
 func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
-	q ProjectDetailQuery, now time.Time, out *ProjectDetail) error {
+	q ProjectDetailQuery, out *ProjectDetail) error {
 
 	project, found, err := readProject(ctx, tx, key)
 	if err != nil {
@@ -593,7 +454,6 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	out.Archived = project.Archived
 	out.Version = project.Version
 	out.Unit, out.Lead = resolveUnit(q.Units, project.Unit)
-	out.SprintPolicy = project.Sprints
 
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
@@ -636,30 +496,6 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	}
 	if held {
 		out.Tags = liveTags(tags.Tags)
-	}
-
-	summary, err := readSprintSummary(ctx, tx, key, now)
-	if err != nil {
-		return err
-	}
-	out.Sprints = summary
-	if summary != nil {
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		recent, _, err := readSprintRows(ctx, tx, project,
-			SprintQuery{Project: key}, SprintWindowDefault, now)
-		if err != nil {
-			return err
-		}
-		out.Recent = recent
-		out.VelocityAvg = velocityOf(recent)
-		if summary.Active != nil {
-			for _, row := range recent {
-				if row.Number == summary.Active.Number {
-					summary.Active.Figures = row.Figures
-					break
-				}
-			}
-		}
 	}
 
 	position, applied, err := readCheckpoint(ctx, tx)

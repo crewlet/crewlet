@@ -19,13 +19,13 @@ import (
 // this reads that back rather than re-deriving a judgement the router made
 // with more information.
 //
-// # Twenty reasons, THREE FRAMES
+// # Nineteen reasons, THREE FRAMES
 //
-// The router distinguishes twenty reasons because the routing rules genuinely
+// The router distinguishes nineteen reasons because the routing rules genuinely
 // differ — a blocker's dependent and a goal's owner are reached by different
 // paths. What a RECIPIENT needs to be told collapses to three: somebody is
 // asking you, this is your work, or this is activity you follow. A prompt with
-// twenty openers would be twenty places for one sentence to drift, and the
+// nineteen openers would be nineteen places for one sentence to drift, and the
 // reason itself is rendered in the header either way.
 //
 // # This prompt DOES name tools, and that is the exception rather than a lapse
@@ -60,13 +60,12 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	switch ChangeKind(n.EventType) {
 	case ChangeComment, ChangeCommentEdited:
 		return strings.TrimSpace(n.Body) == ""
-	case ChangePrioritised, ChangeSprintClosed:
-		// NEITHER IS A POINTER. A `prioritised` wake names the task, the
-		// person who put it there and the position, and a closed sprint
-		// carries its own figures — so the seat can begin reasoning from
-		// the trigger, and turning the recon on would cost it the
-		// personal memory and episode recall that the flag suppresses,
-		// for a fetch of something it was already told.
+	case ChangePrioritised:
+		// NOT A POINTER. A `prioritised` wake names the task, the person
+		// who put it there and the position — so the seat can begin
+		// reasoning from the trigger, and turning the recon on would cost
+		// it the personal memory and episode recall that the flag
+		// suppresses, for a fetch of something it was already told.
 		//
 		// `prioritised` reaches this switch at all only because it is the
 		// one non-task wake that DOES carry a task key: the task at the
@@ -98,9 +97,9 @@ func (Prompt) ConversationKey(metadata map[string]string, _ string) string {
 		return key
 	}
 	// A NON-TASK WAKE KEYS ON ITS OWN OBJECT. Falling through to an empty
-	// key would put every goal update in the company into ONE ledger
-	// together with every sprint close — a conversation key is what
-	// separates threads, and a shared empty one merges them all.
+	// key would put every goal update in the company into ONE ledger — a
+	// conversation key is what separates threads, and a shared empty one
+	// merges them all.
 	if id := metadata[MetaObjectID]; id != "" {
 		return metadata[MetaObject] + ":" + id
 	}
@@ -136,7 +135,7 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	// THE OBJECT DECIDES THE FRAME, before the reason does. Every opener
 	// below says "A task…", the header is labelled **Task:** and the
 	// context block sends the reader to get_work_item — none of which is
-	// true of a goal, a sprint or a person's priority list.
+	// true of a goal or a person's priority list.
 	//
 	// AN ABSENT KEY IS A TASK, which is what keeps a record written by an
 	// older build rendering exactly as it did: this metadata arrived with
@@ -239,8 +238,6 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		b.WriteString("A task you are collaborating on changed.")
 	case ReasonGoalOwner:
 		b.WriteString("A goal you own or are part of changed.")
-	case ReasonSprint:
-		b.WriteString("A sprint your work is in started or closed.")
 	case ReasonWatcher:
 		b.WriteString("A task you are watching changed.")
 	case ReasonUnwatched:
@@ -328,8 +325,6 @@ func changeLead(meta map[string]string, actor string) string {
 		return "Fields were edited" + by + "."
 	case ChangeTags:
 		return "The tags changed" + by + "."
-	case ChangeSprint:
-		return "The sprint changed" + by + "."
 	case ChangeChecklist:
 		return "A checklist changed" + by + "."
 	case ChangeReparented:

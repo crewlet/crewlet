@@ -233,8 +233,7 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	}
 }
 
-// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE, and a sprinting
-// project has two more.
+// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE.
 //
 // That is what makes "required views" moot: a fresh project needs no setup
 // gesture and nothing has to guard against somebody deleting the last view.
@@ -269,32 +268,6 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 		}
 	}
 
-	// A SPRINT POLICY ADDS TWO, and only where there is one.
-	if _, err := r.writer.WriteDocument(t.Context(), "op-sprinting",
-		tracker.ProjectSubject("ENG"), "", tracker.Project{
-			V: 1, Key: "ENG", Name: "Engineering",
-			Sprints:   &tracker.SprintPolicy{},
-			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, tracker.ChangeProjectCreated, nil); err != nil {
-		t.Fatalf("turn sprints on: %v", err)
-	}
-	r.drain()
-
-	got := stripKeys(r.strip(tracker.Container{
-		Kind: tracker.ContainerProject, ID: "ENG"}, ""))
-	for _, key := range []string{tracker.ViewKeySprint, tracker.ViewKeyBacklog} {
-		if !containsString(got, key) {
-			t.Fatalf("a sprinting project's strip is %v, want %s in it", got, key)
-		}
-	}
-	// AND THE WORKSPACE IS UNCHANGED: a project's policy is not the
-	// company's. The SET rather than its size, for the reason above — a
-	// count here would report the timeline's arrival as a workspace that
-	// grew a sprint tab.
-	if got := stripKeys(r.strip(tracker.Container{
-		Kind: tracker.ContainerWorkspace}, "")); !slices.Equal(got, want) {
-		t.Fatalf("the workspace strip grew with a project's policy: %v", got)
-	}
 }
 
 // EVERY IMPLICIT VIEW'S OWN PARAMETERS PARSE.
@@ -313,24 +286,13 @@ func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	if _, err := r.writer.WriteDocument(t.Context(), "op-sprinting",
-		tracker.ProjectSubject("ENG"), "", tracker.Project{
-			V: 1, Key: "ENG", Name: "Engineering",
-			Sprints:   &tracker.SprintPolicy{},
-			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, tracker.ChangeProjectCreated, nil); err != nil {
-		t.Fatalf("turn sprints on: %v", err)
-	}
-	r.drain()
-
 	strip := r.strip(tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}, "")
 	want := []string{
 		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
 		tracker.ViewKeyTimeline, tracker.ViewKeyTable, tracker.ViewKeyTrash,
-		tracker.ViewKeySprint, tracker.ViewKeyBacklog,
 	}
 	if got := stripKeys(strip); !slices.Equal(got, want) {
-		t.Fatalf("a sprinting project offers %v, want %v", got, want)
+		t.Fatalf("a project offers %v, want %v", got, want)
 	}
 	for _, row := range strip.Views {
 		params := make(tracker.MapParams, len(row.Params)+1)

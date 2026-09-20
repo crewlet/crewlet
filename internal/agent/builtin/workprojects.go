@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -23,25 +22,21 @@ import (
 // `describe_project` is the one a woken seat reaches for. The turn-start
 // prefetch renders a ≤2 KB block from local rows for the seat's OWN project;
 // this is how it learns any other one — which statuses exist, which fields are
-// required of which type, what the active sprint is at, and who leads the unit
-// that owns it.
+// required of which type, and who leads the unit that owns it.
 //
 // # Neither writes, and there is no companion that does
 //
 // A project's name, purpose and owning unit are CHART-OWNED: they are written
 // by the epoch apply from the org chart and by nothing else, so a seat editing
 // them would be editing the company's structure through the back door. Its
-// sprint policy and its field declarations are a lead's, through the operator
-// surface.
+// field declarations are a lead's, through the operator surface.
 
 // ProjectReader is the tracker read side these tools need.
 type ProjectReader interface {
-	Projects(ctx context.Context, q tracker.ProjectQuery, now time.Time) (
+	Projects(ctx context.Context, q tracker.ProjectQuery) (
 		tracker.ProjectListing, error)
-	Project(ctx context.Context, q tracker.ProjectDetailQuery, now time.Time) (
+	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
 		tracker.ProjectDetail, error)
-	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
-		tracker.SprintListing, error)
 }
 
 type listProjects struct{ deps WorkDeps }
@@ -52,7 +47,7 @@ func (t *listProjects) Name() string { return tracker.ListProjectsTool }
 
 func (t *listProjects) Description() string {
 	return "The projects this company files work into, with how much open " +
-		"work each holds, who leads it and which sprint is running. " +
+		"work each holds and who leads it. " +
 		"create_work_item refuses a project that is not here."
 }
 
@@ -109,7 +104,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE SEAT'S OWN LEVEL, like every other read here — see
 		// [seatReadLevel] for why it is a name and not a literal.
 		Level: seatReadLevel,
-	}, t.deps.now())
+	})
 	if err != nil {
 		return failed(readFailure(tracker.ListProjectsTool, err)), nil
 	}
@@ -126,8 +121,8 @@ func (t *describeProject) Description() string {
 	return "Everything one project expects of the work filed into it: the six " +
 		"statuses with what each means, the types it files, the custom fields " +
 		"grouped by which type they apply to (required ones first, with their " +
-		"options), its tags, its default assignee, its lead and the sprint " +
-		"that is running. Read this before filing into a project you have not " +
+		"options), its tags, its default assignee and its lead. Read this " +
+		"before filing into a project you have not " +
 		"used — a create refused for a missing required field is one round " +
 		"this call would have saved."
 }
@@ -182,80 +177,9 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ForType: strings.TrimSpace(argString(args, "for_type")),
 		Units:   t.deps.Units,
 		Level:   seatReadLevel,
-	}, t.deps.now())
+	})
 	if err != nil {
 		return failed(readFailure(tracker.DescribeProjectTool, err)), nil
 	}
 	return jsonResult(detail)
-}
-
-type sprintReport struct{ deps WorkDeps }
-
-var _ tools.SeatCallable = (*sprintReport)(nil)
-
-func (t *sprintReport) Name() string { return tracker.SprintReportTool }
-
-func (t *sprintReport) Description() string {
-	return "How a project's recent sprints went: what each took on, what " +
-		"arrived after it started, what was pulled out, and what actually " +
-		"shipped inside its own window — per sprint and per person, in the " +
-		"project's own measure, with the team's average velocity."
-}
-
-func (t *sprintReport) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"project": map[string]any{
-				"type":        "string",
-				"description": "The project key. Omit for your own.",
-			},
-			"sprint": map[string]any{
-				"type": "integer",
-				"description": "One sprint's number, for a report on just that " +
-					"one. Omit for the recent window.",
-			},
-			"sprints": map[string]any{
-				"type": "integer",
-				"description": "How many recent sprints to cover, 3 to 10. " +
-					"Default 5 — the span an average is worth taking over.",
-			},
-		},
-	}
-}
-
-func (t *sprintReport) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
-	return t.CallForTurn(ctx, nil, args)
-}
-
-func (t *sprintReport) CallForTurn(ctx context.Context, turn *turnctx.Turn,
-	args map[string]any) (tools.Result, error) {
-
-	actor, err := t.deps.actor(ctx, turn)
-	if err != nil {
-		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.SprintReportTool), nil
-	}
-	reader, ok := t.deps.Reader.(ProjectReader)
-	if !ok || t.deps.Reader == nil {
-		return unconfigured(tracker.SprintReportTool), nil
-	}
-	project := strings.TrimSpace(argString(args, "project"))
-	if project == "" {
-		project = t.deps.defaultProject(actor.Handle)
-	}
-	if project == "" {
-		return failed("Name a project — a sprint belongs to one, and this " +
-			"seat's unit owns none. list_projects reports the keys."), nil
-	}
-	listing, err := reader.Sprints(ctx, tracker.SprintQuery{
-		Project: project,
-		Number:  argInt(args, "sprint", 0),
-		Sprints: argInt(args, "sprints", 0),
-		Level:   seatReadLevel,
-	}, t.deps.now())
-	if err != nil {
-		return failed(readFailure(tracker.SprintReportTool, err)), nil
-	}
-	return jsonResult(listing)
 }

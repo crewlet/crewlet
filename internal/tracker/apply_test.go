@@ -151,6 +151,21 @@ func taskRecord(id string, op tracker.OpKind, payload any, notify *tracker.Notif
 	}
 }
 
+// filedTask files one plain task into ENG under its own id.
+//
+// THE SEEDER THE READ-SIDE SUITES SHARE, so a case about an activity feed, a
+// blocker or a merge states only what it is about rather than repeating a
+// create.
+func filedTask(t *testing.T, r *roundTrip, id string) {
+	t.Helper()
+	task := newTask(id)
+	task.Key = "ENG-" + id
+	if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+		t.Fatalf("CreateTask %s: %v", id, err)
+	}
+	r.drain()
+}
+
 func newTask(id string) tracker.Task {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	return tracker.Task{

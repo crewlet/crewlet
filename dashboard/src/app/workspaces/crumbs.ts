@@ -4,7 +4,7 @@
  * ONE FUNCTION over the route table, rather than a crumb each screen renders
  * for itself. A screen that builds its own trail gets it right on the day it
  * is written and then drifts: the previous shell derived a single `<h1>` from
- * the first path segment, so an item page said "Work", a sprint said "Work",
+ * the first path segment, so an item page said "Work", a project said "Work",
  * and a page four levels deep said "Knowledge" — the reader's whole sense of
  * place came from the sidebar row still being marked.
  *
@@ -126,15 +126,6 @@ function workCrumbs(rest: string[], labels: Labels): Crumb[] {
     path: second ? ["work", first] : undefined,
     mono: !labels[first],
   };
-  if (second === "sprints") {
-    return third
-      ? [
-          project,
-          { label: "Sprints", path: ["work", first, "sprints"] },
-          { label: labels[`sprint:${third}`] ?? `Sprint ${third}` },
-        ]
-      : [project, { label: "Sprints" }];
-  }
   return [project];
 }
 

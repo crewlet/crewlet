@@ -212,28 +212,16 @@ func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.Cat
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (emptyWork) Projects(context.Context, tracker.ProjectQuery, time.Time) (
+func (emptyWork) Projects(context.Context, tracker.ProjectQuery) (
 	tracker.ProjectListing, error) {
 
 	return tracker.ProjectListing{}, nil
 }
 
-func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery, time.Time) (
+func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery) (
 	tracker.ProjectDetail, error) {
 
 	return tracker.ProjectDetail{}, nil
-}
-
-func (emptyWork) Sprints(context.Context, tracker.SprintQuery, time.Time) (
-	tracker.SprintListing, error) {
-
-	return tracker.SprintListing{}, nil
-}
-
-func (emptyWork) Burndown(context.Context, tracker.BurndownQuery, time.Time) (
-	tracker.Burndown, error) {
-
-	return tracker.Burndown{}, nil
 }
 
 func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time) (

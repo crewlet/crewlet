@@ -1,7 +1,7 @@
 /**
- * The twenty wake reasons, as English, written once.
+ * The nineteen wake reasons, as English, written once.
  *
- * The applier records, per change and per recipient, the ONE reason of twenty
+ * The applier records, per change and per recipient, the ONE reason of nineteen
  * under which that person heard about it — `internal/tracker/recipients.go`,
  * in the precedence order that decided it. Nothing has ever drawn it, and it
  * is the fact no commercial tracker records: Linear, Jira and ClickUp can all
@@ -89,11 +89,6 @@ const PHRASES: Record<string, { short: string; about: string; why: string }> = {
     short: "under your goal",
     about: "owns the goal",
     why: "you own a goal this work counts towards",
-  },
-  sprint: {
-    short: "in your sprint",
-    about: "in the sprint",
-    why: "this is in a sprint you are in",
   },
   watcher: { short: "you watch it", about: "watching", why: "you follow this task" },
   unwatched: {

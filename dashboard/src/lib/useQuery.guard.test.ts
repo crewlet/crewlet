@@ -26,7 +26,7 @@ import { describe, expect, test } from "vitest";
  * Three of the tree's nine conditional call sites had it wrong when this was
  * written — `work_project` on the board (which polls at a minute and whose
  * parameter is empty until somebody picks a project, so it fired for ever),
- * `work_sprints`, and `work_my_work` — while six had it right. That ratio is
+ * and `work_my_work` among them — while six had it right. That ratio is
  * what makes this a test: the correct and incorrect forms differ by an option
  * nobody misses in review, and nothing else in the build can tell them apart.
  *
@@ -131,7 +131,7 @@ describe("a query that may have no parameters", () => {
   test("and a guarded call over several lines is read as guarded", () => {
     const wrapped = conditionalCalls(
       "x.tsx",
-      `const a = useQuery("work_sprints", chosen ? { project: chosen } : undefined, {
+      `const a = useQuery("work_project", chosen ? { project: chosen } : undefined, {
          enabled: chosen !== "",
          pollMs: 60_000,
        });`,

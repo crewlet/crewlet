@@ -87,8 +87,7 @@ const (
 	AuthorHuman AuthorKind = "human"
 	// AuthorOperator is an API token, recorded under its own label.
 	AuthorOperator AuthorKind = "operator"
-	// AuthorSystem is the engine itself — a sprint close, a rollover, a
-	// chart apply.
+	// AuthorSystem is the engine itself — a duty's repair, a chart apply.
 	AuthorSystem AuthorKind = "system"
 )
 
@@ -106,10 +105,10 @@ func (a AuthorKind) Valid() bool { return slices.Contains(AuthorKinds, a) }
 //
 // IT IS THE PREDICATE EVERY AUTHORITY GATE ASKS, and it is here because it was
 // written out at each of them and they did not agree: `set_priorities` tested
-// both kinds, while `write_project` and `manage_sprint` tested only
-// `operator`. So a human teammate could arrange somebody's priority list from
-// the dashboard and could not start their own team's sprint — one rule, two
-// answers, and no single place a reader could go to find out which was meant.
+// both kinds, while `write_project` tested only `operator`. So a human
+// teammate could arrange somebody's priority list from the dashboard and could
+// not declare their own team's fields — one rule, two answers, and no single
+// place a reader could go to find out which was meant.
 //
 // (`pages` carries its own `Actor.IsHuman` over its own three-valued
 // `AuthorKind`. That is a different closed set answering a different question
@@ -400,9 +399,6 @@ func subjectPath(s Subject, container string) string {
 		// deferred settings edit block every write inside that project
 		// — which is exactly what an archive is.
 		return ScopeTerm{Kind: TermContainer, ID: s.ID}.Path()
-	case KindSprint:
-		project, _, _ := strings.Cut(s.ID, ".")
-		return ScopeTerm{Kind: TermObject, Container: project, ID: s.ID}.Path()
 	case KindAlias:
 		key, _, _ := strings.Cut(s.ID, ".")
 		project, _, _ := strings.Cut(key, "-")
@@ -591,8 +587,8 @@ type MutationRecord struct {
 	// windows and the unblocked repair's own scan all select on; when a
 	// record carried no Notify the applier fell back to guessing one from
 	// the OPERATION, which is a different vocabulary altogether. A quiet
-	// catalogue edit filed as `patch`, a sprint close with no assignees as
-	// `patch`, a purge as `purge` — and `patch` and `purge` are not
+	// catalogue edit filed as `patch`, a purge as `purge` — and `patch`
+	// and `purge` are not
 	// [ChangeKind]s at all, so no filter could name them and nothing
 	// noticed.
 	//
@@ -780,11 +776,10 @@ func (r MutationRecord) Encode() ([]byte, error) {
 // THE SPLIT IS BY WHAT A RECIPIENT NEEDS, not by which column moved: a card
 // saying "the status changed" and a card saying "you were assigned" are two
 // different messages about one write. Every kind has exactly ONE writer and no
-// kind has variants — a reader tells a close from a re-target of its
-// spillover by the delta, not by a second kind.
+// kind has variants.
 type ChangeKind string
 
-// The thirty-two, and each constant IS its wire value: a kind is written into
+// The twenty-eight, and each constant IS its wire value: a kind is written into
 // every history row and onto every notification the log carries, so these
 // spellings are stored data in every company already running this build.
 // A kind added here goes into [ChangeKinds] in the same change: that slice is
@@ -802,7 +797,6 @@ const (
 	ChangeRouted          ChangeKind = "routed"
 	ChangeMoved           ChangeKind = "moved"
 	ChangeReparented      ChangeKind = "reparented"
-	ChangeSprint          ChangeKind = "sprint"
 	ChangeChecklist       ChangeKind = "checklist"
 	ChangeArchived        ChangeKind = "archived"
 	ChangeComment         ChangeKind = "comment"
@@ -815,9 +809,6 @@ const (
 	ChangeProjectCreated  ChangeKind = "project_created"
 	ChangeProjectUpdated  ChangeKind = "project_updated"
 	ChangePolicyChanged   ChangeKind = "policy_changed"
-	ChangeSprintMinted    ChangeKind = "sprint_minted"
-	ChangeSprintStarted   ChangeKind = "sprint_started"
-	ChangeSprintClosed    ChangeKind = "sprint_closed"
 	ChangeGoalUpdated     ChangeKind = "goal_updated"
 	ChangeViewSaved       ChangeKind = "view_saved"
 	ChangeCatalogue       ChangeKind = "catalogue_updated"
@@ -840,21 +831,20 @@ const (
 	ChangePersonUpdated ChangeKind = "person_updated"
 )
 
-// ChangeKinds are the thirty-two.
+// ChangeKinds are the twenty-eight.
 //
-// THIRTY-TWO AGAINST FIFTEEN SUBJECTS, and the gap is not an inconsistency:
-// five commit classes carry no notification at all — a turn, a generation, an
-// eviction, a rank move and a barrier — because a reposition is not history
-// and a barrier writes no rows whatever.
+// TWENTY-EIGHT AGAINST FOURTEEN SUBJECTS, and the gap is not an
+// inconsistency: five commit classes carry no notification at all — a turn, a
+// generation, an eviction, a rank move and a barrier — because a reposition is
+// not history and a barrier writes no rows whatever.
 var ChangeKinds = []ChangeKind{
 	ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 	ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
-	ChangeRouted, ChangeMoved, ChangeReparented, ChangeSprint,
+	ChangeRouted, ChangeMoved, ChangeReparented,
 	ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
-	ChangePolicyChanged, ChangeSprintMinted, ChangeSprintStarted,
-	ChangeSprintClosed, ChangeGoalUpdated, ChangeViewSaved, ChangeCatalogue,
+	ChangePolicyChanged, ChangeGoalUpdated, ChangeViewSaved, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated,
 }
 
@@ -983,9 +973,6 @@ type Snapshot struct {
 	GoalOwners  []string `json:"goal_owners,omitempty"`
 	GoalMembers []string `json:"goal_members,omitempty"`
 
-	// SprintAssignees hear about a sprint starting or closing.
-	SprintAssignees []string `json:"sprint_assignees,omitempty"`
-
 	// RoutedTo is the effective lead of a task's NEW routing unit, and it
 	// is an ORDINARY candidate rather than a fallback.
 	//
@@ -1000,7 +987,7 @@ type Snapshot struct {
 	// handle whose priorities somebody else wrote.
 	Person string `json:"person,omitempty"`
 
-	// GoalName and SprintName are what a NON-TASK wake is called.
+	// GoalName is what a NON-TASK wake is called.
 	//
 	// ON THE SNAPSHOT for the reason every other field here is: the node
 	// that wins the delivery is rarely the node that wrote the record and
@@ -1008,8 +995,7 @@ type Snapshot struct {
 	// would be read from a row that has moved on — or, for a goal
 	// somebody archived in between, from no row at all. The record
 	// carries what a card has to render.
-	GoalName   string `json:"goal_name,omitempty"`
-	SprintName string `json:"sprint_name,omitempty"`
+	GoalName string `json:"goal_name,omitempty"`
 
 	// PrioritisedBy is who wrote somebody else's priority list, and
 	// Position is where in it the task named by Key now sits, ONE-BASED
@@ -1096,10 +1082,10 @@ type Notify struct {
 // land would have made one surface record thirty asks and the other thirty
 // facts to absorb, for the same thirty records, with nothing comparing them.
 //
-// A bulk gesture is thirty facts rather than thirty asks — a lead re-planning
-// a sprint is not thirty people each owing an answer — which is what the flag
-// suppresses, and why getting it wrong on one side only is worse than getting
-// it wrong on both.
+// A bulk gesture is thirty facts rather than thirty asks — a lead re-tagging
+// a project's backlog is not thirty people each owing an answer — which is
+// what the flag suppresses, and why getting it wrong on one side only is worse
+// than getting it wrong on both.
 func (r MutationRecord) Batched() bool { return r.BatchID != nil }
 
 // Validate refuses a notification that would render wrong.
@@ -1162,7 +1148,6 @@ func (n *Notify) checkSnapshot() error {
 		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
 		{"goal_owners", len(n.Snapshot.GoalOwners), MaxGoalOwners},
 		{"goal_members", len(n.Snapshot.GoalMembers), MaxGoalMembers},
-		{"sprint_assignees", len(n.Snapshot.SprintAssignees), MaxSprintWakeParties},
 		{"mentions", len(n.Mentions), MaxMentions},
 	} {
 		if c.size > c.max {

@@ -31,13 +31,6 @@ func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 		t.Errorf("describe_project asked about %q, want the seat's own project",
 			trk.detailQuery.Project)
 	}
-	if got := callWork(t, reg, tracker.SprintReportTool, map[string]any{}); got.Failed {
-		t.Fatalf("sprint_report with no project failed: %q", got.Output)
-	}
-	if trk.sprintQuery.Project != "ENG" {
-		t.Errorf("sprint_report asked about %q, want the seat's own project",
-			trk.sprintQuery.Project)
-	}
 
 	// AND A SEAT WHOSE UNIT OWNS NONE IS REFUSED NAMING THE LOOKUP, never
 	// answered about an empty key: an empty project is not a project, and
@@ -68,13 +61,11 @@ func TestTheProjectToolsReadAtTheSeatDefault(t *testing.T) {
 	})
 	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
 	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{})
-	callWork(t, reg, tracker.SprintReportTool, map[string]any{})
 
 	want := statelog.DefaultReadLevel(statelog.SurfaceSeat)
 	for name, level := range map[string]statelog.ReadLevel{
 		tracker.ListProjectsTool:    trk.projectQuery.Level,
 		tracker.DescribeProjectTool: trk.detailQuery.Level,
-		tracker.SprintReportTool:    trk.sprintQuery.Level,
 	} {
 		if level != want {
 			t.Errorf("%s read at %q, want %q — a turn has to see its own "+
@@ -104,15 +95,6 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 	if trk.detailQuery.Project != "ops" || trk.detailQuery.ForType != "bug" {
 		t.Errorf("describe_project built %+v, want the project and the type",
 			trk.detailQuery)
-	}
-
-	callWork(t, reg, tracker.SprintReportTool, map[string]any{
-		"project": "OPS", "sprint": 4, "sprints": 7,
-	})
-	if trk.sprintQuery.Project != "OPS" || trk.sprintQuery.Number != 4 ||
-		trk.sprintQuery.Sprints != 7 {
-		t.Errorf("sprint_report built %+v, want the project, the sprint and "+
-			"the window", trk.sprintQuery)
 	}
 }
 
@@ -150,7 +132,6 @@ func TestAProjectReadFailureIsReported(t *testing.T) {
 	})
 	for _, name := range []string{
 		tracker.ListProjectsTool, tracker.DescribeProjectTool,
-		tracker.SprintReportTool,
 	} {
 		if got := callWork(t, reg, name, map[string]any{}); !got.Failed {
 			t.Errorf("%s answered %q on a read failure, want a failure — an "+

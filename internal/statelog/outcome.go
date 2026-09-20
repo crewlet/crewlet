@@ -121,6 +121,17 @@ const (
 	// another durable record nothing applies.
 	ReasonGated Reason = "gated"
 
+	// ReasonRetired — the record names a kind the domain once published
+	// and no longer applies, so it produces no rows anywhere.
+	//
+	// THE VERSION GATE CANNOT CATCH THIS ONE, which is why it is a reason
+	// of its own: a retired kind arrives at a record version this build
+	// reads perfectly, so nothing defers it, and the kind is simply gone
+	// from the applier's dispatch. A rolling upgrade makes an older
+	// peer's records ordinary traffic for as long as one takes, and
+	// faulting on them wedges the newest node in the fleet.
+	ReasonRetired Reason = "retired"
+
 	// ReasonLogFull — the log is at its byte ceiling and refuses
 	// appends rather than dropping records. An operator raises the
 	// ceiling or unblocks the trim.

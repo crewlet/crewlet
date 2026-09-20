@@ -54,16 +54,6 @@ var ErrNoProject = errors.New("tracker: no such project")
 // would go looking for the wrong thing.
 var ErrNoComment = errors.New("tracker: no such comment")
 
-// ErrNoSprint reports a sprint number this project has never minted.
-//
-// BESIDE the other two rather than folded into [ErrNoProject], because the two
-// failures send a caller to different places: an unknown project key is a typo
-// in the key, and an unknown number on a project that exists is a sprint that
-// has not been minted yet — which `sprint_report` answers by listing the ones
-// that have. A reader that returned an empty series for it would report a
-// sprint in which nothing happened.
-var ErrNoSprint = errors.New("tracker: no such sprint")
-
 // DetailWants says which parts of the answer to assemble.
 //
 // EXPLICIT rather than "everything", because the parts have very different
@@ -377,10 +367,29 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 // and sorting and are a CACHE of what the document says. A rolling upgrade
 // puts a newer node's fields on the wire, and a reader that rebuilt a task
 // from its columns would hand a caller a task with the new field stripped.
+//
+// # `status_entered_at` IS THE ONE EXCEPTION, and it is joined here
+//
+// Every other column is extracted from what the WRITER wrote, so the document
+// is the authority and the column is the copy. This one is DERIVED by the
+// applier from the history — no writer authors it and none could, since it is
+// a closed form over every row about the task — and it is stamped AFTER the
+// document is marshalled, because it reads the history row the same apply
+// writes after the upsert. So the document always carries a zero here.
+//
+// Reading it from the document is what made the published field silently
+// empty while the column behind `sort=status_entered` was maintained
+// correctly: `omitzero` dropped it, and `GET /work/item`, the operator MCP's
+// `get_work_item` and the dashboard's "In status since" row all showed
+// nothing. Writing it INTO the document instead would mean a second write of
+// the whole document per status change, to store a value that is a function
+// of rows already committed.
 func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) {
 	var body []byte
+	var entered int64
 	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM tracker_tasks WHERE id = ?`, id).Scan(&body)
+		`SELECT document, status_entered_at FROM tracker_tasks WHERE id = ?`,
+		id).Scan(&body, &entered)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Task{}, fmt.Errorf("%w: %s", ErrNoTask, id)
@@ -390,6 +399,12 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	var task Task
 	if err := json.Unmarshal(body, &task); err != nil {
 		return Task{}, fmt.Errorf("tracker: decode task %s: %w", id, err)
+	}
+	// ZERO STAYS ZERO rather than becoming the epoch: a task whose status
+	// has never moved has no entered instant, and `omitzero` is what says
+	// so. time.UnixMicro(0) is 1970 and would render as a date.
+	if entered != 0 {
+		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
 	return task, nil
 }

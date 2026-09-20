@@ -361,11 +361,11 @@ func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
 // EXPORTED AND SHARED, because two frames need the same answer and a second
 // copy is how one stops matching the other: the WRITER computes it for the
 // notification card, and the APPLIER computes it for the history row — which
-// every quiet commit also writes, and which the status spans are rebuilt
+// every quiet commit also writes, and which the entered stamp is derived
 // from. While this was a method on [Wake] the applier had no way to reach it,
-// so a quiet status change wrote a history row with NO deltas and produced NO
-// span, and every report derived from the spans — burndown, cumulative flow,
-// cycle time, a sprint's `done` and therefore velocity — silently omitted it.
+// so a quiet status change wrote a history row with NO deltas, and
+// `status_entered_at` went on naming an older change than the task had
+// actually last made.
 func TaskDeltas(before, after Task) map[string]Delta {
 	moved := map[string]Delta{}
 	add := func(field, from, to string) {
@@ -381,13 +381,11 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	add("type", before.Type, after.Type)
 	add("tags", strings.Join(before.Tags, ", "), strings.Join(after.Tags, ", "))
 	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
-	// nothing here could observe it: a due date, an estimate, a size and a
-	// sprint had no producer in the tree, so their absence from this list
-	// was invisible. With one, a sprint move or a re-estimate wrote a
-	// history row and a notification card carrying NO deltas at all —
-	// which renders as the bare kind, and reads as a change that lost what
-	// it changed.
-	add("sprint", sprintText(before.Sprint), sprintText(after.Sprint))
+	// nothing here could observe it: a due date, an estimate and a size
+	// had no producer in the tree, so their absence from this list was
+	// invisible. With one, a re-estimate wrote a history row and a
+	// notification card carrying NO deltas at all — which renders as the
+	// bare kind, and reads as a change that lost what it changed.
 	// THE WHOLE INSTANT, which is [instantText] — the same helper a GOAL's
 	// due and start deltas already take, for the same two field names.
 	//
@@ -414,7 +412,7 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	}
 	if len(moved) > MaxDeltas {
 		// DETERMINISTICALLY, by field name: a card that showed a
-		// different thirty-two on two nodes would be one screen
+		// different twenty-eight on two nodes would be one screen
 		// disagreeing with another about what changed.
 		names := make([]string, 0, len(moved))
 		for name := range moved {
@@ -464,20 +462,19 @@ func without(all, muted []string) []string {
 	return out
 }
 
-// The four schedule values, as the TEXT a delta carries.
+// The three schedule values, as the TEXT a delta carries.
 //
 // AN ABSENT VALUE IS THE EMPTY STRING, which every renderer of a delta already
 // draws as an em-dash — so "no due date → 16 Apr" reads the way "— → jun"
 // already does for an assignee.
 //
-// AND A ZERO IS ABSENT for a sprint, an estimate and a size, because in this
-// package it is the only absence those three have. [Task.StartAt] and
-// [Task.DueAt] are pointers and can be nil; [Task.EstimateMinutes] and
-// [Task.Points] are a plain int and a plain float64 over NOT NULL columns
-// defaulting to 0, and every reader of them already spends that zero as
-// "unsized" — a workload sums it, a burndown adds it, and a sprint's capacity
-// map skips the handle entirely. Rendering 0 as "0m" here would put a number
-// on the one surface that disagreed with all of them.
+// AND A ZERO IS ABSENT for an estimate and a size, because in this package it
+// is the only absence those two have. [Task.StartAt] and [Task.DueAt] are
+// pointers and can be nil; [Task.EstimateMinutes] and [Task.Points] are a
+// plain int and a plain float64 over NOT NULL columns defaulting to 0, and
+// every reader of them already spends that zero as "unsized" — a workload sums
+// it and a total adds it. Rendering 0 as "0m" here would put a number on the
+// one surface that disagreed with both.
 //
 // The obvious alternative is to make "sized at nothing" its own fact by giving
 // the two fields the pointer this repo's zero-value rule calls for. It is not
@@ -487,14 +484,6 @@ func without(all, muted []string) []string {
 // would cost — a size being CLEARED reported as no change at all — is not what
 // it costs: clearing 3 points renders "3" → "", which differs and is a delta
 // like any other. Only 0 → 0 folds, and that is not a change.
-
-// sprintText is the number, or empty for the backlog.
-func sprintText(n *int) string {
-	if n == nil || *n == 0 {
-		return ""
-	}
-	return strconv.Itoa(*n)
-}
 
 // minutesText is the estimate in minutes, or empty when there is none.
 func minutesText(minutes int) string {

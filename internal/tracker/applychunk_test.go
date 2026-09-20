@@ -14,8 +14,8 @@ import (
 // THEM.
 //
 // Every child collection an applied task carries — watchers, collaborators,
-// tags, sprint stays, relations, dependents, checklists, dependency edges and
-// the key directory — is written as a MULTI-ROW insert chunked to the estate's
+// tags, relations, dependents, checklists, dependency edges and the key
+// directory — is written as a MULTI-ROW insert chunked to the estate's
 // parameter limit. That limit is a property of the engine and of nothing the
 // record says, so it is exactly the input a correct applier's OUTPUT cannot
 // see: one row per statement, six rows per statement and the whole collection
@@ -50,7 +50,6 @@ func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 		{"tracker_watchers", "task_id, handle", 9},
 		{"tracker_collaborators", "task_id, handle", tracker.MaxCollaborators},
 		{"tracker_task_tags", "task_id, slug", 7},
-		{"tracker_task_sprints", "task_id, sprint, from_at", 5},
 		// Six waiting_on edges and five linked ones.
 		{"tracker_relations", "task_id, other_id, kind", 11},
 		{"tracker_task_dependents", "task_id, dependent_id", 7},
@@ -148,12 +147,6 @@ func chunkTask(id string) tracker.Task {
 	task.Tags = []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}
 
 	at := time.Unix(1_700_000_000, 0).UTC()
-	for i := range 5 {
-		to := at.Add(time.Duration(i) * time.Hour)
-		task.SprintHistory = append(task.SprintHistory, tracker.SprintStay{
-			Sprint: i + 1, From: at.Add(-time.Duration(i+1) * time.Hour), To: &to,
-		})
-	}
 	// BOTH RELATION KINDS, because only `waiting_on` reaches the CASE in
 	// the relations template and only `waiting_on` writes a dependency
 	// edge — a fixture of one kind would exercise one arm of each.

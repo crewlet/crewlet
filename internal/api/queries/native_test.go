@@ -40,11 +40,7 @@ type stubWork struct {
 	projects      tracker.ProjectListing
 	detailQuery   tracker.ProjectDetailQuery
 	project       tracker.ProjectDetail
-	sprintQuery   tracker.SprintQuery
-	sprints       tracker.SprintListing
-	burnQuery     tracker.BurndownQuery
 	workloadQuery tracker.WorkloadQuery
-	burndown      tracker.Burndown
 	workload      tracker.WorkloadAnswer
 
 	expandViewer  tracker.Viewer
@@ -61,32 +57,18 @@ type stubWork struct {
 	err error
 }
 
-func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery,
-	_ time.Time) (tracker.ProjectListing, error) {
+func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery) (
+	tracker.ProjectListing, error) {
 
 	s.projectQuery = q
 	return s.projects, s.err
 }
 
-func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery,
-	_ time.Time) (tracker.ProjectDetail, error) {
+func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery) (
+	tracker.ProjectDetail, error) {
 
 	s.detailQuery = q
 	return s.project, s.err
-}
-
-func (s *stubWork) Sprints(_ context.Context, q tracker.SprintQuery,
-	_ time.Time) (tracker.SprintListing, error) {
-
-	s.sprintQuery = q
-	return s.sprints, s.err
-}
-
-func (s *stubWork) Burndown(_ context.Context, q tracker.BurndownQuery,
-	_ time.Time) (tracker.Burndown, error) {
-
-	s.burnQuery = q
-	return s.burndown, s.err
 }
 
 func (s *stubWork) Workload(_ context.Context, q tracker.WorkloadQuery,
@@ -338,58 +320,6 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
 	if w.taskWants != want {
 		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
-	}
-}
-
-// A BURNDOWN NAMES BOTH A PROJECT AND A SPRINT, and defaults neither.
-//
-// A sprint is numbered per project, so a number with no key names one sprint
-// per team — and defaulting the number to "the active one" would make a link
-// somebody bookmarked mean a different sprint every fortnight, which is the
-// one thing a chart with a URL must not do.
-func TestABurndownRefusesToGuessItsSprint(t *testing.T) {
-	for _, params := range []map[string]any{
-		{"sprint": 4},
-		{"project": "ENG"},
-		{"project": "ENG", "sprint": 0},
-	} {
-		w := &stubWork{}
-		_, err := askNative(t, queries.Sources{Work: w}, "work_burndown", params)
-		if !errors.Is(err, queries.ErrBadParams) {
-			t.Errorf("work_burndown(%v) answered %v, want a refusal naming the "+
-				"key it needs", params, err)
-		}
-	}
-	w := &stubWork{}
-	if _, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
-		map[string]any{"project": "ENG", "sprint": 4}); err != nil {
-		t.Fatalf("work_burndown: %v", err)
-	}
-	// BOTH KEYS REACH THE READER. Normalising the key is the READER's —
-	// `Burndown` runs it through `ProjectKey` exactly as `Sprints` does —
-	// so a second spelling of that rule here would be the copy that stops
-	// matching. What this surface owes is that neither key is dropped.
-	if w.burnQuery.Project != "ENG" || w.burnQuery.Sprint != 4 {
-		t.Errorf("the reader was asked for %+v, want ENG sprint 4", w.burnQuery)
-	}
-	// AND THE CALLER'S OWN FRESHNESS, resolved to this surface's default
-	// like every other native question — a burndown that silently took a
-	// linearizable read would put a chart's poll on the raft log.
-	if w.burnQuery.Level != statelog.ReadStale {
-		t.Errorf("the burndown was read at %q, want the dashboard's own stale "+
-			"default", w.burnQuery.Level)
-	}
-}
-
-// A SPRINT NOBODY HAS MINTED IS NOT FOUND, never an empty series: a chart
-// drawn from an empty answer is a sprint in which nothing happened, which is
-// a different thing from a sprint that does not exist.
-func TestAnUnmintedSprintIsNotFound(t *testing.T) {
-	w := &stubWork{err: tracker.ErrNoSprint}
-	_, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
-		map[string]any{"project": "ENG", "sprint": 99})
-	if !errors.Is(err, queries.ErrNotFound) {
-		t.Errorf("an unminted sprint answered %v, want not-found", err)
 	}
 }
 
@@ -747,8 +677,6 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.projectQuery.Level }},
 		{"work_project", map[string]any{"key": "ENG"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.detailQuery.Level }},
-		{"work_sprints", map[string]any{"project": "ENG"},
-			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.sprintQuery.Level }},
 		{"work_activity", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }},
 		// OPERATOR-ONLY, and it is in this walk precisely because it
@@ -917,10 +845,6 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.detailQuery.MaxLag, w.detailQuery.MaxLagSeq)
 			}},
-		{"work_sprints", map[string]any{"project": "ENG"},
-			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
-				return bounds(w.sprintQuery.MaxLag, w.sprintQuery.MaxLagSeq)
-			}},
 		{"work_activity", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.activityQuery.MaxLag, w.activityQuery.MaxLagSeq)
@@ -993,10 +917,6 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 		{"work_projects", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.projectQuery.MinPosition }},
 		{"work_project", map[string]any{"key": "ENG"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
-		{"work_sprints", map[string]any{"project": "ENG"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.sprintQuery.MinPosition }},
-		{"work_burndown", map[string]any{"project": "ENG", "sprint": 1},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.burnQuery.MinPosition }},
 		{"work_activity", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
 		{"work_my_work", map[string]any{"handle": "ana"},

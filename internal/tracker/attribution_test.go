@@ -78,7 +78,6 @@ func deltaFields(t *testing.T) []string {
 // [tracker.TaskDeltas] compares, so the set of names it returns is the
 // COMPLETE set rather than whatever a fixture happened to move.
 func twoDifferentTasks() (tracker.Task, tracker.Task) {
-	sprintBefore, sprintAfter := 1, 2
 	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	due := time.Date(2026, 3, 8, 17, 0, 0, 0, time.UTC)
 	later := due.Add(24 * time.Hour)
@@ -91,7 +90,6 @@ func twoDifferentTasks() (tracker.Task, tracker.Task) {
 		Project:         "ENG",
 		Type:            "task",
 		Tags:            []string{"one"},
-		Sprint:          &sprintBefore,
 		StartAt:         &start,
 		DueAt:           &due,
 		EstimateMinutes: 30,
@@ -105,7 +103,6 @@ func twoDifferentTasks() (tracker.Task, tracker.Task) {
 		Project:         "OPS",
 		Type:            "bug",
 		Tags:            []string{"two"},
-		Sprint:          &sprintAfter,
 		StartAt:         &earlier,
 		DueAt:           &later,
 		EstimateMinutes: 90,

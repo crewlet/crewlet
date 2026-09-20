@@ -175,7 +175,6 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		tracker.GetWorkCatalogueTool: false,
 		tracker.ListProjectsTool:     false,
 		tracker.DescribeProjectTool:  false,
-		tracker.SprintReportTool:     false,
 		tracker.TaskActivityTool:     false,
 		tracker.MyWorkTool:           false,
 		tracker.ListWorkGoalsTool:    false,

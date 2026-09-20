@@ -225,9 +225,6 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 		return groupAxis{Expr: "t.type"}, nil
 	case "project":
 		return groupAxis{Expr: "t.project_key"}, nil
-	case "sprint":
-		return groupAxis{Expr: "COALESCE(CAST(t.sprint_number AS TEXT), '')",
-			Unset: "(no sprint)"}, nil
 	case "unit":
 		return groupAxis{Expr: "t.filed_unit", Unset: "(no unit)"}, nil
 	case "routing_unit":
@@ -422,7 +419,7 @@ var ErrTooBroad = errors.New("tracker: this query selects more rows than the ans
 // # A BOUNDED COUNT, never a test for the presence of a filter key
 //
 // The gate this replaces refused a workspace grouping "without a narrowing
-// filter — a status_group, an assignee, a sprint, a unit or a date bound", and
+// filter — a status_group, an assignee, a unit or a date bound", and
 // `status_group=not_started,active` satisfies that while narrowing nothing:
 // every open task is already in it. A gate that tests a NAME is one a caller
 // learns to satisfy in a single attempt without making the query any cheaper.
@@ -467,7 +464,7 @@ func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
 	return fmt.Errorf("tracker: group_by=%s over the whole company matches more "+
 		"than %d tasks, and a board is drawn by sorting every one of them — "+
 		"scope it with container=project:<key>, or add a filter that actually "+
-		"excludes rows (assignee=, sprint=, updated=, a date bound) rather "+
+		"excludes rows (assignee=, updated=, a date bound) rather "+
 		"than one every open task already satisfies: %w",
 		q.GroupBy, GroupByRowCeiling, ErrTooBroad)
 }

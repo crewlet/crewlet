@@ -38,7 +38,6 @@ import { Work } from "~/routes/work/Work.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { SavedViews } from "~/routes/work/SavedViews.tsx";
 import { WorkSearch } from "~/routes/work/WorkSearch.tsx";
-import { Sprints } from "~/routes/work/Sprints.tsx";
 import { Pages, PageView } from "~/routes/knowledge/Pages.tsx";
 import { Conversations } from "~/routes/activity/Conversations.tsx";
 import { Turns } from "~/routes/activity/Turns.tsx";
@@ -68,12 +67,9 @@ function WorkRoutes({ rest }: { rest: string[] }) {
   if (!first) return <Work />;
   if (first === "views") return second ? <SavedViews key={second} id={second} /> : <SavedViews />;
   if (first === "search") return <WorkSearch />;
-  // A PROJECT, ITS SPRINTS, OR AN ITEM — decided by the SHAPE of the key
-  // rather than by a lookup, so the route resolves before any answer arrives.
+  // A PROJECT OR AN ITEM — decided by the SHAPE of the key rather than by a
+  // lookup, so the route resolves before any answer arrives.
   if (PROJECT_KEY.test(first)) {
-    if (second === "sprints") {
-      return <Sprints key={`${first}/${third ?? ""}`} project={first} sprint={third} />;
-    }
     return <Work key={first} project={first} />;
   }
   // A key or an id BOTH resolve, because the reader has whichever they were

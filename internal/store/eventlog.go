@@ -961,7 +961,7 @@ func (q PhaseTokenQuery) Window(now time.Time) (since, until time.Time) {
 const (
 	// DefaultPhaseTokenDays is the window a caller that named none gets.
 	//
-	// A week: long enough to cover "what did last sprint cost", short
+	// A week: long enough to cover "what did last week cost", short
 	// enough that the scan stays inside the index's recent pages. The
 	// dashboard's own default matches it, so an unparameterised REST call
 	// and an unparameterised socket query answer the same question.

@@ -30,7 +30,6 @@ package tracker
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -45,7 +44,7 @@ import (
 // make the writer's own deferral probe miss the record it is meant to see.
 type ObjectKind string
 
-// The fifteen kinds.
+// The fourteen kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -57,16 +56,9 @@ const (
 	// KindTask is one work item, and the overwhelming majority of records.
 	KindTask ObjectKind = "task"
 
-	// KindProject is a project's settings, its sprint policy and its
-	// active-sprint pointer.
+	// KindProject is a project's settings: its field declarations, its
+	// default assignee and its archived flag.
 	KindProject ObjectKind = "project"
-
-	// KindSprint is one sprint of one project. Its id is
-	// "<PROJECT>.<number>", so THE SUBJECT IS THE IDENTITY: minting one
-	// is a create-only append at an expectation of zero, and two nodes
-	// minting number 7 collide harmlessly at the broker with nothing to
-	// repair afterwards.
-	KindSprint ObjectKind = "sprint"
 
 	// KindCounter is a project's key sequence.
 	//
@@ -129,20 +121,65 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the fifteen, in the order they are documented.
+// ObjectKinds are the fourteen, in the order they are documented.
 var ObjectKinds = []ObjectKind{
-	KindTask, KindProject, KindSprint, KindCounter, KindTags,
+	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindGoal, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
+}
+
+// KindSprint is RETIRED, and it is a constant for the reason every other wire
+// value here is one: a literal this build must still recognise is no less a
+// wire value for having stopped being writable.
+//
+// It is deliberately NOT in [ObjectKinds], so [ObjectKind.Valid] is false for
+// it, nothing mints a subject for it, the domain classifies no table for it
+// and it arbitrates nothing. What it buys is [RetiredKinds] below.
+const KindSprint ObjectKind = "sprint"
+
+// RetiredKinds are the kinds this build once published and no longer applies.
+//
+// THE TWO DIRECTIONS OF A ROLLING UPGRADE ARE NOT SYMMETRICAL, and this list
+// exists because only one of them was ever handled. A NEWER peer's record
+// carries a record version this build cannot read, so `statelog` retains it,
+// files it under its own subject and reprocesses it after an upgrade — which
+// is the case [ObjectKind]'s own doc describes. An OLDER peer's record is the
+// mirror image and nothing caught it: the version is one this build reads
+// perfectly and it is the KIND that is gone, so it passes the version gate at
+// `statelog/apply.go`, reaches [Applier.apply]'s switch, matches no case and
+// faults. There is no retry past it — the applier returns an error, the batch
+// rolls back, the checkpoint stops, and the node wedges at that position for
+// as long as the record is in the log, which is `stream.tracker_retention`
+// (seven days by default) and unbounded wherever the trim cannot advance.
+//
+// So a removal is a RETIREMENT rather than a deletion: the kind stops being
+// publishable and goes on being CONSUMABLE, producing no rows, exactly as a
+// gate-dropped record does. `internal/tracker/fallbackkind_test.go` states the
+// premise this rests on — a rolling upgrade makes an older build's records
+// "ordinary traffic for as long as one takes".
+//
+// A KIND THAT WAS NEVER PUBLISHED DOES NOT BELONG HERE. The list is the log's
+// own history rather than a wish list, and a kind nothing ever wrote needs no
+// drain.
+var RetiredKinds = []ObjectKind{
+	// Sprints left the tracker in replicated migration 0013. Every
+	// sprint record written before that is one an upgraded node reads
+	// past.
+	KindSprint,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
 func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 
+// Retired reports whether a kind off the wire is one this build has retired —
+// a record the log may still carry and this build must read past rather than
+// fault on. See [RetiredKinds].
+func (k ObjectKind) Retired() bool { return slices.Contains(RetiredKinds, k) }
+
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// THIRTEEN OF FIFTEEN DO. A turn is ADDITIVE — it records spend that happened
+// TWELVE OF FOURTEEN DO. A turn is ADDITIVE — it records spend that happened
 // and races nobody — and a barrier is arbitrated by nothing at all: every
 // barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
@@ -185,17 +222,16 @@ type Subject struct {
 
 // The subject constructors, ONE PER KIND rather than a single
 // Subject{Kind, ID} literal at every call site, because half the ids are
-// composed — a sprint's is "<PROJECT>.<n>", an alias claim's is "<KEY>.<n>" —
-// and a composition written twice is a subject two writers disagree about.
+// composed — an alias claim's is "<KEY>.<n>" — and a composition written twice
+// is a subject two writers disagree about.
 
 // TaskSubject names one work item by its id. It is the subject every change to
 // that task is published on, so two writers racing on one task contend at the
 // broker and writers on different tasks never contend at all.
 func TaskSubject(id string) Subject { return Subject{Kind: KindTask, ID: id} }
 
-// ProjectSubject names one project's settings, sprint policy and active-sprint
-// pointer by its key. Deliberately NOT the subject its key counter mints on —
-// see [CounterSubject].
+// ProjectSubject names one project's settings by its key. Deliberately NOT the
+// subject its key counter mints on — see [CounterSubject].
 func ProjectSubject(key string) Subject { return Subject{Kind: KindProject, ID: key} }
 
 // CounterSubject names one project's key sequence by its key. Its own subject
@@ -239,11 +275,6 @@ func EvictionSubject(nodeID string) Subject {
 // it carries no expectation and bumps no object's version, so writers here
 // never contend — see [ObjectKind.Arbitrated].
 func TurnSubject(id string) Subject { return Subject{Kind: KindTurn, ID: id} }
-
-// SprintSubject names one sprint of one project.
-func SprintSubject(project string, number int) Subject {
-	return Subject{Kind: KindSprint, ID: fmt.Sprintf("%s.%d", project, number)}
-}
 
 // AliasSubject names a cross-project move's create-only claim on a former key.
 //
@@ -326,8 +357,8 @@ func ParseSubject(wire string) (Subject, bool) {
 // A scope path is a containment hierarchy, so an object's own path sits under
 // its container's — which is what makes a project-wide deferral cover its
 // tasks. Most kinds derive that container from their own subject: a project,
-// counter, tag set or rank order IS a container key; a sprint and an alias
-// carry the project in their id; a catalogue and a person live in a family;
+// counter, tag set or rank order IS a container key; an alias carries the
+// project in its id; a catalogue and a person live in a family;
 // and the three fleet-wide kinds are about the whole domain.
 //
 // These four do not. A task's subject is a uuid and its project is a mutable
@@ -349,13 +380,12 @@ func (k ObjectKind) HomedInAProject() bool {
 
 // Routable reports an object kind whose records can wake somebody.
 //
-// FOUR, and the three beyond a task are there because their wakes are about a
+// THREE, and the two beyond a task are there because their wakes are about a
 // PERSON rather than about a row: a goal's owners hear that the outcome they
-// committed the company to moved, a sprint's assignees hear that the window
-// they planned into opened or closed, and one person hears that somebody else
-// wrote their priority list. None of those is reachable from a task's own
-// routing — an assignee, a watcher, a dependent — which is why the parser used
-// to drop them all and why they arrive under their own reasons instead.
+// committed the company to moved, and one person hears that somebody else
+// wrote their priority list. Neither is reachable from a task's own routing —
+// an assignee, a watcher, a dependent — which is why the parser used to drop
+// them both and why they arrive under their own reasons instead.
 //
 // EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter, an alias
 // and a rank order have no audience at all; a catalogue, a view, a tag set and
@@ -369,7 +399,7 @@ func (k ObjectKind) HomedInAProject() bool {
 // seat in the company woken by a bookkeeping append.
 func (k ObjectKind) Routable() bool {
 	switch k {
-	case KindTask, KindGoal, KindSprint, KindPerson:
+	case KindTask, KindGoal, KindPerson:
 		return true
 	}
 	return false
@@ -387,7 +417,7 @@ func (k ObjectKind) Routable() bool {
 // edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
 // is a [ChangeKind] any filter can name.
 //
-// The seven document kinds and the task are exactly the kinds [Applier.apply]
+// The six document kinds and the task are exactly the kinds [Applier.apply]
 // routes to a path that writes one. Everything else — a barrier, a turn, an
 // eviction, a generation, an alias, a rank order, a counter — is machinery
 // with no audience and no entry in anybody's account of what happened, so a
@@ -398,7 +428,7 @@ func (k ObjectKind) Routable() bool {
 // whose history row is filed under a guess.
 func (k ObjectKind) RecordsHistory() bool {
 	switch k {
-	case KindTask, KindProject, KindSprint, KindTags, KindCatalogue,
+	case KindTask, KindProject, KindTags, KindCatalogue,
 		KindView, KindGoal, KindPerson:
 		return true
 	}
@@ -408,25 +438,6 @@ func (k ObjectKind) RecordsHistory() bool {
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
 	return k == KindTask || k == KindTurn
-}
-
-// splitSprintID takes a sprint subject's id apart.
-//
-// The id IS "<PROJECT>.<number>", which is what makes minting sprint 7 a
-// create-only append two nodes collide harmlessly on — so taking it apart is
-// the inverse of [SprintSubject] and lives beside it rather than at the one
-// call site that needs it.
-func splitSprintID(id string) (project string, number int, err error) {
-	project, rest, ok := strings.Cut(id, ".")
-	if !ok || project == "" {
-		return "", 0, fmt.Errorf("tracker: %q is not a sprint id — a sprint's "+
-			"id is its project key, a dot and its number", id)
-	}
-	number, err = strconv.Atoi(rest)
-	if err != nil || number < 1 {
-		return "", 0, fmt.Errorf("tracker: sprint id %q names no number", id)
-	}
-	return project, number, nil
 }
 
 // ProjectKey normalises what somebody typed into what the column stores.

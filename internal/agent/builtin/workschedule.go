@@ -10,32 +10,27 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// When a task is due, how big it is, and which sprint it is in.
+// When a task is due and how big it is.
 //
 // # These were filterable, sortable, reportable — and unwritable
 //
-// `tracker_tasks` has carried `start_at`, `due_at`, `estimate_min`, `points`
-// and `sprint_number` since migration 0002. The query grammar filters on all
-// five and sorts on three; a row's `overdue` flag is derived from `due_at`;
-// every figure a sprint report carries is a sum over `points` or
-// `estimate_min`; and the `overdue` preset, the `due=` date tokens and the
-// `sprint=` membership values are all documented surface.
+// `tracker_tasks` has carried `start_at`, `due_at`, `estimate_min` and
+// `points` since migration 0002. The query grammar filters on all four and
+// sorts on three; a row's `overdue` flag is derived from `due_at`; a total is
+// a sum over `points` or `estimate_min`; and the `overdue` preset and the
+// `due=` date tokens are documented surface.
 //
 // NOTHING COULD SET ANY OF THEM. `create_work_item` accepted none and
-// `update_work_item` accepted none, and the only producer of a sprint patch in
-// the whole tree was the ROLLOVER — which moves work that is already in a
-// sprint, so a sprint could never come to contain anything in the first place.
+// `update_work_item` accepted none.
 //
 // The consequences were silent and total, which is why nothing reported it: a
 // due date could not exist, so `due=overdue` matched nothing and the overdue
-// flag was never true; an estimate could not exist, so every sprint figure was
-// zero, every sprint reported 100% unestimated, and velocity was zero for a
-// team that delivered everything it took on; and a sprint could not be filled,
-// so the cadence duty minted, started and closed empty sprints for ever.
+// flag was never true, and an estimate could not exist, so every total was
+// zero for a team that had sized all of its work.
 //
 // The write path was complete the whole time — [tracker.TaskPatch] carries all
-// five and the applier writes the rows and maintains the stays. What was
-// missing was the six lines of tool surface that reach it.
+// four and the applier writes the rows. What was missing was the few lines of
+// tool surface that reach it.
 //
 // # One grammar for a date, shared with the filter that reads it
 //
@@ -90,32 +85,23 @@ func scheduleSchema(update bool) map[string]any {
 		"estimate_minutes": map[string]any{
 			"type": nullable("integer"),
 			"description": "How long this is expected to take, in minutes. " +
-				"Sprint figures are summed in whichever of this and `points` " +
-				"the project's own measure names." + clears,
+				"The other half of the size, beside `points`." + clears,
 		},
 		"points": map[string]any{
 			"type": nullable("number"),
 			"description": "How big this is on the team's own scale. The " +
-				"other half of the measure above." + clears,
-		},
-		"sprint": map[string]any{
-			"type": nullable("integer"),
-			"description": "The sprint number this is planned into — " +
-				"`sprint_report` lists the ones a project has. Setting it " +
-				"opens the task's membership of that sprint, which is what " +
-				"every sprint figure is derived from." + clears,
+				"other half of the size above." + clears,
 		},
 	}
 }
 
-// schedule is the five values, resolved, with absent and cleared told apart.
+// schedule is the four values, resolved, with absent and cleared told apart.
 type schedule struct {
 	Start     *time.Time
 	Due       *time.Time
 	DueAllDay *bool
 	Estimate  *int
 	Points    *float64
-	Sprint    *int
 
 	// Cleared names the keys that were explicitly set to null, which a
 	// create ignores — a new task has nothing to clear — and an update
@@ -202,26 +188,6 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 			out.Points = &points
 		}
 	}
-	if raw, held := args["sprint"]; held {
-		if raw == nil {
-			out.Cleared["sprint"] = true
-		} else {
-			number, ok := scheduleInt(raw)
-			if !ok {
-				return out, fmt.Sprintf("%s could not read `sprint`: %s. It is "+
-					"the sprint's NUMBER — `sprint_report` lists the ones this "+
-					"project has. Pass null to take the task out of its sprint.",
-					tool, argString(args, "sprint"))
-			}
-			if number <= 0 {
-				return out, fmt.Sprintf("%s was given sprint %d, and sprints "+
-					"are numbered from 1 — `sprint_report` lists the ones this "+
-					"project has. Pass null to take the task out of its "+
-					"sprint.", tool, number)
-			}
-			out.Sprint = &number
-		}
-	}
 	return out, ""
 }
 
@@ -284,7 +250,7 @@ func scheduleFloat(raw any) (float64, bool) {
 		// to the caller: a size of NaN passed the `points < 0` guard
 		// below — every comparison with NaN is false — and an infinity
 		// passed it honestly, so both reached the writer. Downstream
-		// neither is a number a sprint can be summed with, and JSON
+		// neither is a number a total can be summed from, and JSON
 		// cannot even encode them, so the failure surfaced as a broken
 		// answer somewhere with no memory of who typed it.
 		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
@@ -293,8 +259,8 @@ func scheduleFloat(raw any) (float64, bool) {
 	return 0, false
 }
 
-// finite is what a size has to be: a real number a sprint's figures can be
-// summed from, which NaN and the infinities are not.
+// finite is what a size has to be: a real number a total can be summed from,
+// which NaN and the infinities are not.
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // applyToTask writes what a CREATE was given. A create clears nothing: there
@@ -311,7 +277,6 @@ func (s schedule) applyToTask(task *tracker.Task) {
 	if s.Points != nil {
 		task.Points = *s.Points
 	}
-	task.Sprint = s.Sprint
 }
 
 // applyToPatch writes what an UPDATE was given, cleared keys included.
@@ -345,15 +310,6 @@ func (s schedule) applyToPatch(patch *tracker.TaskPatch) bool {
 	} else if s.Cleared["points"] {
 		zero := 0.0
 		patch.Points, touched = &zero, true
-	}
-	if s.Sprint != nil {
-		patch.Sprint, touched = s.Sprint, true
-	} else if s.Cleared["sprint"] {
-		// ZERO IS OUT OF EVERY SPRINT, which is how the rollover already
-		// spells it — see the `backlog` arm of [tracker.Writer]'s own
-		// spillover walk. A nil here would mean "not named".
-		none := 0
-		patch.Sprint, touched = &none, true
 	}
 	return touched
 }
