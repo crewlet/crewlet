@@ -266,6 +266,27 @@ type consumer struct {
 	// batching the same seat linger independently, exactly as two
 	// processes would.
 	window *lingerWindow
+
+	// detached records that this consumer has been dropped, and exists
+	// because REMOVING IT FROM THE SUBSCRIPTION IS NOT ENOUGH.
+	//
+	// Every other gate a delivery passes is read off the subscription or
+	// the client, so [Broker.drainPass] re-deriving the deliverable members
+	// each time round answers them. A detach is the one that is read off
+	// neither: it is a member LEAVING sub.members, which a loop already
+	// holding the *consumer never looks at again — and [Broker.deliverBatch]
+	// is exactly such a loop, holding one across a partition walk that can
+	// span many handler calls. So a detach landing mid-drain stopped
+	// nothing: the twin went on invoking, and ACKING, partitions 2..N on a
+	// consumer this node had already released, which is precisely the work
+	// the fenced release exists to abandon (internal/node detaches when a
+	// seat's lease is lost). The jetstream backend answers it with a flag
+	// of the same name on its own attachment, read by blocked() beside the
+	// other three.
+	//
+	// Never cleared: attaching again mints a NEW consumer, so there is no
+	// state from a previous life for a re-attach to inherit.
+	detached bool
 }
 
 type streamSub struct {
@@ -400,14 +421,19 @@ func (q *Queue) Stop(context.Context) error {
 	return nil
 }
 
-// dropMembersLocked removes this client's consumers from a subscription and
-// closes any linger window they were holding open.
+// dropMembersLocked removes this client's consumers from a subscription,
+// marks them detached and closes any linger window they were holding open.
+//
+// THE MARK AND THE REMOVAL ARE BOTH REQUIRED, for the reason [consumer.detached]
+// gives: the removal stops a FUTURE delivery being routed here, and the mark
+// stops a drain that is already holding this consumer from finishing on it.
 func (q *Queue) dropMembersLocked(sub *subscription) int {
 	mine := sub.membersOf(q)
 	if len(mine) == 0 {
 		return 0
 	}
 	for _, m := range mine {
+		m.detached = true
 		m.closeWindowLocked()
 	}
 	sub.members = slices.DeleteFunc(sub.members, func(m *consumer) bool { return m.client == q })

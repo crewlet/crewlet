@@ -13,9 +13,17 @@ import (
 )
 
 // runBatch covers batched, key-partitioned delivery: the drain, the
-// partitioning, per-partition acking, and the two places a batch loop has to
-// stop early — a mid-batch quiesce and the linger window closing on a paused
-// attachment.
+// partitioning, per-partition acking, and the places a batch loop has to stop
+// early.
+//
+// THE EARLY STOPS ARE AN ENUMERATION, not a pair, and this comment said "the
+// two" for as long as only two of them were asked about. The contract names
+// four conditions a partition loop must answer BETWEEN partitions — a deferral
+// it just applied, a hold, a drain pause, a detach (see queue.DeliveriesLeft)
+// — and there is one case per condition below, plus the linger window closing
+// on an attachment that has since been paused or held, which is a different
+// gate in both backends. A fifth thing every one of them shares is what the
+// undispatched remainder COSTS, which is its own case again.
 func (s *suite) runBatch(t *testing.T) {
 	ctx := t.Context()
 
@@ -683,6 +691,127 @@ func (s *suite) runBatch(t *testing.T) {
 		seen.staysAt(t, 1, "the hold did not stop the batch")
 		awaitState(t, "the undispatched partitions to return", func() bool {
 			return equalStrings(convsOf(backlog(q, "topic.hold", "grp")), []string{"b", "c"})
+		})
+	})
+
+	t.Run("a_detach_taken_mid_batch_stops_the_rest", func(t *testing.T) {
+		t.Parallel()
+		// THE FOURTH CONDITION, and the one that was stated in two
+		// backend comments and certified on neither.
+		//
+		// The contract names four things that stop a partition loop
+		// between partitions — a deferral just applied, a hold, a pause,
+		// a DETACH (see queue.DeliveriesLeft). The two cases above cover
+		// the first two, and the twin's guard was written to cover all
+		// four; its comment said so. It did not cover this one, because a
+		// detach is the only one that is not a FLAG: it is a consumer
+		// leaving the subscription's member list, and the partition loop
+		// holds the consumer directly and never re-reads that list. So
+		// the twin ran the remaining partitions, ACKED them, and reported
+		// the seat's mail consumed — on a consumer this node had already
+		// given up.
+		//
+		// WHICH IS THE ONE THAT MATTERS MOST. A detach is the fenced
+		// release: internal/node detaches when a seat's lease is lost,
+		// precisely to abandon in-flight work rather than finish it on a
+		// seat a peer already owns. An engine or node test asserting that
+		// path against the twin was certifying the exact opposite of what
+		// the shipped broker does — and this suite, which exists to stop
+		// that, had no case to ask with.
+		//
+		// The undispatched partitions come back like any other stopped
+		// drain's: charged one delivery each and left in the
+		// subscription's retained mail, which outlives every attachment,
+		// so whoever attaches next gets them. What that costs is
+		// an_undispatched_partition_pays_for_its_hand_back's subject and
+		// is deliberately not re-asserted here — this case is about the
+		// loop STOPPING.
+		backlog := s.needBacklog(t)
+		q := s.start(ctx, t)
+
+		seen := newJournal()
+		if err := q.SubscribeBatch(ctx, "topic.detach", "grp",
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				seen.record(firstConv(t, evs))
+				// The seat's lease moves while the rest of this very
+				// batch is still waiting to run, and the node gives the
+				// seat up at once rather than when the drain happens to
+				// end. Detach does NOT join this handler — that is the
+				// contract — so this call returns and the loop is left
+				// holding partitions it no longer has any claim to.
+				if _, err := q.Detach(hctx, "topic.detach", "grp"); err != nil {
+					t.Errorf("Detach: %v", err)
+				}
+				return queue.Ack()
+			}, convKey, queue.DefaultBatchOptions()); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		fillOneBatch(ctx, t, q, "topic.detach", "grp", "a", "b", "c")
+
+		seen.awaitLabels(t, "only the first partition to be handled", "a")
+		seen.staysAt(t, 1, "the detach did not stop the batch")
+		awaitState(t, "the undispatched partitions to return", func() bool {
+			return equalStrings(convsOf(backlog(q, "topic.detach", "grp")), []string{"b", "c"})
+		})
+	})
+
+	t.Run("a_pause_taken_mid_batch_stops_the_rest", func(t *testing.T) {
+		t.Parallel()
+		// AND THE LAST OF THE FOUR, added with the detach case above
+		// rather than after the next finding, because the detach one was
+		// found by reading the enumeration and this is what reading the
+		// rest of it produced.
+		//
+		// MEASURED, not assumed. Deleting the process-wide delivery
+		// pause from the between-partition guard fails THIS case and
+		// nothing else, on either backend — so before it existed, that
+		// condition was held by no case at all. Both backends answer it
+		// correctly and always have; it rides the same predicate as the
+		// hold and the quiesce. But "rides the same predicate" is exactly
+		// the argument that was made for the detach condition, in a
+		// comment, while that condition was not in the predicate at all.
+		// A condition the contract names and no case asks about is one
+		// delete away from being gone, whether or not anything is wrong
+		// with it today.
+		//
+		// THE DRAIN PAUSE IS A DIFFERENT GATE FROM THE TWO NEAR IT, which
+		// is why it cannot borrow their coverage. A hold is per
+		// (topic, group) and reversible; a quiesce is per attachment and
+		// reversible; this is per PROCESS and one-way, because it is the
+		// shutdown drain — the node has stopped taking work and is
+		// waiting out its in-flight handlers. Landing mid-batch is its
+		// ordinary case rather than an exotic one: a drain that began
+		// while a seat was working arrives exactly here.
+		//
+		// pause_during_linger_retains_pending covers the same verb at the
+		// OTHER gate — a window open when the pause lands — which is a
+		// different branch in both backends.
+		backlog := s.needBacklog(t)
+		q := s.start(ctx, t)
+
+		seen := newJournal()
+		if err := q.SubscribeBatch(ctx, "topic.drain", "grp",
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				seen.record(firstConv(t, evs))
+				// The node begins its shutdown drain while the rest of
+				// this batch is still waiting to run. The handler in
+				// flight finishes — that is what a drain waits for —
+				// and nothing new starts.
+				if err := q.PauseDelivery(hctx); err != nil {
+					t.Errorf("PauseDelivery: %v", err)
+				}
+				return queue.Ack()
+			}, convKey, queue.DefaultBatchOptions()); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		fillOneBatch(ctx, t, q, "topic.drain", "grp", "a", "b", "c")
+
+		seen.awaitLabels(t, "only the first partition to be handled", "a")
+		seen.staysAt(t, 1, "the drain pause did not stop the batch")
+		awaitState(t, "the undispatched partitions to return", func() bool {
+			return equalStrings(convsOf(backlog(q, "topic.drain", "grp")), []string{"b", "c"})
 		})
 	})
 

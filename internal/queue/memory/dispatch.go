@@ -126,7 +126,32 @@ func deliverableMembersLocked(sub *subscription) []*consumer {
 	return out
 }
 
+// deliverableLocked is the ONE predicate both the pre-drain gate and the
+// between-partition guard ask, and it enumerates every condition the contract
+// names — see [queue.DeliveriesLeft], whose "a deferral it just applied, a
+// hold, a pause, a detach" is this list, and jetstream's attachment.blocked(),
+// which is the same four on the backend that ships.
+//
+// The mapping, because the two backends spell them differently and the
+// enumeration is the thing that rots:
+//
+//   - a detach (or a Stop, which drops this client's consumers the same way)
+//     -> m.detached
+//   - a stopped client                                     -> !c.running
+//   - a process-wide delivery pause (PauseDelivery)        -> c.paused
+//   - a per-subscription hold (PauseTopic)                 -> c.pauses[m.key]
+//   - a deferral just applied, or an explicit Quiesce      -> c.quiescing[m.key]
+//
+// DETACH IS ASKED FIRST, and not for speed: it is the only one of the five
+// that a caller re-deriving the members from sub.members would never see, so
+// it is the one a reader has to find here. A consumer that has been dropped
+// is out of every other question's jurisdiction — its client may still be
+// running, unpaused and unheld — and answering those first reads as though
+// they could rule it in.
 func deliverableLocked(m *consumer) bool {
+	if m.detached {
+		return false
+	}
 	c := m.client
 	if c == nil || !c.running || c.paused {
 		return false
@@ -199,6 +224,20 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 			// attachment.blocked(), all four conditions) and did not stop
 			// the twin, and a test written against the twin certified a
 			// behaviour production does not have.
+			//
+			// SHARING THE PREDICATE WAS NOT THE SAME AS COVERING THE LIST,
+			// and this comment claimed the second while only the first had
+			// been done. A DETACH was still not answered: it is the one
+			// condition that lives on the MEMBERSHIP rather than on a flag,
+			// and this loop holds the *consumer, so a member leaving
+			// sub.members is invisible from here. The twin went on running
+			// and ACKING partitions 2..N on a seat this node had already
+			// released — the fenced release's whole point, inverted, on the
+			// backend internal/node's own tests run against. The condition
+			// is [consumer.detached] now and it is asked FIRST; the
+			// enumeration itself is written down at [deliverableLocked],
+			// where the next reader can check it against the contract
+			// rather than re-derive it.
 			//
 			// THE REST OF THE DRAIN IS CHARGED FOR THE HAND-BACK, exactly
 			// as the partition that stopped it was: see [Broker.restoreLocked].

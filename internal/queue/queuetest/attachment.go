@@ -60,6 +60,87 @@ func (s *suite) runAttachment(t *testing.T) {
 		}
 	})
 
+	t.Run("a_detach_inside_a_handler_stops_the_next_delivery", func(t *testing.T) {
+		t.Parallel()
+		// THE SINGLE-DELIVERY HALF of
+		// Batch/a_detach_taken_mid_batch_stops_the_rest, and it is a
+		// separate case because the two paths answer the same condition
+		// through DIFFERENT mechanisms.
+		//
+		// The case above detaches between publishes, so a backend passes
+		// it by checking anything at all at the point of delivery. This
+		// one detaches from INSIDE a handler with the next event already
+		// waiting — the arrangement the batch case exposed, where a
+		// backend that had answered the question once went on to serve
+		// the rest of what it had already drained. On the single path a
+		// backend re-asks per event rather than holding a consumer across
+		// a partition walk, so the question here is whether it re-asks at
+		// all.
+		//
+		// WHY THAT IS NOT THE SAME CODE. On the batch path the twin reads
+		// a flag on the consumer it is holding; on this one the consumer
+		// is simply gone from the subscription's member list by the time
+		// the next event is considered. Two mechanisms, one rule — so one
+		// of them can rot while the other keeps passing, which is what a
+		// case per path is for.
+		//
+		// WHAT THIS CASE DOES AND DOES NOT DISCRIMINATE, measured rather
+		// than claimed, because the finding this was written alongside
+		// was precisely a claim about coverage that nothing checked.
+		// Each backend answers a detach on THIS path twice over — the
+		// twin by the detached flag and by the member leaving
+		// sub.members, JetStream by attachment.blocked() and by the
+		// consume loop's context being cancelled — and removing either
+		// half alone leaves this case GREEN on that backend. So it holds
+		// the rule, not a mechanism: it goes red when a detach stops
+		// stopping the next delivery, by whatever route. The mechanism
+		// half is held by the batch case, which measurably fails when the
+		// flag (twin) or blocked()'s detached term (JetStream) is
+		// removed.
+		q := s.start(ctx, t)
+
+		seen := newJournal()
+		var detached bool
+		subscribe(ctx, t, q, "topic.detach1", "grp",
+			func(hctx context.Context, ev *events.Event) queue.Result {
+				seen.record(labelOf(ev))
+				// ONCE: the seat is released on the first delivery, and
+				// a second call would mean the property under test has
+				// already failed — reporting it as a Detach error would
+				// bury that under the wrong message.
+				if !detached {
+					detached = true
+					if _, err := q.Detach(hctx, "topic.detach1", "grp"); err != nil {
+						t.Errorf("Detach: %v", err)
+					}
+				}
+				return queue.Ack()
+			})
+
+		// Both events are in the mailbox before anything can be
+		// delivered, so the second one is already waiting when the first
+		// one's handler gives the seat up. Publishing them without the
+		// hold would let the first be delivered and acked before the
+		// second was even accepted, and the case would assert nothing.
+		if err := q.PauseTopic(ctx, "topic.detach1", "grp", "queuetest-fill"); err != nil {
+			t.Fatalf("PauseTopic: %v", err)
+		}
+		publish(ctx, t, q, "topic.detach1", newEvent("e1"))
+		publish(ctx, t, q, "topic.detach1", newEvent("e2"))
+		if err := q.ResumeTopic(ctx, "topic.detach1", "grp", "queuetest-fill"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+
+		seen.awaitLabels(t, "only the first event to be handled", "e1")
+		seen.staysAt(t, 1, "the detach did not stop the next delivery")
+
+		if backlog := s.optionalBacklog(t); backlog != nil {
+			awaitState(t, "the undelivered event to be retained", func() bool {
+				return equalStrings(labelsOf(backlog(q, "topic.detach1", "grp")), []string{"e2"})
+			})
+		}
+	})
+
 	t.Run("detach_removes_batch_subscription", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
