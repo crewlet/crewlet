@@ -2658,6 +2658,11 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
+		// A RESUMER THAT PANICS, because these cases never reach one:
+		// the lookup is what fails, and a resume from here would be the
+		// answer being run after the store said it could not say which
+		// run is owed it.
+		Resume: unreachedResumer{t},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -2706,3 +2711,15 @@ func (blindLookupStore) FindAwaitingByConversation(context.Context, string,
 type discardPublisher struct{}
 
 func (discardPublisher) Publish(context.Context, string, *events.Event) error { return nil }
+
+// unreachedResumer stands in the seam a coordinator requires on a path that
+// must never get there — a stub that answered quietly would let a resume
+// through as a pass.
+type unreachedResumer struct{ t *testing.T }
+
+func (r unreachedResumer) Resume(context.Context, sandbox.ResumeRequest) error {
+	r.t.Helper()
+	r.t.Fatal("the answer was resumed although the lookup that matches it to a " +
+		"run could not be made")
+	return nil
+}
