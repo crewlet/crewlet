@@ -37,6 +37,17 @@ type LexicalQuery struct {
 	// one meaning "no buckets" would answer every search with nothing, and
 	// an empty answer is indistinguishable from an empty corpus.
 	Shards Assignment
+
+	// MergeInput says this answer feeds [MergeByScore] rather than a
+	// reader, which is the fan-out participant and nothing else.
+	//
+	// IT SKIPS THE BODY READ A SNIPPET NEEDS. A [Slice] carries keys and
+	// scores and no text at all, so the snippet a participant cut would be
+	// fifty documents read and discarded per query per node; the
+	// coordinator cuts them once over the fused list, in [Indexer.Hydrate].
+	// The excerpt-cut snippet is still filled, because it costs a column
+	// of a row the hydration already reads.
+	MergeInput bool
 }
 
 // LexicalHit is one document [Indexer.Search] ranked, and the BM25 score it
@@ -137,7 +148,7 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 	if len(scores) == 0 {
 		return nil, nil
 	}
-	return x.hydrateHits(ctx, scores, terms, limit)
+	return x.hydrateHits(ctx, q, scores, terms, limit)
 }
 
 // corpus reads the collection statistics BM25 needs.
@@ -251,7 +262,8 @@ func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery,
 // The ordering is done in Go over the score map rather than in SQL, because
 // the scores exist only here: pushing them into a temporary table to sort
 // them would cost a write transaction per query on a single-writer store.
-func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, terms []string, limit int) ([]LexicalHit, error) {
+func (x *Indexer) hydrateHits(ctx context.Context, q LexicalQuery,
+	scores map[string]float64, terms []string, limit int) ([]LexicalHit, error) {
 	top := topN(scores, limit)
 	if len(top) == 0 {
 		return nil, nil
@@ -282,7 +294,18 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
-	x.resnippet(ctx, byID, terms)
+	// THE SNIPPET IS RECUT FROM THE BODY, unless this answer is a merge
+	// input nobody will read one from.
+	if !q.MergeInput {
+		for key, snippet := range x.resnippet(ctx,
+			bodyRefs(byID, func(h LexicalHit) (string, string) {
+				return h.Source, h.ID
+			}), terms) {
+			hit := byID[key]
+			hit.Snippet = snippet
+			byID[key] = hit
+		}
+	}
 	out := make([]LexicalHit, 0, len(top))
 	for _, id := range top {
 		// A hit whose row vanished between the posting scan and this read
@@ -319,14 +342,21 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 // leaves the excerpt-cut snippet in place and logs. A hit is still a hit, and
 // a search that died because one body was unreadable is strictly worse than
 // one whose snippet is a preamble.
-func (x *Indexer) resnippet(ctx context.Context, byID map[string]LexicalHit, terms []string) {
+// IT RETURNS RATHER THAN MUTATES, because the two hydrations it serves
+// answer in different types — [LexicalHit] carries a score and [FusedHit]
+// deliberately does not — and a shared step that wrote into both would need
+// the field they differ by.
+func (x *Indexer) resnippet(ctx context.Context, want map[string][2]string,
+	terms []string) map[string]string {
+
 	// BY SOURCE, because an id is only unique within one: `kb_docs.id` is
 	// source-qualified for exactly that reason, and the source's Fetch
 	// takes its own unqualified ids.
 	wanted := map[string][]string{}
-	for _, hit := range byID {
-		wanted[hit.Source] = append(wanted[hit.Source], hit.ID)
+	for _, ref := range want {
+		wanted[ref[0]] = append(wanted[ref[0]], ref[1])
 	}
+	out := make(map[string]string, len(want))
 	for _, source := range x.sources {
 		ids := wanted[source.Source()]
 		if len(ids) == 0 {
@@ -338,16 +368,14 @@ func (x *Indexer) resnippet(ctx context.Context, byID map[string]LexicalHit, ter
 				return err
 			}
 			for _, d := range docs {
-				key := docKey(d.Source, d.ID)
-				hit, ok := byID[key]
 				// AN EMPTY BODY IS NOT AN IMPROVEMENT: a page
 				// whose text is only its title keeps the
 				// excerpt's snippet rather than getting none.
-				if !ok || strings.TrimSpace(d.Body) == "" {
+				if strings.TrimSpace(d.Body) == "" {
 					continue
 				}
-				hit.Snippet = textindex.Snippet(d.Body, terms, snippetBytes)
-				byID[key] = hit
+				out[docKey(d.Source, d.ID)] =
+					textindex.Snippet(d.Body, terms, snippetBytes)
 			}
 			return nil
 		}); err != nil {
@@ -355,6 +383,17 @@ func (x *Indexer) resnippet(ctx context.Context, byID map[string]LexicalHit, ter
 				"source", source.Source(), "documents", len(ids), "error", err)
 		}
 	}
+	return out
+}
+
+// bodyRefs is the (source, id) pair each key needs fetching by.
+func bodyRefs[T any](byKey map[string]T, of func(T) (string, string)) map[string][2]string {
+	out := make(map[string][2]string, len(byKey))
+	for key, v := range byKey {
+		source, id := of(v)
+		out[key] = [2]string{source, id}
+	}
+	return out
 }
 
 // snippetBytes is the window a hit's snippet is cut to.
@@ -472,6 +511,17 @@ func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]Fu
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: read fused hits: %w", err)
+	}
+	// THE SAME RECUT, because this is where a FAN-OUT's snippets are made:
+	// a participant answers with keys and scores alone, so the coordinator
+	// is the only place in that path a snippet exists at all.
+	for key, snippet := range x.resnippet(ctx,
+		bodyRefs(byKey, func(h FusedHit) (string, string) {
+			return h.Source, h.ID
+		}), terms) {
+		hit := byKey[key]
+		hit.Snippet = snippet
+		byKey[key] = hit
 	}
 	out := make([]FusedHit, 0, len(keys))
 	for _, key := range keys {
