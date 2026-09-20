@@ -226,7 +226,17 @@ func TestADetachedRunsRowKeepsThePartitionAndTheConversationApart(t *testing.T) 
 	if ref.PartitionKey != theDMThread {
 		t.Errorf("the row's partition = %q, want the batch the run was launched from", ref.PartitionKey)
 	}
-	if ref.Reply != "tool" || ref.TurnID != "wk-1" || ref.AgentHandle != "swe" {
+	// AND THE OTHER CROSSED PAIR, which is the same hazard one identity
+	// down: the run is this execution and the work key is what a redelivery
+	// reproduces (ADR-0017), both are strings, and a row that swapped them
+	// would resume under an id no completion poll is watching.
+	if ref.TurnID != "run-1" {
+		t.Errorf("the row's run = %q, want this execution's own id", ref.TurnID)
+	}
+	if ref.WorkKey != "wk-1" {
+		t.Errorf("the row's work key = %q, want the unit a redelivery reproduces", ref.WorkKey)
+	}
+	if ref.Reply != "tool" || ref.AgentHandle != "swe" {
 		t.Errorf("the rest of the row is wrong too: %+v", ref)
 	}
 }

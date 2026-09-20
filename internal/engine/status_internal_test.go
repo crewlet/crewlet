@@ -605,10 +605,17 @@ func TestOnlyARecordedSuspensionKeepsTheIndicatorUp(t *testing.T) {
 // [notify.StatusDriver.ClearFor] was added to bound and what nothing else
 // would ever have taken down.
 func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
+	// THE ROW IS KEYED ON THE RUN, not on the work it was dispatched for
+	// (ADR-0017), so the request below names its own RunID rather than
+	// letting runTurn mint one: a row seeded under any other id is not
+	// launching as far as the suspension is concerned, and every case here
+	// would take the "nowhere to go" branch while claiming to test the
+	// others.
 	launching := func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
 		t.Helper()
 		if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-			TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
+			TurnID: "run-code", WorkKey: "wk-code",
+			AgentHandle: "swe", Role: "SWE",
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("BeginLaunch: %v", err)
 		}
@@ -639,7 +646,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 			equipForCode(t, e, tc.pending(t, store))
 
 			res, err := e.runTurn(t.Context(), Request{
-				Handle: "swe", WorkKey: "wk-code",
+				Handle: "swe", WorkKey: "wk-code", RunID: "run-code",
 				Events: []*events.Event{chatTrigger("D0ANA")},
 			})
 			if err != nil {
