@@ -530,3 +530,84 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 			len(clean))
 	}
 }
+
+// THE CURSOR AND THE FAILURE FILTER TOGETHER, which is the ONE combination
+// that can catch a misordered bound argument.
+//
+// `Turns` binds its placeholders in three groups — the SELECT list, then the
+// WHERE clause, then HAVING — and the failure predicate appears in TWO of them,
+// so its arguments are appended twice and the second batch has to land AFTER
+// the cursor's. Exercised with `Failed` alone, a wrong order is invisible:
+// HAVING then holds one clause and there is nothing for the cursor's argument
+// to be swapped with. It takes a query that sets BOTH to bind the cursor's
+// timestamp to an `event_type IN (…)` slot and a type name to `MIN(event_time)
+// < ?`, which answers the wrong rows rather than raising — the silent shape
+// this test exists for. Mutation-checked: moving the append above the cursor's
+// turns it red, and leaves every other case in this file green.
+func TestTheTurnCursorAndTheFailureFilterComposeCorrectly(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	// One clean turn, then two that died on a failure TYPE, each a minute
+	// apart so the cursor can cut between them.
+	seedTurn(t, log, "t-clean", base, "CEO", nil)
+	died := func(id string, at time.Time, eventType string) {
+		t.Helper()
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-p0", Type: "agent_phase_completed", Time: at,
+			Category: "lifecycle", Actor: "CEO",
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+		}); err != nil {
+			t.Fatalf("append the phase: %v", err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-x", Type: eventType, Time: at.Add(time.Second),
+			Category: "system", Actor: "CEO",
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+		}); err != nil {
+			t.Fatalf("append the %s: %v", eventType, err)
+		}
+	}
+	died("t-budget", base.Add(time.Minute), "budget_exhausted")
+	died("t-llm", base.Add(2*time.Minute), "llm_unavailable")
+
+	ids := func(q store.TurnQuery) []string {
+		t.Helper()
+		got, err := log.Turns(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Turns(%+v): %v", q, err)
+		}
+		out := []string{}
+		for _, turn := range got {
+			out = append(out, turn.TurnID)
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	yes, no := true, false
+	cursor := base.Add(2 * time.Minute)
+	// Before the cursor: t-clean and t-budget. Of those, the failed one is
+	// t-budget and the clean one is t-clean — so each filter names exactly
+	// one row, and a swapped argument cannot coincidentally agree.
+	if got := ids(store.TurnQuery{AgentRole: "CEO", Before: cursor, Failed: &yes}); !slices.Equal(
+		got, []string{"t-budget"}) {
+
+		t.Errorf("cursor+failed=true answered %v, want [t-budget] — the cursor's "+
+			"timestamp and the failure types are bound in the same HAVING clause "+
+			"and must go in in that order", got)
+	}
+	if got := ids(store.TurnQuery{AgentRole: "CEO", Before: cursor, Failed: &no}); !slices.Equal(
+		got, []string{"t-clean"}) {
+
+		t.Errorf("cursor+failed=false answered %v, want [t-clean]", got)
+	}
+	// And the cursor alone still pages by the turn's START, unchanged by the
+	// predicate sharing its clause.
+	if got := ids(store.TurnQuery{AgentRole: "CEO", Before: cursor}); !slices.Equal(
+		got, []string{"t-budget", "t-clean"}) {
+
+		t.Errorf("the bare cursor answered %v, want both turns that started before it", got)
+	}
+}
