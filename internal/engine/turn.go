@@ -820,6 +820,13 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		// The LAST round's, which is the one the reply came out of. The
 		// earlier rounds are the turn's own business and end with it.
 		in.Intent, in.Calls = w.Summary, w.Calls
+		if w.Outcome == turn.OutcomeBlocked {
+			// See [ledger.Session.BlockedOn]: the ledger cannot name this
+			// outcome itself, because turn imports ledger. The evidence is
+			// mandatory on a blocked submission, so this is never the
+			// empty string standing in for a real account.
+			in.BlockedOn = w.Evidence
+		}
 	}
 	entry := ledger.BuildSession(in)
 	if res.LastReview != nil {
