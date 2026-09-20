@@ -868,6 +868,21 @@ reader could tick would report a change that never reached the page.
 speech: its line breaks are load-bearing there and it is not markdown. A
 document carries `.prose.md` beside it.
 
+**A fenced block wraps rather than scrolling**, and it took a wrong class name
+to notice it did neither. The renderer emitted `class="code plain"` on every
+fence — two names this stylesheet spends on something else (`.grid-th.plain`
+is a table header) and neither of them a recipe for a `pre`. So a fenced
+sample had no surface, no padding, and a `pre`'s own `white-space: pre` with
+`overflow: visible`: one long line of JSON in a page body, a work item's
+description or a phase prompt pushed the whole page sideways — 1378px of
+scroll width in a 700px viewport, measured. The class is `md-code` now, in the
+same family as `md-table`, `md-tasks` and `md-task-body`, and its recipe
+wraps: that is the design system's own default for a block a reader *reads*,
+and unlike a scroll container it owes no tab stop. The forward half of the
+class gate could not see any of it, because it read a `className` **attribute**
+and the renderer writes a `className:` **property** — so that half reads both
+now, and both directions of the gate fail on the old name.
+
 The same file also **splits a document into its sections without rendering
 anything** — `splitSections` for the flat run, `nestSections` for the outline
 its heading levels describe — for the one surface that needs a document's

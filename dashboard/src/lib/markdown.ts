@@ -655,9 +655,21 @@ function renderBlock(block: Block, key: string): ReactNode {
     case "paragraph":
       return createElement("p", { key }, renderInline(block.text, key));
     case "code":
+      // `md-code`, in the same family as `md-table`, `md-tasks` and
+      // `md-task-body`. It was `code plain`, which is two names this
+      // stylesheet spends on something else — `.grid-th.plain` is a table
+      // header — and NEITHER of them was ever a recipe for this block. So a
+      // fenced sample in a page body, a work item's description, a comment or
+      // a phase prompt had no surface, no padding and, because a `pre`
+      // defaults to `white-space: pre` with `overflow: visible`, no way to
+      // contain a long line: one line of JSON pushed the whole page 678px
+      // wider than its own viewport (measured at 700px). The forward half of
+      // the class gate could not see it either, because it read a `className`
+      // ATTRIBUTE and this is a property in a props object — which is the
+      // other half of why it stayed silent, and is fixed in that gate.
       return createElement(
         "pre",
-        { key, className: "code plain", "data-lang": block.lang || undefined },
+        { key, className: "md-code", "data-lang": block.lang || undefined },
         createElement("code", null, block.text),
       );
     case "quote":
