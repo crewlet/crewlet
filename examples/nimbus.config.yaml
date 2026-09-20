@@ -84,6 +84,17 @@ stream:
   store_dir: "./nimbus-data/stream"
   replicas: 1                     # 1 solo; 3 in a fleet, where it is what
                                   #   makes a publish quorum-durable
+  # store_max_bytes: 68719476736  # how much of store_dir's volume this broker
+                                  #   may hold — the number every stream
+                                  #   ceiling on it is checked against. Left
+                                  #   unset the broker takes three quarters of
+                                  #   that volume's free space, measured once
+                                  #   at boot, which is right when it is the
+                                  #   only tenant. SET AND DIVIDE IT when more
+                                  #   than one engine runs against one
+                                  #   filesystem: free space bounds their sum,
+                                  #   so two engines each sizing themselves
+                                  #   from what they can see over-commit it
 
 # ── This node's local database ────────────────────────────────────────
 #

@@ -46,6 +46,29 @@ type Config struct {
 	// what no node serving a company should run: see config.Stream.
 	StoreDir string
 
+	// StoreMaxBytes is how much of StoreDir's volume an EMBEDDED server
+	// may hold. Zero lets it size itself from that volume's free space
+	// when its JetStream comes up, which is nats-server's own derivation.
+	//
+	// IT IS THE NUMBER EVERY STREAM CEILING IS COMPARED AGAINST, which is
+	// why [Queue.StreamBudget] READS IT BACK — declared or derived,
+	// whichever is in force — rather than modelling it. It is the lever
+	// for the one shape that arithmetic cannot reach: the volume's free
+	// space bounds the SUM of every engine sharing it and not each of
+	// them, so two nodes on one filesystem each sizing from what they can
+	// see over-commit it, and the broker's refusal names whichever stream
+	// happened to be provisioned last rather than the disk. An operator
+	// running N engines against one filesystem divides it between them.
+	//
+	// Read by the embedded branch only. An external cluster's account
+	// limits belong to its own operator, and Tier A refuses this field
+	// against one. It is also IGNORED without a StoreDir: that server's
+	// streams are memory-backed, so a file-store limit would bound none of
+	// them — Tier A warns on that pair rather than refusing it, because it
+	// is a test's shape rather than a node serving a company, which
+	// provisions the streams its company lives on whatever else it does.
+	StoreMaxBytes int64
+
 	// ClusterName, ClusterURLs and ClusterPort configure an embedded
 	// server that joins peers, which is the fleet topology: every node
 	// embeds a member of one cluster and streams replicate between them.

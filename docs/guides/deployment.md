@@ -260,6 +260,35 @@ backend is enough: a company on Jira whose knowledge base is the engine's own,
 which is the default without Confluence, is refused the same way. Only a
 company on vendors for both can run an in-memory member.
 
+**Divide `store_max_bytes` when several engines share a filesystem.** Every
+stream ceiling on the embedded broker is a *reservation*: the broker refuses to
+create a stream whose ceiling it cannot back, and the number it compares
+against is this limit. Unset, the broker sizes itself from the free space on
+`store_dir` when its JetStream comes up — three quarters of it, measured once —
+which is right when it is the volume's only tenant and wrong the moment it is
+not, because free space bounds the *sum* of the engines on a disk rather than
+each of them. Two engines each taking what they can see over-commit the volume;
+three over-commit it by half again. The failure is not a disk-full message: it
+is `insufficient storage resources available` on whichever stream that node
+happened to provision last, which reads as a problem with that subsystem. So on
+a host running N engines against one filesystem — a test runner, a
+multi-tenant box, several companies on one machine — give each of them its own
+share:
+
+```yaml
+stream:
+  store_dir: "/var/lib/crewlet/acme/stream"
+  store_max_bytes: 68719476736   # 64 GiB of the volume, this engine's share
+```
+
+It is measured once, at boot, on both paths: a volume that later grows or
+shrinks does not move the limit, and a node that should see a resized disk is
+restarted. Half of whatever is in force is what the state logs' derived
+ceilings may reserve between them; the other half is for the streams that
+reserve nothing and simply grow against it — the seats' mailboxes, the event
+log, the dead-letter stream, the memory changelog and every coordination
+bucket. A refusal names the limit, what was already spoken for, and this field.
+
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**
 >

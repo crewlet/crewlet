@@ -398,6 +398,34 @@ stream:
                                     #   page there, so the engine refuses to
                                     #   boot it on an in-memory stream rather
                                     #   than lose them at the first restart
+  # store_max_bytes: 68719476736    # how much of that directory's volume the
+                                    #   EMBEDDED broker may hold — the ONE number
+                                    #   every stream ceiling on it is compared
+                                    #   against, because a ceiling is a
+                                    #   RESERVATION the broker refuses if it
+                                    #   cannot back it. UNSET, the broker sizes
+                                    #   itself: three quarters of that volume's
+                                    #   free space when its JetStream came up,
+                                    #   plus what it already occupies there,
+                                    #   which is what a single-engine host should
+                                    #   have. MEASURED ONCE, AT BOOT, on either
+                                    #   path — a disk that later grows or shrinks
+                                    #   does not move this limit, and a node that
+                                    #   should see a resized volume is restarted.
+                                    #   SET IT WHEN MORE THAN ONE ENGINE SHARES A
+                                    #   FILESYSTEM and divide it between them:
+                                    #   free space bounds their SUM, so two
+                                    #   engines each sizing themselves from what
+                                    #   they can see over-commit it, and the
+                                    #   failure is `insufficient storage
+                                    #   resources available` naming whichever
+                                    #   stream was provisioned last. Bounds:
+                                    #   4 GiB..64 TiB, and it must not be smaller
+                                    #   than the ceilings declared inside it.
+                                    #   REFUSED for `type: nats` — an external
+                                    #   cluster's account limits are its own
+                                    #   operator's, and this node reads them back
+                                    #   rather than declaring them
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
@@ -511,7 +539,11 @@ stream:
                                     #   had. Every one of the three is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
-                                    #   `crewlet retention set-capacity` does
+                                    #   `crewlet retention set-capacity` does.
+                                    #   WHAT THE BROKER CAN GRANT is
+                                    #   `store_max_bytes` wherever you set one,
+                                    #   and Tier A refuses a limit smaller than
+                                    #   the ceilings declared inside it
   # tracker_vectors_max_bytes: 17179869184
                                     #   the vector changelog's ceiling (default
                                     #   16 GiB). SIZED FOR THE PEAK: the stream

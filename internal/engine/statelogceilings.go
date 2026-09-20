@@ -385,9 +385,15 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 func limitSource(source jetstream.BudgetSource, volume string) string {
 	switch source {
 	case jetstream.BudgetServerStore:
-		return fmt.Sprintf("that limit is three quarters of the free space on the "+
-			"volume holding stream.store_dir (%s), counting what the broker's "+
-			"streams already hold there", volume)
+		// BOTH SOURCES OF THE SAME NUMBER, because the broker reports
+		// only the number and not which one set it: stream.store_max_bytes
+		// where an operator declared one, and nats-server's own sizing of
+		// the volume where nobody did. Naming only the second sends an
+		// operator who set the first to a disk that has room.
+		return fmt.Sprintf("that limit is stream.store_max_bytes where you set "+
+			"one, and otherwise three quarters of the free space on the volume "+
+			"holding stream.store_dir (%s), counting what the broker's streams "+
+			"already hold there", volume)
 	case jetstream.BudgetServerMemory:
 		return "that limit is three quarters of this host's memory, because " +
 			"stream.store_dir is unset and the embedded broker keeps its streams " +
