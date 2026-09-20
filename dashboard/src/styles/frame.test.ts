@@ -20,8 +20,31 @@ import { describe, expect, test } from "vitest";
 
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
 
+/**
+ * One stylesheet, WITH ITS COMMENTS BLANKED.
+ *
+ * Every case here reads CSS as text, and several of them slice it at a
+ * breakpoint — `split("@media (max-width: 860px)")` for the wide half,
+ * `indexOf("@container page (max-width:")` for the broken bar. A COMMENT
+ * naming one of those at-rules truncates that slice at the prose instead of
+ * at the rule, and this file's comments name at-rules constantly, because
+ * explaining why a rule sits at a breakpoint means writing the breakpoint
+ * down.
+ *
+ * It has happened: a note on `.page` mentioning `@media (max-width: 860px)`
+ * moved the wide half's end 480 lines up the file, and three cases failed
+ * naming `.grid-wrap` and `.rail-label` — selectors nothing in that change
+ * had touched. A gate that fails for the wrong reason is a gate somebody
+ * fixes by deleting an assertion.
+ *
+ * BLANKED RATHER THAN REMOVED: every comment becomes spaces of the same
+ * length, so an offset into this string is still an offset into the file and
+ * a failure's line number still points at the rule.
+ */
 function sheet(name: string): string {
-  return readFileSync(join(STYLES, name), "utf8");
+  return readFileSync(join(STYLES, name), "utf8").replace(/\/\*[\s\S]*?\*\//g, (c) =>
+    c.replace(/[^\n]/g, " "),
+  );
 }
 
 /** The body of the first rule whose selector is exactly `selector`. */
