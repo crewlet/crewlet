@@ -277,7 +277,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	// above, where a linter can see it belongs to this response.
 	defer stream.stop()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(stream, 2048))
+		detail, _ := io.ReadAll(io.LimitReader(stream, httpx.RefusalBytes))
 		return e2bProcessResult{}, fmt.Errorf("e2b: start: %d: %s",
 			resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
@@ -394,7 +394,7 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, nil
 	}
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
 			resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
@@ -445,11 +445,11 @@ func (c *envdClient) writeFile(ctx context.Context, path string, content []byte)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		return fmt.Errorf("e2b: write %s: %d: %s", path,
 			resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 	return nil
 }
 

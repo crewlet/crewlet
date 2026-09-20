@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -191,7 +190,7 @@ func (a *Admin) Exchange(ctx context.Context, clientID, clientSecret, code, base
 		return Install{}, fmt.Errorf("slack: oauth.v2.access: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBody)
 	if err != nil {
 		return Install{}, fmt.Errorf("slack: oauth.v2.access: %w", err)
 	}

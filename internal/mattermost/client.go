@@ -242,7 +242,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		// person, and surfacing it turns "500 on /users/me" into
 		// "Invalid session". Capped because a proxy in front of a dead
 		// server answers with an HTML page.
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, httpx.RefusalBytes))
 		return resp.Header, &Error{
 			Method: method, Path: path, Status: resp.StatusCode,
 			Message:    serverMessage(payload),
@@ -256,7 +256,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	} else {
 		// Drained so the connection returns to the pool rather than
 		// being closed and re-dialled on the next call.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 	}
 	return resp.Header, nil
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,7 +147,7 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 		}
 	}
 	if out == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
@@ -283,14 +284,6 @@ func (a *e2bAPI) pauseBox(ctx context.Context, sandboxID string) error {
 	return a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/pause", nil, nil)
 }
 
-// detailLimit bounds a vendor's own explanation of a refusal.
-//
-// The whole account of what went wrong — a quota message, a permission
-// name, a validation list — and it reaches an operator and a model as the
-// error's text. Two kilobytes holds any of those; past that it is a vendor
-// serving an HTML page where an API response belongs.
-const detailLimit = 2048
-
 // readDetail reads a refusal's body, SAYING when it cut.
 //
 // An unmarked cut leaves "the explanation is off-screen" and "the vendor
@@ -298,12 +291,13 @@ const detailLimit = 2048
 // reader most needs — and the read error is reported rather than dropped,
 // because a body that died mid-read is a different fact from a short one.
 func readDetail(body io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(body, detailLimit+1))
+	raw, err := io.ReadAll(io.LimitReader(body, httpx.RefusalBytes+1))
 	text := strings.TrimSpace(string(raw))
 	switch {
-	case len(raw) > detailLimit:
-		return strings.TrimSpace(textcut.Bytes(string(raw), detailLimit)) +
-			"\n…(the rest of the response is past the 2048-byte cap this build reads)"
+	case len(raw) > httpx.RefusalBytes:
+		return strings.TrimSpace(textcut.Bytes(string(raw), httpx.RefusalBytes)) +
+			"\n…(the rest of the response is past the " +
+			strconv.Itoa(httpx.RefusalBytes) + "-byte cap this build reads)"
 	case err != nil && text == "":
 		return "(the response body could not be read: " + err.Error() + ")"
 	default:

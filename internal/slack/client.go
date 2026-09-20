@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -99,7 +98,7 @@ func call(ctx context.Context, httpClient *http.Client, method, token string, bo
 		return fmt.Errorf("slack: %s: %w", method, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBody)
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", method, err)
 	}
@@ -139,7 +138,7 @@ func callQuery(ctx context.Context, httpClient *http.Client,
 		return fmt.Errorf("slack: %s: %w", method, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBody)
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", method, err)
 	}

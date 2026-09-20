@@ -461,7 +461,11 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	answer, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// REFUSED PAST THE CEILING, not read up to it: this body is both the
+	// refusal's detail and the success's payload, so a silent cut turns
+	// one into half a sentence and the other into "unexpected end of JSON
+	// input" — an error naming neither this endpoint nor the cap.
+	answer, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBody)
 	if err != nil {
 		return fmt.Errorf("atlassian: read %s %s: %w", method, path, err)
 	}

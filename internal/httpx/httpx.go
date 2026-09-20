@@ -43,6 +43,21 @@
 // processpool_guard_test.go is what keeps all three halves true: written down
 // and checked by nobody, this rule had four prose copies and seven packages
 // violating it.
+//
+// # The three caps
+//
+// The same argument holds for HOW MUCH of a response a client reads, so the
+// three answers live here too and nowhere else: [MaxResponseBody] for a body
+// that will be decoded, [RefusalBytes] for one that only has to explain a
+// refusal, and [DrainBytes] for one nothing will read at all. Each is one
+// decision with one reason, and each had drifted the way this package's doc
+// predicts: RefusalBytes' own comment claimed to have replaced six spellings
+// of 2 KiB while four of them were still in the tree, and the drain was a
+// bare 1 MiB written out nine times under a sentence asserting they matched.
+//
+// limits_guard_test.go is what keeps it true. A bare integer handed to an
+// io.LimitReader over a response body is the bug, exactly as a bare
+// &http.Client{} is above.
 package httpx
 
 import (

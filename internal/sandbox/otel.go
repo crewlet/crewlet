@@ -180,7 +180,7 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 		return
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpx.DrainBytes))
 	if resp.StatusCode >= 400 {
 		log.WarnContext(ctx, "sandbox_otel_forward_refused",
 			"signal", signal, "status", resp.StatusCode)
