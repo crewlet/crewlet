@@ -60,24 +60,49 @@ func TestATurnReadsEveryEventItTouchedNotOnlyItsPhases(t *testing.T) {
 }
 
 // A non-phase row must not acquire a phase's numbers on the way in: the
-// fallback fills the identifier only.
+// identity fallback fills the identifier columns only.
+//
+// ASSERTED THROUGH A READ THAT SELECTS THE COLUMNS. It used to read
+// `Turn(...)[0].Spend`, which a read NEVER populates — `finishRecord` does not
+// set that field — so the guard short-circuited on nil and the test could not
+// fail whatever the writer did. `Turns` sums `total_tokens` over every row of
+// a turn regardless of type, so a delivery that wrongly acquired a phase's
+// numbers shows up there and nowhere else.
 func TestTheTurnFallbackDoesNotInventSpend(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Minute)
+	// A real phase, so the assertion below is "only this one counted"
+	// rather than "nothing counted", which a broken writer also satisfies.
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "e-phase", Type: "agent_phase_completed", Source: "engine",
+		Category: "lifecycle", Time: at,
+		Tags:    map[string]string{"turn_id": "turn-1", "agent_role": "PM"},
+		Payload: []byte(`{"turn_id":"turn-1","total_tokens":10,"model":"real"}`),
+	}); err != nil {
+		t.Fatalf("append the phase: %v", err)
+	}
 	if err := log.Append(t.Context(), store.EventRecord{
 		ID: "e-1", Type: "message_delivered", Source: "engine", Category: "comms",
-		Time: time.Now().UTC().Add(-time.Minute),
+		Time: at.Add(time.Second),
 		Tags: map[string]string{"turn_id": "turn-1"},
 		// A payload that WOULD look like spend if anything read it here.
 		Payload: []byte(`{"turn_id":"turn-1","total_tokens":999,"model":"ghost"}`),
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	got, err := log.Turn(t.Context(), "turn-1")
-	if err != nil || len(got) != 1 {
-		t.Fatalf("Turn = %v, %v", got, err)
+	rows, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
 	}
-	if got[0].Spend != nil && got[0].Spend.TotalTokens != 0 {
-		t.Errorf("a delivery was credited with %d tokens", got[0].Spend.TotalTokens)
+	if len(rows) != 1 {
+		t.Fatalf("%d turn rows, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].TotalTokens != 10 {
+		t.Errorf("the turn totals %d tokens, want the phase's 10 — a delivery "+
+			"was credited with a phase's numbers", rows[0].TotalTokens)
+	}
+	if rows[0].Models != "real" {
+		t.Errorf("models = %q, want only the phase's", rows[0].Models)
 	}
 }
