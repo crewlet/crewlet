@@ -267,11 +267,19 @@ type posting struct {
 //
 // Six hundred: enough for a snippet window wherever the query terms fall in
 // the opening, and small enough that the index does not become a second copy
-// of every body. A hit whose terms are deeper in the document gets its
-// snippet cut from the excerpt, which is why this is not [knowledge.SnippetLimit].
+// of every body.
+//
+// IT IS THE FALLBACK RATHER THAN THE SOURCE. A snippet is cut from the
+// document's real body, read per query for the top hits alone — see
+// [Indexer.resnippet] — because a window over the opening cannot centre on a
+// match that is not in the opening, and a snippet without the search term in
+// it reads as a wrong result. What this value covers is the case where that
+// read cannot be taken: a source that no longer holds the row, or an estate
+// that would not answer. Three times [knowledge.SnippetLimit], so the
+// fallback still has a window to choose within.
 const excerptLimit = 600
 
-// excerptOf keeps the opening of a body for snippet rendering.
+// excerptOf keeps the opening of a body for the fallback snippet.
 //
 // Whitespace is collapsed first, so a markdown body's blank lines do not
 // spend the budget, and the cut goes through [textcut.Bytes] — a plain slice
