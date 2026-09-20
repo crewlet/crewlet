@@ -60,27 +60,34 @@ func TestTheApplierIsNeverQueuedBehindReaders(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	// SATURATE THE WHOLE POOL, which is what makes the mutation reachable:
-	// five readers are started against a pool of five (four readers plus
-	// the one declared pin) and only four can get a connection while the
-	// pin holds the fifth. Remove the pin — take the writer's connection
-	// from the pool per transaction — and all five readers get one, so the
-	// write has nothing left to begin on and this test goes red.
+	// one more reader than the pool has reader connections is started
+	// against a pool of [store.DefaultReaderConns] plus the one declared
+	// pin, so every reader connection is held and the last reader is
+	// blocked while the pin holds the connection nobody else can reach.
+	// Remove the pin — take the writer's connection from the pool per
+	// transaction — and that last reader gets one too, so the write has
+	// nothing left to begin on and this test goes red.
 	//
-	// Waiting for four rather than five is the point: the fifth is EXPECTED
-	// to be blocked in the correct implementation.
+	// THE COUNT IS DERIVED, not typed. Written as a literal it was four,
+	// and raising the pool to eight left it starting five readers against
+	// nine connections: every one of them served, four spare for the
+	// writer, and a case that passes whether or not the pin exists. A test
+	// that cannot fail is worse than no test, and this is exactly how one
+	// becomes that — silently, from a constant it does not mention.
+	const readers = store.DefaultReaderConns
 	held := make(chan struct{})
 	defer close(held)
 	var up sync.WaitGroup
-	up.Add(4)
+	up.Add(readers)
 	var once sync.Once
 	var got int64
-	for range 5 {
+	for range readers + 1 {
 		go func() {
 			_ = db.Read(t.Context(), func(tx *sql.Tx) error {
 				var n int
 				_ = tx.QueryRowContext(t.Context(),
 					`SELECT count(*) FROM crewlet_pin_probe`).Scan(&n)
-				if atomic.AddInt64(&got, 1) <= 4 {
+				if atomic.AddInt64(&got, 1) <= readers {
 					up.Done()
 				} else {
 					once.Do(func() {})
@@ -117,8 +124,8 @@ func TestTheApplierIsNeverQueuedBehindReaders(t *testing.T) {
 //
 // Mutation: hand out the connection anyway and the pool silently narrows —
 // a node running three domains against a handle sized for two serves its
-// dashboard from three connections instead of four, with nothing anywhere
-// reporting it.
+// dashboard from one connection fewer than [store.DefaultReaderConns], with
+// nothing anywhere reporting it.
 func TestAPinPastTheDeclaredCountIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openPinned(t, 1)

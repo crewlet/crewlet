@@ -18,10 +18,24 @@ import (
 //
 // Queries run CONCURRENTLY so a store scan cannot stall the live feed, but each
 // can take a connection from a pool the engine shares — so an unbounded fan-out
-// from one tab would starve the engine's own writes. Four covers the most one
-// screen issues at once (the agent page opens with three) and makes a burst
-// queue rather than pile up.
-const MaxInFlightQueries = 4
+// from one tab would starve the engine's own writes. The number is therefore
+// the BUSIEST SCREEN'S OPENING BURST, so that first paint never queues and
+// anything past it does.
+//
+// EIGHT, and the screen that moved it is chat: opening a channel issues the
+// viewer's channel list, that channel's page, its members, the viewer's
+// mention feed and the unread counts — five — while the shell around it is
+// still fetching the company header and the agent list. At four the busiest
+// screen's first paint queued on itself, which is the one moment a person is
+// watching it. The agent page, which set the old number, opens with three.
+//
+// IT IS ALSO THE STORE'S READ POOL, which is sized to exactly this number and
+// says so at [store.DefaultReaderConns]: connections past the read concurrency
+// only deepen a queue, and read concurrency past the connections queues before
+// the query starts and raises `pool_starved`. The two constants cannot be one
+// value — the store is a leaf and importing this package would be a cycle — so
+// each names the other, and MOVING ONE MEANS MOVING BOTH.
+const MaxInFlightQueries = 8
 
 // The error codes a query answer can carry. CODES, not prose: the client
 // switches on the value, and a message there would make every new wording a

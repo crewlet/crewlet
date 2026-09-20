@@ -617,6 +617,20 @@ store:
                                     #   a copy of this one alone; separate it
                                     #   only to put it on a different disk, and
                                     #   never onto the same file as `path`
+  # max_open_conns: 0               # the connection pool bound; 0 takes the
+                                    #   store's own default of 8 readers, plus
+                                    #   one more on the replicated estate for
+                                    #   each applier that holds a pinned writer.
+                                    #   EIGHT because that is what the dashboard
+                                    #   socket admits at once, which is the chat
+                                    #   screen's opening burst: below it a query
+                                    #   queues for a connection before it starts
+                                    #   — the `pool_starved` alarm — and above it
+                                    #   the spare connections only deepen a
+                                    #   queue, since writers serialise on the
+                                    #   file lock however many readers there are.
+                                    #   Raise it only for a node serving more
+                                    #   dashboards than one
 
 coordination:
   type: local                       # one node holding its own seat leases;
