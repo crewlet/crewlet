@@ -46,6 +46,13 @@ func TestAResumeThatPanicsIsAbandonedAndPutsTheSeatAFK(t *testing.T) {
 		t.Errorf("kind = %q, want %q", breach.Kind, types.GuardUnhandledException)
 	}
 	// Off the run's own row, since this engine has no company to ask.
+	// The resume path always HAS a run — it is resuming one — so its breach
+	// names it in turn_id, which is the half the dispatcher's could not.
+	if breach.WorkKey != "" {
+		t.Errorf("breach work key = %q, want none: this run carries no unit of "+
+			"work of its own and an invented one would group it with strangers",
+			breach.WorkKey)
+	}
 	if breach.RoleName != "CEO" || breach.Agent != "a-1" || breach.TurnID != "t-9" {
 		t.Errorf("breach = %+v, want it addressed to the run's seat and turn", breach)
 	}

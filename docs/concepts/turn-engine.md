@@ -634,6 +634,18 @@ A **resumed** turn is not a re-run. A detached coding job re-enters the run
 that parked it, carrying that run's id and work key on its own row, so a
 suspend/resume pair is one turn on every screen.
 
+**A failure that precedes the run names no run.** A panic recovered outside
+the turn loop publishes `turn.guard_breach(kind="unhandled_exception")`, and
+the run id is minted inside the frame the panic unwound — so the breach
+carries it only when the panic came after the mint. A panic in a screening
+stage, in the park path or in the history read happens before any run exists,
+and its breach names the **work key alone**, leaving `turn_id` empty. That is
+deliberate: the turns list is an aggregate over rows carrying a turn id, so an
+invented id would add a row for a run that never ran — and since the list
+reads a guard breach as a failure, that phantom would be listed as a *failed*
+turn with no phases and no tokens, above the work it belongs to. An empty
+`turn_id` is what keeps it out. Ask for the `work_key` to find it.
+
 Where that shows on the screens:
 
 | Screen | What a re-run looks like |

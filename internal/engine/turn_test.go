@@ -623,12 +623,25 @@ func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
 // no turn telemetry ran to do it.
 func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 	t.Parallel()
-	for name, arrange := range map[string]func(d *engine.Dispatcher, r *recorder){
-		"in the turn's own frames": func(_ *engine.Dispatcher, r *recorder) {
-			r.panicWith = "runner could not be built: nil registry"
+	for name, tc := range map[string]struct {
+		arrange func(d *engine.Dispatcher, r *recorder)
+		// minted says whether the panic happened AFTER the dispatcher
+		// minted this partition's run id. It decides what the breach may
+		// claim: a panic in the turn's own frames belongs to a run, and
+		// one in a screening stage precedes every run there will ever be.
+		minted bool
+	}{
+		"in the turn's own frames": {
+			arrange: func(_ *engine.Dispatcher, r *recorder) {
+				r.panicWith = "runner could not be built: nil registry"
+			},
+			minted: true,
 		},
-		"in a screening stage": func(d *engine.Dispatcher, _ *recorder) {
-			d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+		"in a screening stage": {
+			arrange: func(d *engine.Dispatcher, _ *recorder) {
+				d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+			},
+			minted: false,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -646,7 +659,7 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 				}
 				return "CEO", "a-1"
 			}
-			arrange(d, r)
+			tc.arrange(d, r)
 			ctx := context.Background()
 
 			got := d.Dispatch(ctx, "ceo", []*events.Event{a})
@@ -676,8 +689,30 @@ func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
 				breach.Agent != "a-1" {
 				t.Errorf("breach = %+v, want unhandled_exception addressed to CEO/a-1", breach)
 			}
-			if breach.TurnID != key {
-				t.Errorf("breach turn id = %q, want the partition's work key %q", breach.TurnID, key)
+			// TWO IDENTITIES, AND NEITHER SUBSTITUTES FOR THE OTHER.
+			// The breach used to carry the WORK KEY in its turn_id with
+			// work_key empty, so every reader grouping on a turn id saw a
+			// run that never existed — and once the turns aggregate read a
+			// guard breach as a failure, that phantom became a failed turn
+			// with no phases listed above the run that actually died. See
+			// ADR-0017.
+			if breach.WorkKey != key {
+				t.Errorf("breach work key = %q, want the partition's %q",
+					breach.WorkKey, key)
+			}
+			switch {
+			case breach.TurnID == key:
+				t.Errorf("breach turn id = %q, which is the WORK KEY: the two "+
+					"identities are separate fields and one may not stand in "+
+					"for the other", breach.TurnID)
+			case tc.minted && breach.TurnID == "":
+				t.Error("breach names no run although the panic happened inside " +
+					"one, so nothing joins it to the phases that ran")
+			case !tc.minted && breach.TurnID != "":
+				t.Errorf("breach turn id = %q for a panic that preceded the mint: "+
+					"an invented run id is a phantom row in the turns list, which "+
+					"`turn_id != ''` declines to create only while this stays empty",
+					breach.TurnID)
 			}
 			if skipped == nil || !strings.Contains(skipped.Reason, "panicked") {
 				t.Errorf("skipped = %+v, want the trigger on the record as panicked", skipped)
@@ -843,8 +878,17 @@ func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
 					"to the queue", data.TriggerID)
 			}
 		case *types.TurnGuardBreach:
-			if data.TurnID != headKey {
-				t.Errorf("breach turn id = %q, want the head's own key %q", data.TurnID, headKey)
+			// The HEAD's own work key, in the work-key field. Its turn id
+			// is the run the head minted — a uuid this test cannot predict,
+			// so what is asserted is that it is present and is not the key
+			// wearing the other field's name.
+			if data.WorkKey != headKey {
+				t.Errorf("breach work key = %q, want the head's own key %q",
+					data.WorkKey, headKey)
+			}
+			if data.TurnID == "" || data.TurnID == headKey {
+				t.Errorf("breach turn id = %q, want the run the head minted",
+					data.TurnID)
 			}
 		}
 	}
