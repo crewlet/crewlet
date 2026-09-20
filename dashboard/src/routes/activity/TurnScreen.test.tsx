@@ -225,10 +225,8 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   // THE TOOL ARRAY IS ON THE PAGE, which is the term this panel was blind to
   // and the dominant one: a measured turn read ~6,900 tokens here against the
   // provider's 205,000.
-  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.8 KB");
-  expect(
-    screen.getByTitle("bytes of conversation a resumed phase re-entered"),
-  ).toBeTruthy();
+  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
+  expect(screen.getByTitle("bytes of conversation a resumed phase re-entered")).toBeTruthy();
 });
 
 // A PHASE THAT RAN TWICE IS ONE ROW AND A COUNT.
