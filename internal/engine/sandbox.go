@@ -307,7 +307,12 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Run:     req.Run,
 		State:   state,
 		Turn: &turnctx.Turn{
-			ID: req.Run.TurnID, Seat: seat, Org: company.Org,
+			// THE SAME RUN AND THE SAME UNIT OF WORK the suspended
+			// turn had, both read off the row: the resume re-enters
+			// that run, and its writes stay idempotent against the
+			// trigger the run was dispatched for.
+			RunID: req.Run.TurnID, WorkKey: req.Run.UnitOfWork(),
+			Seat: seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
 		Answer:        req.Answer,
@@ -370,7 +375,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	})
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn.resume",
 		attribute.String("crewlet.seat", in.Turn.Handle()),
-		attribute.String("crewlet.turn_id", in.Run.TurnID))
+		attribute.String("crewlet.turn_id", in.Run.TurnID),
+		// The unit of work beside the run, so the two halves of a
+		// suspended turn answer the same trace query as the dispatch
+		// span that started it.
+		attribute.String("crewlet.work_key", in.Run.UnitOfWork()))
 	defer span.End()
 
 	company := in.Company
@@ -379,7 +388,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return err
 	}
 	tel := e.describeResume(ctx, company, in)
-	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
+	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
@@ -450,7 +459,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// a detached sandbox run can legitimately outlive it, and the resumed
 	// half is finishing work the box already did rather than starting more.
 	res, err := turn.Run(ctx, r, company.TurnSettings(0), turn.Input{
-		TurnID:  in.Run.TurnID,
+		RunID:   in.Run.TurnID,
 		Depth:   in.Run.DelegationDepth,
 		History: in.State.Iterations,
 		Resume:  true,
@@ -460,7 +469,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// end in silence.
 		Reply: resumedReply,
 	})
-	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
+	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	if err != nil {
 		if res.Acted {
 			// The same decision the dispatcher makes on the other path
@@ -503,8 +512,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // so there is no reply to file. The completion that eventually lands comes
 // back through this same frame and records then.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result) {
+	// THE RUN THE ROW NAMES, and the work key it rode in on: a resume
+	// re-enters the run that suspended, so the entry names that one rather
+	// than a fresh id, and it dedupes against the same trigger the dispatch
+	// that launched it did.
 	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
-		in.Run.TurnID, resumeTask(in), res, e.dispatch.now())
+		in.Run.TurnID, in.Run.UnitOfWork(), resumeTask(in), res, e.dispatch.now())
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -686,7 +699,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	// or torn down under a zero TTL — so this call provisions a fresh one
 	// and the work re-seeds from the pushed branch.
 	reuse := ""
-	if existing, found, err := pending.Get(ctx, t.ID); err == nil && found {
+	if existing, found, err := pending.Get(ctx, t.RunID); err == nil && found {
 		reuse = existing.SandboxID
 	}
 
@@ -734,7 +747,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	runTrace := tracing.TraceOf(ctx)
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{
-			TurnID: t.ID, AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
+			TurnID: t.RunID, WorkKey: t.WorkKey,
+			AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
 			Depth: t.Depth, Chain: t.Chain,
 			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
 			// THE CONVERSATION THE WORK CAME FROM, which nothing set

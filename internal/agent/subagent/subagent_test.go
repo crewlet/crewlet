@@ -2564,7 +2564,7 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 		phase.Entry{Key: "default", Provider: p})
 	cfg.Seat.Role.LLMSubagent = org.ProviderKeys{"benched", "default"}
 	cfg.ParentRemaining = 0
-	cfg.Turn = &turnctx.Turn{ID: "t-9", Seat: cfg.Seat.Role, Org: cfg.Seat.Org}
+	cfg.Turn = &turnctx.Turn{RunID: "run-9", WorkKey: "wk-9", Seat: cfg.Seat.Role, Org: cfg.Seat.Org}
 	pub := &publisher{}
 	cfg.Publisher = pub
 
@@ -2593,10 +2593,12 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 	}
 	for _, c := range []struct{ field, got, want string }{
 		{"agent_id", f.Agent, wantAgent.String()},
-		{"turn_id", f.TurnID, "t-9"},
 		{"role", f.RoleName, "CTO"},
 		// SUBAGENT, not execute: a reader has to be able to tell the seat's
 		// own executor falling through from one of its workers doing it.
+		// The PARENT's run, since a worker holds no seat of its own.
+		{"turn_id", f.TurnID, "run-9"},
+		{"work_key", f.WorkKey, "wk-9"},
 		{"phase", string(f.Phase), "subagent"},
 		{"from_provider_key", f.FromProviderKey, "benched"},
 		{"to_provider_key", f.ToProviderKey, "default"},

@@ -206,8 +206,11 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 		Observer: t.Event.AgentHandle,
 		Subject:  s.subject,
 		Traits:   traits,
-		WorkKey:  t.Event.TurnID,
-		At:       p.now(),
+		// THE UNIT OF WORK, not the run: the count is an unconditional
+		// increment, and a trigger that legitimately re-runs must not
+		// add a second interaction. See [Turn.WorkKey] and ADR-0017.
+		WorkKey: t.WorkKey(),
+		At:      p.now(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("learning: record observation of %s: %w",
@@ -218,13 +221,14 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 		// nodes racing this turn. The guard worked; announcing it would
 		// report an interaction that did not happen.
 		log.DebugContext(ctx, "counterparty_already_counted", "observer", t.Event.AgentHandle,
-			"subject", s.subject.ExternalID, "work_key", t.Event.TurnID)
+			"subject", s.subject.ExternalID, "work_key", t.WorkKey())
 		return nil, nil
 	}
 	return types.CounterpartyProfileUpdated{
 		ObserverHandle:    t.Event.AgentHandle,
 		RoleName:          t.Event.RoleName,
 		TurnID:            t.Event.TurnID,
+		WorkKey:           t.WorkKey(),
 		SubjectHandle:     s.subject.Handle,
 		SubjectExternalID: s.subject.ExternalID,
 		SubjectPlatform:   s.subject.Platform,

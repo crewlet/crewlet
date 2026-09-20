@@ -105,6 +105,7 @@ import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "
 import { useNow } from "~/lib/clock.ts";
 import { spanWords } from "~/lib/range.ts";
 import {
+  attempts,
   fromLiveCall,
   fromPhaseEvent,
   groupTurns,
@@ -725,6 +726,10 @@ export function SeatScreen({ handle }: { handle: string }) {
   }, [history.data, phaseEvents, agent, role]);
 
   const turns = useMemo(() => groupTurns(phases), [phases]);
+  // WHICH OF THESE ARE THE SAME WORK. A turn id names one run, so a trigger
+  // that failed without acting and came back is several cards here — and
+  // without this they read as the seat having been asked twice.
+  const attempt = useMemo(() => attempts(turns), [turns]);
   // THE ENGINE'S OWN ROW FOR EACH CARD. One turn, one set of figures: the card
   // reads its start and its duration off the same record the table above draws,
   // and falls back to its phases only where there is no row. They disagreed
@@ -1576,7 +1581,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </div>
                 <div className="col gap-2">
                   {liveTurns.map((g) => (
-                    <TurnCard key={g.turnId} group={g} row={turnRows.get(g.turnId)} defaultOpen />
+                    <TurnCard
+                      key={g.turnId}
+                      group={g}
+                      row={turnRows.get(g.turnId)}
+                      attempt={attempt.get(g.turnId)}
+                      defaultOpen
+                    />
                   ))}
                 </div>
               </section>
@@ -1592,6 +1603,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   key={g.turnId}
                   group={g}
                   row={turnRows.get(g.turnId)}
+                  attempt={attempt.get(g.turnId)}
                   defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
                 />
               ))}

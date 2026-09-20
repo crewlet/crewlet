@@ -473,6 +473,7 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 		AgentHandle: run.AgentHandle,
 		RoleName:    run.Role,
 		TurnID:      run.TurnID,
+		WorkKey:     run.WorkKey,
 		// The job this tick saw finish, and the only one the completion
 		// may claim: see [Tail].
 		LaunchID:    run.LaunchID,

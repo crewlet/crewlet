@@ -59,7 +59,13 @@ func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
 	return map[string]any{
-		"turn_id":      run.TurnID,
+		"turn_id": run.TurnID,
+		// The unit of work behind that run, so a board row links back to
+		// the trigger rather than only to the one execution that detached.
+		// THROUGH THE ACCESSOR, because nothing rewrites a parked row: a
+		// run suspended before the identities were split carries the key
+		// in its turn id instead. Empty when the run genuinely has none.
+		"work_key":     run.UnitOfWork(),
 		"agent_handle": run.AgentHandle,
 		"role":         run.Role,
 		"status":       run.Status,

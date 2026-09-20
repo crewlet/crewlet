@@ -65,7 +65,10 @@ type ToolSkillGuardBlocked struct {
 	ToolName  string   `json:"tool_name"`
 	SkillKeys []string `json:"skill_keys,omitempty"`
 	TurnID    string   `json:"turn_id"`
-	Iteration int      `json:"iteration"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey   string `json:"work_key,omitempty"`
+	Iteration int    `json:"iteration"`
 }
 
 // EventType is the "phase.tool_skill_blocked" wire type.
@@ -98,9 +101,12 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // Addressed like every other phase event, so the size a turn actually paid is
 // readable on that turn rather than only in aggregate.
 type PromptSize struct {
-	Agent             string `json:"agent_id"`
-	RoleName          string `json:"role"`
-	TurnID            string `json:"turn_id"`
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	TurnID   string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey           string `json:"work_key,omitempty"`
 	Iteration         int    `json:"iteration"`
 	Phase             Phase  `json:"phase"`
 	ApproximateTokens int    `json:"approximate_tokens"`
@@ -135,6 +141,9 @@ type TurnGuardBreach struct {
 	Kind     GuardKind `json:"kind"`
 	Detail   string    `json:"detail"`
 	TurnID   string    `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "turn.guard_breach" wire type, and one of the four names in

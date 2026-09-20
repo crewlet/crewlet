@@ -428,7 +428,10 @@ func workTurn(t *testing.T) *turnctx.Turn {
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "eng"}},
 	}
 	o.Normalize()
-	return &turnctx.Turn{ID: "turn-1", Seat: o.Roles[0], Org: o, Chain: []string{"pm"}}
+	return &turnctx.Turn{
+		RunID: "run-1", WorkKey: "turn-1",
+		Seat: o.Roles[0], Org: o, Chain: []string{"pm"},
+	}
 }
 
 func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]any) tools.Result {
@@ -503,8 +506,15 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	if actor.Handle != "eng" || actor.Kind != tracker.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", actor)
 	}
-	if actor.TurnID != "turn-1" || !slices.Equal(actor.Chain, []string{"pm"}) {
-		t.Errorf("provenance = %+v, want the turn's id and chain", actor)
+	// THE RUN is the provenance an audit walks back to, and the WORK KEY is
+	// what the derived operation and comment ids are seeded from — a
+	// redelivered trigger runs again under a new run, and an id seeded from
+	// that would post the same comment twice. See ADR-0017.
+	if actor.TurnID != "run-1" || !slices.Equal(actor.Chain, []string{"pm"}) {
+		t.Errorf("provenance = %+v, want the run and the chain", actor)
+	}
+	if actor.WorkKey != "turn-1" || actor.OperationSeed() != "turn-1" {
+		t.Errorf("provenance = %+v, want the unit of work as the id seed", actor)
 	}
 }
 

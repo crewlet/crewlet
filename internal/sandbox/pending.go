@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // The durable state of a detached coding job.
@@ -190,6 +192,29 @@ type BridgeCall struct {
 	At     time.Time `json:"at"`
 }
 
+// UnitOfWork is the identity this run's once-per-unit-of-work writes collapse
+// on, or "" when the run has none.
+//
+// NOT the raw field, because nothing rewrites a parked row: a run suspended by
+// a build from before ADR-0017 carries no work key at all, and its TurnID IS
+// one. A resume days later reads that row and has no trigger left to
+// re-derive from, so without this its conversation entry and its tracker
+// writes would dedupe against an empty key.
+//
+// ON SHAPE rather than on absence, for the reason [workkey.IsDerived] gives:
+// a post-split run with no ledgerable trigger is also missing the field, and
+// answering it with a run id would arm a dedupe guard with a value that means
+// nothing.
+func (r PendingRun) UnitOfWork() string {
+	if r.WorkKey != "" {
+		return r.WorkKey
+	}
+	if workkey.IsDerived(r.TurnID) {
+		return r.TurnID
+	}
+	return ""
+}
+
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
@@ -211,7 +236,18 @@ const MaxBridgeCalls = 200
 // does not know decodes to a zero value — an emptied box reference is a
 // leaked sandbox. Add fields; never rename or repurpose one.
 type PendingRun struct {
-	TurnID      string `json:"turn_id"`
+	// TurnID is the RUN this record belongs to — one execution of a turn,
+	// and this record's own key. See ADR-0017.
+	TurnID string `json:"turn_id"`
+
+	// WorkKey is the unit of work that run was dispatched for. It rides
+	// the row so a resumed turn keeps the identity its writes have to be
+	// idempotent against — the resume re-enters the loop mid-round, with
+	// no trigger left to re-derive it from. Empty on a row written before
+	// this field existed, and on a turn with no ledgerable trigger, which
+	// is the documented "nothing to collapse" case.
+	WorkKey string `json:"work_key,omitempty"`
+
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
 	Role        string `json:"role"`

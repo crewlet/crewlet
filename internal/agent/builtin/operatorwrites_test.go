@@ -140,6 +140,80 @@ func TestATurnsRepeatedWriteIsStillOneOperation(t *testing.T) {
 	}
 }
 
+// AND TWO RUNS OF ONE TRIGGER ARE STILL ONE OPERATION, which is the case that
+// stopped working when a turn id started naming a run.
+//
+// A turn that fails without reaching outside the engine is redelivered and
+// runs again under a NEW run id. An operation id seeded from that is a
+// different id every attempt, so the ledger has nothing to collapse and the
+// retry posts a second comment, moves the status a second time and notifies
+// everybody twice. The seed has to be the identity a redelivery reproduces,
+// which is the work key. See ADR-0017.
+func TestTwoRunsOfOneTriggerWriteOneOperation(t *testing.T) {
+	t.Parallel()
+	seeds := map[string]string{}
+	// The SAME work key from two different runs, which is exactly what a
+	// redelivered trigger produces.
+	attempt := func(runID string) *turnctx.Turn {
+		tn := workTurn(t)
+		tn.RunID, tn.WorkKey = runID, "wk-1"
+		return tn
+	}
+	for name, turn := range map[string]*turnctx.Turn{
+		"first attempt":  attempt("run-1"),
+		"the redelivery": attempt("run-2"),
+	} {
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+		entry, ok := reg.Lookup(builtin.UpdateWorkItemTool)
+		if !ok {
+			t.Fatal("update_work_item is not registered")
+		}
+		callable, ok := entry.Tool.(tools.SeatCallable)
+		if !ok {
+			t.Fatal("update_work_item is not seat-callable")
+		}
+		if _, err := callable.CallForTurn(t.Context(), turn, map[string]any{
+			"item": "ENG-1", "priority": "urgent",
+		}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(trk.opIDs) != 1 {
+			t.Fatalf("%s wrote %v", name, trk.opIDs)
+		}
+		seeds[name] = trk.opIDs[0]
+	}
+	if seeds["first attempt"] != seeds["the redelivery"] {
+		t.Errorf("the attempts wrote under %q and %q — a redelivery the engine "+
+			"guarantees becomes a second write, with a second comment and a "+
+			"second notification for one thing that happened",
+			seeds["first attempt"], seeds["the redelivery"])
+	}
+}
+
+// AND A TURN WITH NO LEDGERABLE TRIGGER IS STILL IDEMPOTENT WITHIN ITS RUN.
+//
+// A scheduled fire has no work key — the documented "nothing to collapse" —
+// and its seed used to be empty, so every call minted a fresh id and an
+// executor that updated the same item in two rounds wrote twice. Falling back
+// to the run keeps the within-run guarantee without inventing a cross-run one.
+func TestATurnWithNoWorkKeySeedsFromItsRun(t *testing.T) {
+	t.Parallel()
+	agent := builtin.Actor{TurnID: "run-1", WorkKey: ""}
+	if got := agent.OperationSeed(); got != "run-1" {
+		t.Errorf("seed = %q, want the run — an empty seed mints a fresh id per call", got)
+	}
+	keyed := builtin.Actor{TurnID: "run-1", WorkKey: "wk-1"}
+	if got := keyed.OperationSeed(); got != "wk-1" {
+		t.Errorf("seed = %q, want the work key — the run does not survive a redelivery", got)
+	}
+	// OUTSIDE A TURN THERE IS NOTHING TO BE IDEMPOTENT AGAINST: an operator's
+	// MCP client made one call and nothing will redeliver it.
+	if got := (builtin.Actor{}).OperationSeed(); got != "" {
+		t.Errorf("seed = %q, want empty for a write with no turn behind it", got)
+	}
+}
+
 // commonPrefix is the leading text two strings share.
 func commonPrefix(a, b string) string {
 	n := min(len(a), len(b))

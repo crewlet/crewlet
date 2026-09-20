@@ -61,7 +61,7 @@ func TestATextModeSeatGetsNoAgentLauncher(t *testing.T) {
 	t.Parallel()
 	c, _ := modeCompany(t, "claude-code", false, "")
 	e := &Engine{}
-	if got := e.agentRunFor(c, "swe", &turnctx.Turn{ID: "t1"}); got != nil {
+	if got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}); got != nil {
 		t.Fatalf("a text-mode seat got %T, want a nil interface", got)
 	}
 }
@@ -78,7 +78,7 @@ func TestAnAgentModeSeatGetsALauncherForItsOwnCLIAndCell(t *testing.T) {
 	t.Parallel()
 	c, _ := modeCompany(t, "opencode", true, config.PlacementE2B)
 	e := &Engine{}
-	got := e.agentRunFor(c, "swe", &turnctx.Turn{ID: "t1"})
+	got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"})
 	if got == nil {
 		t.Fatal("an agent-mode seat got no launcher, so its executor ran natively")
 	}
@@ -101,7 +101,7 @@ func TestAnAgentEntryWithNoCellDefersToTheCatalogue(t *testing.T) {
 	t.Parallel()
 	c, _ := modeCompany(t, "claude-code", true, "")
 	e := &Engine{}
-	launcher, _ := e.agentRunFor(c, "swe", &turnctx.Turn{ID: "t1"}).(*agentLauncher)
+	launcher, _ := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}).(*agentLauncher)
 	if launcher == nil {
 		t.Fatal("no launcher")
 	}
@@ -122,7 +122,7 @@ func TestAgentModeIsRefusedWithNoBridge(t *testing.T) {
 	e := &Engine{}
 	e.epoch.current.Store(c)
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.Direct,
 	}
 	err := launcher.LaunchExecutor(t.Context(), runnerAgentRequest())
@@ -401,7 +401,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
 	})
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
 	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
@@ -480,7 +480,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	}
 	launcherFor := func(e *Engine, seat *org.Role) *agentLauncher {
 		return &agentLauncher{
-			engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat}, seat: seat,
+			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
 			codingAgent: "claude-code", placement: sandbox.E2B,
 		}
 	}
@@ -521,7 +521,7 @@ func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 		Org: &org.Organization{Name: "Acme Renamed", Roles: []*org.Role{seat}},
 	})
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat, Org: pinned.Org}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: pinned.Org}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.Direct,
 	}
 	want, ok := org.DeriveAgentID("Acme", seat.Handle())

@@ -115,7 +115,7 @@ func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *r
 		Caps:      runner.Caps{ExecutorRounds: 3},
 		Task:      "post the summary",
 		Publisher: pub,
-		Turn:      runner.Turn{ID: "t-guard", AgentID: "agent-1"},
+		Turn:      runner.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

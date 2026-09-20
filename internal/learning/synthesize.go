@@ -328,6 +328,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		AgentHandle: handle,
 		RoleName:    t.Event.RoleName,
 		TurnID:      t.Event.TurnID,
+		WorkKey:     t.WorkKey(),
 		SkillName:   draft.Name,
 		SkillID:     skill.ID,
 		Trigger:     types.SynthesisSingleTurn,

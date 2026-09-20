@@ -205,7 +205,7 @@ func extendableRunner(
 		Publisher: pub,
 		Judge:     judge,
 		Budget:    budgetOf(meter),
-		Turn:      runner.Turn{ID: "t-rounds", AgentID: "agent-1"},
+		Turn:      runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -620,7 +620,7 @@ func bigResultRunner(
 		Caps:      runner.Caps{ExecutorRounds: 4},
 		Task:      "read the big file",
 		Publisher: pub,
-		Turn:      runner.Turn{ID: "t-frames", AgentID: "agent-1"},
+		Turn:      runner.Turn{RunID: "t-frames", WorkKey: "wk-t-frames", AgentID: "agent-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

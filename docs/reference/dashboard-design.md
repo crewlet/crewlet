@@ -962,6 +962,15 @@ rules fix it, and each one names a specific mechanism:
    into its chronological slot, and its expanded state was lost with the key it
    was filed under. Now a live phase *becomes* a finished phase in place.
 
+   That key has to be unique per EXECUTION, which is why `turn_id` names one
+   run rather than the unit of work behind it (see
+   [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)).
+   It named the unit of work once, and a redelivered trigger's retry then
+   published the identity the failed attempt already held: the merge kept the
+   older row, so the screen showed a dead call for as long as the real one
+   ran. A turn's `work_key` is what relates the attempts, and a card carrying
+   one says `attempt 2/2`.
+
    **A phase has to HAVE a finished half for that to mean anything**, and for a
    while it did not. A screen reads two sources — the seat overlay's `live_call`
    and a query answered ONCE, at mount — and the projection clears `live_call`

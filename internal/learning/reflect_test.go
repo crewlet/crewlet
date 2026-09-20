@@ -931,3 +931,36 @@ func TestTheMarkStillCollapsesARealRedelivery(t *testing.T) {
 		t.Errorf("worker ran %d times on one turn", len(w.turns()))
 	}
 }
+
+// --- a turn that ran twice, and a turn that only parked ------------------ //
+
+// THE REDELIVERY MARK IS ON THE UNIT OF WORK, not on the run.
+//
+// A turn that fails without reaching outside the engine is NAK'd and the same
+// trigger runs again — under a new run id (ADR-0017). Keyed on that, every
+// re-run takes a full second reflection pass: a second diary row (agent_diary
+// has no dedupe of its own), a second skill draft, a second refinement, and a
+// second set of auxiliary-LLM calls the gate exists to avoid. The episode row
+// and the interaction count would still collapse on their own indexes, which
+// is exactly what would make the duplication invisible.
+func TestTwoRunsOfOneTriggerReflectOnce(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "diarist"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+
+	first := settledTurn()
+	first.TurnID, first.WorkKey = "run-1", "wk-1"
+	if got := reflectOnce(r, first); got.Skip != "" {
+		t.Fatalf("the first run was skipped: %s", got.Skip)
+	}
+	second := settledTurn()
+	second.TurnID, second.WorkKey = "run-2", "wk-1"
+	if got := reflectOnce(r, second); got.Skip != learning.SkipDuplicate {
+		t.Errorf("the re-run reflected again (skip = %q) — a second diary row, a "+
+			"second skill draft and a second set of auxiliary calls for one "+
+			"piece of work", got.Skip)
+	}
+	if w.ran() != 1 {
+		t.Errorf("the worker ran %d times for one unit of work, want 1", w.ran())
+	}
+}

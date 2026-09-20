@@ -37,7 +37,7 @@ func resumed(conversation string) resumeInput {
 			AgentHandle:     "swe",
 			ConversationKey: conversation,
 		},
-		Turn: &turnctx.Turn{ID: "wk-1", Seat: &org.Role{Name: "Engineer", DeclaredHandle: "swe"}},
+		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: &org.Role{Name: "Engineer", DeclaredHandle: "swe"}},
 	}
 }
 
@@ -109,7 +109,7 @@ func TestASuspendedTurnFilesNothingAgainstItsConversation(t *testing.T) {
 	d := &Dispatcher{Conversations: conversations}
 	ctx := context.Background()
 
-	d.RecordSession(ctx, "swe", "slack:C1", "wk-1", "@ana: fix CI", turn.Result{
+	d.RecordSession(ctx, "swe", "slack:C1", "run-1", "wk-1", "@ana: fix CI", turn.Result{
 		Suspended: true, Decision: phase.SelfIterate,
 	}, time.Now().UTC())
 
@@ -181,12 +181,12 @@ func (failingResumeConversations) Purge(context.Context, time.Time) (int64, erro
 // trigger that may be long gone.
 func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	t.Parallel()
-	tel := turnTelemetry{handle: "swe", convKey: "slack:C1"}
+	tel := turnTelemetry{handle: "swe", convKey: "slack:C1", runID: "run-1", workKey: "wk-1"}
 	company := &Company{Org: &org.Organization{
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
-	got := tel.runnerTurn(company, "wk-1", 0, nil, "fix the failing test", turn.ToolReply(""))
+	got := tel.runnerTurn(company, 0, nil, "fix the failing test", turn.ToolReply(""))
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}
@@ -225,7 +225,10 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	in := resumed("slack:C1")
 	in.Company = admitted
 	in.Run.AgentHandle = seat.Handle()
-	in.Turn = &turnctx.Turn{ID: in.Run.TurnID, Seat: seat, Org: admitted.Org}
+	in.Turn = &turnctx.Turn{
+		RunID: in.Run.TurnID, WorkKey: in.Run.WorkKey,
+		Seat: seat, Org: admitted.Org,
+	}
 
 	err := e.resumeTurn(t.Context(), in)
 	if err == nil || !strings.Contains(err.Error(), "resume round 1") {

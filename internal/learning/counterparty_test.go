@@ -444,3 +444,40 @@ func TestAPurgeWithNothingStaleDropsNothing(t *testing.T) {
 		t.Errorf("purged %d, want 0", dropped)
 	}
 }
+
+// AN UNKEYED TURN STILL MUST NOT DISARM THE GUARD, and after the identity
+// split that depends on [Turn.WorkKey] answering "" rather than inventing one.
+//
+// The column keeps the last KEYED unit of work precisely so a redelivery
+// arriving after an unkeyed observation compares its real key against a real
+// key. A run id in that slot walks straight through: the redelivery differs
+// from it, counts again, and the interaction count is wrong in the direction
+// nobody checks. See ADR-0017.
+func TestAnUnkeyedObservationDoesNotDisarmTheNextRedelivery(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	ana := learning.Subject{Handle: "ana"}
+
+	obs := func(workKey string) learning.Observation {
+		return learning.Observation{
+			Observer: "dev", Subject: ana, At: base,
+			Traits:  map[string]any{"prefers": "detail"},
+			WorkKey: workKey,
+		}
+	}
+	// A keyed interaction, then an unkeyed one (a scheduled fire).
+	for _, key := range []string{"wk-1", ""} {
+		if _, err := c.Record(t.Context(), obs(key)); err != nil {
+			t.Fatalf("Record(%q): %v", key, err)
+		}
+	}
+	// The redelivery of the keyed one must NOT count again.
+	counted, err := c.Record(t.Context(), obs("wk-1"))
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if counted {
+		t.Error("a redelivery counted a second time — the unkeyed observation " +
+			"between them moved the guard off the last real key")
+	}
+}

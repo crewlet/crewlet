@@ -250,7 +250,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		AgentRun:  opts.agentRun,
 		Resume:    opts.resume,
 		Publisher: opts.pub,
-		Turn:      runner.Turn{ID: "t-1", AgentID: "a-1"},
+		Turn:      runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

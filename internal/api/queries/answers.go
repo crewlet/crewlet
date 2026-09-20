@@ -841,6 +841,11 @@ func eventFilters(p Params) (store.ListQuery, error) {
 		// surface ever passed one — so "every event of this turn" was
 		// answerable by the store and unaskable from anywhere.
 		TurnID: p.String("turn_id"),
+		// AND THE UNIT OF WORK BEHIND IT, so "every event of every attempt
+		// at this trigger" is askable. Declaring the column and shipping
+		// its index without a caller is the mistake the paragraph above
+		// records, one migration later. See ADR-0017.
+		WorkKey: p.String("work_key"),
 	}
 	// THE WINDOW, which is what a reader scrubbing a time range means and
 	// is NOT the cursor: a cursor is where a page resumes and moves with

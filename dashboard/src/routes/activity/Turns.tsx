@@ -240,6 +240,19 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
     });
   }, [turns, since, until]);
   const bars = useMemo(() => foldBars(rows, since, until, bucket), [rows, since, until, bucket]);
+  // HOW MANY RUNS EACH TRIGGER GOT, over the rows this page holds. A turn id
+  // names one run (see `adr/0017`), so a redelivered trigger is several rows
+  // and nothing else on the screen says they are the same work.
+  const reruns = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of rows) {
+      // An empty work key is the ABSENCE of an identity — a trigger with
+      // nothing to collapse on — so counting them together would report
+      // every such turn as a re-run of every other.
+      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
+    }
+    return counts;
+  }, [rows]);
   // WHAT `[` AND `]` WALK: the rows this list actually loaded, windowed and
   // sorted as the reader left them. Published rather than handed to the rail,
   // because only the list knows that order — see `PeekHost`.
@@ -411,6 +424,23 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               shrink: true,
               cell: (t) => (
                 <span className="row gap-1">
+                  {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger
+                      that failed without reaching outside the engine and was
+                      redelivered is several rows here — and two rows for one
+                      message read as the company having done the work twice.
+                      Counted over the rows this page holds, which is what the
+                      tooltip says. */}
+                  {t.work_key && reruns.get(t.work_key)! > 1 && (
+                    <Tag
+                      appearance="outline"
+                      title={
+                        `one of ${reruns.get(t.work_key)} runs of the same trigger on this ` +
+                        `page — a turn that fails without acting is redelivered and runs again`
+                      }
+                    >
+                      re-run
+                    </Tag>
+                  )}
                   {!t.complete && (
                     <Tag
                       variant="info"

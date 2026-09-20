@@ -20,7 +20,7 @@ func TestAgentIDIsTheOrgsOwnDerivation(t *testing.T) {
 	if !ok {
 		t.Fatal("the org derives no id for an agent seat")
 	}
-	tn := &turnctx.Turn{ID: "t-1", Seat: seat, Org: o}
+	tn := &turnctx.Turn{RunID: "run-1", WorkKey: "t-1", Seat: seat, Org: o}
 	if got := tn.AgentID(); got != want.String() {
 		t.Fatalf("AgentID() = %q, want the org's %q", got, want)
 	}

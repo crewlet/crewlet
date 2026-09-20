@@ -91,7 +91,17 @@ type ErrorInfo struct {
 // lose any call mid-flight the moment someone hit refresh. Holding it here and
 // shipping it in the snapshot is what makes the live row survive that.
 type LiveCall struct {
-	TurnID    string `json:"turn_id"`
+	// TurnID names ONE RUN of a turn, so (TurnID, Phase, Iteration) — the
+	// key this whole projection is built on — is unique per execution. It
+	// was the WORK KEY once, which a redelivery reproduces: a retry's
+	// rounds then folded into the previous attempt's frozen failed call
+	// and the live row never moved. See ADR-0017.
+	TurnID string `json:"turn_id"`
+
+	// WorkKey is the unit of work that run was dispatched for, carried so
+	// a reader can find the attempt this one is repeating.
+	WorkKey string `json:"work_key,omitempty"`
+
 	Phase     string `json:"phase"`
 	Iteration int    `json:"iteration"`
 	Model     string `json:"model"`

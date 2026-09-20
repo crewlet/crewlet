@@ -65,7 +65,8 @@ func skillUsed(turn *turnctx.Turn, name, skillID, file string,
 	}
 	return types.SkillUsed{
 		Agent: agentID, AgentHandle: turn.Handle(), RoleName: turn.Role(),
-		TurnID: turn.ID, SkillName: name, SkillID: skillID,
+		TurnID: turn.RunID, WorkKey: turn.WorkKey,
+		SkillName: name, SkillID: skillID,
 		SourceKind: kind, FileLoaded: file,
 	}
 }

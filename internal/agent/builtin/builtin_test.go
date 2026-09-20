@@ -60,7 +60,7 @@ func turnFor(t *testing.T, handle string) *turnctx.Turn {
 	if seat == nil {
 		t.Fatalf("no seat %q", handle)
 	}
-	return &turnctx.Turn{ID: "wk-1", Seat: seat, Org: o}
+	return &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: o}
 }
 
 // registered builds a registry over the given deps and returns one tool.

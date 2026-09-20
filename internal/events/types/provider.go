@@ -33,6 +33,9 @@ type LLMUnavailable struct {
 	LastErrorKind string   `json:"last_error_kind"`
 	LastError     string   `json:"last_error"`
 	TurnID        string   `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
 }
 
 // EventType is the "llm_unavailable" wire type, and one of the four names in
@@ -70,9 +73,12 @@ func (e LLMUnavailable) SummaryFor(actor string) string {
 // invisible to the screen built to show a turn end to end. The Turn screen's
 // own subtitle promised these rows and could never have shown one.
 type ProviderFallback struct {
-	Agent     string `json:"agent_id"`
-	RoleName  string `json:"role"`
-	TurnID    string `json:"turn_id"`
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	TurnID   string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
 	Phase     Phase  `json:"phase"`
 	// FromProviderKey and ToProviderKey are the providers.llm keys an

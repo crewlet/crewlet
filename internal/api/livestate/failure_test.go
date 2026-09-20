@@ -207,3 +207,80 @@ func TestTheNextTurnClearsTheFailure(t *testing.T) {
 		t.Errorf("last error = %+v, want cleared by the next task", got.LastError)
 	}
 }
+
+// --- a redelivered trigger runs again ----------------------------------- //
+
+// A RETRY IS A NEW CALL, not a continuation of the attempt it repeats.
+//
+// A turn that fails without reaching outside the engine is NAK'd and
+// redelivered, so the same trigger runs again — and a turn id used to be the
+// work key, which a redelivery reproduces. `agent_phase_started` for the retry
+// therefore named the identity the failed attempt already held, `sameCall`
+// matched, and the projection kept the FROZEN FAILED row: the seat read
+// `working` while the retry ran and the live row showed the dead attempt's
+// error for the whole of it. See ADR-0017.
+func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	// Attempt one: the executor died on an auth failure and its call froze.
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"phase": "execute", "iteration": 1,
+	}, at("2026-06-14T12:00:00Z")))
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"phase": "execute", "iteration": 1,
+		"failed": true, "error_kind": "auth", "error": "not authenticated",
+	}, at("2026-06-14T12:00:01Z"), id("e2")))
+
+	frozen := overlayOf(t, s, "CEO")
+	if frozen.LiveCall == nil || !frozen.LiveCall.Failed {
+		t.Fatalf("the failed attempt did not freeze its call: %+v", frozen.LiveCall)
+	}
+
+	// Attempt two: the broker redelivered the trigger, so the SAME work key
+	// runs again — under a run id of its own.
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "CEO", "turn_id": "run-2", "work_key": "wk-1",
+		"phase": "execute", "iteration": 1,
+	}, at("2026-06-14T12:02:00Z"), id("e3")))
+
+	got := overlayOf(t, s, "CEO")
+	if got.LiveCall == nil {
+		t.Fatal("the retry opened no live call at all")
+	}
+	if got.LiveCall.TurnID != "run-2" {
+		t.Errorf("the live call is %q, want the retry's own run — the reader watches "+
+			"the dead attempt while the real one runs", got.LiveCall.TurnID)
+	}
+	if got.LiveCall.Failed {
+		t.Error("the retry's call inherited the previous attempt's failure")
+	}
+	if got.LiveCall.WorkKey != "wk-1" {
+		t.Errorf("work key = %q, want the trigger both attempts share", got.LiveCall.WorkKey)
+	}
+}
+
+// AND THE KEY SURVIVES THE ROUNDS. A progress round rebuilds the live call
+// WHOLESALE, so a field the rebuild forgets is blank for the rest of the call
+// — and blank on every row a reader sees, because a phase publishes many
+// rounds and the opening frame is one of them.
+func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"phase": "execute", "iteration": 1,
+	}, at("2026-06-14T12:00:00Z")))
+	// A round from a node that predates the field carries no work key. It
+	// must not blank what the opening frame established.
+	s.Apply(env("agent_turn_progress", map[string]any{
+		"role": "CEO", "turn_id": "run-1",
+		"phase": "execute", "iteration": 1, "round_num": 0,
+	}, at("2026-06-14T12:00:02Z"), id("e2"), streamOnly))
+
+	got := overlayOf(t, s, "CEO")
+	if got.LiveCall == nil || got.LiveCall.WorkKey != "wk-1" {
+		t.Errorf("work key = %+v, want it carried across the round", got.LiveCall)
+	}
+}

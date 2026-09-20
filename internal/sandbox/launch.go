@@ -20,7 +20,16 @@ import (
 // in a different process from the launch as a matter of routine: a restart, a
 // seat handoff, or simply days passing while a person answers a question.
 type TurnRef struct {
-	TurnID          string
+	// TurnID is the RUN this job belongs to — one execution of a turn, and
+	// the key the whole pending-run record is stored under. It has to be
+	// unique per execution: a redelivered trigger re-runs, and two runs
+	// sharing this value would share one row and one box. See ADR-0017.
+	TurnID string
+
+	// WorkKey is the unit of work behind that run, carried so the row can
+	// say which trigger it came from after the run outlives its process.
+	WorkKey string
+
 	AgentID         string
 	AgentHandle     string
 	Role            string
@@ -104,8 +113,9 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	// polls or claims a run in that window, which is what stops a job that
 	// finishes before the turn unwinds from being collected into nothing.
 	if err := store.BeginLaunch(ctx, PendingRun{
-		TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle,
-		AgentID: req.Turn.AgentID, Role: req.Turn.Role,
+		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
+		AgentHandle: req.Turn.AgentHandle,
+		AgentID:     req.Turn.AgentID, Role: req.Turn.Role,
 		// WRITTEN WITH THE ROW, before the box exists, because every
 		// failure path from here on reclaims through it — and because the
 		// process that collects this run may not be this one, nor reading
@@ -172,7 +182,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 
 	started := types.SandboxRunStarted{
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
-		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID,
+		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
 		ConversationKey: req.Turn.ConversationKey,
 		Task:            summarise(req.Brief),

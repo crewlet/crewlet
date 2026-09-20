@@ -1399,11 +1399,30 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 // surface it was asked from. A literal drops a field quietly; a function with
 // a test does not.
 func turnInputFor(req Request, reply turn.Reply) turn.Input {
-	return turn.Input{TurnID: req.WorkKey, Depth: req.Depth, Reply: reply}
+	return turn.Input{RunID: req.RunID, Depth: req.Depth, Reply: reply}
 }
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
 func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+	// THIS EXECUTION'S OWN IDENTITY, settled before anything else so the
+	// span, the events and the tools all name the same run.
+	//
+	// It is NOT the work key, and that is the whole of ADR-0017: a trigger
+	// that fails without acting is NAK'd and redelivered, so one work key
+	// legitimately runs several times — and a run that borrowed that
+	// identity wrote its phases, its live row and its sandbox run on top of
+	// the attempt it was repeating.
+	//
+	// THE DISPATCH'S WHERE THERE IS ONE, written back onto the local copy of
+	// the request rather than kept beside it: [Dispatcher.Dispatch] mints it
+	// so its own bookkeeping — the conversation entry, the abandon record —
+	// names the run this turn publishes under, and two variables for one
+	// identity is how those two stop agreeing. A Request assembled anywhere
+	// else (a test, a direct driver) carries none, and a turn with no
+	// identity is not an option, so one is minted here.
+	if req.RunID == "" {
+		req.RunID = newRunID()
+	}
 	// THE TURN'S OWN SPAN, opened before anything else so every phase, LLM
 	// round and tool call below is a child of it and every event the turn
 	// publishes carries its id. The dispatcher has already restored the
@@ -1411,6 +1430,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// a root.
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn",
 		attribute.String("crewlet.seat", req.Handle),
+		// `turn_id` IS the run id, and it is spelled the way every event
+		// and every screen spells it — a span attribute that named the
+		// same value something else would make a trace query find the
+		// dispatch span and neither the resume span nor the box's own.
+		attribute.String("crewlet.turn_id", req.RunID),
 		attribute.String("crewlet.work_key", req.WorkKey),
 		attribute.Bool("crewlet.coalesced", req.Coalesce),
 		attribute.Int("crewlet.delegation_depth", req.Depth))
@@ -1443,7 +1467,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	tel.skills = blocks.SkillIDs
 
 	reply := ReplyFor(req.Events)
-	turnIdentity := tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain,
+	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
 		task, reply)
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
@@ -1511,13 +1535,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.
 	if res.Suspended {
-		e.persistSuspension(ctx, r, req.WorkKey)
+		e.persistSuspension(ctx, r, req.RunID)
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
-	e.publishTurnCompleted(ctx, tel, req.WorkKey, r.Spend(), res, err)
+	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

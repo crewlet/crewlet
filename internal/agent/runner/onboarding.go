@@ -278,7 +278,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		Decision: decision, Notes: notes, Available: surface.Active(),
 	})
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",
-		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.ID,
+		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.RunID,
 		"marked", marked, "rounds", res.Rounds, "chain", chain)
 	// RECORDED HERE, not left to the caller. The executor's prompt carries an
 	// onboarding hint rendered BEFORE this pass ran — the prefetch is

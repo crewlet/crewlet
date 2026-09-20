@@ -493,7 +493,7 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) error {
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: run.TurnID, SandboxID: run.SandboxID,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		Question: redact.Secrets(result.Question), Audience: result.AskTo,
 		ConversationKey: run.ConversationKey,
 	}
@@ -832,7 +832,7 @@ func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string
 func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reason, detail string) {
 	failed := types.SandboxRunFailed{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: run.TurnID, SandboxID: run.SandboxID,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		CodingAgent: run.CodingAgent,
 		Reason:      reason, Detail: redact.Secrets(detail),
 	}

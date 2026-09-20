@@ -46,7 +46,19 @@ var (
 
 // Turn is one unit of agent work, as a list row.
 type Turn struct {
+	// TurnID is ONE RUN of a turn. Two attempts at one trigger are two
+	// rows here, and deliberately: they ran at different times, on
+	// different models, and one can fail where the next succeeds. Folding
+	// them was what made a turn that recovered from an auth failure read
+	// as permanently failed, with both attempts' tokens summed. See
+	// ADR-0017.
 	TurnID string `json:"turn_id"`
+
+	// WorkKey is the unit of work those runs share — what a reader follows
+	// to find the other attempts at the same trigger. Empty for a turn
+	// with no ledgerable trigger, and for rows written before the two
+	// identities were split (schema/0029 backfills those from turn_id).
+	WorkKey string `json:"work_key,omitempty"`
 
 	AgentID   string `json:"agent_id,omitempty"`
 	AgentRole string `json:"role,omitempty"`
@@ -119,6 +131,12 @@ type TurnQuery struct {
 	// Model narrows to turns that used one.
 	Model string
 
+	// WorkKey narrows to every RUN of one unit of work — the attempts at a
+	// trigger that was redelivered. It is the one question the turns list
+	// could not ask while a turn id WAS the work key, because then the two
+	// were the same query. See ADR-0017.
+	WorkKey string
+
 	// Failed narrows to turns that carried a failure, or to those that did
 	// not. Nil is both, which is not the same as false.
 	Failed *bool
@@ -187,6 +205,10 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		where = append(where, strings.TrimPrefix(clause, " AND "))
 		args = append(args, ids...)
 	}
+	if q.WorkKey != "" {
+		where = append(where, "work_key = ?")
+		args = append(args, q.WorkKey)
+	}
 	if q.Model != "" {
 		// ON THE TURN, not on the row: a turn is selected when ANY of
 		// its phases used the model, which is what a reader means by
@@ -225,6 +247,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	// and a nameless row in its breakdown.
 	rows, err := l.db.sql.QueryContext(ctx, `
 		SELECT turn_id,
+		       MAX(work_key),
 		       MAX(agent_id), MAX(agent_role),
 		       MIN(event_time), MAX(event_time),
 		       SUM(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
@@ -256,6 +279,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	for rows.Next() {
 		var (
 			t                 Turn
+			workKey           sql.NullString
 			agentID, role     sql.NullString
 			started, ended    int64
 			failed, complete  int
@@ -264,12 +288,13 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 			in, outTok, total sql.NullInt64
 			duration          sql.NullInt64
 		)
-		if err := rows.Scan(&t.TurnID, &agentID, &role, &started, &ended,
+		if err := rows.Scan(&t.TurnID, &workKey, &agentID, &role, &started, &ended,
 			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total, &models,
 			&complete, &duration, &summary, &taskID, &trigger); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
 		}
+		t.WorkKey = workKey.String
 		t.AgentID, t.AgentRole = agentID.String, role.String
 		t.StartedAt, t.EndedAt = DecodeTime(started), DecodeTime(ended)
 		t.Failed = failed != 0

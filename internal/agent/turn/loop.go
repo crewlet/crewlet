@@ -157,7 +157,10 @@ type Phases interface {
 
 // Input is one turn's starting state.
 type Input struct {
-	TurnID string
+	// RunID names THIS EXECUTION of the turn — see [turnctx.Turn.RunID]
+	// and ADR-0017. Log lines here name it `turn_id`, which is what every
+	// event and every screen calls it.
+	RunID string
 
 	// Depth is the delegation depth this turn inherited.
 	Depth int
@@ -395,7 +398,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			// closed and must not be appended, because its review has not
 			// run and appending it would tell the resumed turn a delivery
 			// was judged when nothing judged it.
-			log.InfoContext(ctx, "turn_suspended", "turn_id", in.TurnID, "round", round)
+			log.InfoContext(ctx, "turn_suspended", "turn_id", in.RunID, "round", round)
 			res.Suspended = true
 			res.Decision = phase.SelfIterate
 			res.Artifact = work.Text
@@ -407,7 +410,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// cost no model call at all.
 		verdict := Check(work, in.Reply, surface)
 		if verdict.Skip {
-			log.InfoContext(ctx, "turn_no_action", "turn_id", in.TurnID,
+			log.InfoContext(ctx, "turn_no_action", "turn_id", in.RunID,
 				"round", round, "summary", work.Summary)
 			res.Decision = phase.Skipped
 			res.Artifact = work.Summary
@@ -422,7 +425,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			// has to read a correction from somewhere — but marked as the
 			// engine's, since no model judged it.
 			log.WarnContext(ctx, "round_corrected_before_review",
-				"turn_id", in.TurnID, "round", round, "outcome", string(work.Outcome),
+				"turn_id", in.RunID, "round", round, "outcome", string(work.Outcome),
 				"correction", verdict.Correction)
 			rev = Review{Decision: phase.SelfIterate, Notes: verdict.Correction}
 		} else {
@@ -445,7 +448,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		if decision == phase.Done {
 			if override, correction := OverrideDone(work, in.Reply, surface); override {
 				log.WarnContext(ctx, "review_done_overridden_undelivered",
-					"turn_id", in.TurnID, "round", round,
+					"turn_id", in.RunID, "round", round,
 					"cited", work.Deliveries, "called", names(work.Calls))
 				decision = phase.SelfIterate
 				notes = AppendCorrection(notes, correction)
@@ -465,7 +468,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 
 		stall.Observe(artifact)
 		if stall.ShouldAbort() {
-			log.InfoContext(ctx, "turn_stall_aborted", "turn_id", in.TurnID, "round", round)
+			log.InfoContext(ctx, "turn_stall_aborted", "turn_id", in.RunID, "round", round)
 			res.Decision = phase.Failed
 			res.Breach = &Breach{
 				Kind:   BreachStall,
@@ -497,7 +500,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		})
 	}
 
-	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.TurnID, "max", maxRounds)
+	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.RunID, "max", maxRounds)
 	res.Decision = phase.Failed
 	res.Breach = &Breach{
 		Kind: BreachMaxIterations,

@@ -10,7 +10,17 @@
 // Two writes carry it: the episode row (exactly one per turn, so a unique
 // index makes a second writer's insert a no-op) and the counterparty
 // profiler's interaction count (an unconditional increment a duplicate turn
-// would double).
+// would double). Both run in the REFLECTION pass, which is a queue consumer
+// on whichever node wins the delivery — routinely not the one that took the
+// turn — so each reads the key off the completed-turn event's own payload
+// (see learning.Turn.WorkKey). This package derives it; it does not carry it.
+//
+// It was carried, on the turn's context, by a With/From pair that nothing in
+// production ever read: the two writers above are on the far side of a broker
+// from the frame that bound it, so the channel could not reach them and two
+// package docs asserted it did. A third carrier of an identity that can
+// disagree with the two real ones is worse than none, so there is no ambient
+// work key.
 //
 // # Why a key rather than an epoch fence
 //
@@ -36,13 +46,20 @@
 // treats NULLs as distinct, so only the case the key can actually speak for
 // is constrained by it.
 //
+// # It is not the turn id, and the difference is load-bearing
+//
+// A turn id names ONE RUN. A trigger whose turn fails without acting is naked
+// and redelivered, so one work key legitimately produces several runs — which
+// is exactly why a write that must happen once per unit of work keys on this
+// and not on the run. The two were one value once; ADR-0017 records what that
+// cost.
+//
 // This package imports nothing else from the engine, for the same reason the
 // topic grammar does not: a producer and a consumer that disagree about an
 // identity never raise, they just quietly record two of everything.
 package workkey
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
@@ -79,26 +96,31 @@ func Derive(eventIDs []string) string {
 	return hex.EncodeToString(sum[:])[:keyChars]
 }
 
-// ctxKey is the private context key type; unexported so nothing outside this
-// package can write the value by another route.
-type ctxKey struct{}
-
-// With returns a context carrying the work key.
+// IsDerived reports whether a string has the shape [Derive] produces.
 //
-// The tempting shape is an ambient channel set once around an inbox dispatch
-// and read several frames below by writers that have no other reason to know
-// about it. This threads it through context instead — the same reach, but
-// visible in every signature that carries it.
-func With(ctx context.Context, key string) context.Context {
-	return context.WithValue(ctx, ctxKey{}, key)
-}
-
-// From returns the work key bound to this context, or "" when none is —
-// which callers must treat as "legitimately unconstrained", not an error.
-func From(ctx context.Context) string {
-	if ctx == nil {
-		return ""
+// IT EXISTS TO TELL TWO ERAS APART ON ONE WIRE FIELD. A `turn_id` published
+// before ADR-0017 IS a work key; one published after names a run. The payload
+// cannot say which, because the work key travels `omitempty` and an ABSENT
+// field and an EMPTY one are the same bytes — and those are exactly the two
+// cases a consumer must separate: an old build's event (fall back to the turn
+// id, which is a key) and a new build's turn with no ledgerable trigger (do
+// NOT, because there is no unit of work and inventing one arms a dedupe guard
+// against a value that means nothing).
+//
+// The shapes do not overlap and cannot drift into each other: this is
+// [keyChars] lowercase hex, and a run id is a uuid — 36 characters with four
+// dashes. Here rather than at either caller because it is a property of the
+// grammar this package owns, and a second copy of "what a work key looks
+// like" is the shape internal/whsec and internal/textcut exist because of.
+func IsDerived(s string) bool {
+	if len(s) != keyChars {
+		return false
 	}
-	key, _ := ctx.Value(ctxKey{}).(string)
-	return key
+	for i := range len(s) {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

@@ -144,7 +144,14 @@ type Spend struct {
 	Worker    string `json:"worker,omitempty"`
 	Model     string `json:"model,omitempty"`
 
+	// TurnID and WorkKey are IDENTITY rather than cost, and they are here
+	// because this type is the carrier for every promoted column — see
+	// [EventLog.Append], which fills them for any event that names one and
+	// not only for the phase completions [SpendFor] reads. TurnID names one
+	// RUN of a turn; WorkKey names the unit of work it was dispatched for,
+	// which a re-run repeats and a run id does not. See ADR-0017.
 	TurnID    string `json:"turn_id,omitempty"`
+	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration,omitempty"`
 
 	InputTokens  int `json:"input_tokens,omitempty"`
@@ -175,11 +182,19 @@ type ListQuery struct {
 	TraceID  string
 	Actor    string
 
-	// TurnID selects one unit of agent work — every phase of it, its own
+	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
 	// inside it. Rows written before migration 0014 carry an empty
 	// turn_id and do not answer this filter; see the migration.
 	TurnID string
+
+	// WorkKey selects EVERY RUN of one unit of work — the attempts at a
+	// trigger that was redelivered, which TurnID by construction cannot
+	// ask for once it names one execution. Backed by the partial index
+	// schema/0029 ships; rows from before it carry the work key in
+	// turn_id, and that migration's backfill copies it across so the
+	// history answers this filter too. See ADR-0017.
+	WorkKey string
 
 	// RelatedAgent is a broad filter: events whose actor is the agent, or
 	// whose tags name it as agent_role / target / recipient / sender, plus
@@ -233,10 +248,10 @@ INSERT INTO crewlet_events (
 	trace_id, span_id, parent_span_id,
 	agent_id, agent_role, task_id, channel_id, sender,
 	summary, actor, tags, payload,
-	phase, host_phase, worker, model, turn_id, iteration,
+	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -310,6 +325,13 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	if spend.TurnID == "" {
 		spend.TurnID = tags["turn_id"]
 	}
+	// THE UNIT OF WORK BESIDE THE RUN, for the same reason and by the same
+	// route. A turn that fails without acting is redelivered, so one
+	// trigger legitimately runs several times: turn_id tells the attempts
+	// apart and this is what still groups them. See ADR-0017.
+	if spend.WorkKey == "" {
+		spend.WorkKey = tags["work_key"]
+	}
 	// IN ONE TRANSACTION with its party rows, because the party table is an
 	// INDEX of this one and an index that can be missing entries is not an
 	// index: an event stored without its parties is invisible to the filter
@@ -323,7 +345,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			tags["channel_id"], tags["sender"],
 			rec.Summary, rec.Actor, string(tagJSON), string(payload),
 			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
-			spend.TurnID, spend.Iteration,
+			spend.TurnID, spend.WorkKey, spend.Iteration,
 			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
 		); err != nil {
 			return err
@@ -440,6 +462,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
+	addEq("work_key", q.WorkKey)
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.

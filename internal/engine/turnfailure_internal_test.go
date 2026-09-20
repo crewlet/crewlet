@@ -96,14 +96,14 @@ func failing(t *testing.T) (*Engine, *pub, turnTelemetry) {
 	t.Helper()
 	p := &pub{}
 	e := &Engine{backends: &Backends{Queue: p}}
-	return e, p, turnTelemetry{role: "CEO", agentID: "a-1", handle: "ceo"}
+	return e, p, turnTelemetry{role: "CEO", agentID: "a-1", handle: "ceo", runID: "t-1", workKey: "wk-1"}
 }
 
 func TestAGuardBreachIsItsOwnEventNotJustAFieldOnTheSummary(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 
-	e.publishFailure(context.Background(), tel, "t-1", turn.Result{
+	e.publishFailure(context.Background(), tel, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: turn.BreachStall, Detail: "two rounds, one artifact"},
 	}, nil)
@@ -146,7 +146,7 @@ func TestEveryBreachTheLoopRaisesIsAGuardKindTheEventNames(t *testing.T) {
 		t.Run(string(tc.want), func(t *testing.T) {
 			t.Parallel()
 			e, p, tel := failing(t)
-			e.publishFailure(context.Background(), tel, "t-kind", turn.Result{
+			e.publishFailure(context.Background(), tel, turn.Result{
 				Decision: phase.Failed,
 				Breach:   &turn.Breach{Kind: tc.breach, Detail: "stopped"},
 			}, nil)
@@ -169,7 +169,7 @@ func TestAnExhaustedProviderChainSaysWhatItTried(t *testing.T) {
 			Err: fmt.Errorf("rate limited"),
 		},
 	}
-	e.publishFailure(context.Background(), tel, "t-2",
+	e.publishFailure(context.Background(), tel,
 		turn.Result{Decision: phase.Failed}, fmt.Errorf("runner: execute: %w", exhausted))
 
 	got := only[*types.LLMUnavailable](t, p, "llm_unavailable")
@@ -186,8 +186,12 @@ func TestAnExhaustedProviderChainSaysWhatItTried(t *testing.T) {
 	if got.LastErrorKind != llm.KindRateLimit.String() {
 		t.Errorf("last_error_kind = %q, want %q", got.LastErrorKind, llm.KindRateLimit)
 	}
-	if got.TurnID != "t-2" {
-		t.Errorf("turn_id = %q, want t-2", got.TurnID)
+	// THE RUN the chain ran out under, and the unit of work beside it: an
+	// AFK record that named only the trigger could not say which attempt
+	// at it went dark. See ADR-0017.
+	if got.TurnID != "t-1" || got.WorkKey != "wk-1" {
+		t.Errorf("turn_id = %q work_key = %q, want the turn's own run and key",
+			got.TurnID, got.WorkKey)
 	}
 	// No guard fired, so nothing may claim one did.
 	none[*types.TurnGuardBreach](t, p, "turn.guard_breach")
@@ -197,7 +201,7 @@ func TestARefusedChargeIsABudgetEventNotAProviderOne(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 
-	e.publishFailure(context.Background(), tel, "t-3", turn.Result{Decision: phase.Failed},
+	e.publishFailure(context.Background(), tel, turn.Result{Decision: phase.Failed},
 		fmt.Errorf("execute: %w", &toolloop.BudgetError{
 			Scope: string(types.BudgetScopeOrg), Used: 1_000_000, Limit: 900_000,
 		}))
@@ -222,7 +226,7 @@ func TestAnUnhandledExceptionIsBothABreachAndItsCause(t *testing.T) {
 	// The two are not exclusive: the guard names WHICH invariant ended the
 	// turn, the error says what broke. Reporting only one drops half the
 	// answer, and this is the case where a reader needs both.
-	e.publishFailure(context.Background(), tel, "t-4", turn.Result{
+	e.publishFailure(context.Background(), tel, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: "unhandled_exception", Detail: "nil map write"},
 	}, errors.New("nil map write"))
@@ -242,7 +246,7 @@ func TestATurnThatDidNotFailPublishesNoFailure(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 
-	e.publishFailure(context.Background(), tel, "t-5",
+	e.publishFailure(context.Background(), tel,
 		turn.Result{Decision: phase.Done}, nil)
 
 	// Every one of these types is in FailureEventTypes, so a spurious publish
@@ -264,7 +268,7 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 	e, p, tel := failing(t)
 	tel.startedAt = time.Now().UTC().Add(-time.Second)
 
-	e.publishTurnCompleted(context.Background(), tel, "t-6", runner.Spend{}, turn.Result{
+	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: turn.BreachMaxIterations, Detail: "6 rounds, no done"},
 	}, nil)
@@ -282,7 +286,9 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 	if breach.Kind != types.GuardKind(turn.BreachMaxIterations) {
 		t.Errorf("breach kind = %q", breach.Kind)
 	}
-	if breach.TurnID != "t-6" {
-		t.Errorf("breach turn_id = %q, want the work key the summary carries", breach.TurnID)
+	if breach.TurnID != summary.TurnID || breach.WorkKey != summary.WorkKey {
+		t.Errorf("breach names run %q key %q, summary names run %q key %q — the "+
+			"two records of one turn have to join",
+			breach.TurnID, breach.WorkKey, summary.TurnID, summary.WorkKey)
 	}
 }

@@ -69,7 +69,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
 	endpoint := e.bridge.Open(&mcpbridge.Session{
-		RunID:   l.turn.ID,
+		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
@@ -114,7 +114,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// asking it about llm_sandbox would answer for a model this run never
 	// touches.
 	if err := sandboxCredentials(company, l.seat, phase.Execute, spec.Placement, env); err != nil {
-		e.bridge.Close(l.turn.ID)
+		e.bridge.Close(l.turn.RunID)
 		return err
 	}
 
@@ -130,7 +130,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if err != nil {
 		// The launch failed, so nothing will ever close this session on
 		// the completion path.
-		e.bridge.Close(l.turn.ID)
+		e.bridge.Close(l.turn.RunID)
 		return err
 	}
 	return nil
@@ -257,7 +257,8 @@ func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
 		// other fact about the seat here. The engine's current company is
 		// the next epoch once an apply lands mid-turn, and a renamed company
 		// derives a different id for the same seat.
-		TurnID: l.turn.ID, AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
+		TurnID: l.turn.RunID, WorkKey: l.turn.WorkKey,
+		AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
 		Role:            l.seat.Name,
 		ConversationKey: l.turn.ConversationKey,
 		Reply:           l.turn.Reply,

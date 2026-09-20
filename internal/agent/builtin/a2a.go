@@ -136,7 +136,7 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// another agent inherits its depth plus one.
 		DelegationDepth: turn.Depth,
 		DelegationChain: append(append([]string(nil), turn.Chain...), seat.Handle()),
-		ParentTurnID:    turn.ID,
+		ParentTurnID:    turn.RunID,
 	})
 	if err != nil {
 		return failed(fmt.Sprintf("Could not reach %s: %v", resolved.Handle, err)), nil

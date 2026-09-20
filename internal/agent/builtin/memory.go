@@ -442,7 +442,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 			"relevance — call refresh_memory without `context_hint` for your " +
 			"most recent ones instead."), nil
 	}
-	take := t.hints.take(turn.ID, hint, t.hintBudget())
+	take := t.hints.take(turn.RunID, hint, t.hintBudget())
 	switch {
 	case take.Hit:
 		// ANSWERED FROM THE LEDGER, which is what makes a repeat free
@@ -467,7 +467,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	// Kept even when the filter found nothing: "nothing bears on this" is
 	// an answer, and a repeat of the hint would otherwise cost another
 	// completion to be told it again.
-	t.hints.keep(turn.ID, hint, entries)
+	t.hints.keep(turn.RunID, hint, entries)
 	return renderHintedNotes(entries, hint, limit), nil
 }
 
@@ -568,7 +568,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// operator reading the diary has to be able to tell what the
 		// agent chose to keep from what a worker decided for it.
 		Source: "tool:" + ReflectAndPersistTool,
-		TurnID: turn.ID, CreatedAt: time.Now().UTC(),
+		TurnID: turn.RunID, CreatedAt: time.Now().UTC(),
 	}
 	if err := t.diary.Write(ctx, entry); err != nil {
 		return failed(fmt.Sprintf("Could not keep that note: %v", err)), nil

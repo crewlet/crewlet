@@ -127,7 +127,7 @@ The last one is deliberate. Nothing can key a *differently worded* diary entry t
 
 The instinct is to fence these the way a sandbox run is fenced, on `owner_epoch`. That works for a mutation of an existing row and fails here twice over: an insert has no prior row to hang the condition on, and a fence **loses data in the case where nothing went wrong** — a node that completes a turn, acks the delivery and only then lapses would have its episode refused. The turn happened; the memory of it is gone.
 
-So the write is keyed on the work rather than fenced on the writer. Every turn dispatched from a ledgerable trigger carries a `work_key` derived from its constituent event ids — the same identity the completion ledger uses, and the one thing that is stable across a re-run (two nodes mint two `turn_id`s, so anything keyed on those records the duplicate instead of collapsing it).
+So the write is keyed on the work rather than fenced on the writer. Every turn dispatched from a ledgerable trigger carries a `work_key` derived from its constituent event ids — the same identity the completion ledger uses, and the one thing that is stable across a re-run (a `turn_id` names ONE RUN, so anything keyed on it records the duplicate instead of collapsing it — and a re-run is ordinary rather than exceptional: two nodes mint two runs for one trigger, and a turn that breaks before reaching outside the engine is redelivered and runs again. See [a turn's two identities](turn-engine.md#a-turns-two-identities)).
 
 |  | epoch fence | work key |
 |---|---|---|

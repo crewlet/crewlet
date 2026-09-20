@@ -1,7 +1,7 @@
 package workkey
 
 import (
-	"context"
+	"strings"
 	"testing"
 )
 
@@ -58,17 +58,24 @@ func TestDeriveIgnoresBlankIDs(t *testing.T) {
 	}
 }
 
-func TestContextRoundTrip(t *testing.T) {
+// THE TWO ERAS HAVE NON-OVERLAPPING SHAPES, which is the whole reason
+// [IsDerived] can tell them apart on a wire field that cannot.
+func TestIsDerivedSeparatesAKeyFromARunID(t *testing.T) {
 	t.Parallel()
-	ctx := With(context.Background(), "abc123")
-	if got := From(ctx); got != "abc123" {
-		t.Errorf("From = %q, want abc123", got)
+	key := Derive([]string{"evt-a", "evt-b"})
+	if !IsDerived(key) {
+		t.Errorf("IsDerived(%q) = false for this package's own output", key)
 	}
-	if got := From(context.Background()); got != "" {
-		t.Errorf("unbound context yielded %q, want empty", got)
-	}
-	//nolint:staticcheck // deliberately asserting the nil-context guard
-	if got := From(nil); got != "" {
-		t.Errorf("nil context yielded %q, want empty", got)
+	for name, s := range map[string]string{
+		"a run id":                     "d7c5a66d-3d53-420a-afbb-b72448774f68",
+		"empty":                        "",
+		"the right length but not hex": strings.Repeat("g", keyChars),
+		"hex but too short":            key[:keyChars-1],
+		"hex but too long":             key + "0",
+		"uppercase hex":                strings.ToUpper(key),
+	} {
+		if IsDerived(s) {
+			t.Errorf("IsDerived(%s = %q) = true", name, s)
+		}
 	}
 }

@@ -159,7 +159,19 @@ export interface RoundNarration {
 
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
 export interface LiveCall {
+  /**
+   * ONE RUN of a turn. A trigger that fails without acting is redelivered, so
+   * one unit of work legitimately runs several times, and each run is its own
+   * id: `(turn_id, phase, iteration)` is the key every phase row is stored
+   * under, and it has to be unique per execution. See `adr/0017`.
+   */
   turn_id: string;
+  /**
+   * The unit of work behind that run — what groups a trigger's attempts.
+   * Absent on a row an engine from before the split wrote, where `turn_id`
+   * carries it instead.
+   */
+  work_key?: string;
   phase: string;
   iteration: number;
   model: string;
@@ -274,7 +286,12 @@ export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
 
 export interface SandboxRun {
+  /** The RUN this job belongs to — one execution of a turn, and this
+   *  record's own key. See `adr/0017`. */
   turn_id: string;
+  /** The unit of work behind that run. Absent on a row written before the
+   *  identities were split. */
+  work_key?: string;
   agent_handle: string;
   role: string;
   status: SandboxStatus;
@@ -3288,7 +3305,19 @@ export interface WorkRoutingAnswer {
 
 /** One unit of agent work, as a list row. */
 export interface TurnRow {
+  /**
+   * ONE RUN of a turn. A trigger that fails without acting is redelivered, so
+   * one unit of work legitimately runs several times, and each run is its own
+   * id: `(turn_id, phase, iteration)` is the key every phase row is stored
+   * under, and it has to be unique per execution. See `adr/0017`.
+   */
   turn_id: string;
+  /**
+   * The unit of work behind that run — what groups a trigger's attempts.
+   * Absent on a row an engine from before the split wrote, where `turn_id`
+   * carries it instead.
+   */
+  work_key?: string;
   agent_id?: string;
   role?: string;
   /** The span of the turn's own EVENTS, which is not its duration: the span

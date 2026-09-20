@@ -260,6 +260,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		AgentHandle:    handle,
 		RoleName:       t.Event.RoleName,
 		TurnID:         t.Event.TurnID,
+		WorkKey:        t.WorkKey(),
 		SkillName:      updated.Name,
 		SkillID:        updated.ID,
 		SkillVersion:   updated.Version,

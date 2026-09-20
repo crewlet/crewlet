@@ -102,11 +102,9 @@ type recorder struct {
 	deferred []string
 }
 
-func (r *recorder) run(ctx context.Context, req engine.Request) (turn.Result, error) {
+func (r *recorder) run(_ context.Context, req engine.Request) (turn.Result, error) {
 	r.reqs = append(r.reqs, req)
-	// The work key must be on the CONTEXT by the time the turn runs: the
-	// writers that must not duplicate under it sit frames below this one.
-	r.keys = append(r.keys, workkey.From(ctx))
+	r.keys = append(r.keys, req.WorkKey)
 	return r.result, r.err
 }
 
@@ -148,8 +146,15 @@ func TestAHealthyPartitionReachesTheTurnEngine(t *testing.T) {
 	if r.reqs[0].WorkKey == "" {
 		t.Error("the dispatch carried no work key")
 	}
-	if r.keys[0] != r.reqs[0].WorkKey {
-		t.Errorf("the context key %q does not match the request's %q", r.keys[0], r.reqs[0].WorkKey)
+	// AND A RUN ID OF ITS OWN. A redelivered trigger re-derives the same
+	// work key by design, so a dispatch that reused it as the run's
+	// identity wrote the retry's phases on top of the previous attempt's.
+	// See ADR-0017.
+	if r.reqs[0].RunID == "" {
+		t.Error("the dispatch minted no run id")
+	}
+	if r.reqs[0].RunID == r.reqs[0].WorkKey {
+		t.Error("the run id IS the work key — a re-run would collide with the attempt it repeats")
 	}
 }
 
@@ -784,9 +789,13 @@ func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 		t.Error("a non-ledgered event was recorded")
 	}
 	// And with no ledgerable trigger the work key is empty, which is the
-	// documented "nothing to collapse".
+	// documented "nothing to collapse" — while the RUN is still identified,
+	// because an execution always has one.
 	if r.keys[0] != "" {
 		t.Errorf("work key = %q, want empty", r.keys[0])
+	}
+	if r.reqs[0].RunID == "" {
+		t.Error("a turn with no ledgerable trigger still ran with no run id")
 	}
 }
 
@@ -1382,5 +1391,38 @@ func TestTheMergedAskCarriesEverySpeakerInTheOrderTheySpoke(t *testing.T) {
 	}
 	if note.Sender != "cy" {
 		t.Errorf("the merged ask's flat sender = %q, want the latest constituent's", note.Sender)
+	}
+}
+
+// THE SAME TRIGGER, TWICE, IS TWO RUNS OF ONE UNIT OF WORK.
+//
+// A turn that fails without reaching outside the engine is NAK'd, and the
+// broker redelivers the very same event — so the work key, which is derived
+// from the trigger's ids, is reproduced by construction. That is what it is
+// for. What must NOT be reproduced is the run: everything a turn publishes is
+// keyed on it, so a second attempt under the first one's id writes its phases,
+// its live row and its detached sandbox run on top of the attempt it is
+// repeating. See ADR-0017.
+func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
+	d := dispatcher(t, r)
+	// The SAME event both times, which is exactly what a NAK redelivers.
+	trigger := ev("notification")
+
+	d.Dispatch(context.Background(), "ceo", []*events.Event{trigger})
+	d.Dispatch(context.Background(), "ceo", []*events.Event{trigger})
+
+	if len(r.reqs) != 2 {
+		t.Fatalf("the turn engine ran %d times, want 2", len(r.reqs))
+	}
+	if r.reqs[0].WorkKey != r.reqs[1].WorkKey {
+		t.Errorf("the work key changed across a redelivery (%q then %q) — the "+
+			"completion ledger and the episode row could no longer collapse it",
+			r.reqs[0].WorkKey, r.reqs[1].WorkKey)
+	}
+	if r.reqs[0].RunID == r.reqs[1].RunID {
+		t.Errorf("both runs share the id %q — the retry would publish its phases "+
+			"under the identity the previous attempt already occupied", r.reqs[0].RunID)
 	}
 }
