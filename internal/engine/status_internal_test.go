@@ -749,6 +749,79 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 	}
 }
 
+// AND SO DOES A RUN THE ENGINE DESTROYS — through the coordinator the engine
+// itself builds.
+//
+// The park's counterpart, and the one settleFailed reaches: a suspension whose
+// row DID land keeps the indicator up because a box is working, and a settle is
+// the moment that stops being true. The turn never returns to say so, so
+// without [sandbox.CoordinatorOptions.Lost] the indicator heartbeat outlives
+// the process.
+//
+// Driven through [Engine.buildSandboxRuntime] rather than a coordinator this
+// case assembled, because the whole defect class on this path is a complete
+// subsystem with no caller: an option declared and never passed is exactly what
+// a test holding its own coordinator cannot see.
+//
+// AND IT IS ONE TURN'S HOLD, not the seat's indicators: a second turn working
+// in the same thread keeps its own.
+func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
+	e, ws := indicating(t, notify.StatusAlways)
+	e.backends.Fleet = coordmem.NewFleet()
+	company := e.Company()
+	// The double, which is the whole catalogue this case needs: the run is
+	// settled before it ever has a box.
+	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
+	if err := e.buildSandboxRuntime(company); err != nil {
+		t.Fatalf("buildSandboxRuntime: %v", err)
+	}
+	if err := e.sandboxPending.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+
+	coding := e.beginWorkingStatus(t.Context(), "swe", "wk-code",
+		[]*events.Event{chatTrigger("D0ANA")})
+	if coding == nil {
+		t.Fatal("no indicator was raised for a chat trigger")
+	}
+	ws.awaitShown(t, 1)
+	endWorkingStatus(t.Context(), coding, true)
+
+	// A colleague's ask lands in the same thread while the box runs, and it
+	// is a different turn: the session is shared and reference-counted.
+	alongside := e.beginWorkingStatus(t.Context(), "swe", "wk-alongside",
+		[]*events.Event{chatTrigger("D0ANA")})
+	if alongside == nil {
+		t.Fatal("a second turn in the same thread joined no session")
+	}
+
+	// The run is settled rather than resumed: its record is deleted, its box
+	// reclaimed, and the turn suspended into it is over.
+	if err := e.sandboxCoordinator.FailRun(t.Context(), "wk-code",
+		types.SandboxFailureSuspensionUnrecorded,
+		"the suspended conversation could not be written"); err != nil {
+		t.Fatalf("FailRun: %v", err)
+	}
+
+	if got := ws.shown(); slices.Contains(got, "") {
+		t.Fatalf("the settle cleared an indicator a second turn is still holding: %v", got)
+	}
+	if live := e.notify.slack.Status().Live(); len(live) != 1 {
+		t.Fatalf("the second turn's indicator went down with the settle: %v", live)
+	}
+	// AND THE SETTLED TURN'S HOLD IS GONE, which is what the last holder
+	// ending proves: with the hold still counted the clear below never comes.
+	endWorkingStatus(t.Context(), alongside, false)
+	if shown := ws.shown(); shown[len(shown)-1] != "" {
+		t.Errorf("the settled turn's hold outlived the run it was held for: %v", shown)
+	}
+	if live := e.notify.slack.Status().Live(); len(live) != 0 {
+		t.Errorf("an indicator outlived every turn holding it: %v", live)
+	}
+}
+
 // AND A PERSON'S ANSWER RAISES ONE AGAIN.
 //
 // The park released the hold, so a resume that only ever rejoined would work

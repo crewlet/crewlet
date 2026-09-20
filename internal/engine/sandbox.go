@@ -1166,6 +1166,14 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		// turn that suspended into it does not return to say so. See
 		// [sandbox.CoordinatorOptions.Parked].
 		Parked: e.releaseWorkingStatus,
+		// AND SO DOES A RUN THIS NODE DESTROYS, which is the same fact
+		// reached by the other door: a settled run's turn is never
+		// resumed, so the frame that raised the indicator is as gone as
+		// it is at a park and nothing else would take it down. One
+		// function for both, because "this turn stopped and is not
+		// coming back" is one thing to do. See
+		// [sandbox.CoordinatorOptions.Lost].
+		Lost: e.releaseWorkingStatus,
 	})
 	if err != nil {
 		return err

@@ -143,6 +143,7 @@ type coordRig struct {
 
 	mu     sync.Mutex
 	parked []string
+	lost   []string
 }
 
 // parkedTurns is every turn the coordinator reported as stopped on a
@@ -151,6 +152,13 @@ func (r *coordRig) parkedTurns() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.parked...)
+}
+
+// lostTurns is every turn the coordinator reported as destroyed, in order.
+func (r *coordRig) lostTurns() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.lost...)
 }
 
 func newCoordRig(t *testing.T) *coordRig {
@@ -168,6 +176,11 @@ func newCoordRig(t *testing.T) *coordRig {
 			rig.mu.Lock()
 			defer rig.mu.Unlock()
 			rig.parked = append(rig.parked, handle+"/"+turnID)
+		},
+		Lost: func(_ context.Context, handle, turnID string) {
+			rig.mu.Lock()
+			defer rig.mu.Unlock()
+			rig.lost = append(rig.lost, handle+"/"+turnID)
 		},
 		Now: func() time.Time { return base.now },
 	})
@@ -858,6 +871,126 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// AND A DESTROYED TURN IS REPORTED TO THE ENGINE, exactly as a parked one is.
+//
+// A settle here ends a turn that is still SUSPENDED into the run: the record
+// is deleted, the box reclaimed and the seat freed, and the frame that started
+// the turn returned the moment it suspended. So nothing above this package
+// learns the agent stopped unless [CoordinatorOptions.Lost] says so — which is
+// the same hole [CoordinatorOptions.Parked] closed on the other stop, left
+// open on this one. Its first victim was the working indicator: a run whose
+// collect failed kept it up for the life of the process.
+//
+// Every call site of settleFailed, because the lesson of the park was that
+// enumerating them by hand is what missed this one.
+func TestALostRunIsReportedLikeAParkedOne(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		drive func(*testing.T, *coordRig)
+		want  []string
+	}{
+		{"a collect that could not read the box back", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true})
+			rig.runner.CollectErr = errors.New("the box died mid-read")
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+		}, []string{"swe/t1"}},
+		{"a row carrying no suspended conversation", func(t *testing.T, rig *coordRig) {
+			rig.launching("t1")
+			if err := rig.pending.SetStatus(t.Context(), "t1", StatusRunning, Fence{}); err != nil {
+				t.Fatalf("SetStatus: %v", err)
+			}
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+		}, []string{"swe/t1"}},
+		{"a suspension the engine could not record", func(t *testing.T, rig *coordRig) {
+			rig.launching("t1")
+			if err := rig.coordinator.FailRun(t.Context(), "t1",
+				types.SandboxFailureSuspensionUnrecorded,
+				"the suspended conversation could not be written"); err != nil {
+				t.Fatalf("FailRun: %v", err)
+			}
+			// REPORTED HERE TOO, although the suspending frame is still
+			// on the stack and clears its own indicator off this same
+			// settle. One rule for every settle rather than a branch for
+			// the one caller that happens to have another way of
+			// knowing: the release is idempotent, and a gate here would
+			// be a second answer to "did this turn stop".
+		}, []string{"swe/t1"}},
+		{"a completion that resumed its turn", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+		}, nil},
+		{"a run that parked on a question", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{
+				NeedsInput: true, Question: "which branch?", AskTo: "requester",
+			})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+		}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRig(t)
+			tc.drive(t, rig)
+			if got := rig.lostTurns(); !slices.Equal(got, tc.want) {
+				t.Errorf("reported %v as lost, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// AND A RUN THIS CALL DID NOT END REPORTS NOTHING, on the gate the failure
+// announcement takes.
+//
+// A run a newer lease owns, or one somebody else settled between the claim and
+// this settle, is that party's to end and to explain — and its holds are that
+// party's to drop. Reporting it here would tell a node that is still running
+// the turn that its turn is over.
+func TestASettleSomebodyElseEndedReportsNoLoss(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	var lost []string
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: endedFirst{rig.pending},
+		Manager: rig.manager, Resume: rig.resumer,
+		Lost: func(_ context.Context, handle, turnID string) {
+			lost = append(lost, handle+"/"+turnID)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true})
+	rig.runner.CollectErr = errors.New("the box died mid-read")
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	rig.finished("t1")
+	if len(lost) != 0 {
+		t.Errorf("reported %v as lost for a run somebody else had already ended", lost)
 	}
 }
 

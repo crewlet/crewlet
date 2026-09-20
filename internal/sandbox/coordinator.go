@@ -165,6 +165,37 @@ type CoordinatorOptions struct {
 	// turn would find the hold already dropped.
 	Parked func(ctx context.Context, handle, turnID string)
 
+	// Lost is called once for every run this node DESTROYS while a turn is
+	// still suspended into it: the box is reclaimed, the record deleted,
+	// the seat freed, and that turn is never resumed.
+	//
+	// The SETTLE-side counterpart of Parked, and the two together are the
+	// whole of "the agent stopped and its turn did not come back to say
+	// so". A park is a wait and this is an ending, but the frame that
+	// raised whatever the engine holds up while a turn works is equally
+	// gone either way — it returned when the turn suspended — so nothing
+	// above this package can learn of the stop unless this call makes it.
+	//
+	// The working indicator is the caller it was added for, and the hole it
+	// closes is the one Parked did not: a suspension the engine DID record
+	// keeps the indicator up deliberately, because a box is working, and a
+	// settle here is the moment that stops being true. Without it a run
+	// whose collect failed left the indicator heart-beating for the life of
+	// the process — the same failure, on the same rule, that Parked exists
+	// for.
+	//
+	// NOT Ended, which fires for every finish including a collected run's:
+	// there the turn is resumed immediately and the agent never stopped.
+	// Ended is about a credential the run HOLDS and is keyed on the run;
+	// this is about the turn, and is keyed on the seat and turn a caller
+	// addresses its holds by.
+	//
+	// Fired only where the ending was THIS call's, on the same gate the
+	// failure announcement takes: a run a newer lease owns, or one somebody
+	// else ended first, is that party's to settle and to explain, and its
+	// holds are that party's to drop.
+	Lost func(ctx context.Context, handle, turnID string)
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -202,6 +233,7 @@ type Coordinator struct {
 	account Accountant
 	ended   func(runID string)
 	parked  func(ctx context.Context, handle, turnID string)
+	lost    func(ctx context.Context, handle, turnID string)
 	now     func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
@@ -277,6 +309,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
 		parked: opts.Parked,
+		lost:   opts.Lost,
 		now:    opts.Now,
 		runs:   map[string]seatRuns{},
 	}
@@ -940,16 +973,28 @@ func claimedFrom(run PendingRun) string {
 //
 // Announced only when this call ended the run. One that a newer lease owns,
 // or that somebody else ended first, is that party's to settle and to explain,
-// and a second announcement would name a reason the run did not end for.
+// and a second announcement would name a reason the run did not end for. The
+// engine is told on the same gate and for the same reason — see
+// [CoordinatorOptions.Lost].
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
 	ended := c.finish(ctx, run, fenceOf(run))
 	// Out of whichever set the record was in: this path settles a claimed
 	// run ([StatusResumed]) and a launch that never suspended
 	// ([StatusLaunching]) alike, and a status names its own set.
 	c.uncountRun(run.AgentHandle, run.Status)
-	if ended {
-		c.announceFailure(ctx, run, reason, detail)
+	if !ended {
+		return
 	}
+	// THE TURN IS DESTROYED, and this is the moment it becomes so: the
+	// record is deleted and the box reclaimed above, so nothing will ever
+	// resume it. Whatever the engine holds up while a turn works comes down
+	// here for the reason it comes down at a park — the turn does not return
+	// to say so itself. BEFORE the announcement, which is a publish that can
+	// block: what is being released is a claim on somebody's screen.
+	if c.lost != nil {
+		c.lost(ctx, run.AgentHandle, run.TurnID)
+	}
+	c.announceFailure(ctx, run, reason, detail)
 }
 
 // FailRun settles a run the turn that launched it cannot suspend into.
