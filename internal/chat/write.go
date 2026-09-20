@@ -463,9 +463,11 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 			}
 			if held >= MaxChannels {
 				return statelog.Decision{}, invalid("name", "this company "+
-					"holds %d channels and the maximum is %d — past it the "+
-					"sidebar is a search problem rather than a list; archive a "+
-					"room before making another", held, MaxChannels)
+					"holds %d live channels and the maximum is %d — past it "+
+					"the sidebar is a search problem rather than a list. "+
+					"Archive a room and this one can be created: an archived "+
+					"room is still read and still searched, it just takes no "+
+					"new messages", held, MaxChannels)
 			}
 			return s.decide(actor, subject, OpCreate, scope, opID, payload, nil, at)
 		},
@@ -1846,12 +1848,32 @@ func handlesTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]st
 	return out, nil
 }
 
-// countChannelsTx is how many rooms the company holds.
+// countChannelsTx is how many LIVE rooms the company holds.
+//
+// ARCHIVED ROOMS DO NOT COUNT, and that is what makes the refusal's own
+// advice true. It counted every row, and there is no channel delete in this
+// vocabulary at all — so a company that had ever created [MaxChannels] rooms
+// could never create another, and the refusal told it to archive one, which
+// changed nothing. A cap somebody cannot get under is not a cap; it is a
+// permanent stop with a remedy that reads like an oversight.
+//
+// AN ARCHIVED ROOM IS STILL READ, still searched and still counted by
+// retention. What archiving ends is new messages, which is exactly the cost
+// this cap is about: a sidebar of live rooms, and a routing surface somebody
+// has to keep in their head.
+//
+// THE OTHER HALF OF THE OLD COUPLING IS GONE. This cap used to be load-bearing
+// for chat SEARCH, because a query named one bound variable per visible room
+// and the statement compiler refused past its own limit — so raising this cap
+// would have broken search rather than the sidebar. `search.chatPostings`
+// chunks that list now, and this constant answers only the question it is
+// named for.
 func countChannelsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	var held int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM chat_channels`).Scan(&held); err != nil {
-		return 0, fmt.Errorf("chat: count this company's channels: %w", err)
+		`SELECT COUNT(*) FROM chat_channels WHERE archived_at IS NULL`).
+		Scan(&held); err != nil {
+		return 0, fmt.Errorf("chat: count this company's live channels: %w", err)
 	}
 	return held, nil
 }

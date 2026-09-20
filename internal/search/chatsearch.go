@@ -56,6 +56,20 @@ type ChatHit struct {
 // that FORGOT to resolve its viewer must not be handed one.
 var ErrNoViewer = errors.New("search: a chat search needs the viewer's visible channels")
 
+// channelChunk is how many rooms one posting statement names at a time.
+//
+// FIVE HUNDRED, which is a quarter of the 2 000 bound parameters Turso's
+// statement compiler accepts and leaves three quarters of it for the rest of
+// the statement and for whatever a future predicate adds. It is not a tuning
+// knob in the performance sense: every chunk reads the same index on the same
+// connection, and what it buys is that the number of rooms a person can see
+// stops being able to refuse the statement.
+//
+// It is also what DECOUPLES the room cap from search. `chat.MaxChannels`
+// bounded the company's rooms partly because this list had to fit; with the
+// list chunked, that cap answers only the question it is named for.
+const channelChunk = 500
+
 // chatSearchLimit is how many hits a chat query returns when it says nothing.
 //
 // Twenty, against the knowledge search's ten, because a chat hit is one
@@ -134,38 +148,68 @@ func (x *ChatIndexer) chatPostings(ctx context.Context, term string, q ChatQuery
 		if docs == 0 {
 			return nil
 		}
-		args := []any{term}
-		filter := &strings.Builder{}
-		filter.WriteString(` AND d.channel_id IN (`)
-		for i, channel := range q.Channels {
-			if i > 0 {
-				filter.WriteString(",")
+		// THE VIEWER'S ROOMS IN CHUNKS, and the chunking is a
+		// correctness property rather than a tidiness one. A driver
+		// bounds how many variables one statement may bind, so an
+		// `IN` list of one variable per visible room made the size of
+		// this company's org chart decide whether chat search worked
+		// at all — and it failed by REFUSING the statement, which a
+		// caller reads as a search that found nothing.
+		//
+		// The chunks are disjoint because a document lives in exactly
+		// one room, so concatenating their postings is exact rather
+		// than approximate. What is NOT per chunk is the budget below.
+		budget := maxPostingScan
+		for chunk := range slices.Chunk(q.Channels, channelChunk) {
+			if budget <= 0 {
+				break
 			}
-			filter.WriteString("?")
-			args = append(args, channel)
-		}
-		filter.WriteString(")")
-		args = append(args, maxPostingScan)
+			args := make([]any, 0, len(chunk)+2)
+			args = append(args, term)
+			filter := &strings.Builder{}
+			filter.WriteString(` AND d.channel_id IN (`)
+			for i, channel := range chunk {
+				if i > 0 {
+					filter.WriteString(",")
+				}
+				filter.WriteString("?")
+				args = append(args, channel)
+			}
+			filter.WriteString(")")
+			// ONE BUDGET ACROSS EVERY CHUNK, not one each. A limit
+			// applied per statement would make the scan this bounds
+			// grow with the room count — which is the coupling the
+			// chunking exists to remove, reintroduced one line later.
+			args = append(args, budget)
 
-		rows, err := tx.QueryContext(ctx, `
-			SELECT p.doc_id, p.freq, d.length
-			  FROM chat_postings p
-			  JOIN chat_docs d ON d.id = p.doc_id
-			 WHERE p.term = ?`+filter.String()+`
-			 ORDER BY p.doc_id
-			 LIMIT ?`, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var p textindex.Posting
-			if err := rows.Scan(&p.DocID, &p.Freq, &p.Length); err != nil {
+			rows, err := tx.QueryContext(ctx, `
+				SELECT p.doc_id, p.freq, d.length
+				  FROM chat_postings p
+				  JOIN chat_docs d ON d.id = p.doc_id
+				 WHERE p.term = ?`+filter.String()+`
+				 ORDER BY p.doc_id
+				 LIMIT ?`, args...)
+			if err != nil {
 				return err
 			}
-			postings = append(postings, p)
+			for rows.Next() {
+				var p textindex.Posting
+				if err := rows.Scan(&p.DocID, &p.Freq, &p.Length); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				postings = append(postings, p)
+				budget--
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
 		}
-		return rows.Err()
+		return nil
 	})
 	if err != nil {
 		return nil, 0, fmt.Errorf("search: read the chat postings for %q: %w", term, err)

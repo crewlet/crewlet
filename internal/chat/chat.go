@@ -214,6 +214,13 @@ const (
 	// problem rather than a list. It binds at the CREATE — nothing in a
 	// record can count the company's rooms — so the write path refuses the
 	// thousand-and-first naming this constant.
+	//
+	// IT COUNTS LIVE ROOMS, not every row ever written. There is no channel
+	// delete in this vocabulary, so counting archived rooms made this a
+	// number a company could reach once and never get back under — with a
+	// refusal telling it to archive a room, which did nothing. Archiving is
+	// the release, which is what the sidebar argument above was about in the
+	// first place.
 	MaxChannels = 1000
 
 	// MaxDMParticipants bounds a direct or group conversation.
