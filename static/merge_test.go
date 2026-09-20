@@ -115,11 +115,26 @@ func mergeAttr(t *testing.T, path string) string {
 // Asked of git rather than walked up from the test binary's directory: the
 // answer is the same one `check-attr` resolves paths against, so the two
 // cannot disagree about where the tree starts.
+//
+// IT REFUSES RATHER THAN SKIPS when there is no working tree, which is the
+// opposite of the reflex and is what this repository already does with its
+// other git-dependent gate: scripts/check-signoff.sh answers "not inside a git
+// repository, so there is no history to judge", and its own suite asserts that
+// as a FAILURE ("outside a git repository it refuses").
+//
+// Two reasons it is right here too. A skip would be UNDECLARED, and
+// internal/skipgate fails any skip missing from its allowlist — so the
+// friendly-looking branch turns a `make test` run red exactly where it was
+// trying to be accommodating. And an allowlist entry is the wrong answer as
+// well: that table's own doc requires a `Why` naming where the coverage lives
+// instead, and for this invariant it lives nowhere else. A gate that cannot
+// check its contract has not passed, so it says so.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		t.Skipf("not a git working tree, so there is no attribute stack to read: %v", err)
+		t.Fatalf("not a git working tree, so there is no attribute stack to read "+
+			"and this gate cannot check its contract: %v", err)
 	}
 	return strings.TrimSpace(string(out))
 }
