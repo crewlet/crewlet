@@ -291,7 +291,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	held := holding{events: evs}
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
-			result = d.recoverPanic(ctx, handle, held.events, panicked)
+			result = d.recoverPanic(ctx, handle, held.events, held.runID, panicked)
 		}
 	}()
 	return d.dispatch(ctx, handle, evs, &held)
@@ -315,7 +315,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 // copies on the queue and the rest unpublished; narrowed afterwards, this
 // would still be claiming the published ones at the moment they stopped being
 // its to claim.
-type holding struct{ events []*events.Event }
+// THE RUN ID IS PART OF WHAT THIS HOLDS, because the recovery publishes a
+// record about the run and the run id is minted inside the frame the panic
+// unwound. Without it the breach was addressed with the WORK KEY in its
+// `turn_id` — one field carrying the other identity, which is what ADR-0017
+// split — so the turns aggregate grew a phantom row keyed on a work key with
+// no phases, while the run that actually died read clean. Empty until the
+// mint: a panic in screening, in the park path or in the history read happens
+// before any run exists, and naming one there would invent it.
+type holding struct {
+	events []*events.Event
+	runID  string
+}
 
 // dispatch is [Dispatcher.Dispatch]'s body, separated so the recovery around
 // it is one deferred call rather than a frame every return has to pass. It
@@ -529,6 +540,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		Depth:           depth,
 		DelegationChain: chain,
 	}
+	// HANDED TO THE RECOVERY, which is outside this frame and cannot see
+	// `req`. From here a panic has a run to name; before it, there is none.
+	held.runID = req.RunID
 	// THE PARTITION, not the identity: this records that N events were
 	// MERGED, and merging is what the partition key decides. The two differ
 	// for a direct message's thread reply, where the record would otherwise
@@ -682,11 +696,14 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 // derivation, so the breach and the skipped records name the key a completed
 // turn would have carried.
 func (d *Dispatcher) recoverPanic(ctx context.Context, handle string, evs []*events.Event,
-	panicked *turn.PanicError,
+	runID string, panicked *turn.PanicError,
 ) queue.Result {
 	log.ErrorContext(ctx, "dispatch_panicked", "seat", handle, "events", len(evs),
-		"panic", panicked.Value, "stack", panicked.Stack)
-	req := Request{Handle: handle, Events: evs, WorkKey: inbox.WorkKeyFor(evs, d.ledgered)}
+		"run_id", runID, "panic", panicked.Value, "stack", panicked.Stack)
+	req := Request{
+		RunID: runID, Handle: handle, Events: evs,
+		WorkKey: inbox.WorkKeyFor(evs, d.ledgered),
+	}
 	d.noteBreach(ctx, handle, req, panicked)
 	return d.abandon(ctx, handle, req, panicked, turn.AbandonedPanicked)
 }
@@ -698,7 +715,8 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 		return
 	}
 	role, agentID := d.Identify(handle)
-	if rec := panicBreach(role, agentID, req.WorkKey, triggerTrace(req.Events), panicked); rec != nil {
+	if rec := panicBreach(role, agentID, req.RunID, req.WorkKey,
+		triggerTrace(req.Events), panicked); rec != nil {
 		d.Observe(ctx, rec)
 	}
 }
@@ -708,7 +726,20 @@ func (d *Dispatcher) noteBreach(ctx context.Context, handle string, req Request,
 //
 // One builder for the two frames that need it, the dispatcher and the sandbox
 // resume, so a breach reads the same whichever path the panic took.
-func panicBreach(role, agentID, turnID string, trace events.TraceContext,
+//
+// BOTH IDENTITIES, NAMED SEPARATELY. This took one `turnID` parameter, and its
+// two callers disagreed about what to put in it: the sandbox resume passed a
+// run id and the dispatcher passed a WORK KEY, which landed in `TurnID` with
+// `WorkKey` left empty. Every reader that groups on the turn id then saw a run
+// that never existed — and once the turns aggregate learned to read a guard
+// breach as a failure, that phantom became a failed turn with no phases and no
+// tokens, listed above the run that actually died, which reads clean. Two
+// parameters are what stop one caller supplying the other's value.
+//
+// An EMPTY runID is honest rather than substituted: a panic before the run was
+// minted belongs to no run, and `turn_id != ”` is what keeps the aggregate
+// from inventing a row for it. The work key still names what was being worked.
+func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext,
 	panicked *turn.PanicError,
 ) *events.Event {
 	if role == "" {
@@ -721,7 +752,8 @@ func panicBreach(role, agentID, turnID string, trace events.TraceContext,
 		RoleName: role,
 		Kind:     types.GuardUnhandledException,
 		Detail:   events.ClipDiagnostic(panicked.Error()),
-		TurnID:   turnID,
+		TurnID:   runID,
+		WorkKey:  workKey,
 	}, trace)
 	// SOURCED AS THE SEAT, as every turn-level event is (see
 	// [Engine.publishEvent]): a consumer with no other attribution renders

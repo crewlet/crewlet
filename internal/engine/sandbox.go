@@ -372,7 +372,8 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 		}
 	}
 	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
-	if breach := panicBreach(role, agentID, run.TurnID, trace, panicked); breach != nil {
+	if breach := panicBreach(role, agentID, run.TurnID, run.UnitOfWork(),
+		trace, panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
