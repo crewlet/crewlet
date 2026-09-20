@@ -5,6 +5,16 @@ per agent, on a server you run. It is the alternative to
 [Slack](slack.md) for orgs that want the conversational surface inside their
 own infrastructure.
 
+> **This is one of three chat backends, and the axis is exclusive.** Declaring
+> `integrations.mattermost` puts this company on `chat.backend: vendor`; the
+> engine's own chat ([Chat](../concepts/chat.md)) is what a company gets when
+> it declares no vendor chat surface at all. Naming `chat.backend: native`
+> beside this block is **refused at validation**, because a person who replied
+> in one of two live chat homes has answered a thread the agents are reading
+> the other half of, and nothing could say which was real. Mattermost and
+> [Slack](slack.md) together are fine — they are two workspaces with different
+> people in them, which is what an org migrating between them looks like.
+
 > **Prerequisites.** A Mattermost server you administer, and a **team** the
 > agents will live in. Crewlet never creates top-level tenancy — create the
 > server and the team yourself, then let

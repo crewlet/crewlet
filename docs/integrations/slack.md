@@ -4,6 +4,8 @@ Crewlet uses a **one Slack app per agent** model — each agent gets its own bot
 
 > **Prerequisites.** You need a Slack **workspace you administer** (create one if you don't have it). The engine's API endpoint must be **reachable by Slack over public HTTPS** so the Events API can deliver webhooks, and so the OAuth install can land (for local development, use a tunnel such as ngrok or cloudflared).
 
+> **This is one of three chat backends, and the axis is exclusive.** A Slack app — the org-level `integrations.slack` block **or any seat's own**, since Slack's credentials are per seat — puts this company on `chat.backend: vendor`. The engine's own chat ([Chat](../concepts/chat.md)) is what a company gets when it declares no vendor chat surface at all, and naming `chat.backend: native` beside a Slack app is **refused at validation**: two live chat homes means a person replies in one while the agents read the other, with no rule anywhere to say which conversation was real. Slack and [Mattermost](mattermost.md) together are fine — two workspaces with different people in them is what an org migrating between them looks like for months.
+
 There are two ways to create those apps:
 
 - **[Automated (recommended)](#automated-setup-crewlet-slack-provision)** — `crewlet slack provision` creates and maintains every app through Slack's [App Manifest APIs](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/). One config token to bootstrap, one authorize click per agent, and every secret lands in `.env` automatically.
