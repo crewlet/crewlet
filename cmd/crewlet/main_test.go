@@ -1108,7 +1108,7 @@ func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
-		"units:\n  - name: Platform\n    lead: Ghost\n"
+		"units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
@@ -1138,7 +1138,11 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // could be better after it.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	// THE CHANNEL KEEPS THIS CASE ABOUT THE TWO KINDS. A native-chat
+	// company whose units declare none raises a third advisory of its own,
+	// and a fixture collecting it would assert a warning set rather than
+	// the pair this case names.
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1183,7 +1187,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1227,7 +1231,7 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {

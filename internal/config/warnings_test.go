@@ -168,11 +168,16 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 // because giving it an id fixes one of them and not the other.
 func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 	t.Parallel()
+	// THE CHANNEL IS HERE SO THIS CASE STAYS ABOUT THE ID. A native-chat
+	// company whose units declare no channel raises an advisory of its own,
+	// and a fixture that collected it would assert two warnings while
+	// naming one rule.
 	c := &config.Company{
 		Name: "Acme",
 		Units: []config.Unit{{
-			Name:  "Platform",
-			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
+			Name:    "Platform",
+			Channel: "platform",
+			Roles:   []config.Role{{Name: "SWE", Handle: "swe"}},
 		}},
 	}
 	warnings := c.Warnings()
@@ -208,9 +213,14 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
 		Name: "Acme",
+		// The channels keep this case about the id, as above — and the
+		// child deliberately declares none, which is inheritance working
+		// rather than an omission: a unit that takes its parent's channel
+		// raises nothing.
 		Units: []config.Unit{
-			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
-			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
+			{Name: "Product", ID: "product", Channel: "product",
+				Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
+			{Name: "Engineering", ID: "engineering", Channel: "engineering", Children: []config.Unit{
 				{Name: "Platform", Roles: []config.Role{{Name: "SWE", Handle: "swe"}}},
 			}},
 		},

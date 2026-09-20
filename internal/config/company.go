@@ -47,6 +47,9 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Chat is which chat surface this company talks on.
+	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -461,6 +464,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -502,6 +506,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
+	p.wrap(c.Chat.Native.validate(field("chat.native")))
 	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
 	// and the failure that produces is silence: an operator sets a
 	// timezone the authored dates of somebody else's tracker will never

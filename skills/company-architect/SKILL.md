@@ -220,6 +220,31 @@ the org-wide read scope in `knowledge.scope`, and note a scope on a
 backend switched off is refused, because it reads as a working narrowing
 and narrows nothing.
 
+**Chat is a third axis on the same terms, and it is `chat.backend`.**
+`native` (the engine is the chat system), `vendor` (Slack or Mattermost),
+or `none`. Unset derives `vendor` when the company declares a vendor chat
+surface and `native` otherwise — and for chat that includes **any seat's
+own `integrations.slack` app**, because Slack's credentials are per seat
+and a company using it heavily may never write the org-level block.
+Naming `native` beside one is refused: a person would reply in one place
+while the agents read the other, and no rule could say which thread was
+real. The value is `vendor` rather than a product name because a company
+may legitimately run Mattermost *and* Slack. On `native`, the founder's
+own policy lives in `chat.native` — and `message_retention_days` is
+three-valued: leave it out for a year, write `0` to keep messages **for
+ever**, or 30..3650 for a horizon. (`tracker.native.inbox_retention_days`
+reads `0` the other way, as "take the default"; do not carry one across
+to the other.)
+
+**A unit's `channel` is an address, and it has a grammar.** Lowercase
+letters, digits and `-`, up to 64 characters — `backend`, never
+`#backend`, `C_BACKEND` or `Backend Team`. It is inherited by children
+that name none, which is the way to give a whole branch one room. On
+native chat the engine OPENS the room this names, so two units declaring
+the same channel is warned about (everything scoped to one lands in the
+other's room) and a native-chat company where no unit declares one at all
+is warned about too — nobody has anywhere to talk.
+
 **`project` / `space` on a unit or root role is identity, not read scope,
 and not a credential.** It means "this team's home": where inbound
 activity with no better recipient routes, and where the team files work

@@ -147,6 +147,10 @@ units:
     type: team
     lead: PM
     purpose: "Define what gets built and why"
+    # The team's room. Chat defaults to the engine's own too, so this opens
+    # a channel called `product` with this unit's seats in it — and it is an
+    # address, so it is `product` rather than `#product` or `Product Team`.
+    channel: product
     # A unit's identity on the tracker and the knowledge base. Both default
     # to the engine's own backends, so these two keys are all it takes to
     # give the team somewhere to file work and write things down — no site,
@@ -166,6 +170,7 @@ units:
     type: team
     lead: CTO
     purpose: "Build and ship the product"
+    channel: engineering
     project: ENG
     space: ENG
     goals:
