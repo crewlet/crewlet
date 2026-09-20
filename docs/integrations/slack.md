@@ -512,9 +512,10 @@ Rules that keep the indicator readable:
 - A phase with **one** phrase is a fixed label; more phrases give it
   variety across turns. Either is fine — the engine holds one line for the
   whole phase regardless.
-- An **empty list** (or an omitted phase) keeps the built-in pool. A blank
-  string is rejected at config load: an empty status doesn't render, it
-  *clears* the indicator.
+- An **empty list** (or an omitted phase) keeps the built-in pool, and so
+  does a list with nothing usable left in it: a blank string is dropped
+  rather than shown, because an empty status doesn't render — it *clears*
+  the indicator.
 - `default` covers any future phase with no pool of its own. You rarely
   need it.
 

@@ -964,7 +964,8 @@ integrations:
   slack:                                 # per-seat apps live on each role
     typing_status: always                # working indicator: always (default) | addressed
     status_phrases:                      # optional — replaces the built-in wording, per phase
-      plan: ["is nimbusing...", "is thinking very hard..."]
+      execute: ["is nimbusing...", "is thinking very hard..."]
+      review:  ["is re-nimbusing...", "is double-checking..."]
 
   mattermost:                            # self-hosted chat — transport AND inbound fleet
     enabled: true
