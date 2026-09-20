@@ -494,6 +494,28 @@ Rounds that reached nobody are still counted on the phase record as
 what the turn cost rather than what the loop will tolerate — and the
 dashboard badges them.
 
+**A round can also end because the model ran out of OUTPUT**, which is a
+different failure and now has its own fact on the record:
+`output_truncated`. A length stop arrives as an ordinary successful
+response with a short body — prose that ends mid-word, a structured
+submission missing the field it was called for — so nothing else about it
+says the model did not finish. Both backends have always reported the stop
+reason and nothing read it, which meant a phase that was cut off and a
+phase that finished were the same record, and the reviewer judged the first
+as the seat's considered work. The flag is **latched across the whole
+phase**, extensions included: a first round whose prose was severed leaves
+that prose in the record however cleanly the rest of the phase runs. It is
+reported rather than raised, because whether a cut answer can stand is the
+phase's question — a round that emitted whole tool calls before it ran out
+has done real work.
+
+> **The two backends do not agree on what that cap is.** An Anthropic
+> entry is capped at the provider's own `DefaultMaxTokens` — the vendor's
+> API requires the field, so something must be sent — while an OpenAI
+> entry sends no output cap at all. Neither is settable from the company
+> config today, so `output_truncated` on an Anthropic phase is the signal
+> that a seat wanted to write more than that default allows.
+
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would
 invite a model to call it and answer nothing. A text answer on an `auto`

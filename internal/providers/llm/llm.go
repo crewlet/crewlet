@@ -115,6 +115,44 @@ type Completion struct {
 // TotalTokens is the figure a budget is charged.
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 
+// The stop reasons that mean THE MODEL WAS CUT OFF rather than finished.
+//
+// Two spellings for one fact, because two vendors name it differently, and
+// they are compared HERE so no caller has to know both — a caller that checked
+// only "length" would read every Anthropic truncation as a finished answer,
+// and one that checked only "max_tokens" every OpenAI one.
+const (
+	FinishLength    = "length"     // OpenAI and the compatible endpoints
+	FinishMaxTokens = "max_tokens" // Anthropic
+)
+
+// Truncated reports a completion the model did not get to finish.
+//
+// # This is the one truncation the engine cannot see any other way
+//
+// A length stop is a 200 with a short body: the content is a sentence that
+// stops mid-word, a tool call whose JSON arguments never closed, or a
+// structured submission missing the field it was called for. Nothing else
+// about the response says so, and [Completion.FinishReason] was set by both
+// backends and read by nobody — so every caller in the tree treated a cut
+// answer as the model's considered one.
+//
+// Both streaming paths already state the rule this restores. anthropic.go: "A
+// stream that dies MID-BODY is a failure of the call, not a short answer:
+// handing back what accumulated would give the loop a truncated response as
+// though the model had finished." A length stop is that same failure arriving
+// through the front door rather than through a broken socket, and it was the
+// one the engine accepted in silence.
+//
+// A PREDICATE RATHER THAN AN ERROR, because whether a cut answer is fatal is
+// the CALLER's question and not the provider's: a round that produced whole
+// tool calls before it ran out has done real work, while a phase's final prose
+// stopping mid-sentence has not. The provider's job is to report the fact
+// once, in one spelling.
+func (c Completion) Truncated() bool {
+	return c.FinishReason == FinishLength || c.FinishReason == FinishMaxTokens
+}
+
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows, and every provider feature added over time would otherwise become
 // another positional argument at forty call sites.

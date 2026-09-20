@@ -724,6 +724,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// narration: a round that answered nothing records no narration
 		// at all, so there is nothing downstream to count it from.
 		EmptyAnswerRounds: rec.Result.EmptyAnswers,
+		OutputTruncated:   rec.Result.Truncated,
 		Decision:          rec.Decision,
 		RescueFired:       rec.Rescued,
 		Notes:             rec.Notes,

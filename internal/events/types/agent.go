@@ -425,8 +425,23 @@ type AgentPhaseCompleted struct {
 	// model that habitually answers nothing would otherwise be visible only
 	// as unexplained rescues. A non-zero count on a phase is the
 	// explanation, and the fix is the entry's `model`.
-	EmptyAnswerRounds int    `json:"empty_answer_rounds,omitempty"`
-	Decision          string `json:"decision"`
+	EmptyAnswerRounds int `json:"empty_answer_rounds,omitempty"`
+
+	// OutputTruncated is true when a round of this phase ended because the
+	// model hit its OUTPUT cap rather than because it had finished.
+	//
+	// THE ONE TRUNCATION THE ENGINE CANNOT SEE ANY OTHER WAY. A length stop
+	// is a 200 with a short body: the prose stops mid-word, a structured
+	// submission is missing the field it was called for. Both backends have
+	// always set the stop reason on the completion and nothing read it, so
+	// a phase that was cut off and a phase that finished were the same
+	// record — and the reviewer judged the first as the seat's considered
+	// work. Beside [AgentPhaseCompleted.EmptyAnswerRounds] and for the same
+	// reason: this is the record that already knows the seat, the phase and
+	// the model, and the fix an operator reaches for is the entry's cap.
+	OutputTruncated bool `json:"output_truncated,omitempty"`
+
+	Decision string `json:"decision"`
 	// RescueFired is true when the phase's submit tool was not called on the
 	// first run of the loop, prompting a constrained rescue call. The
 	// executor and the reviewer both can; sub-agent phases never set this.

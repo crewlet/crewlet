@@ -1036,6 +1036,11 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	// own rounds, so a phase that answered nothing twice under two
 	// invocations would report one.
 	res.EmptyAnswers += done.Result.EmptyAnswers
+	// LATCHED ACROSS INVOCATIONS, for the reason the counters are folded:
+	// an extension runs the loop again, and a phase whose FIRST invocation
+	// was cut at the model's output cap has prose in its record that stops
+	// mid-word however cleanly the extension ends.
+	res.Truncated = res.Truncated || done.Result.Truncated
 	// The model that served the phase, not the model that served the round
 	// that died. An invocation which failed before its first completion
 	// names nobody, and a record with no model on it reads as a phase that
