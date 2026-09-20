@@ -227,6 +227,15 @@ describe("the block parser", () => {
     expect(el.querySelector("code")?.textContent).toBe("**not bold**");
   });
 
+  it("does not close a fence on a line that merely starts with its marker", () => {
+    // A closing fence carries no info string, so a ```ts line inside a ```sh
+    // sample is CONTENT. Read as a close it ended the block on its first line
+    // and the whole sample was thrown away — an empty code block where a page
+    // was teaching somebody how to write one.
+    const blocks = parseBlocks("```sh\n```ts\n# install deps\n```");
+    expect(blocks).toEqual([{ kind: "code", lang: "sh", text: "```ts\n# install deps" }]);
+  });
+
   it("renders an unterminated fence rather than dropping the rest", () => {
     const el = draw("before\n\n```\nnever closed\n");
     expect(el.querySelector("pre code")?.textContent).toBe("never closed");
@@ -295,6 +304,37 @@ describe("sectioning", () => {
         .filter((line) => /^#{1,6}\s/.test(line))
         .map((line) => line.replace(/^#{1,6}\s+/, "").trim()),
     );
+  });
+
+  it("does not end a fence on a line that merely starts with its marker", () => {
+    // The same defect one level up, and worse: the block ends early and every
+    // `# ` line left in the sample becomes a section of the DOCUMENT.
+    const sections = splitSections("## Sample\n```sh\n```ts\n# install deps\n```\ntail");
+    expect(sections.map((s) => s.title)).toEqual(["Sample"]);
+    expect(sections[0]?.body).toBe("```sh\n```ts\n# install deps\n```\ntail");
+  });
+
+  it("hands a body back with the line endings the document had", () => {
+    // A prompt carries a webhook's task text and a page's body verbatim, and a
+    // GitHub issue body is CRLF. Normalised, a fold showed an edited copy of a
+    // record the whole-document view showed unchanged.
+    const source = "lead\r\n\r\n## One\r\na\r\nb\r\n\r\n## Two\r\nc\r\n";
+    expect(splitSections(source).map((s) => s.body)).toEqual(["lead", "a\r\nb", "c"]);
+  });
+
+  it("makes every body a slice of the source, whatever its line endings", () => {
+    // THE CONTRACT THE SCREEN RESTS ON, stated as the thing a caller can check:
+    // a section's body is found in the document, so the folds and the whole
+    // view can never disagree about what was sent.
+    for (const source of [
+      "lead\n\n## One\na\nb\n\n## Two\nc\n",
+      "lead\r\n\r\n## One\r\na\r\nb\r\n\r\n## Two\r\nc\r\n",
+      "## Mixed\r\na\nb\r\nc",
+    ]) {
+      for (const section of splitSections(source)) {
+        expect(source).toContain(section.body);
+      }
+    }
   });
 
   it("answers a document with no headings as one untitled run", () => {

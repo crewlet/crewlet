@@ -112,6 +112,31 @@ const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
+/**
+ * What CLOSES a fence opened with each marker.
+ *
+ * NOT `line.startsWith(marker)`, which is what both walks did. A closing fence
+ * carries NO INFO STRING, so a literal ```` ```ts ```` line inside a
+ * ```` ```sh ```` sample is content — and reading it as a close ended the block
+ * on its first line. `parseBlocks` then rendered an EMPTY code block and threw
+ * the sample away; the section walk went further and promoted every `# ` line
+ * in the rest of it to a heading of the document. A page teaching somebody how
+ * to write a fenced block is exactly that input, and a prompt carries page
+ * bodies verbatim.
+ *
+ * A LONGER RUN OF THE SAME CHARACTER STILL CLOSES, which is CommonMark's rule
+ * and free here: [FENCE] only ever opens on three, so a four-backtick line is
+ * not an opening this file can have made.
+ */
+const FENCE_CLOSE: Record<string, RegExp> = {
+  "```": /^`{3,}[ \t]*$/,
+  "~~~": /^~{3,}[ \t]*$/,
+};
+
+function closesFence(line: string, marker: string): boolean {
+  return FENCE_CLOSE[marker]?.test(line) ?? false;
+}
+
 /** Split a document into blocks. Pure, and the only thing that reads lines. */
 export function parseBlocks(source: string): Block[] {
   const lines = (source ?? "").replace(/\r\n?/g, "\n").split("\n");
@@ -141,7 +166,7 @@ export function parseBlocks(source: string): Block[] {
       const marker = fence[1] ?? "```";
       const body: string[] = [];
       i++;
-      while (i < lines.length && !(lines[i] ?? "").startsWith(marker)) {
+      while (i < lines.length && !closesFence(lines[i] ?? "", marker)) {
         body.push(lines[i] ?? "");
         i++;
       }
@@ -327,8 +352,9 @@ export interface Section {
   /** The heading's own text, inline markup and all. "" at level 0. */
   title: string;
   /**
-   * The lines under the heading, VERBATIM and joined with "\n" — the heading
-   * line itself removed, and the blank lines that bound the run with it.
+   * The source under the heading, VERBATIM and with its own line endings —
+   * the heading line itself removed, and the blank lines that bound the run
+   * with it. It is a SLICE of the document, so it is always found in it.
    */
   body: string;
 }
@@ -358,19 +384,21 @@ export interface Section {
  * WHAT IS LOST, deliberately and only this: the blank lines bounding each run.
  * They are the separators between sections rather than content of one, and
  * keeping them would open every section on an empty line. Every other line of
- * the source appears in exactly one section, in order, byte for byte.
+ * the source appears in exactly one section, in order, byte for byte — LINE
+ * ENDINGS INCLUDED, which is why this reads lines through [readLines] rather
+ * than normalising them the way [parseBlocks] does.
  */
 export function splitSections(source: string): Section[] {
-  const lines = (source ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = readLines(source ?? "");
   const out: Section[] = [];
   let level = 0;
   let title = "";
-  let body: string[] = [];
+  let body: Line[] = [];
   // The fence marker currently open, or "" outside one.
   let fence = "";
 
   const close = () => {
-    const text = trimBlankLines(body).join("\n");
+    const text = joinLines(trimBlankLines(body));
     body = [];
     // A heading with nothing under it is still a section — that is a fact
     // about the document. An EMPTY lead run is not: nothing was written
@@ -384,17 +412,17 @@ export function splitSections(source: string): Section[] {
     // `split(/^#/m)`: `# install deps` inside a shell sample is a comment,
     // and a tool catalogue is full of them.
     if (fence !== "") {
-      if (line.startsWith(fence)) fence = "";
+      if (closesFence(line.text, fence)) fence = "";
       body.push(line);
       continue;
     }
-    const opened = FENCE.exec(line);
+    const opened = FENCE.exec(line.text);
     if (opened) {
       fence = opened[1] ?? "```";
       body.push(line);
       continue;
     }
-    const heading = HEADING.exec(line);
+    const heading = HEADING.exec(line.text);
     if (!heading) {
       body.push(line);
       continue;
@@ -450,12 +478,54 @@ export function nestSections(sections: Section[]): SectionNode[] {
   return roots;
 }
 
+/** One source line and the break that ended it — "" on the last. */
+interface Line {
+  text: string;
+  eol: string;
+}
+
+/**
+ * Split a source into lines, KEEPING each one's own line break.
+ *
+ * [parseBlocks] normalises `\r\n` away, which is right for a renderer: a break
+ * becomes a React node and the bytes behind it are gone either way. A SECTION
+ * IS A SLICE OF A RECORD, though, and the same normalisation handed back a
+ * body that could not be found in the document it came out of — a prompt
+ * carries a webhook's task text and a page's body verbatim, and a GitHub issue
+ * body is CRLF, so the whole-document view showed the record and every fold
+ * showed an edited copy of it.
+ */
+function readLines(source: string): Line[] {
+  const out: Line[] = [];
+  const breaks = /\r\n|\r|\n/g;
+  let start = 0;
+  for (let m = breaks.exec(source); m !== null; m = breaks.exec(source)) {
+    out.push({ text: source.slice(start, m.index), eol: m[0] });
+    start = breaks.lastIndex;
+  }
+  out.push({ text: source.slice(start), eol: "" });
+  return out;
+}
+
+/**
+ * A run of lines as the source it was read from.
+ *
+ * The LAST line's break is dropped: it separates this run from whatever
+ * follows rather than ending the run's own content, which is the same reason
+ * a closed fence never carries its closing line.
+ */
+function joinLines(lines: Line[]): string {
+  return lines
+    .map((line, i) => (i === lines.length - 1 ? line.text : line.text + line.eol))
+    .join("");
+}
+
 /** A run of lines with its leading and trailing blank lines dropped. */
-function trimBlankLines(lines: string[]): string[] {
+function trimBlankLines(lines: Line[]): Line[] {
   let lo = 0;
   let hi = lines.length;
-  while (lo < hi && (lines[lo] ?? "").trim() === "") lo++;
-  while (hi > lo && (lines[hi - 1] ?? "").trim() === "") hi--;
+  while (lo < hi && (lines[lo]?.text ?? "").trim() === "") lo++;
+  while (hi > lo && (lines[hi - 1]?.text ?? "").trim() === "") hi--;
   return lines.slice(lo, hi);
 }
 
