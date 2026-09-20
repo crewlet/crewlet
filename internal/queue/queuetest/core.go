@@ -414,20 +414,45 @@ func (s *suite) runCore(t *testing.T) {
 		// dead-letter reports zero. That is what lets a caller reason
 		// about headroom without knowing which of the two conventions
 		// its broker counts in.
+		//
+		// BOTH READERS, ON THE PATH THAT CARRIES ONE MESSAGE. A backend
+		// states each message's own count and the contract folds the
+		// partition's from that list, so with exactly one message the two
+		// answers MUST be the same number — and that agreement is itself
+		// worth pinning, because it is the only place the fold can be
+		// checked against its own input. Without it the single-delivery
+		// path was certified on the partition's number alone while
+		// [queue.DeliveriesLeftFor] — the number the engine's one caller
+		// actually reads — was exercised only by the batch suite: half a
+		// shared suite covering half a shared contract, which is the shape
+		// this whole package exists to prevent.
 		newQueueWithAttempts := s.needAttempts(t)
 		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
 		var attempts int
 		subscribe(ctx, t, q, "topic.left", "grp",
-			func(hctx context.Context, _ *events.Event) queue.Result {
+			func(hctx context.Context, ev *events.Event) queue.Result {
 				attempts++
 				left, known := queue.DeliveriesLeft(hctx)
+				mine, stated := queue.DeliveriesLeftFor(hctx, ev.ID)
+				switch {
+				case !known:
+					j.record("the partition stated nothing")
+				case !stated:
+					j.record("the message stated nothing")
+				case mine != left:
+					// One message, two numbers, one of them folded
+					// from the other — a disagreement here is a
+					// backend stating the two separately.
+					j.record("partition " + strconv.Itoa(left) +
+						" but message " + strconv.Itoa(mine))
+				default:
+					j.record(strconv.Itoa(left))
+				}
 				if !known {
-					j.record("unknown")
 					return queue.Ack()
 				}
-				j.record(strconv.Itoa(left))
 				if attempts < 3 {
 					return queue.Nak(errors.New("still failing"))
 				}
@@ -440,7 +465,8 @@ func (s *suite) runCore(t *testing.T) {
 		// a hand-back dead-letters, which is where
 		// exhausted_redeliveries_dead_letter_the_event draws the same
 		// line from the other side.
-		j.awaitLabels(t, "the headroom to count down to the last delivery", "2", "1", "0")
+		j.awaitLabels(t, "both headroom readers to count down to the last delivery, "+
+			"agreeing on every one of them", "2", "1", "0")
 	})
 
 	t.Run("defer_delivery_leaves_the_event_and_stops_consuming", func(t *testing.T) {
