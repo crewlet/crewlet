@@ -137,6 +137,18 @@ type Summary struct {
 type Listing struct {
 	Pages []Summary `json:"pages"`
 
+	// Truncated says the listing filled its limit and the container holds
+	// more, which `offset` is how a caller reaches.
+	//
+	// DISTINCT FROM [Listing.Complete], which covers the OTHER kind of
+	// incompleteness — a deferred record's scope meeting this read — so a
+	// caller checking that alone was told the answer was whole while half
+	// the container was missing. The tool built on this goes out of its way
+	// to surface Complete, on the reasoning that "a model that reads a
+	// short list as the whole truth writes the duplicate"; a full page it
+	// cannot see is full is the same mistake with nothing to check.
+	Truncated bool `json:"truncated,omitempty"`
+
 	// Level is what the read was SERVED at, which is the level asked for
 	// or a refusal — never the level requested, which is how a level
 	// becomes a label.
@@ -223,16 +235,17 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		limit = MaxLimit
 	}
 	var out []Summary
+	var more bool
 	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container, ""), true), func(tx *sql.Tx) error {
 		var err error
-		out, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
+		out, more, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
 		return err
 	})
 	if err != nil {
 		return Listing{}, err
 	}
 	return Listing{
-		Pages: out, Level: served.Level, Complete: served.Complete,
+		Pages: out, Truncated: more, Level: served.Level, Complete: served.Complete,
 		Position: served.Position, LogLag: served.Lag,
 	}, nil
 }
@@ -244,10 +257,17 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 // so a caller that appended the page window to `args` itself would be one
 // reordering away from paging the listing by a filter value — and the caller
 // that got it right would still be stating the same two numbers twice.
+// The second return says the page FILLED — one row past the limit is read as
+// evidence and dropped, the same shape [Reader.Activity] uses beside it.
+//
+// Without it a listing of fifty pages and a container holding exactly fifty
+// answered identically, and `Listing.Complete` covers only the OTHER kind of
+// incompleteness (a deferred record's scope), so a caller checking it was told
+// the answer was whole while half the container was missing.
 func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
-	args []any, limit, offset int) ([]Summary, error) {
+	args []any, limit, offset int) ([]Summary, bool, error) {
 
-	args = append(slices.Clip(args), limit, offset)
+	args = append(slices.Clip(args), limit+1, offset)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
@@ -258,7 +278,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		 ORDER BY p.container, p.title
 		 LIMIT ? OFFSET ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("pages: list pages: %w", err)
+		return nil, false, fmt.Errorf("pages: list pages: %w", err)
 	}
 	defer rows.Close()
 
@@ -271,7 +291,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision); err != nil {
-			return nil, fmt.Errorf("pages: scan page: %w", err)
+			return nil, false, fmt.Errorf("pages: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding = skill != 0, onboarding != 0
 		s.Updated = store.DecodeTime(updated)
@@ -279,9 +299,15 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pages: list pages: %w", err)
+		return nil, false, fmt.Errorf("pages: list pages: %w", err)
 	}
-	return out, r.attachLabels(ctx, tx, out)
+	// THE PROBE ROW IS EVIDENCE, never an answer: the page stays at the
+	// bound and the caller is told there is more.
+	more := len(out) > limit
+	if more {
+		out = out[:limit]
+	}
+	return out, more, r.attachLabels(ctx, tx, out)
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -320,6 +346,14 @@ type Detail struct {
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
 	Children []Summary         `json:"children,omitempty"`
+
+	// ChildrenTruncated says this page has more children than the read
+	// carries. There is no paging parameter on a detail read, so this is
+	// the whole of what a caller gets — `list_pages` with `parent` is where
+	// the rest is, and without it the fifty-first child of a container
+	// index page was unreachable through the read that claims to answer a
+	// page in full and invisible to whoever asked.
+	ChildrenTruncated bool `json:"children_truncated,omitempty"`
 
 	// Ancestors are the parent chain, outermost first. Carried because
 	// the auto-draft exclusion is by ancestor and a reader wants the
@@ -383,7 +417,12 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
 			return err
 		}
-		if detail.Children, err = r.list(ctx, tx,
+		// THIS READ HAS NO PAGING PARAMETER OF ITS OWN, so the marker is
+		// the whole of what a caller gets: `list_pages` with `parent` is
+		// where the rest is, and without the flag the fifty-first child
+		// of a container index page was unreachable through the tool
+		// that claims to read a page in full AND invisible to the reader.
+		if detail.Children, detail.ChildrenTruncated, err = r.list(ctx, tx,
 			[]string{"1 = 1", "p.parent_id = ?"}, []any{id},
 			DefaultLimit, 0); err != nil {
 			return err

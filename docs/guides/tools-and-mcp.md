@@ -45,8 +45,8 @@ the tracker's fourteen in full.
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
-| `list_pages` | Browse the knowledge base by container, parent or title |
-| `get_page` | One page's body, breadcrumb, children and history |
+| `list_pages` | Browse the knowledge base by container, parent or title. A `truncated` answer is one page of the container — `offset` reaches the rest |
+| `get_page` | One page's body, breadcrumb, children and history. `children_truncated` says the page has more children than the read carries; `list_pages` with `parent` lists them all |
 | `write_page` | Create one. Titles are addresses and are unique per container |
 | `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
