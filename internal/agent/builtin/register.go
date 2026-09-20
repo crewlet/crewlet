@@ -131,6 +131,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		on   bool
 	}{
 		{&lookupColleague{}, true},
+		// AND recall_iteration, unconditional for a second reason on top
+		// of lookup_colleague's: its corpus is the turn's own closed
+		// rounds, which every turn has, and a tool that appeared only
+		// from round two would move the system+tools prefix MID-TURN.
+		// Prompt caching keys on that prefix, so the saving would be a
+		// cache miss on every turn that iterates, to hide a tool that
+		// answers round one honestly in one line.
+		{&recallIteration{}, true},
 		{&a2aAsk{svc: deps.A2A}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
 		{&refineSkill{
@@ -271,7 +279,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 func annotationsFor(name string) tools.Annotations {
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
-		LoadToolSkillTool, SearchKnowledgeTool:
+		LoadToolSkillTool, SearchKnowledgeTool, RecallIterationTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing, which is what lets a phase retry one safely.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}

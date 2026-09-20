@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -102,9 +103,15 @@ func TestATooWithNoBackingIsOmittedNotBroken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if len(names) != 1 || names[0] != builtin.LookupColleagueTool {
-		t.Errorf("a storeless node registered %v; only lookup_colleague needs "+
-			"nothing but the turn's own org", names)
+	// THE UNCONDITIONAL TWO, named rather than counted: a count goes green
+	// the day one is dropped and another is added. Each needs nothing but
+	// the turn itself — lookup_colleague reads its org, recall_iteration
+	// reads its closed rounds — which is what a node with no store, no
+	// broker and no company credentials still has.
+	want := []string{builtin.LookupColleagueTool, builtin.RecallIterationTool}
+	if !slices.Equal(names, want) {
+		t.Errorf("a storeless node registered %v, want exactly %v: every other "+
+			"builtin needs a backing this node does not have", names, want)
 	}
 }
 
@@ -163,6 +170,12 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 
 		// Pure reads, short-circuited before OpenWorld is consulted.
 		builtin.LookupColleagueTool: false,
+		// recall_iteration reads the CALLER's own closed rounds, and a
+		// worker's turn is derived by turnctx.ForSubagent, which carries
+		// none: a leaf is given a brief, not its parent's argument log.
+		// So a granted worker gets an honest "no earlier round", never
+		// the parent's deliveries.
+		builtin.RecallIterationTool: false,
 		builtin.UseSkillTool:        false,
 		builtin.QueryEpisodesTool:   false,
 		builtin.RefreshMemoryTool:   false,

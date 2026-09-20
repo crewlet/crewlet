@@ -171,6 +171,8 @@ The block rides the **user** message for the executor, never its system prompt: 
 
 **Reads are marked, not merged with writes.** Tool *results* are deliberately not carried across rounds, so a read the next round needs must be re-run — telling it "do not repeat" a `jira_get_issue` would push it to invent the data instead. Each record carries the positively-known read names the delivery check resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Failed calls stay marked `→ error`: they did not take effect and may be retried. Only the reads the round actually CALLED are recorded, not the whole surface's annotation set: the row is persisted across a sandbox suspend, and carrying every read-only tool on a large MCP surface makes it grow with the catalogue rather than with what the round did.
 
+That rule is about **results**, and only results. Everything the *render* shortens is reachable whole through `recall_iteration` — see [What the ledger trims](#what-the-ledger-trims-and-why) below.
+
 ### What the ledger trims, and why
 
 One principle decides every budget: **elide payloads, never structure.**
@@ -179,7 +181,7 @@ A *payload* is a tool **argument** — a message body, page HTML, a diff. It is 
 
 *Structure* is everything else: the plan's steps, the draft under review, the reviewer's correction, the trigger, the reply that was sent. It is exactly what the next round must act on, and it is carried **verbatim**.
 
-It used not to be. Six further limits sat beside the two below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and unlike a chat message or an issue comment there is no surface to go back and re-read: on the cross-turn ledger the cut was applied at **write** time, so the stored row was the only copy.
+It used not to be. Six further limits sat beside the two below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and on the cross-turn ledger the cut was applied at **write** time, so the stored row was the only copy — nothing anywhere could recover what it dropped.
 
 What is left bounds arguments and the read-call list, and both say when they cut. Prompt caching keys on the system+tools prefix, which the ledger never touches, so a larger block costs little.
 
@@ -192,6 +194,27 @@ What is left bounds arguments and the read-call list, and both say when they cut
 A prior round's **produced text** is kept whole in the record and elided at `RenderedArtifactLimit` (4000 runes) when *rendered* into the next round's block — from the TAIL, because `Work.Text` is that round's whole tool loop concatenated (thinking included) and its deliverable is at the end. The block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
 
 A failed call's *result* is elided at `ValueLimit` too. It is tool output — authored outside the engine and unbounded, so a failed HTTP call would otherwise put a whole error document on one ledger line, re-sent on every round of every later phase. The full text is on the phase event that line summarises.
+
+### Every cut has a floor: `recall_iteration`
+
+A budget is only defensible while what it cuts is reachable another way. Until `recall_iteration` existed, none of it was: a round-five executor could read that it had called `post_message` and had no way to learn what it had actually sent — which is the exact state a turn is in when it posts the same thing twice.
+
+The record was never the problem. `ledger.Call.Args` is the model's own argument map kept whole, and every cut above happens at **render** time — so the fix was a verb, not a bigger budget. `recall_iteration` (always registered; `internal/agent/builtin/recall.go`) returns one closed round of *this same turn* with nothing elided:
+
+| Argument | Meaning |
+|---|---|
+| `iteration` | Which round, as numbered by the `### Iteration N` headings in the prompt. Defaults to the most recent closed round. Addressed by the record's **own** number, not by position — a turn resumed after a [sandbox suspend](code-sandbox.md) carries the rounds it closed before parking |
+| `tool` | Optional. Only that round's calls to this tool, and nothing else about the round — a round's produced text is the phase's entire tool loop, so narrowing has to narrow |
+
+What comes back whole: every argument value, every argument key (no `+N more`), every read call (no `+N further read call(s) omitted`), the round's produced text (no tail cut), and a **failed** call's error text.
+
+The answer itself is **not** capped, and needs no cap. No tool in this engine cuts its result: evidence a turn reasons over is passed whole, so a bound here would be unique to the one tool whose whole purpose is to undo a cut. And everything it returns already fit in one conversation — the round's text is what that phase's own model wrote and the arguments are what it sent, so that phase held all of it at once and the provider took it. `tool` narrows further when a busy round is more than the caller wants.
+
+What does **not** come back is a *succeeded* call's result, although the record holds it. That is the reads rule above, and it survives being offered as a pull rather than a push: a read's answer may have moved since, so replaying a stale copy is worse than re-reading it, and a write's result is a receipt for something the ledger already records as done. The line is re-runnability — an argument the model already sent is fixed, spent and recoverable from nowhere else; a read is not. The answer says so, so the next move is the re-run rather than an invented one.
+
+**None of the four budgets shrank when the tool arrived**, which is a decision rather than an omission. Each is set by what the next round needs in order to act *without* asking — the discriminating identifier, the draft it is revising — and `RenderedArtifactLimit` is where the temptation is real, since its cost is the limit times the rounds times both phases. But the common `self_iterate` path is "revise what you produced against the reviewer's correction", so the draft is what the next round acts on rather than what it decides whether to fetch; cutting it to a sample would spend a tool round on almost every iterating turn. The tool is the floor under the cut, not a licence to cut deeper.
+
+It is also a **meta-tool** (`engine.MetaToolNames`), so it never renders into the block it reads: otherwise a recall would add a line to every later round and spend one of `MaxReadCalls` on the agent looking up its own work. And the **reviewer does not get it** — see [Agent Runtime § Built-in Tools](agent-runtime.md#built-in-tools).
 
 Arguments use **per-value** elision, never a cap on the serialised blob. `json.Marshal` sorts map keys, so capping the object would drop whichever keys sort last — and the discriminating argument (`channel`, `key`, `page_id`) is usually the *shortest* one. A line that kept a 400-char message body but lost `channel` would look precise while hiding which of two deliveries actually fired. When even fully elided values exceed `BlobLimit`, the backstop drops **whole keys** — shortest-value-first, so identifiers survive — and appends `+N more` rather than cutting mid-serialisation. The same priority governs the read-line cap: only reads are ever omitted, never a write.
 
@@ -843,6 +866,7 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/subagent/` | `delegate`: the worker boundary (`subagent.go`), the task graph (`workflow.go`), how a worker answers (`result.go`), the tool (`tool.go`) |
 | `internal/agent/turn/guards.go` | Depth cap, stall detector, and the breach kinds the engine publishes |
 | `internal/agent/ledger/iteration.go` | Prior-work ledger: the iteration record and how it renders into the next round |
+| `internal/agent/builtin/recall.go` | `recall_iteration`: one closed round of this turn, unelided — the floor under the budgets above |
 | `internal/agent/ledger/conversation.go` | The cross-turn ledger — what this seat already said in one thread |
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |

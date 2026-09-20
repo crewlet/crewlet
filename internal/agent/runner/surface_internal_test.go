@@ -5,8 +5,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -142,5 +144,68 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 	}
 	if !slices.Contains(got.KnownReads, "recall") {
 		t.Errorf("KnownReads = %v, want the read in it", got.KnownReads)
+	}
+}
+
+// THE ROUNDS REACH THE SURFACE, which is the whole of the wiring behind
+// recall_iteration: the tool reads [turnctx.Turn.Rounds], and the ONE funnel
+// every phase surface goes through is what puts them there. Bound at the same
+// moment as the seat, so a resumed Execute cannot come back holding a
+// different turn's rounds from the surface it was built beside.
+//
+// Mutate surfaceWith to drop the WithRounds call and this goes red; the tool's
+// own suite would not, because it hands itself a turn.
+func TestAPhaseSurfaceCarriesThatPhasesClosedRounds(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Chief of Staff"}
+	r, err := New(Config{
+		Registry: tools.NewRegistry(),
+		Models:   &phase.Registry{},
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: seat},
+		Turn:     Turn{RunID: "run-1", Context: &turnctx.Turn{RunID: "run-1", Seat: seat}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []ledger.Iteration{{Iteration: 1, Intent: "posted"}, {Iteration: 2}}
+
+	for _, ph := range []phase.Phase{phase.Execute, phase.Review} {
+		surface, err := r.surfaceWith(context.Background(), ph, 3, history,
+			tools.NewRegistry().Snapshot(), nil, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", ph, err)
+		}
+		got := surface.Turn().Rounds
+		if len(got) != len(history) || got[0].Intent != "posted" {
+			t.Errorf("%s surface carries %d round(s) %+v, want this phase's %d",
+				ph, len(got), got, len(history))
+		}
+	}
+}
+
+// A SNAPSHOT, so the loop appending the round that is still open cannot reach
+// a surface a phase is already running on — the reason [turnctx.Turn.WithRounds]
+// derives rather than assigns, asserted at the frame that calls it.
+func TestAPhaseSurfaceDoesNotAliasTheLoopsLedger(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Chief of Staff"}
+	r, err := New(Config{
+		Registry: tools.NewRegistry(),
+		Models:   &phase.Registry{},
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: seat},
+		Turn:     Turn{RunID: "run-1", Context: &turnctx.Turn{RunID: "run-1", Seat: seat}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []ledger.Iteration{{Iteration: 1, Intent: "posted"}}
+	surface, err := r.surfaceWith(context.Background(), phase.Execute, 2, history,
+		tools.NewRegistry().Snapshot(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history[0].Intent = "REWRITTEN"
+	if got := surface.Turn().Rounds[0].Intent; got != "posted" {
+		t.Errorf("the surface read a later write to the loop's ledger: %q", got)
 	}
 }

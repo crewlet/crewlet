@@ -23,6 +23,16 @@
 // would push it to fabricate the data instead. Across turns the rule is
 // STRONGER, not weaker — a read from last Tuesday is stale by construction.
 //
+// THAT RULE IS ABOUT RESULTS, AND ONLY RESULTS. Everything the RENDER cuts —
+// argument values, whole arguments, read lines past the cap, a round's
+// produced text, a failed call's error — is reachable whole through
+// `recall_iteration` (internal/agent/builtin), which reads this same
+// [Iteration] record within the turn that owns it. The line between the two is
+// re-runnability: a read's answer can have MOVED since, so replaying a stale
+// copy is worse than re-reading it, while an argument the model already sent
+// is fixed, spent, and recoverable from nowhere else. See budgets.go, where
+// every number now rests on that.
+//
 // The package imports nothing from crewlet. The turn context, the prompt
 // builder and the API layer all hold ledger values, and a ledger that dragged
 // the provider stack behind it would be held by all three.

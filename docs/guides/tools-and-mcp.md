@@ -11,6 +11,7 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | Tool | Description |
 |------|-------------|
 | `lookup_colleague` | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; ambiguous queries return the candidate list so the LLM picks rather than guessing |
+| `recall_iteration` | Re-read one earlier round of this same turn in full: every tool call with its arguments exactly as sent, and everything the round produced. The prior-work block in the prompt is a shortened rendering; this is the whole record ([Turn Engine § What the ledger trims](../concepts/turn-engine.md#what-the-ledger-trims-and-why)) |
 | `reflect_and_persist` | Capture a durable fact in the agent's private diary (`kind`: `long` or `short`) |
 | `refresh_memory` | Re-run the personal-memory filter mid-turn after gathering richer context |
 | `query_episodes` | Recall the agent's own past turns: by meaning, by conversation, or most recent first |

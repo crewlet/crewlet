@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -122,8 +123,17 @@ func TestTurnSettingsComeFromTheEpochNotALiveCell(t *testing.T) {
 	if got.MaxIterations != 7 || got.DelegationDepthLimit != 2 {
 		t.Errorf("settings = %+v", got)
 	}
-	if !slices.Contains(got.SkipNames, "activate_tool") {
-		t.Errorf("skip names = %v, want the meta-tools", got.SkipNames)
+	// EVERY meta-tool, named: a tool that acts on the turn rather than on
+	// the world is never a delivery, so a record of "what already happened
+	// that matters" carrying one is pure noise. recall_iteration is the
+	// sharp case — it READS the very block it would appear in, so leaving
+	// it here would add a line per recall to every later round and spend
+	// one of the ledger's read slots on the agent looking up its own work.
+	for _, want := range []string{"activate_tool", "list_mcp_server_tools",
+		builtin.RecallIterationTool} {
+		if !slices.Contains(got.SkipNames, want) {
+			t.Errorf("skip names = %v, without %s", got.SkipNames, want)
+		}
 	}
 	// The wall-clock cap comes off the TRIGGER, not the epoch: a scheduled
 	// fire carries one and every other trigger carries none.

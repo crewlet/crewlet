@@ -49,7 +49,9 @@ package turnctx
 
 import (
 	"fmt"
+	"slices"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -125,6 +127,49 @@ type Turn struct {
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
+
+	// Rounds is this turn's CLOSED rounds, whole — every tool call with
+	// its arguments unelided, and every round's own prose.
+	//
+	// THE PROMPT CARRIES A RENDERING OF THIS, NOT THIS. The iteration
+	// ledger block is bounded ([ledger.ValueLimit], [ledger.BlobLimit],
+	// [ledger.RenderedArtifactLimit]) because it is re-sent on every round
+	// of both phases, so its cost is the product of the value and the
+	// round cap rather than the value. Those bounds were the only copy:
+	// the ledger's own doc names the consequence — "the ledger is not
+	// re-readable from anywhere: unlike a chat message or an issue
+	// comment, there is no surface to go back to" — so a round-five
+	// executor could see that it had called `post_message` and have no way
+	// to learn what it actually sent. This is the surface to go back to,
+	// and [github.com/crewlet/crewlet/internal/agent/builtin] is what
+	// reads it.
+	//
+	// A SNAPSHOT, DERIVED PER PHASE, never a live slice: see
+	// [Turn.WithRounds]. The turn loop already hands each phase the
+	// history it has closed so far, so nothing here is written after the
+	// Turn is built and the package's immutability rule holds unchanged.
+	Rounds []ledger.Iteration
+}
+
+// WithRounds derives a Turn carrying the rounds closed so far.
+//
+// DERIVED RATHER THAN ASSIGNED, which is this package's own rule and not
+// ceremony here: the rounds are the one value that GROWS during a turn, and a
+// pointer to the loop's live slice on a type whose whole purpose is to be
+// safely captured by a goroutine is the exact data race this package exists to
+// remove. The loop hands each phase the history it has closed, this makes a
+// Turn out of it, and a goroutine that outlives the phase holds a stale
+// snapshot rather than a slice somebody is appending to.
+//
+// NIL IS A REAL ANSWER and means "no closed rounds" — round one of every turn,
+// and every surface built outside a turn at all.
+func (t *Turn) WithRounds(rounds []ledger.Iteration) *Turn {
+	if t == nil {
+		return nil
+	}
+	next := *t
+	next.Rounds = slices.Clone(rounds)
+	return &next
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.
