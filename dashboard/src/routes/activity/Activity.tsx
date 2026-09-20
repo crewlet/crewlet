@@ -91,15 +91,23 @@ const LOG_OFFER: Offer = {
   buckets: ["minute", "hour", "day"],
 };
 
-/** Whether two instants fall on the same local day. */
-function sameDay(a: string, b: string): boolean {
-  const x = new Date(a);
-  const y = new Date(b);
-  return (
-    x.getFullYear() === y.getFullYear() &&
-    x.getMonth() === y.getMonth() &&
-    x.getDate() === y.getDate()
-  );
+/**
+ * Which day a row belongs to, AS THE HEADING WOULD DRAW IT.
+ *
+ * The obvious version reads `getFullYear/getMonth/getDate` off a `Date`,
+ * which is the BROWSER's local day — and `fmtDate` renders in the zone the
+ * reader chose (`lib/prefs.ts`). A reader viewing a company in another zone
+ * then got rows grouped on one day boundary under a heading naming another:
+ * around midnight, the rows under "14 September" were the ones that fell on
+ * the 14th *here*.
+ *
+ * So the key IS the label. Two rows are the same day when they draw the same
+ * heading, which is true by construction rather than by two pieces of date
+ * arithmetic agreeing — the same reason the recents cap counts the rows a rail
+ * draws rather than a number beside them.
+ */
+export function dayKey(ts: string): string {
+  return fmtDate(ts);
 }
 
 export function Activity() {
@@ -413,8 +421,8 @@ export function Activity() {
               // stays right for the ninety-nine per cent, and the one row
               // that has something extra to say says it at full width.
               <Fragment key={ev.id}>
-                {(i === 0 || !sameDay(rows[i - 1]!.timestamp, ev.timestamp)) && (
-                  <div className="list-day">{fmtDate(ev.timestamp)}</div>
+                {(i === 0 || dayKey(rows[i - 1]!.timestamp) !== dayKey(ev.timestamp)) && (
+                  <div className="list-day">{dayKey(ev.timestamp)}</div>
                 )}
                 <EventRow event={ev} />
               </Fragment>
