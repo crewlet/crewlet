@@ -63,7 +63,14 @@ export interface Recent {
   path: string[];
   /** What to call it. The label the screen itself showed, never re-derived. */
   label: string;
-  /** Which workspace it belongs to, for the icon beside it. */
+  /**
+   * Which workspace it belongs to.
+   *
+   * PART OF THE IDENTITY, not a decoration: the rail draws one workspace's
+   * rows and the cap counts them per workspace, so a row with none is a row
+   * nothing can draw and nothing can evict. `valid` refuses one, and the
+   * Shell does not record a route no workspace owns.
+   */
   workspace: string;
   /** When it was last opened, epoch ms. */
   at: number;
@@ -72,13 +79,48 @@ export interface Recent {
 const KEY = "crewlet_recents";
 
 /**
- * How many are kept.
+ * How many are kept, PER WORKSPACE.
  *
  * Eight: enough that a morning's work is in the list and few enough that the
  * list is scanned rather than searched — which is the whole difference between
  * recents and a history.
+ *
+ * AND THAT IS A CLAIM ABOUT THE DRAWN LIST, which is why the bucket is the
+ * workspace. It was a single global bound, written when the command palette
+ * was the only reader and the list it offered was the whole of it. The
+ * workspace sidebar's Recent section came later and draws one workspace's
+ * share — `sections` are appended to whichever tree is shown — so across a
+ * rail of eight workspaces the reader saw one or two rows where the number
+ * says eight, and a morning spent in Work could push every Activity row out
+ * of a rail that had no Work rows in it either.
  */
 export const MaxRecents = 8;
+
+/**
+ * At most [MaxRecents] per workspace, oldest visit first to go.
+ *
+ * ARRIVAL ORDER IS PRESERVED — this drops rows, it never reorders them — and
+ * the bucket is what the rail filters on, so the number the cap counts and
+ * the number a reader sees are the same number.
+ */
+function capped(rows: readonly Recent[]): Recent[] {
+  const over = new Map<string, Recent[]>();
+  for (const row of rows) {
+    const bucket = over.get(row.workspace);
+    if (bucket) bucket.push(row);
+    else over.set(row.workspace, [row]);
+  }
+  const drop = new Set<Recent>();
+  for (const bucket of over.values()) {
+    if (bucket.length <= MaxRecents) continue;
+    // The oldest VISIT leaves, not the last row in the bucket — see
+    // [remember]. Sorted on a copy: `bucket` is this pass's own array, but
+    // its entries are the caller's and their order is the answer.
+    const byVisit = [...bucket].sort((a, b) => a.at - b.at);
+    for (const row of byVisit.slice(0, bucket.length - MaxRecents)) drop.add(row);
+  }
+  return drop.size === 0 ? [...rows] : rows.filter((row) => !drop.has(row));
+}
 
 /**
  * WHAT THIS TAB IS PAINTING, and nothing else.
@@ -105,7 +147,7 @@ function stored(): Recent[] {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxRecents) : [];
+    return Array.isArray(parsed) ? capped(parsed.filter(valid)) : [];
   } catch {
     // A private window, blocked site data, or a value somebody's other tab
     // wrote in a shape this build does not have. None of them is a reason
@@ -137,6 +179,11 @@ function valid(row: unknown): row is Recent {
     r.path.length > 0 &&
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
+    // A ROW WITH NO WORKSPACE CAN BE DRAWN BY NOTHING — see [Recent.workspace]
+    // — so it is a shape this build cannot use rather than one it renders
+    // into a rail that has no section for it.
+    typeof r.workspace === "string" &&
+    r.workspace !== "" &&
     typeof r.at === "number"
   );
 }
@@ -155,10 +202,23 @@ function write(next: Recent[]): void {
 /**
  * Record that the reader opened something.
  *
- * KEYED ON THE PATH, so a place is here once however often it is opened. A
- * label that arrives later — a page whose title loads after its route —
- * overwrites the one stored, because the last label a screen showed is the
- * one the reader recognises.
+ * KEYED ON THE PATH, so a place is here once however often it is opened.
+ *
+ * `named` IS WHETHER A SCREEN SUPPLIED THE LABEL, and it is required rather
+ * than optional because its zero value is the bug. A label the screen has not
+ * resolved yet is the route's own segment — a uuid for a turn — and every
+ * screen publishes its name a render AFTER the route, so the first write of
+ * every navigation carries the identifier and the second carries the name.
+ * That is fine on a first visit and wrong on a REVISIT: the row the reader
+ * pressed already had its name, and the click replaced it with a hex string
+ * until the query came back. Which is the flash they see, on the row they
+ * aimed at, caused by the act of aiming at it.
+ *
+ * So a name is never replaced by an identifier: an unnamed write to a path
+ * this list already holds keeps the stored label and moves only `at`. A path
+ * it does not hold is stored either way, because an object NOTHING ever names
+ * — a turn with no plan summary — has its id and nothing else, and a rail that
+ * dropped it would lose a place the reader was.
  *
  * A REVISIT KEEPS ITS SLOT: only `at` moves, and nothing the reader is
  * looking at does. See the module doc for why a drawn list may not re-sort
@@ -168,9 +228,11 @@ function write(next: Recent[]): void {
  * with the OLDEST VISIT leaves — not the last one in the list, which under
  * arrival order is simply the one that has been here longest. That is what
  * keeps the board somebody opens every morning alive although it never moves.
+ * The cap is per WORKSPACE, so a morning in Work cannot empty the Activity
+ * rail; see [MaxRecents].
  */
-export function remember(entry: Omit<Recent, "at">): void {
-  if (entry.path.length === 0) return;
+export function remember(entry: Omit<Recent, "at">, named: boolean): void {
+  if (entry.path.length === 0 || entry.workspace === "") return;
   const key = entry.path.join("/");
   const at = Date.now();
   // STORED, NOT THE RENDER SNAPSHOT — see [cache]. A write replaces the whole
@@ -179,20 +241,13 @@ export function remember(entry: Omit<Recent, "at">): void {
   const held = stored();
   const found = held.findIndex((r) => r.path.join("/") === key);
   if (found >= 0) {
+    const was = held[found]!;
     const next = held.slice();
-    next[found] = { ...entry, at };
+    next[found] = { ...entry, label: named ? entry.label : was.label, at };
     write(next);
     return;
   }
-  const next = [{ ...entry, at }, ...held];
-  if (next.length > MaxRecents) {
-    let oldest = 0;
-    for (let i = 1; i < next.length; i++) {
-      if (next[i]!.at < next[oldest]!.at) oldest = i;
-    }
-    next.splice(oldest, 1);
-  }
-  write(next);
+  write(capped([{ ...entry, at }, ...held]));
 }
 
 /** Drop everything. For the palette's own "clear" command. */

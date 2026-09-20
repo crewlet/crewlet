@@ -280,12 +280,31 @@ export function Shell({ children }: { children: ReactNode }) {
   // it lands a render after the route, which is why this depends on the title
   // rather than on the path.
   const path = route.path;
+  // WHETHER A SCREEN SUPPLIED THIS NAME, asked of `labels` rather than of a
+  // flag each crumb branch would have to set.
+  //
+  // `crumbsFor` falls back to the raw segment wherever `labels` has nothing,
+  // so "did a screen name this?" is exactly "is what the trail is showing one
+  // of the values a screen published?". Asked centrally it covers every branch
+  // including the ones that join a tail; asked as a per-branch boolean it
+  // would be fourteen places to keep in step with `mono`, and the four that
+  // nobody updated would go on downgrading a stored name in silence.
+  //
+  // A screen that publishes a label EQUAL to the segment — a project named by
+  // its key — answers yes, which is right: it named it, and the name is that
+  // string.
+  const named = useMemo(() => Object.values(labels).includes(where), [labels, where]);
   useEffect(() => {
     if (path.length < 2) return;
     if (DESTINATIONS.some((d) => samePath(d.path, path))) return;
     if (where === "Crewlet") return;
-    remember({ path, label: where, workspace: workspaceOf(path) || "" });
-  }, [path, where]);
+    // A ROUTE NO WORKSPACE OWNS IS NOT REMEMBERED. The rail draws recents per
+    // workspace, so a row stored under `""` is one nothing can ever show —
+    // it would sit in the list consuming a slot and drawing nowhere.
+    const workspace = workspaceOf(path);
+    if (!workspace) return;
+    remember({ path, label: where, workspace }, named);
+  }, [path, where, named]);
 
   const page: PageContext = useMemo(() => ({ setLabels, setCoverage }), [setLabels, setCoverage]);
 

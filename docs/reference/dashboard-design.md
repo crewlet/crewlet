@@ -1004,7 +1004,23 @@ first. The workspace sidebar's Recent section is DRAWN, navigated by position
 and read while it is being used, so it takes ARRIVAL order — a place the reader
 has not been enters at the top, and going back to one already there moves
 nothing. Stored as one list either way; only the read is sorted, because
-storing the ranking is what made the rail jump. Pressing the third Recent row
+storing the ranking is what made the rail jump. The cap is per workspace for
+the same reason it exists at all — eight is a claim about the DRAWN list, and
+since the rail grew its section the drawn list is one workspace's share, so a
+morning in Work could empty the Activity rail while the number said eight.
+A route no workspace owns is not remembered: nothing could ever draw it.
+
+**And a name is never replaced by an identifier.** Every screen publishes its
+object's name a render after the route, so the first write of every navigation
+carries the raw segment — a uuid for a turn — and the second carries the name.
+Overwriting on the first is fine on a first visit and wrong on a revisit:
+opening a recent re-navigates to it, so the row the reader pressed lost its
+title to a hex string at the instant they pressed it, until the query came
+back. `remember` takes whether a screen supplied the label, asked once of the
+published labels rather than as a flag each crumb branch would have to set —
+fourteen places to keep in step, of which the four nobody updated would go on
+downgrading in silence. A place nothing has EVER named still stores its id,
+because an object with no name has that and nothing else. Pressing the third Recent row
 used to send it to the first and slide the two above it down, under the
 pointer, at the instant it was hit — and nothing can soften that, because the
 row's React key is its path, so the browser moves the existing node rather than
