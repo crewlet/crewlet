@@ -26,9 +26,27 @@ import (
 // maintainClosure rebuilds the ancestry rows for a task and everything under
 // it.
 //
-// THE WHOLE SUBTREE, because a re-parent moves every descendant's ancestry —
-// and it is bounded by the descendant cap, which is what makes "rebuild it
-// all" affordable rather than clever.
+// THE WHOLE SUBTREE, because a re-parent moves every descendant's ancestry,
+// and whole means whole: the walk below carried a `LIMIT MaxDescendants` on
+// the claim that the cap bounded it, and nothing enforces that cap on the path
+// a subtree actually GROWS. Only a move and a removal check it — a create
+// under a parent never does, and [MaxDepth] beside it is likewise a derived
+// FLAG rather than a refusal, which is the design.
+//
+// So a subtree grown one task at a time past the cap reached that LIMIT in the
+// APPLIER, and the tail it cut kept its old `root_id`, `depth`, `cycle` and
+// `too_deep` — for ever, since nothing revisits a task whose own record did
+// not change. Every node computed the same wrong answer identically, so
+// nothing could notice: the `too_deep` flag a board draws was derived from a
+// depth that was never updated, and a re-parent silently left half a subtree
+// filed under the root it came from.
+//
+// A SHORT READ IN AN APPLIER IS NOT A SHORT ANSWER, it is durable wrong state
+// replicated to the fleet — which is the one place this package's own rule
+// against a silent cut has to hold hardest. The walk is now over what the
+// closure actually holds, so its cost is the subtree's real size and its
+// output is correct at any size; the caps that bound what a single gesture
+// carries stay where they are, on the move and the removal.
 func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
 	subtree, err := descendantsOf(ctx, tx, task.ID)
 	if err != nil {
@@ -114,12 +132,16 @@ func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 // what the previous apply left and is therefore the set whose ancestry this
 // one has to redo — walking the parent pointers would find the NEW shape and
 // miss whatever the move detached.
+//
+// UNBOUNDED, deliberately: see [Applier.maintainClosure] for what the bound
+// this used to carry cost. The rows are one indexed range over a table the
+// applier is already writing a row per member of, so the read is not what
+// decides this walk's cost.
 func descendantsOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT descendant_id FROM tracker_task_closure
 		WHERE ancestor_id = ? AND descendant_id <> ?
-		ORDER BY distance
-		LIMIT ?`, id, id, MaxDescendants)
+		ORDER BY distance`, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the subtree of %s: %w", id, err)
 	}
