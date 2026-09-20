@@ -66,6 +66,17 @@
 // BEGIN having done nothing, rather than discovering the loss at its first
 // write and replaying everything above it.
 //
+// writequeue.go is the other half, and it answers the question the begin mode
+// leaves open: WHO GETS THE LOCK NEXT. The driver's lock is a try-lock with no
+// queue, polled by a busy handler, so a writer committing back to back starves
+// a waiter until that waiter's busy timeout — measured, and the reason an
+// applier's transaction ran four times against a writer that committed 2338
+// times beside it. Every write transaction this process begins therefore takes
+// its place in one FIFO line per file, handed from each holder to the writer
+// that asked next. A writer's wait is then bounded by the work in front of it
+// rather than by how its polls line up, which is what lets three domains'
+// appliers share the replicated estate and each still drain.
+//
 // # One driver
 //
 // Turso (turso.tech/database/tursogo) is the database, and it is the only
@@ -281,6 +292,12 @@ type DB struct {
 	// no file to exclude anyone from. See lock.go.
 	lock *fileLock
 
+	// writes is the line this handle's write transactions take their place
+	// in, shared with every other handle this process has open on the same
+	// file. Taken from [fileLock.queue] at open, so it is never nil on a
+	// handle a caller can reach. See writequeue.go.
+	writes *writeQueue
+
 	// opened is the Options this handle was opened with, kept so
 	// [DB.ReplaceReplicated] can bring the peer back up IDENTICALLY. A
 	// second Options assembled at the reopen is a second place to decide
@@ -454,7 +471,8 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 		return nil, err
 	}
 
-	db := &DB{sql: pool, path: path, lock: lock, estate: estate, busy: opts.busyTimeout()}
+	db := &DB{sql: pool, path: path, lock: lock, estate: estate,
+		busy: opts.busyTimeout(), writes: lock.queue()}
 	// THE PINS ARE THE REPLICATED ESTATE'S. A pinned connection is an
 	// applier's, and an applier writes there — so the node estate keeps
 	// its four readers and the pool that grows is the one the writers are
@@ -834,11 +852,20 @@ func (c *connector) Driver() driver.Driver { return c.drv }
 // Tx runs fn inside a transaction, committing when it returns nil and rolling
 // back otherwise.
 //
-// A PANIC rolls back and re-panics rather than leaving the transaction open.
-// Without that, a panic in fn returns through the runtime with the connection
-// still holding an uncommitted transaction — and on a single-writer database
-// that connection going back to the pool with an open transaction blocks every
-// subsequent write, so one bug in one handler wedges the whole process.
+// IT HOLDS THE FILE'S WRITE LOCK FROM ITS BEGIN, having queued for it behind
+// every write transaction on this database that asked first (see
+// writequeue.go). So fn reads a snapshot no other writer can advance, and a
+// burst of writers is served in the order it arrived rather than in the order
+// their busy handlers happen to poll. A transaction that only reads belongs in
+// [DB.Read], which takes the deferred begin and queues behind nothing.
+//
+// A PANIC rolls back, hands the connection back and re-panics rather than
+// leaving the transaction open. Both halves are load-bearing on a
+// single-writer database: a connection returned to the pool with an
+// uncommitted transaction on it refuses the next caller's BEGIN, and a
+// connection never returned at all is one the pool has lost for good. Either
+// way one bug in one handler wedges the whole process, the second way
+// permanently.
 //
 // The rollback error is deliberately discarded on the failure paths: fn's error
 // is what the caller needs, and replacing it with "rollback failed" would hide
@@ -1058,6 +1085,15 @@ func classify(err error) txCause {
 	if err == nil {
 		return causeFatal
 	}
+	// THE QUEUE'S OWN TIMEOUT IS THE SAME CAUSE as the driver's, and it is
+	// matched on the sentinel rather than on text because it is this
+	// package's own error. Both are the wait for one file's write lock
+	// ended by one knob, so they take the same budget: [lockAttempts] gives
+	// the holder two busy timeouts and then answers honestly, whether the
+	// waiting was done in this process's line or in the driver's poll.
+	if errors.Is(err, errWritersQueued) {
+		return causeLockTimeout
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "snapshot is stale"):
@@ -1106,21 +1142,61 @@ func sleepFor(ctx context.Context, d time.Duration) {
 // estate is not open"), rather than a segfault that takes the process with it.
 // Measured: a maintenance tick racing a shutdown panicked the whole engine.
 func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return d.txOpts(ctx, nil, fn)
+	if d == nil || d.sql == nil {
+		return ErrNoEstate
+	}
+	// THE CONNECTION BEFORE THE QUEUE, and the order is the whole reason
+	// this draws one explicitly rather than beginning on the pool. Drawn
+	// the other way round, a writer at the FRONT of the queue could be
+	// waiting on the pool, behind readers that are waiting on the very
+	// commit a pinned applier queued behind it is about to make — the
+	// feedback loop [Writer] exists to break, rebuilt one layer up. A
+	// writer waiting here holds a pooled connection instead, which is
+	// exactly what one polling the driver's busy handler already held.
+	conn, err := d.sql.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	// FROM A DEFER, because [txOn] re-panics rather than returning: a
+	// hand-back written on the return path alone never runs, and a pooled
+	// connection never handed back is one database/sql has lost for the
+	// life of the process. The pool is four plus the pins, so the fourth
+	// panicking body would wedge the handle.
+	defer func() { _ = conn.Close() }()
+	return d.writeOn(ctx, conn, fn)
 }
 
-// txOpts is [DB.tx] with the begin mode named.
+// writeOn is one write attempt on conn: its place in this file's queue, then
+// the IMMEDIATE begin, then fn.
 //
+// [DB.Tx] and [Writer.Tx] differ only in where conn comes from, which is why
+// both reach the lock through here. A second copy is how one of them comes to
+// take the write lock in a way the other does not.
+func (d *DB) writeOn(ctx context.Context, conn *sql.Conn, fn func(*sql.Tx) error) error {
+	if err := d.writes.acquire(ctx, d.busy); err != nil {
+		return err
+	}
+	// HELD FOR THE WHOLE TRANSACTION, panic included: a queue slot dropped
+	// while its holder unwinds stalls every writer behind it until each
+	// one's busy timeout, and then the next one again.
+	defer d.writes.release()
+	return txOn(ctx, conn.BeginTx, nil, fn)
+}
+
+// txOn runs ONE transaction on whatever begin it is given: begin with opts,
+// run fn, then commit or roll back.
+//
+// One body for every transaction this package runs, pooled or pinned, read or
+// write — [DB.Read] is the only caller that passes anything but nil for opts.
 // nil is the WRITE mode, which is the default for the same reason
 // [beginModeConn.Begin] takes it: everything through [DB.Tx] is a write until
 // a caller says otherwise, and a default that quietly took the deferred begin
 // would put the read-then-write abort back on whichever path forgot to ask.
-// Only [DB.Read] passes anything else.
-func (d *DB) txOpts(ctx context.Context, opts *sql.TxOptions, fn func(*sql.Tx) error) (err error) {
-	if d == nil || d.sql == nil {
-		return ErrNoEstate
-	}
-	tx, err := d.sql.BeginTx(ctx, opts)
+func txOn(ctx context.Context,
+	begin func(context.Context, *sql.TxOptions) (*sql.Tx, error),
+	opts *sql.TxOptions, fn func(*sql.Tx) error,
+) error {
+	tx, err := begin(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}

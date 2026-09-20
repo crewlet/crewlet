@@ -81,31 +81,11 @@ func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return retryTransient(ctx, pinned(w.db.busy), func() error { return w.tx(ctx, fn) })
 }
 
-// tx is one attempt: begin, run, commit or roll back.
-func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := w.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: begin: %w", err)
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			rollback(ctx, tx)
-			panic(p)
-		}
-	}()
-	if err := fn(tx); err != nil {
-		// THROUGH THE SAME HELPER, and here the consequence is worse
-		// than on the pool: this connection is PINNED, so a rollback
-		// that failed leaves a transaction open on the one connection
-		// this applier will ever use — every subsequent attempt is
-		// refused its own BEGIN and the domain stops applying entirely.
-		rollback(ctx, tx)
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit: %w", err)
-	}
-	return nil
+// tx is one attempt: its place in the queue, then begin, run, commit or roll
+// back — all on the pinned connection, through the same [DB.writeOn] the pool
+// uses.
+func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	return w.db.writeOn(ctx, w.conn, fn)
 }
 
 // Conn exposes the pinned connection for statements that are not transactions
@@ -176,6 +156,6 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		return ErrNoEstate
 	}
 	return retryTransient(ctx, pooled(d.busy), func() error {
-		return d.txOpts(ctx, readTx, func(tx *sql.Tx) error { return fn(tx) })
+		return txOn(ctx, d.sql.BeginTx, readTx, fn)
 	})
 }

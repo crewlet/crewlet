@@ -98,6 +98,25 @@ type fileLock struct {
 	// map entry have to move together, or a release racing an open would
 	// drop a lock the opener is about to depend on.
 	holds int
+
+	// writes orders the write transactions every one of those handles
+	// runs on this file. Here rather than on the handle for the same
+	// reason the claim itself is: two handles on one file share one
+	// driver-level write lock, so they have to share one line for it.
+	// See writequeue.go.
+	writes writeQueue
+}
+
+// queue is the write queue a handle on this path takes its place in.
+//
+// A nil claim is an IN-MEMORY database, which has no file and no peer handle
+// to share anything with, so it gets a queue of its own — one per handle,
+// which is exactly the scope of the lock it is ordering.
+func (l *fileLock) queue() *writeQueue {
+	if l == nil {
+		return &writeQueue{}
+	}
+	return &l.writes
 }
 
 // locksHeld is this process's claims, one per database path.
