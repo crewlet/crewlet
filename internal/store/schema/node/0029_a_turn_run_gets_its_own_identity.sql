@@ -32,6 +32,16 @@ ALTER TABLE crewlet_events ADD COLUMN work_key TEXT NOT NULL DEFAULT '';
 -- documented "a turn with no ledgerable trigger" value — so writing '' to ''
 -- would be work with no reader.
 --
+-- THE COLUMN ONLY, and not the `tags` blob beside it. That blob is what the
+-- WRITER extracted from an event's own JSON at the time it was written, and
+-- those events genuinely carried no `work_key` field — rewriting every one of
+-- them would restate history, re-encode the largest text column in the table
+-- on a boot, and still leave the stored payload disagreeing with it. So the
+-- COLUMN is the authority every reader takes: `EventRecord.WorkKey` is read
+-- off it rather than out of the tags, which is the one promoted value that is
+-- not a copy of a tag. A reader going through the tags answers "no unit of
+-- work" for exactly the rows this backfill exists to preserve.
+--
 -- ONE STATEMENT, UNBATCHED, and that is a deliberate difference from the
 -- retention sweep, which batches over this same table for a reason that does
 -- not apply here. Purge runs on a tick while the publish listener is appending

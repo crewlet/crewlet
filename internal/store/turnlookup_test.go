@@ -106,3 +106,77 @@ func TestTheTurnFallbackDoesNotInventSpend(t *testing.T) {
 		t.Errorf("models = %q, want only the phase's", rows[0].Models)
 	}
 }
+
+// A ROW'S WORK KEY IS READ OFF THE COLUMN, never out of its tags blob.
+//
+// schema/0029 backfilled `work_key` from `turn_id` — which is where the work
+// key lived before ADR-0017 split the two — and deliberately did not rewrite
+// the stored tags, because those blobs record what the writer actually
+// extracted from an event whose JSON carried no such field. So for every row
+// written before that migration the column holds the key and the tags do not,
+// and a reader going through the tags answers "no unit of work" for exactly
+// the history the backfill exists to preserve, while `/events?work_key=` —
+// which filters on the column — returns those same rows. Two surfaces
+// disagreeing about one question.
+//
+// The shape is reproduced here the way Append itself produces it: Spend is the
+// carrier for every promoted column, so a record that sets the key there and
+// not in its tags writes precisely a post-backfill row.
+func TestAWorkKeyIsReadFromItsColumnAndNotFromTheTags(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "e-legacy", Type: "agent_phase_completed", Source: "engine",
+		Category: "agent", Time: time.Now().UTC().Add(-time.Minute),
+		// AS THE BACKFILL LEAVES IT: the column carries the key, the
+		// blob carries only what that build knew to extract.
+		Tags:    map[string]string{"turn_id": "run-legacy"},
+		Spend:   &store.Spend{TurnID: "run-legacy", WorkKey: "wk-legacy"},
+		Payload: []byte(`{"turn_id":"run-legacy","phase":"execute"}`),
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	rows, err := log.Turn(t.Context(), "run-legacy")
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want the one appended", len(rows))
+	}
+	if rows[0].WorkKey != "wk-legacy" {
+		t.Errorf("WorkKey = %q, want the backfilled column; a read that went "+
+			"through Tags answers %q for every row written before schema/0029",
+			rows[0].WorkKey, rows[0].Tags["work_key"])
+	}
+	// AND THE FILTER AGREES WITH IT, which is the whole point of one
+	// authority: a listing found by the column must say which key it was
+	// found by.
+	found, err := log.List(t.Context(), store.ListQuery{WorkKey: "wk-legacy"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(found) != 1 || found[0].WorkKey != "wk-legacy" {
+		t.Errorf("filtering on the column returned %d rows carrying %q",
+			len(found), keysOf(found))
+	}
+	// AND THE SINGLE-EVENT READ AGREES, which is the read a person reaches
+	// by pasting an id and the one a second hand-written Scan silently
+	// left behind when the column was added.
+	one, err := log.ByID(t.Context(), "e-legacy")
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if one.WorkKey != "wk-legacy" {
+		t.Errorf("ByID WorkKey = %q, want wk-legacy", one.WorkKey)
+	}
+}
+
+func keysOf(recs []store.EventRecord) []string {
+	out := make([]string, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, rec.WorkKey)
+	}
+	return out
+}

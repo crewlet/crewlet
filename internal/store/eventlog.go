@@ -109,6 +109,22 @@ type EventRecord struct {
 	// are copies of five of these; the rest exist only here.
 	Tags map[string]string `json:"tags,omitempty"`
 
+	// WorkKey is the unit of work this row's run was an attempt at — see
+	// ADR-0017 and [ListQuery.WorkKey].
+	//
+	// OFF THE COLUMN, and it is the one promoted value that is NOT a copy
+	// of a tag. schema/0029 backfilled the column from `turn_id`, which is
+	// where the work key lived before the split, and it could not
+	// reasonably rewrite every historical tags blob to match — so for rows
+	// written before that migration the column holds the work key and
+	// `Tags["work_key"]` is empty. A reader going through the tags would
+	// therefore answer "no unit of work" for exactly the history the
+	// backfill exists to preserve, while `/events?work_key=` — which
+	// filters on the column — returned those same rows. One authority,
+	// and it is the column every other work-key reader already uses
+	// (turnlist's grouping, the phase-token rollup, the filter above).
+	WorkKey string `json:"work_key,omitempty"`
+
 	// Payload is the full serialized event. Nil on a listing — see above.
 	Payload json.RawMessage `json:"payload,omitempty"`
 
@@ -398,7 +414,7 @@ func partiesOf(actor string, tags map[string]string) []string {
 // listColumns is every column a listing reads. `payload` is absent
 // deliberately — see EventRecord.Payload.
 const listColumns = `event_time, event_id, event_type, source, category,
-	summary, actor, trace_id, span_id, parent_span_id, tags`
+	summary, actor, trace_id, span_id, parent_span_id, tags, work_key`
 
 // qualifiedListColumns names the same columns on the log's own table.
 //
@@ -761,26 +777,26 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 // The identity is (event_time, event_id) and a caller holding only an id — a
 // link, a line pasted from a log — has no time to seek with, so this reads the
 // id index and takes the newest match.
+//
+// THROUGH THE SHARED SCANNER although it wants one row, which is what
+// QueryRow would give it more directly. A second hand-written Scan is a second
+// copy of the agreement between `listColumns` and the destination list, and
+// that is precisely the drift [EventLog.scanPayloads] exists to prevent: the
+// `work_key` promotion added a column to the list, every listing picked it up,
+// and this reader kept a twelve-argument Scan that failed at RUNTIME — on the
+// one read a person reaches by pasting an id. LIMIT 1 makes the slice at most
+// one row, so the cost is one allocation on a path that serves a link.
 func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
-	row := l.db.sql.QueryRowContext(ctx,
+	recs, err := l.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE event_id = ? ORDER BY event_time DESC LIMIT 1", id)
-
-	var rec EventRecord
-	var micros int64
-	var tagJSON, payload string
-	if err := row.Scan(&micros, &rec.ID, &rec.Type, &rec.Source, &rec.Category,
-		&rec.Summary, &rec.Actor, &rec.TraceID, &rec.SpanID, &rec.ParentSpanID,
-		&tagJSON, &payload,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
-		}
+	if err != nil {
 		return EventRecord{}, fmt.Errorf("store: read event %s: %w", id, err)
 	}
-	finishRecord(&rec, micros, tagJSON)
-	rec.Payload = json.RawMessage(payload)
-	return rec, nil
+	if len(recs) == 0 {
+		return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
+	}
+	return recs[0], nil
 }
 
 // Purge deletes events past EventRetention and reports how many went.
@@ -871,7 +887,7 @@ func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, arg
 		var tagJSON, payload string
 		dest := []any{&micros, &rec.ID, &rec.Type, &rec.Source,
 			&rec.Category, &rec.Summary, &rec.Actor, &rec.TraceID,
-			&rec.SpanID, &rec.ParentSpanID, &tagJSON}
+			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey}
 		if withPayload {
 			dest = append(dest, &payload)
 		}

@@ -148,31 +148,54 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 }
 
 // attemptsOf reports the unit of work a run was an attempt at, and every run
-// of it in the window, oldest first.
+// of it this store still holds, oldest first.
 //
 // THE KEY COMES OFF THE ROWS THIS READ ALREADY HAS rather than from a second
 // seek: every event of the turn carries it, and a turn with none is answered
 // as having none rather than searched for.
 //
-// OFF THE TAGS, not off [store.EventRecord.Spend]. That field is set by the
-// WRITE path and never by a read — `finishRecord` does not populate it — so a
-// reader that reached through it would find nil on every row and quietly
-// answer "no attempts" for every turn in the company. The tags blob is on
-// `listColumns`, so it is there whether or not the payload was selected.
+// OFF [store.EventRecord.WorkKey], which is the column, and neither off the
+// tags blob nor off [store.EventRecord.Spend]. Spend is set by the WRITE path
+// and never by a read — `finishRecord` does not populate it — so a reader
+// reaching through it would find nil on every row and quietly answer "no
+// attempts" for every turn in the company. The tags blob is populated on
+// read, but only from what the WRITER extracted: schema/0029 backfilled the
+// column for history and could not rewrite every stored blob, so a tag read
+// answers nothing for every turn written before the split. See the field.
+//
+// THE WINDOW IS THE DETAIL READ'S, not the turns list's default. [store.Turn]
+// is a listing type and its query takes DefaultTurnDays — a week — when asked
+// for nothing, while the rows above came from [store.EventLog.Turn], which
+// floors at [store.EventHistory]. Left implicit, opening a turn between eight
+// and thirty days old found its work key and then reported no attempt at all,
+// including the one being read. MaxTurnDays is that same horizon, so the two
+// halves of this answer describe one window.
 func (s Sources) attemptsOf(ctx context.Context, id string,
 	records []store.EventRecord,
 ) (string, []store.Turn) {
 	key := ""
 	for _, rec := range records {
-		if k := rec.Tags["work_key"]; k != "" {
-			key = k
+		if rec.WorkKey != "" {
+			key = rec.WorkKey
 			break
 		}
 	}
 	if key == "" {
 		return "", []store.Turn{}
 	}
-	rows, err := s.Events.Turns(ctx, store.TurnQuery{WorkKey: key})
+	// EVERY RUN, which is why the page is the ceiling rather than the
+	// default. This is an enumeration bounded by the broker's own delivery
+	// budget — a trigger gets twenty-five attempts before it dead-letters
+	// (internal/queue/jetstream) — not a page somebody scrolls, and it is
+	// an index seek on schema/0029's partial index over one key. Taking
+	// DefaultTurnPage would have tied "attempt 3 of 4" to a knob sized for
+	// a scannable list, so shrinking that list would silently start
+	// miscounting attempts.
+	rows, err := s.Events.Turns(ctx, store.TurnQuery{
+		WorkKey:   key,
+		SinceDays: store.MaxTurnDays,
+		Limit:     store.MaxTurnPage,
+	})
 	if err != nil {
 		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,
 			"work_key", key, "error", err)

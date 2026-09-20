@@ -473,7 +473,12 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 		AgentHandle: run.AgentHandle,
 		RoleName:    run.Role,
 		TurnID:      run.TurnID,
-		WorkKey:     run.WorkKey,
+		// [PendingRun.UnitOfWork] rather than the raw field: a run parked
+		// by a build from before ADR-0017 carries its work key in TurnID
+		// and nothing rewrites a parked row, so the raw field would
+		// announce an empty unit of work for every run that outlived the
+		// upgrade.
+		WorkKey: run.UnitOfWork(),
 		// The job this tick saw finish, and the only one the completion
 		// may claim: see [Tail].
 		LaunchID:    run.LaunchID,

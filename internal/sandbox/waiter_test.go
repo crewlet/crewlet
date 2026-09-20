@@ -708,3 +708,28 @@ func TestAWaiterNeedsItsCollaborators(t *testing.T) {
 		t.Fatal("a waiter with no queue, store or manager was accepted")
 	}
 }
+
+// A COMPLETION CARRIES THE UNIT OF WORK TOO, by the same rule and for the same
+// reason: see TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun. This is
+// the announcement the dashboard's board reads and the one that routes the
+// resume, so a blank key here is a resumed turn whose writes dedupe against
+// nothing.
+func TestACompletionCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
+	const preSplit = "0123456789abcdef0123456789abcdef"
+
+	rig := newWaiterRig(t)
+	rig.launch(preSplit)
+	rig.runner.Finish(Result{Success: true})
+	rig.tick()
+
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	payload, ok := rig.queue.published[0].event.Data.(*types.SandboxRunCompleted)
+	if !ok {
+		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
+	}
+	if payload.WorkKey != preSplit {
+		t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
+			payload.WorkKey, preSplit)
+	}
+}
