@@ -56,10 +56,18 @@ import (
 // Per-turn, like the task and the conversation beside it: a runner is built
 // per turn (see Company.RunnerFor), so these are configuration, not state.
 type Turn struct {
-	// ID is the work key — what identifies the unit of work this turn did.
-	// NOT a turn id minted per node: two nodes completing one trigger mint
-	// two, and a consumer correlating on it would draw one turn as two.
-	ID string
+	// RunID names THIS EXECUTION of the turn — see [turnctx.Turn.RunID]
+	// and ADR-0017. It is the `turn_id` on every event published below,
+	// and it is minted fresh per run, so a redelivered trigger's second
+	// attempt writes its own phase records rather than landing on top of
+	// the first attempt's.
+	RunID string
+
+	// WorkKey is the unit of work this run is doing — stable across a
+	// re-run, empty for a turn with no ledgerable trigger. Carried on
+	// every event beside RunID so a reader can ask "every attempt at this
+	// trigger" without the two identities having to be one value.
+	WorkKey string
 
 	// AgentID is the seat's derived agent id, so a consumer can resolve the
 	// seat without the org.
@@ -303,7 +311,8 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 	e.publish(ctx, events.New(types.AgentPhaseStarted{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
-		TurnID:    e.turn.ID,
+		TurnID:    e.turn.RunID,
+		WorkKey:   e.turn.WorkKey,
 		Iteration: iteration,
 		Phase:     types.Phase(ph),
 		Trigger:   e.turn.Trigger,
@@ -312,7 +321,8 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
-		TurnID:    e.turn.ID,
+		TurnID:    e.turn.RunID,
+		WorkKey:   e.turn.WorkKey,
 		Phase:     types.Phase(ph),
 		Iteration: iteration,
 		Trigger:   e.turn.Trigger,
@@ -350,7 +360,8 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, 
 	e.publish(ctx, events.New(types.PromptSize{
 		Agent:             e.turn.AgentID,
 		RoleName:          e.role,
-		TurnID:            e.turn.ID,
+		TurnID:            e.turn.RunID,
+		WorkKey:           e.turn.WorkKey,
 		Iteration:         iteration,
 		Phase:             types.Phase(ph),
 		ApproximateTokens: (len(system) + len(user)) / charsPerToken,
@@ -386,7 +397,8 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 	e.publish(ctx, events.New(types.ProviderFallback{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
-		TurnID:    e.turn.ID,
+		TurnID:    e.turn.RunID,
+		WorkKey:   e.turn.WorkKey,
 		Iteration: iteration,
 		Phase:     types.Phase(ph),
 		// Carried through verbatim, EMPTY To included: the chain writes
@@ -406,7 +418,8 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
-		TurnID:    e.turn.ID,
+		TurnID:    e.turn.RunID,
+		WorkKey:   e.turn.WorkKey,
 		Phase:     types.Phase(ph),
 		Iteration: iteration,
 		Model:     res.Model,
@@ -528,7 +541,8 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
 	e.publish(ctx, events.New(types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
-		TurnID:   e.turn.ID,
+		TurnID:   e.turn.RunID,
+		WorkKey:  e.turn.WorkKey,
 		Phase:    types.PhaseJudge,
 		// NESTED under the phase that asked, which is what the dashboard's
 		// grouping already expects of every non-turn phase.
@@ -587,7 +601,8 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	ev := types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
-		TurnID:   e.turn.ID,
+		TurnID:   e.turn.RunID,
+		WorkKey:  e.turn.WorkKey,
 		Phase:    types.PhaseSubagent,
 		// THE ROUND THIS RAN IN, and it was left at zero.
 		//
@@ -679,7 +694,8 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	ev := types.AgentPhaseCompleted{
 		Agent:           e.turn.AgentID,
 		RoleName:        e.role,
-		TurnID:          e.turn.ID,
+		TurnID:          e.turn.RunID,
+		WorkKey:         e.turn.WorkKey,
 		Iteration:       rec.Iteration,
 		Phase:           types.Phase(rec.Phase),
 		Model:           rec.Result.Model,
@@ -775,7 +791,7 @@ func (e emitter) publish(ctx context.Context, ev *events.Event) {
 	ev.Source = e.role
 	if err := e.pub.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", ev.Type,
-			"role", e.role, "turn_id", e.turn.ID, "error", err)
+			"role", e.role, "turn_id", e.turn.RunID, "error", err)
 	}
 }
 

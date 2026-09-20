@@ -65,7 +65,8 @@ func (g *reportingGuard) report(tool string) {
 		Phase:     types.Phase(g.phase),
 		ToolName:  tool,
 		SkillKeys: g.guard.Pending(),
-		TurnID:    g.emit.turn.ID,
+		TurnID:    g.emit.turn.RunID,
+		WorkKey:   g.emit.turn.WorkKey,
 		Iteration: g.round,
 	}, g.emit.turn.Trace)
 	// A BACKGROUND context, because tools.Guard has none to inherit — the

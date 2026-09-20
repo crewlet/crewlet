@@ -26,7 +26,7 @@ func (s *launchSpy) Launch(_ context.Context, turn *turnctx.Turn, brief string) 
 	if s.err != nil {
 		return sandbox.LaunchResult{}, s.err
 	}
-	s.turns = append(s.turns, turn.ID)
+	s.turns = append(s.turns, turn.RunID)
 	s.briefs = append(s.briefs, brief)
 	return sandbox.LaunchResult{SandboxID: "box-1", CommandID: "cmd-1", CodingAgent: "claude-code"}, nil
 }
@@ -108,7 +108,11 @@ func TestALaunchedRunSuspendsTheLoop(t *testing.T) {
 	// THE TURN COMES FROM THE SURFACE, never from the arguments: a model
 	// that spelled a different id could otherwise start a box against
 	// somebody else's suspended conversation.
-	if len(spy.turns) != 1 || spy.turns[0] != "wk-1" {
+	//
+	// And it is the RUN, because the pending row is keyed on it: two runs
+	// of one redelivered trigger would otherwise share one row and one box.
+	// See ADR-0017.
+	if len(spy.turns) != 1 || spy.turns[0] != "run-1" {
 		t.Fatalf("turns = %v, want the calling turn", spy.turns)
 	}
 }

@@ -107,10 +107,15 @@ const (
 // synchronously at turn end from inside the parent turn's span. Skipped
 // entirely when no episode store is wired.
 type EpisodeWritten struct {
-	Agent         string `json:"agent_id"`
-	AgentHandle   string `json:"agent_handle"`
-	RoleName      string `json:"role"`
-	TurnID        string `json:"turn_id"`
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey       string `json:"work_key,omitempty"`
 	ReviewOutcome string `json:"review_outcome"`
 	DurationMS    int    `json:"duration_ms"`
 	ToolCount     int    `json:"tool_count"`
@@ -142,8 +147,13 @@ type PersistDeciderCompleted struct {
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 	TurnID      string `json:"turn_id"`
-	Persisted   bool   `json:"persisted"`
-	DocID       string `json:"doc_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey   string `json:"work_key,omitempty"`
+	Persisted bool   `json:"persisted"`
+	DocID     string `json:"doc_id"`
 	// Scope is empty on a NOOP.
 	Scope          MemoryScope           `json:"scope"`
 	Classification PersistClassification `json:"classification"`
@@ -186,7 +196,12 @@ type SkillUsed struct {
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 	TurnID      string `json:"turn_id"`
-	SkillName   string `json:"skill_name"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey   string `json:"work_key,omitempty"`
+	SkillName string `json:"skill_name"`
 	// SkillID is empty for a registry-loaded skill.
 	SkillID    string          `json:"skill_id"`
 	SourceKind SkillSourceKind `json:"source_kind"`
@@ -221,10 +236,15 @@ func (e SkillUsed) SummaryFor(actor string) string {
 // per agent: a block stuck at zero is a configuration or data problem, not a
 // turn problem.
 type PrefetchSummary struct {
-	Agent                  string `json:"agent_id"`
-	AgentHandle            string `json:"agent_handle"`
-	RoleName               string `json:"role"`
-	TurnID                 string `json:"turn_id"`
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey                string `json:"work_key,omitempty"`
 	CounterpartyHit        bool   `json:"counterparty_hit"`
 	CounterpartyBytes      int    `json:"counterparty_bytes"`
 	SynthesizedSkillsHit   bool   `json:"synthesized_skills_hit"`
@@ -286,9 +306,14 @@ func (e PrefetchSummary) SummaryFor(actor string) string {
 // turn had an identifiable counterparty — even on a no-op traits patch, because
 // the interaction count still moves and the cadence should stay visible.
 type CounterpartyProfileUpdated struct {
-	ObserverHandle    string `json:"observer_handle"`
-	RoleName          string `json:"role"`
-	TurnID            string `json:"turn_id"`
+	ObserverHandle string `json:"observer_handle"`
+	RoleName       string `json:"role"`
+	TurnID         string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey           string `json:"work_key,omitempty"`
 	SubjectHandle     string `json:"subject_handle"`
 	SubjectExternalID string `json:"subject_external_id"`
 	SubjectPlatform   string `json:"subject_platform"`
@@ -330,7 +355,12 @@ type SkillSynthesized struct {
 	RoleName    string `json:"role"`
 	// TurnID is empty for a clustered synthesis: there is no single turn that
 	// triggered it.
-	TurnID    string `json:"turn_id"`
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey   string `json:"work_key,omitempty"`
 	SkillName string `json:"skill_name"`
 	SkillID   string `json:"skill_id"`
 	// Trigger here is the synthesis path, NOT the turn-trigger descriptor.
@@ -359,10 +389,15 @@ func (e SkillSynthesized) SummaryFor(actor string) string {
 // counter-example. Most turns do not: it fires only when the refiner actually
 // appended a note and bumped the version.
 type SkillRefined struct {
-	Agent        string `json:"agent_id"`
-	AgentHandle  string `json:"agent_handle"`
-	RoleName     string `json:"role"`
-	TurnID       string `json:"turn_id"`
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey      string `json:"work_key,omitempty"`
 	SkillName    string `json:"skill_name"`
 	SkillID      string `json:"skill_id"`
 	SkillVersion int    `json:"skill_version"`
@@ -552,10 +587,15 @@ func (e CompactionCompleted) SummaryFor(actor string) string {
 // workers' phase events keep the agent showing as working during learning, and
 // this is what flips it back to idle when the whole pass is done.
 type ReflectionCompleted struct {
-	Agent         string `json:"agent_id"`
-	AgentHandle   string `json:"agent_handle"`
-	RoleName      string `json:"role"`
-	TurnID        string `json:"turn_id"`
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey       string `json:"work_key,omitempty"`
 	WorkersRun    int    `json:"workers_run"`
 	ReviewOutcome string `json:"review_outcome"`
 }

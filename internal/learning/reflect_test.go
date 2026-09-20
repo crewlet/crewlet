@@ -931,3 +931,74 @@ func TestTheMarkStillCollapsesARealRedelivery(t *testing.T) {
 		t.Errorf("worker ran %d times on one turn", len(w.turns()))
 	}
 }
+
+// --- a turn that ran twice, and a turn that only parked ------------------ //
+
+// THE REDELIVERY MARK IS ON THE UNIT OF WORK, not on the run.
+//
+// A turn that fails without reaching outside the engine is NAK'd and the same
+// trigger runs again — under a new run id (ADR-0017). Keyed on that, every
+// re-run takes a full second reflection pass: a second diary row (agent_diary
+// has no dedupe of its own), a second skill draft, a second refinement, and a
+// second set of auxiliary-LLM calls the gate exists to avoid. The episode row
+// and the interaction count would still collapse on their own indexes, which
+// is exactly what would make the duplication invisible.
+func TestTwoRunsOfOneTriggerReflectOnce(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "diarist"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+
+	first := settledTurn()
+	first.TurnID, first.WorkKey = "run-1", "wk-1"
+	if got := reflectOnce(r, first); got.Skip != "" {
+		t.Fatalf("the first run was skipped: %s", got.Skip)
+	}
+	second := settledTurn()
+	second.TurnID, second.WorkKey = "run-2", "wk-1"
+	if got := reflectOnce(r, second); got.Skip != learning.SkipDuplicate {
+		t.Errorf("the re-run reflected again (skip = %q) — a second diary row, a "+
+			"second skill draft and a second set of auxiliary calls for one "+
+			"piece of work", got.Skip)
+	}
+	if w.ran() != 1 {
+		t.Errorf("the worker ran %d times for one unit of work, want 1", w.ran())
+	}
+}
+
+// AND A PARKED TURN DOES NOT SPEND THE MARK, which is what made a seat that
+// works through `run_sandbox` learn nothing at all.
+//
+// A suspended executor publishes `turn_completed` carrying the suspend's own
+// self_iterate. Every worker declines it on [Turn.Settled] — but the mark was
+// taken before they were asked, and it is never released, so the RESUMED
+// half, which publishes under the same run, was refused as a duplicate. No
+// episode, no diary row, no counterparty profile, no skill, and the only
+// symptom is an empty memory tab.
+func TestAParkedTurnLeavesTheMarkForItsResumedHalf(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "diarist"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+
+	parked := settledTurn()
+	parked.TurnID, parked.WorkKey = "run-1", "wk-1"
+	// What a suspend publishes: the turn has not decided anything yet.
+	parked.ReviewOutcome = "self_iterate"
+	if got := reflectOnce(r, parked); got.Skip != "" {
+		t.Fatalf("a parked turn was skipped wholesale as %q — the counterparty "+
+			"profiler asks for exactly these", got.Skip)
+	}
+
+	// The resume: the same run, finished this time.
+	resumed := settledTurn()
+	resumed.TurnID, resumed.WorkKey = "run-1", "wk-1"
+	if got := reflectOnce(r, resumed); got.Skip != "" {
+		t.Errorf("the resumed half was skipped as %q — the seat learns nothing "+
+			"from any turn that used a sandbox", got.Skip)
+	}
+	// Twice: once for the park (a worker that takes no Settled gate wants
+	// it) and once for the resume. What must not happen is the resume being
+	// refused, which is what the mark did.
+	if w.ran() != 2 {
+		t.Errorf("the worker ran %d times, want the park and then the resume", w.ran())
+	}
+}

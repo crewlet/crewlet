@@ -976,14 +976,15 @@ func publishFallback(ctx context.Context, cfg Config, f chain.Fallback) {
 	// The PARENT's identity, matching the role name beside it: a worker is
 	// ephemeral and holds no seat in the org, so it has no agent id of its
 	// own — the hand-off belongs to the seat whose chain fell through.
-	turnID, agentID := "", ""
+	runID, workKey, agentID := "", "", ""
 	if cfg.Turn != nil {
-		turnID, agentID = cfg.Turn.ID, cfg.Turn.AgentID()
+		runID, workKey, agentID = cfg.Turn.RunID, cfg.Turn.WorkKey, cfg.Turn.AgentID()
 	}
 	ev := events.New(types.ProviderFallback{
 		Agent:    agentID,
 		RoleName: cfg.Seat.Role.Name,
-		TurnID:   turnID,
+		TurnID:   runID,
+		WorkKey:  workKey,
 		Phase:    types.Phase(phase.Subagent),
 		// No iteration: a worker runs outside the executor/review loop
 		// the number counts, and writing the PARENT's would attribute the
@@ -1016,8 +1017,14 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 		tokens += r.Tokens()
 		statuses[r.ID] = string(r.Status)
 	}
+	batchRun, batchWork := "", ""
+	if cfg.Turn != nil {
+		batchRun, batchWork = cfg.Turn.RunID, cfg.Turn.WorkKey
+	}
 	ev := events.New(types.SubagentBatched{
 		ParentHandle: cfg.Seat.Role.Handle(),
+		TurnID:       batchRun,
+		WorkKey:      batchWork,
 		TaskCount:    len(results),
 		Successes:    successes,
 		Failures:     len(results) - successes,

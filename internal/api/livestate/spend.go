@@ -42,6 +42,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		Worker:       str(payload, "worker"),
 		Model:        str(payload, "model", "provider_key"),
 		TurnID:       str(payload, "turn_id"),
+		WorkKey:      str(payload, "work_key"),
 		Iteration:    num(payload, "iteration"),
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),

@@ -409,3 +409,44 @@ test("…and with nothing else to carry, the panel goes with it", async () => {
   await screen.findByTitle("how long this phase took");
   expect(screen.queryByText("Woken by")).toBeNull();
 });
+
+/**
+ * THE SCREEN SAYS WHICH ATTEMPT IT IS SHOWING, and links the others.
+ *
+ * A turn id names one RUN (`adr/0017`), so a trigger that failed without
+ * reaching outside the engine and was redelivered is several turns — and this
+ * page is where every deep link in the product lands. Arriving on the failed
+ * attempt with nothing saying a later one succeeded is how a reader concludes
+ * the work never happened; arriving on the second with nothing saying it is a
+ * retry is how they conclude the company did it twice.
+ */
+test("a re-run says which attempt it is and links the one before it", async () => {
+  mount({
+    turn_id: TURN,
+    work_key: "wk-1",
+    attempts: [
+      { turn_id: "run-1", failed: true } as TurnAnswer["attempts"] extends (infer R)[] ? R : never,
+      { turn_id: TURN, failed: false } as TurnAnswer["attempts"] extends (infer R)[] ? R : never,
+    ],
+    events: [phase("2026-09-13T10:00:02Z", 1000)],
+  });
+  expect(await screen.findByText("attempt 2/2")).toBeTruthy();
+  // The one before it is REACHABLE, not merely announced — and says it
+  // failed, so the pair reads as the story it is.
+  expect(await screen.findByText(/Attempt 1 \(failed\)/)).toBeTruthy();
+});
+
+/** A turn that ran once claims nothing: tagging it "attempt 1/1" would put a
+ *  re-run marker on every ordinary turn in the company. */
+test("a turn that ran once carries no attempt badge", async () => {
+  mount({
+    turn_id: TURN,
+    work_key: "wk-1",
+    attempts: [
+      { turn_id: TURN, failed: false } as TurnAnswer["attempts"] extends (infer R)[] ? R : never,
+    ],
+    events: [phase("2026-09-13T10:00:02Z", 1000)],
+  });
+  await screen.findByText("1 phases");
+  expect(screen.queryByText(/attempt \d+\/\d+/)).toBeNull();
+});

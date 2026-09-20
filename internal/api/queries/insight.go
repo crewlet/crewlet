@@ -117,9 +117,27 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		log.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", err)
 		traces = []string{}
 	}
+	// WHICH ATTEMPT THIS IS, and where the others are.
+	//
+	// A turn id names one RUN (ADR-0017), so a trigger that failed without
+	// acting and was redelivered is several turns — and this screen is the
+	// destination of every deep link in the product. Landing on one of them
+	// with nothing saying the other exists is how a reader concludes the
+	// company did the work twice, or that it failed when in fact the next
+	// attempt succeeded.
+	//
+	// DEGRADES like the two reads above, and for the same reason: the rows
+	// are what the caller came for.
+	key, siblings := s.attemptsOf(ctx, id, records)
 	return map[string]any{
 		"turn_id": id,
-		"events":  records,
+		// The unit of work this run was an attempt at, and every run of it
+		// this store holds, oldest first. One element — this turn — is the
+		// ordinary case; empty means the turn carries no work key at all,
+		// which is a trigger with nothing to collapse on.
+		"work_key": key,
+		"attempts": siblings,
+		"events":   records,
 		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
 		// client that predates the field is unaffected — and one that has it
 		// can say the gap is the middle rather than warning that the page
@@ -127,6 +145,66 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		"truncated": truncated,
 		"trace_ids": traces,
 	}, nil
+}
+
+// attemptsOf reports the unit of work a run was an attempt at, and every run
+// of it this store still holds, oldest first.
+//
+// THE KEY COMES OFF THE ROWS THIS READ ALREADY HAS rather than from a second
+// seek: every event of the turn carries it, and a turn with none is answered
+// as having none rather than searched for.
+//
+// OFF [store.EventRecord.WorkKey], which is the column, and neither off the
+// tags blob nor off [store.EventRecord.Spend]. Spend is set by the WRITE path
+// and never by a read — `finishRecord` does not populate it — so a reader
+// reaching through it would find nil on every row and quietly answer "no
+// attempts" for every turn in the company. The tags blob is populated on
+// read, but only from what the WRITER extracted: schema/0029 backfilled the
+// column for history and could not rewrite every stored blob, so a tag read
+// answers nothing for every turn written before the split. See the field.
+//
+// THE WINDOW IS THE DETAIL READ'S, not the turns list's default. [store.Turn]
+// is a listing type and its query takes DefaultTurnDays — a week — when asked
+// for nothing, while the rows above came from [store.EventLog.Turn], which
+// floors at [store.EventHistory]. Left implicit, opening a turn between eight
+// and thirty days old found its work key and then reported no attempt at all,
+// including the one being read. MaxTurnDays is that same horizon, so the two
+// halves of this answer describe one window.
+func (s Sources) attemptsOf(ctx context.Context, id string,
+	records []store.EventRecord,
+) (string, []store.Turn) {
+	key := ""
+	for _, rec := range records {
+		if rec.WorkKey != "" {
+			key = rec.WorkKey
+			break
+		}
+	}
+	if key == "" {
+		return "", []store.Turn{}
+	}
+	// EVERY RUN, which is why the page is the ceiling rather than the
+	// default. This is an enumeration bounded by the broker's own delivery
+	// budget — a trigger gets twenty-five attempts before it dead-letters
+	// (internal/queue/jetstream) — not a page somebody scrolls, and it is
+	// an index seek on schema/0029's partial index over one key. Taking
+	// DefaultTurnPage would have tied "attempt 3 of 4" to a knob sized for
+	// a scannable list, so shrinking that list would silently start
+	// miscounting attempts.
+	rows, err := s.Events.Turns(ctx, store.TurnQuery{
+		WorkKey:   key,
+		SinceDays: store.MaxTurnDays,
+		Limit:     store.MaxTurnPage,
+	})
+	if err != nil {
+		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,
+			"work_key", key, "error", err)
+		return key, []store.Turn{}
+	}
+	// OLDEST FIRST, which the listing is not: "attempt 2 of 3" has to count
+	// from the one that ran first, whatever order the list was built in.
+	slices.Reverse(rows)
+	return key, rows
 }
 
 // TurnClosingEvents is how many of a long turn's last rows are recovered

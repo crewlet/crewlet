@@ -550,6 +550,55 @@ that `integrations.slack.status_phrases` can replace. See
 
 ---
 
+## A turn's two identities
+
+A turn carries **two ids, and they are not the same value**. Getting this
+round the right way is what stops a retry being invisible.
+
+| | What it names | Reproduced by a redelivery? |
+|---|---|---|
+| **run id** (`turn_id` on every event) | ONE execution of a turn | **No** — minted per dispatch |
+| **work key** (`work_key`) | the unit of work: the trigger events the dispatch derived it from | **Yes** — that is what it is for |
+
+A turn that breaks *before* it reached outside the engine is not abandoned:
+its trigger is NAK'd and the broker redelivers it, backing off from one second
+to thirty across twenty-five attempts (invariant 10 above). **So one unit of
+work legitimately runs more than once** — a seat whose LLM credentials were
+missing fails, an operator fixes them, and the next redelivery succeeds.
+
+Each of those runs is its own turn: its own `turn_id`, its own phase records,
+its own row in **Turns**, its own outcome and its own token count. That is why
+a turn that failed and then recovered shows as two rows rather than one row
+that is somehow both — and the dashboard marks the second one `re-run` so the
+two read as what they are. The work key is what relates them: ask for
+`work_key` on `/events` or on the turns list to get every attempt at one
+trigger.
+
+Everything that must happen **once per unit of work however many times it
+runs** keys on the work key, never on the run: the completion ledger, the
+[episode row](agent-learning.md), the counterparty interaction count, the
+[conversation entry](conversation-sessions.md), and the derived ids that make
+a re-run's tracker comment and work-item update land once. Everything that
+describes **one execution** keys on the run: the phase records, the live view,
+a [detached sandbox run](code-sandbox.md) and its MCP bridge session.
+
+A **resumed** turn is not a re-run. A detached coding job re-enters the run
+that parked it, carrying that run's id and work key on its own row, so a
+suspend/resume pair is one turn on every screen.
+
+Where that shows on the screens:
+
+| Screen | What a re-run looks like |
+|---|---|
+| **Turns** | two rows, the later one tagged `re-run` |
+| A seat's **Turns** tab | two cards, the later one tagged `attempt 2/2` |
+| A **turn's own page** | the badge, plus a button to each other attempt saying whether it failed |
+| **Cost** and a seat's spend | two rows with their own real bills, each tagged `re-run` — the tokens are not summed, because each attempt genuinely spent them |
+
+`adr/0017` records the decision and what folding the two into one value cost.
+
+---
+
 ## Events and tracing
 
 Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id` and its `worker` template, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.

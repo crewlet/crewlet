@@ -89,7 +89,7 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 	if brief == "" {
 		return failedDetached("run_sandbox needs a non-empty `brief` describing the code task."), nil
 	}
-	if turn == nil || turn.ID == "" {
+	if turn == nil || turn.RunID == "" {
 		return failedDetached("run_sandbox needs an active turn; it can only be " +
 			"called from within an Execute phase."), nil
 	}
@@ -103,7 +103,7 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 	}
 
 	log.InfoContext(ctx, "run_sandbox_suspended",
-		"turn_id", turn.ID, "sandbox_id", res.SandboxID,
+		"turn_id", turn.RunID, "sandbox_id", res.SandboxID,
 		"coding_agent", res.CodingAgent, "reused", res.Reused)
 
 	return tools.DetachedResult{
@@ -113,7 +113,7 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 		},
 		Suspend: true,
 		Payload: map[string]any{
-			"turn_id":    turn.ID,
+			"turn_id":    turn.RunID,
 			"sandbox_id": res.SandboxID,
 		},
 	}, nil

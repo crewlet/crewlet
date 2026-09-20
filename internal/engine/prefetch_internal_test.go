@@ -217,6 +217,7 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 	}
 	e.prefetchFor(t.Context(), company, Request{
 		Handle:  "lead",
+		RunID:   "run-1",
 		WorkKey: "work-1",
 		Events:  []*events.Event{notification("gitlab", "dev", nil, true)},
 	}, "a pull request got a comment")
@@ -226,8 +227,12 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		switch {
 		case summary.RoleName != "Tech Lead" || summary.AgentHandle != "lead":
 			t.Errorf("the summary is attributed to %+v", summary)
-		case summary.TurnID != "work-1":
-			t.Errorf("turn = %q", summary.TurnID)
+		// THE RUN, so the summary sits under the same id every phase
+		// record of this turn does. Under the work key it landed on an
+		// id no phase shares — invisible to the turn view. See ADR-0017.
+		case summary.TurnID != "run-1":
+			t.Errorf("turn = %q, want the run this prefetch was assembled for",
+				summary.TurnID)
 		// A node with no store and no models renders nothing at all,
 		// which is exactly the state this event exists to make visible:
 		// a seat running with no memory must not look like a seat whose

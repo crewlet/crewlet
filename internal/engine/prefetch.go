@@ -59,7 +59,9 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 // The SEAT and the AGENT ID are read off the pinned epoch, like everything
 // else a turn is built from: a prefetch resolved against a revision the turn
 // is not running would surface another company's memory.
-func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request, task string) prefetch.Blocks {
+func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
+	task string,
+) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
 		return prefetch.Blocks{}
@@ -67,7 +69,14 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
-		Task: task, TurnID: req.WorkKey,
+		// THE RUN, not the unit of work. Every phase record of this turn
+		// is filed under the run, so a prefetch summary carrying the work
+		// key would sit under an id no phase shares — invisible to the
+		// turn view and to `GET /events?turn_id=`. And the prefetcher's
+		// own per-turn cache is keyed on it: a retry keyed on the work
+		// key would inherit the FAILED attempt's frozen context blocks
+		// rather than assembling its own. See ADR-0017.
+		Task: task, TurnID: req.RunID,
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -84,7 +93,7 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		RequiresRecon: requiresRecon(req.Ask()),
 	}
 	blocks := e.prefetcher(company).Fetch(ctx, r)
-	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.WorkKey, r, blocks)
+	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.RunID, req.WorkKey, r, blocks)
 	return blocks
 }
 
@@ -100,14 +109,15 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 // Best effort, and deliberately so: this is measurement, and a turn must not
 // fail because its telemetry could not be published.
 func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
-	agentID, turnID string, r prefetch.Request, b prefetch.Blocks,
+	agentID, runID, workKey string, r prefetch.Request, b prefetch.Blocks,
 ) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
 	}
 	ev := events.NewFrom(types.PrefetchSummary{
 		Agent: agentID, AgentHandle: seat.Handle(), RoleName: seat.Name,
-		TurnID:                 turnID,
+		TurnID:                 runID,
+		WorkKey:                workKey,
 		CounterpartyHit:        b.CounterpartyProfile != "",
 		CounterpartyBytes:      len(b.CounterpartyProfile),
 		SynthesizedSkillsHit:   b.SynthesizedSkills != "",

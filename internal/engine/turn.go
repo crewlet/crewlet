@@ -133,6 +133,15 @@ type Request struct {
 	// WorkKey identifies this unit of work for the whole dispatch.
 	WorkKey string
 
+	// RunID identifies THIS EXECUTION of it — minted per dispatch, so a
+	// redelivered trigger (which re-derives the same WorkKey by design)
+	// runs under an identity of its own. See ADR-0017.
+	//
+	// Empty means "assembled outside Dispatch", which is a test or a
+	// direct driver; [Engine.runTurn] mints one rather than running a turn
+	// with no identity.
+	RunID string
+
 	// Coalesce is true when the partition must be merged into one digest
 	// trigger, so the seat runs one turn instead of N.
 	Coalesce bool
@@ -318,7 +327,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	// above the webhook that actually happened.
 	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
 	depth, chain := delegationOf(routing.Events)
+	// MINTED HERE, at the one frame that knows a partition is about to
+	// RUN, because both halves of the dispatch's own bookkeeping need it:
+	// the conversation entry names the run a reader can open, and the
+	// abandon record names the run that stopped. See ADR-0017.
 	req := Request{
+		RunID:  newRunID(),
 		Handle: handle, Events: routing.Events, Trigger: trigger,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
 		TimeoutSeconds:  wallClockOf(routing.Events),
@@ -344,11 +358,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		log.WarnContext(ctx, "conversation_history_unreadable",
 			"seat", handle, "conversation", req.ConversationKey, "error", err)
 	}
-
-	// The work key travels on the context, not as an argument, because the
-	// writers that must not duplicate under it sit frames below the
-	// dispatch behind functions with no other reason to carry it.
-	ctx = workkey.With(ctx, req.WorkKey)
 
 	// The acting seat travels the same way, and for the same reason: the
 	// only consumer is a leaf. A cli-agent provider gives every seat its
@@ -381,7 +390,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 					d.NoteDeferred(handle)
 				}
 				log.InfoContext(ctx, "turn_seat_moved", "seat", handle,
-					"work_key", req.WorkKey, "error", err.Error())
+					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 				return queue.Defer("the seat moved to another node mid-turn")
 			}
 			// Nothing this turn did can be proven to have left the
@@ -422,8 +431,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 // and this adds the half that record cannot carry: that the trigger behind it
 // will not come back. Both halves name the same seat and the same work key.
 func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, cause error) queue.Result {
+	// BOTH IDENTITIES. This record is paired with the turn's own completion
+	// event (see [Engine.publishTurnCompleted]) and the two are joined by a
+	// reader: the completion names the RUN, so a line carrying only the work
+	// key stopped joining it the moment the two stopped being one value.
 	log.ErrorContext(ctx, "turn_abandoned_after_acting", "seat", handle,
-		"work_key", req.WorkKey, "error", cause.Error(),
+		"run_id", req.RunID, "work_key", req.WorkKey, "error", cause.Error(),
 		"detail", "the turn broke after it had already written outside the engine, "+
 			"so its trigger is recorded rather than redelivered — a retry would "+
 			"repeat those writes and cannot take them back")
@@ -582,7 +595,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
-	d.RecordSession(ctx, handle, req.ConversationKey, req.WorkKey,
+	d.RecordSession(ctx, handle, req.ConversationKey, req.RunID, req.WorkKey,
 		DescribeTrigger(req.Ask()), res, now)
 }
 
@@ -599,8 +612,15 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 // Fails open, like the completion write beside it: a turn whose bookkeeping
 // failed has already delivered, and refusing to admit it happened is the
 // worse of the two errors.
-func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation, workKey, trigger string,
-	res turn.Result, now time.Time,
+// TWO IDENTITIES, BECAUSE THE ENTRY AND THE DEDUPE ARE DIFFERENT QUESTIONS.
+// runID is what the entry RENDERS — the seat reads "(turn a1b2c3d4)" back on
+// its next turn of this thread, and that has to name the execution somebody
+// can open. workKey is what the row is DEDUPED on, and it has to survive a
+// re-run or the same trigger files two entries into one conversation. One
+// value served both until a turn id stopped meaning the unit of work; see
+// ADR-0017.
+func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
+	runID, workKey, trigger string, res turn.Result, now time.Time,
 ) {
 	if d == nil {
 		return
@@ -626,7 +646,7 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation, wo
 	// produced them — no trigger, no intent, no calls — and the renderer's
 	// other three sections never appeared at all.
 	in := ledger.SessionInput{
-		TurnID:  workKey,
+		TurnID:  runID,
 		At:      now.Format(time.RFC3339),
 		Trigger: trigger,
 		Reply:   res.Artifact,

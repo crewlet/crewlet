@@ -239,7 +239,7 @@ func TestLoadingASkillIsPublished(t *testing.T) {
 			"and a seat reusing its own answer different questions",
 			payload.SourceKind, types.SkillSourceSynthesized)
 	}
-	if payload.AgentHandle != "agent-ceo" || payload.TurnID != turn.ID {
+	if payload.AgentHandle != "agent-ceo" || payload.TurnID != turn.RunID {
 		t.Errorf("event does not place the load: handle %q turn %q",
 			payload.AgentHandle, payload.TurnID)
 	}
@@ -450,7 +450,7 @@ func TestRefreshMemoryCapsDistinctHintsAndNotRepeats(t *testing.T) {
 	// PER TURN. A different turn starts with the whole budget, or one busy
 	// turn would silence the tool for every turn after it.
 	other := turnFor(t, "agent-ceo")
-	other.ID = "wk-2"
+	other.RunID = "run-2"
 	if res := callFor(t, tool, other, map[string]any{"context_hint": "third thing"}); res.Failed {
 		t.Errorf("a new turn inherited the previous turn's spend: %q", res.Output)
 	}
@@ -591,14 +591,14 @@ func TestTheHintLedgerForgetsOldTurns(t *testing.T) {
 	}, builtin.RefreshMemoryTool)
 
 	oldest := turnFor(t, "agent-ceo")
-	oldest.ID = "wk-oldest"
+	oldest.RunID = "run-oldest"
 	if res := callFor(t, tool, oldest, map[string]any{"context_hint": "indexing"}); res.Failed {
 		t.Fatalf("the first call was refused: %q", res.Output)
 	}
 	// Well past the bound, so the first turn's entry must have fallen out.
 	for i := range builtin.HintLedgerTurns + 1 {
 		turn := turnFor(t, "agent-ceo")
-		turn.ID = fmt.Sprintf("wk-%d", i)
+		turn.RunID = fmt.Sprintf("wk-%d", i)
 		callFor(t, tool, turn, map[string]any{"context_hint": "indexing"})
 	}
 	before := recall.memoryCalls

@@ -78,6 +78,17 @@ export interface EventRecord {
    * how a turn could render red in the feed and clean on its own page.
    */
   failed?: boolean;
+  /**
+   * The unit of work this row's run was an attempt at — see `adr/0017`.
+   *
+   * OFF THE PROMOTED COLUMN server-side, and it is the one promoted value that
+   * is not a copy of a tag: migration `0029` backfilled the column from
+   * `turn_id`, which is where the work key lived before the split, and
+   * deliberately left the stored payloads and tags blobs alone. So a reader
+   * going through `payload.work_key` answers nothing for every turn written
+   * before the split, while this field answers for all of them.
+   */
+  work_key?: string;
 }
 
 export interface EventsPage {
@@ -159,7 +170,19 @@ export interface RoundNarration {
 
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
 export interface LiveCall {
+  /**
+   * ONE RUN of a turn. A trigger that fails without acting is redelivered, so
+   * one unit of work legitimately runs several times, and each run is its own
+   * id: `(turn_id, phase, iteration)` is the key every phase row is stored
+   * under, and it has to be unique per execution. See `adr/0017`.
+   */
   turn_id: string;
+  /**
+   * The unit of work behind that run — what groups a trigger's attempts.
+   * Absent on a row an engine from before the split wrote, where `turn_id`
+   * carries it instead.
+   */
+  work_key?: string;
   phase: string;
   iteration: number;
   model: string;
@@ -274,7 +297,12 @@ export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
 
 export interface SandboxRun {
+  /** The RUN this job belongs to — one execution of a turn, and this
+   *  record's own key. See `adr/0017`. */
   turn_id: string;
+  /** The unit of work behind that run. Absent on a row written before the
+   *  identities were split. */
+  work_key?: string;
   agent_handle: string;
   role: string;
   status: SandboxStatus;
@@ -370,7 +398,12 @@ export interface AgentSpendRow extends Bucket {
   by_phase: Record<string, Bucket>;
 }
 export interface TurnSpendRow extends Bucket {
+  /** ONE ROW PER RUN. Each attempt at a redelivered trigger really did spend
+   *  what it spent, so summing them would charge one turn with another's
+   *  tokens — `work_key` is what relates them. See `adr/0017`. */
   turn_id: string;
+  /** The unit of work this run was an attempt at, absent when it had none. */
+  work_key?: string;
   role: string;
   handle: string;
   agent_id: string;
@@ -2568,9 +2601,21 @@ export interface PhasesPage {
   exhausted: boolean;
 }
 
-/** Every stored event of one turn, ordered oldest first. */
+/** Every stored event of one RUN of a turn, ordered oldest first. */
 export interface TurnAnswer {
   turn_id: string;
+  /**
+   * The unit of work this run was an attempt at, and every run of it the
+   * store holds, OLDEST FIRST.
+   *
+   * A turn id names one execution (see `adr/0017`), so a trigger that failed
+   * without reaching outside the engine and was redelivered is several turns
+   * — and this screen is where every deep link in the product lands. One
+   * element (this turn) is the ordinary case; an empty `work_key` means the
+   * trigger had no key to collapse on, and `attempts` is then empty too.
+   */
+  work_key?: string;
+  attempts?: TurnRow[];
   events: EventRecord[];
   /**
    * True when the store stopped at its per-turn cap rather than at the end of
@@ -3288,7 +3333,19 @@ export interface WorkRoutingAnswer {
 
 /** One unit of agent work, as a list row. */
 export interface TurnRow {
+  /**
+   * ONE RUN of a turn. A trigger that fails without acting is redelivered, so
+   * one unit of work legitimately runs several times, and each run is its own
+   * id: `(turn_id, phase, iteration)` is the key every phase row is stored
+   * under, and it has to be unique per execution. See `adr/0017`.
+   */
   turn_id: string;
+  /**
+   * The unit of work behind that run — what groups a trigger's attempts.
+   * Absent on a row an engine from before the split wrote, where `turn_id`
+   * carries it instead.
+   */
+  work_key?: string;
   agent_id?: string;
   role?: string;
   /** The span of the turn's own EVENTS, which is not its duration: the span

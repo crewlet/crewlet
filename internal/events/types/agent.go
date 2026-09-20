@@ -137,6 +137,9 @@ type AgentTurnCompleted struct {
 
 	// The turn engine's own summary of the loop.
 	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
 	// PlanModel is NO LONGER WRITTEN: there is no plan phase. It stays on
 	// the type because the event store holds rows an earlier build wrote,
 	// and a reader that dropped the field would render those turns as
@@ -205,7 +208,10 @@ type TurnCompleted struct {
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 	TurnID      string `json:"turn_id"`
-	TaskID      string `json:"task_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
+	TaskID  string `json:"task_id"`
 	// StartedAt / EndedAt bound the turn; DurationMS is the span the learning
 	// workers actually reason about.
 	StartedAt   time.Time `json:"started_at"`
@@ -294,9 +300,12 @@ func (e TurnCompleted) SummaryFor(actor string) string {
 // Not emitted for subagent, judge or auxiliary phases: those nest under a host
 // phase that is already showing.
 type AgentPhaseStarted struct {
-	Agent     string `json:"agent_id"`
-	RoleName  string `json:"role"`
-	TurnID    string `json:"turn_id"`
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	TurnID   string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
 	Phase     Phase  `json:"phase"`
 	// Trigger rides on every phase event so a live row that has no completed
@@ -329,9 +338,24 @@ func (e AgentPhaseStarted) SummaryFor(actor string) string {
 // times and Iteration tags which; sub-agent spawns emit their own as siblings
 // under the parent Execute phase.
 type AgentPhaseCompleted struct {
-	Agent     string `json:"agent_id"`
-	RoleName  string `json:"role"`
-	TurnID    string `json:"turn_id"`
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	// TurnID names ONE RUN of a turn. (TurnID, Phase, Iteration) is the
+	// identity every reader keys a phase row on — the live projection, the
+	// dashboard's merge, the store's fold — so it has to be unique per
+	// execution, which is exactly what the work key is not. See ADR-0017.
+	TurnID string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — the set
+	// of trigger events the dispatch derived it from, stable across a
+	// re-run and across nodes, and empty for a trigger with none.
+	//
+	// BESIDE TurnID RATHER THAN INSTEAD OF IT. TurnID names ONE RUN, so a
+	// redelivered trigger's second attempt writes its own phase records
+	// instead of landing on top of the first attempt's — and this is what
+	// still groups the attempts, which is the question an operator asks
+	// when a turn failed and came back. The two were one value once; see
+	// ADR-0017 for what that cost.
+	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
 	Phase     Phase  `json:"phase"`
 	// HostPhase / HostIteration are set only on a judge event: the phase that
@@ -499,9 +523,12 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 // consumers correlate these with the turn-grouped history through TurnID,
 // Phase and Iteration, which mirror the same fields on the phase events.
 type AgentTurnProgress struct {
-	Agent     string `json:"agent_id"`
-	RoleName  string `json:"role"`
-	TurnID    string `json:"turn_id"`
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	TurnID   string `json:"turn_id"`
+	// WorkKey is the unit of work this run was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey   string `json:"work_key,omitempty"`
 	Phase     Phase  `json:"phase"`
 	Iteration int    `json:"iteration"`
 	Model     string `json:"model"`
@@ -577,10 +604,18 @@ func (e AgentTurnProgress) SummaryFor(actor string) string {
 // fan-out work and spot a pathological one.
 type SubagentBatched struct {
 	ParentHandle string `json:"parent_handle"`
-	TaskCount    int    `json:"task_count"`
-	Successes    int    `json:"successes"`
-	Failures     int    `json:"failures"`
-	TotalTokens  int    `json:"total_tokens"`
+	// TurnID is the RUN that made the call, and WorkKey the unit of work
+	// behind it. Neither was here, so the one summary a fan-out emits
+	// could be joined to nothing: not to the turn that ran it, not to the
+	// per-worker `agent_phase_completed` rows it summarises, and not to
+	// `/events?turn_id=`, which its empty column never answered. See
+	// ADR-0017.
+	TurnID      string `json:"turn_id,omitempty"`
+	WorkKey     string `json:"work_key,omitempty"`
+	TaskCount   int    `json:"task_count"`
+	Successes   int    `json:"successes"`
+	Failures    int    `json:"failures"`
+	TotalTokens int    `json:"total_tokens"`
 
 	// Graph is the shape the call ran: every task, the worker it used, its
 	// topological wave and what it waited for.

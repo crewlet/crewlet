@@ -76,7 +76,12 @@ export interface Round {
 export interface PhaseRecord {
   /** `turn|phase|iteration`. The SAME value live and finished. */
   key: string;
+  /** ONE RUN of a turn — unique per execution, which is what makes `key`
+      unique per execution. See `adr/0017`. */
   turnId: string;
+  /** The unit of work behind that run: what groups a redelivered trigger's
+      attempts. Empty on a record an engine from before the split wrote. */
+  workKey: string;
   phase: string;
   iteration: number;
   role: string;
@@ -343,6 +348,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
   return {
     key: phaseKey(call.turn_id, call.phase, call.iteration),
     turnId: call.turn_id,
+    workKey: call.work_key ?? "",
     phase: call.phase,
     iteration: call.iteration,
     role,
@@ -407,6 +413,15 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   return {
     key: phaseKey(turnId, phase, iteration, taskId),
     turnId,
+    // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
+    // carries. The stored column is backfilled across the split
+    // (migration 0029) and the payload is not, so a payload-only read
+    // reports no unit of work for every turn older than the split.
+    // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
+    // carries. The stored column is backfilled across the split
+    // (migration 0029) and the payload is not, so a payload-only read
+    // reports no unit of work for every turn older than the split.
+    workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
     role: String(p.role ?? ev.actor ?? ""),
@@ -596,15 +611,35 @@ export function turnSpan(
 /**
  * Merge the live view and the durable record into one ordered list.
  *
- * The DURABLE record wins on a key collision, always: it is the complete one,
- * and a live call lingering in the projection after its event has landed would
- * otherwise re-blank the fields only the event carries (decision, notes, the
- * verbatim system prompt).
+ * The DURABLE record wins over a LIVE one on a key collision: it is the
+ * complete one, and a live call lingering in the projection after its event
+ * has landed would otherwise re-blank the fields only the event carries
+ * (decision, notes, the verbatim system prompt).
+ *
+ * Between two DURABLE records the NEWER one wins, and that rule had to be
+ * written down. The premise underneath the old code — that two records
+ * sharing a key are "the same durable record", so whichever arrived by the
+ * more authoritative route could win — held only while a phase key was unique.
+ * It was not: a turn id used to be the work key, which a redelivery
+ * reproduces, so a retry's `execute` record collided with the failed
+ * attempt's. Both were real, different phases; this function kept the one the
+ * mount-time query happened to apply last, which is the OLDEST, and the retry
+ * was invisible for as long as it ran. Run ids are unique per execution now
+ * (see `adr/0017`) so the collision should not recur — and a merge that
+ * silently prefers stale data on a key it cannot prove unique is the shape
+ * that hid it, so it does not go back.
  */
 export function mergePhases(stored: PhaseRecord[], live: PhaseRecord[]): PhaseRecord[] {
   const byKey = new Map<string, PhaseRecord>();
   for (const rec of live) byKey.set(rec.key, rec);
-  for (const rec of stored) byKey.set(rec.key, rec);
+  for (const rec of stored) {
+    const held = byKey.get(rec.key);
+    // A live row always yields to a durable one; between two durable rows the
+    // newer wins, and a tie keeps the one already held so the order a caller
+    // passes them in cannot change the answer.
+    if (held && !held.live && tsKey(held.at) >= tsKey(rec.at)) continue;
+    byKey.set(rec.key, rec);
+  }
   return [...byKey.values()].sort((a, b) => {
     // Newest first, and NEVER by comparing the ISO strings: Go trims trailing
     // zeros from RFC3339Nano, so `…:07Z` sorts before `…:07.42Z` by comparing
@@ -620,6 +655,11 @@ export function mergePhases(stored: PhaseRecord[], live: PhaseRecord[]): PhaseRe
 
 export interface TurnGroup {
   turnId: string;
+  /** The unit of work this run was an attempt at. Empty when its phases carry
+      none — a trigger with no ledgerable id, or records an engine from before
+      the split wrote. Two groups sharing one of these are two attempts at the
+      same trigger; see `adr/0017`. */
+  workKey: string;
   role: string;
   /** The turn's OWN phases, in the order they ran. A nested call is not
       here — it hangs off the phase that made it, see `nested`. */
@@ -659,6 +699,48 @@ export interface TurnGroup {
   failed: boolean;
   totalTokens: number;
   trigger: PhaseRecord["trigger"];
+}
+
+/** Which attempt at its trigger a turn was, for the turns a screen holds. */
+export interface Attempt {
+  /** 1-based, oldest attempt first. */
+  index: number;
+  total: number;
+}
+
+/**
+ * Number each turn among the other attempts at the same trigger.
+ *
+ * A turn id names ONE RUN (see `adr/0017`), so a trigger that failed without
+ * acting and was redelivered is several turns — which is honest, and on its
+ * own leaves an operator looking at two rows with no way to tell they are the
+ * same work. This is what tells them.
+ *
+ * SCOPED TO WHAT THE CALLER HOLDS, deliberately, and the caller says so in the
+ * tooltip: these are the attempts on this screen, not a claim about every
+ * attempt that ever ran. Counting the rest would need a query per work key,
+ * and a number quietly computed from a page is the kind of figure that reads
+ * as authoritative and is not.
+ *
+ * A turn with no work key gets no attempt at all: an empty key is the absence
+ * of an identity, not a value, so grouping on it would report every
+ * unledgered turn on the page as attempts at one another.
+ */
+export function attempts(groups: readonly TurnGroup[]): Map<string, Attempt> {
+  const byKey = new Map<string, TurnGroup[]>();
+  for (const g of groups) {
+    if (!g.workKey) continue;
+    byKey.set(g.workKey, [...(byKey.get(g.workKey) ?? []), g]);
+  }
+  const out = new Map<string, Attempt>();
+  for (const list of byKey.values()) {
+    if (list.length < 2) continue;
+    // Oldest first, so "attempt 1" is the one that ran first however the
+    // caller happened to sort them.
+    const ordered = [...list].sort((a, b) => tsKey(a.startedAt) - tsKey(b.startedAt));
+    ordered.forEach((g, i) => out.set(g.turnId, { index: i + 1, total: ordered.length }));
+  }
+  return out;
 }
 
 /** Group phases into the turns they belong to, newest turn first. */
@@ -704,6 +786,11 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       const startedAt = from > 0 ? new Date(from).toISOString() : "";
       return {
         turnId,
+        // OFF THE PHASES, and the first that HAS one rather than the first
+        // phase: a record written before the identities were split carries
+        // none, and a turn whose opening phase is such a record still belongs
+        // to whatever unit of work its later phases name.
+        workKey: ordered.find((r) => r.workKey)?.workKey ?? "",
         role: ordered[0]?.role ?? "",
         phases: own,
         nested,

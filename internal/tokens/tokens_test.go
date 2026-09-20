@@ -352,3 +352,40 @@ func TestOrdinaryStampsStillOrder(t *testing.T) {
 		t.Errorf("StartedAt = %q", got.ByTurn[0].StartedAt)
 	}
 }
+
+// TWO RUNS OF ONE TRIGGER ARE TWO COST ROWS, EACH LINKABLE TO THE OTHER.
+//
+// A turn id names one RUN (ADR-0017), so a trigger that fails without
+// reaching outside the engine and is redelivered spends twice — and each
+// attempt really did spend what it spent, so folding them into one row would
+// charge a turn with another's tokens. What the rows need instead is the work
+// key, which is the only thing that says they are attempts at one trigger:
+// without it an expensive-looking pair reads as the company having paid for
+// the work twice.
+func TestTwoRunsOfOneTriggerAreTwoLinkableRows(t *testing.T) {
+	t.Parallel()
+	first := rec("CEO", "execute", "sonnet", "run-1", "2026-06-14T12:00:00Z", 10, 0)
+	first.WorkKey = "wk-1"
+	second := rec("CEO", "execute", "sonnet", "run-2", "2026-06-14T12:02:00Z", 300, 27)
+	second.WorkKey = "wk-1"
+
+	got := tokens.Aggregate([]tokens.Record{first, second},
+		tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
+
+	if len(got.ByTurn) != 2 {
+		t.Fatalf("by_turn = %d rows, want one per run: %+v", len(got.ByTurn), got.ByTurn)
+	}
+	byID := map[string]tokens.TurnRow{}
+	for _, row := range got.ByTurn {
+		byID[row.TurnID] = row
+	}
+	if byID["run-1"].TotalTokens != 10 || byID["run-2"].TotalTokens != 327 {
+		t.Errorf("run-1 = %d, run-2 = %d — a sum across attempts charges one "+
+			"turn with another's spend",
+			byID["run-1"].TotalTokens, byID["run-2"].TotalTokens)
+	}
+	if byID["run-1"].WorkKey != "wk-1" || byID["run-2"].WorkKey != "wk-1" {
+		t.Errorf("work keys = %q and %q, want both to name the one trigger",
+			byID["run-1"].WorkKey, byID["run-2"].WorkKey)
+	}
+}

@@ -216,9 +216,10 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 		Agent:       agentID,
 		AgentHandle: handle,
 		RoleName:    seatName(seat),
-		// NO TurnID. The draft came from a cluster rather than from one
-		// turn, and naming any single member would put a trace on the
-		// event that explains none of the other ten.
+		// NO TurnID, and NO WorkKey either, for one reason: the draft
+		// came from a cluster rather than from one turn, and naming any
+		// single member would put a trace on the event that explains
+		// none of the other ten.
 		SkillName:   draft.Name,
 		SkillID:     skill.ID,
 		Trigger:     types.SynthesisClustered,

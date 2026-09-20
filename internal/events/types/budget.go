@@ -28,8 +28,15 @@ const (
 // type is in FailureEventTypes: a refused charge is a failure whatever the
 // payload says.
 type BudgetExhausted struct {
-	Agent      string      `json:"agent_id"`
-	RoleName   string      `json:"role"`
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	// TurnID is the RUN whose charge was refused, and WorkKey the unit of
+	// work behind it. Neither was here, and this is one of the three types
+	// a seat goes AFK on — so the only failure record that could be
+	// attributed to no turn at all was the one an operator opens the turn
+	// to understand. See ADR-0017.
+	TurnID     string      `json:"turn_id,omitempty"`
+	WorkKey    string      `json:"work_key,omitempty"`
 	BudgetType BudgetScope `json:"budget_type"`
 	UsedTokens int         `json:"used_tokens"`
 	MaxTokens  int         `json:"max_tokens"`

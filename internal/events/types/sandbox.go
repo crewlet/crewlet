@@ -17,10 +17,15 @@ func init() {
 // SandboxRunStarted marks a detached coding job being kicked off, after the
 // pending-run row is persisted.
 type SandboxRunStarted struct {
-	Agent           string `json:"agent_id"`
-	AgentHandle     string `json:"agent_handle"`
-	RoleName        string `json:"role"`
-	TurnID          string `json:"turn_id"`
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey         string `json:"work_key,omitempty"`
 	SandboxID       string `json:"sandbox_id"`
 	CodingAgent     string `json:"coding_agent"`
 	ConversationKey string `json:"conversation_key"`
@@ -66,6 +71,11 @@ type SandboxRunCompleted struct {
 	RoleName    string `json:"role"`
 	TurnID      string `json:"turn_id"`
 	LaunchID    string `json:"launch_id,omitempty"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey     string `json:"work_key,omitempty"`
 	SandboxID   string `json:"sandbox_id"`
 	CodingAgent string `json:"coding_agent"`
 }
@@ -100,10 +110,15 @@ func (e SandboxRunCompleted) SummaryFor(actor string) string {
 // Audience is "requester", "team", "manager" or a handle — an open set, since a
 // named colleague is a legitimate audience.
 type SandboxClarificationRequested struct {
-	Agent           string `json:"agent_id"`
-	AgentHandle     string `json:"agent_handle"`
-	RoleName        string `json:"role"`
-	TurnID          string `json:"turn_id"`
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey         string `json:"work_key,omitempty"`
 	SandboxID       string `json:"sandbox_id"`
 	Question        string `json:"question"`
 	Audience        string `json:"audience"`
@@ -153,6 +168,11 @@ type SandboxRunFailed struct {
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
+	// work-key filter answers with a run's WHOLE record rather than only
+	// its phases.
+	WorkKey     string `json:"work_key,omitempty"`
 	SandboxID   string `json:"sandbox_id"`
 	CodingAgent string `json:"coding_agent"`
 	Reason      string `json:"reason"`

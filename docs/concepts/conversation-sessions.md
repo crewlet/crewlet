@@ -127,9 +127,16 @@ rediscover the hard way.
 ### Identity
 
 The row is keyed on `(agent_handle, conversation_key)` and deduped on
-`work_key` — **never** `turn_id`. Two nodes completing one trigger mint two
-turn ids, so a turn-keyed row would *record* the duplicate instead of
-collapsing it, and the next turn would read its own reply twice.
+`work_key` — **never** `turn_id`. A turn id names ONE RUN
+([two identities](turn-engine.md#a-turns-two-identities)), and one trigger
+legitimately runs more than once: a turn that broke before reaching outside
+the engine is redelivered, and two nodes completing one trigger mint two runs
+besides. A turn-keyed row would *record* each of those instead of collapsing
+them, and the next turn would read its own reply twice.
+
+The row still **carries** the run id beside the key, because that is what it
+renders: the seat reads "(turn a1b2c3d4)" back on its next turn of the thread,
+and that has to name an execution somebody can open.
 
 The dedupe index is **partial**, over `work_key <> ''`: an empty work key is
 the documented "a turn with no ledgerable trigger", and those turns are
@@ -246,10 +253,15 @@ cannot undercut the worker's own invariant.
 
 ## Storage
 
-One row per recorded turn in `conversation_sessions`, a regular
-table (not a hypertable), so dedupe is a plain unique index and an ordinary
-`ON CONFLICT DO NOTHING` — the advisory-lock dance in
-`031_work_key.sql` exists only because `episodes` is partitioned on time.
+One row per recorded turn in `conversation_sessions`, deduped by a plain
+partial unique index over `work_key <> ''` and an ordinary
+`ON CONFLICT DO NOTHING` (`internal/store/schema/node/0005_turn_ledgers.sql`).
+
+`episodes` reaches the same guarantee by the other route — a NULLable
+`work_key` under a plain unique index, so `ON CONFLICT` can name it
+(`0002_learning.sql`). Two shapes for one rule, and the difference is only
+what `ON CONFLICT` can target: aiming it at a partial index is a parse error
+unless the predicate is repeated verbatim.
 
 Bounded twice: `max_entries` trims on write (a chat DM keys on the whole
 channel rather than a thread, so its ledger never stops receiving entries),

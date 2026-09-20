@@ -68,6 +68,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"BackupSurvivesConcurrentWrites", testBackupUnderWrites},
 		{"RecordSkipsUntrackedTypes", testRecordUntracked},
 		{"NullUnconstrainedWorkKey", testWorkKeyNull},
+		{"AWorkKeyFilterAnswersForEveryRunOfOneTrigger", testWorkKeyFilter},
 		{"OnlyOneRevisionIsActive", testOnlyOneRevisionIsActive},
 		{"AnInsertedRevisionIsHistoryUntilActivated", testAnInsertedRevisionIsHistoryUntilActivated},
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
@@ -1251,4 +1252,46 @@ func zeroPad(i, width int) string {
 		i /= 10
 	}
 	return string(out)
+}
+
+// testWorkKeyFilter certifies the second identity a turn carries.
+//
+// A turn id names ONE RUN, so a trigger that fails without acting and is
+// redelivered is several runs — and `work_key` is what groups them (ADR-0017).
+// Both halves are asserted here rather than only the filter: a promoted column
+// that the writer does not fill answers nothing, and a filter with no column
+// behind it is a scan.
+func testWorkKeyFilter(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	for _, r := range []struct{ id, run, key string }{
+		{"a1", "run-1", "wk-1"},
+		{"a2", "run-2", "wk-1"},
+		{"b1", "run-3", "wk-2"},
+	} {
+		write(t, log, store.EventRecord{
+			ID: r.id, Type: "agent_phase_completed", Source: "engine",
+			Time: base, Category: "lifecycle", Actor: "dev",
+			Tags: map[string]string{"turn_id": r.run, "work_key": r.key},
+		})
+	}
+	// The run selects ONE execution.
+	got, err := log.List(ctx, store.ListQuery{TurnID: "run-1"})
+	if err != nil {
+		t.Fatalf("List by run: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "a1" {
+		t.Errorf("the run filter answered %d rows: %+v", len(got), ids(got))
+	}
+	// The work key selects EVERY execution of one unit of work, which is
+	// the question a turn id by construction cannot ask once it names one.
+	got, err = log.List(ctx, store.ListQuery{WorkKey: "wk-1"})
+	if err != nil {
+		t.Fatalf("List by work key: %v", err)
+	}
+	found := ids(got)
+	slices.Sort(found)
+	if !slices.Equal(found, []string{"a1", "a2"}) {
+		t.Errorf("the work-key filter answered %v, want both runs of wk-1", found)
+	}
 }

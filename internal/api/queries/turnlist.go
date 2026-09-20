@@ -29,7 +29,11 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		AgentRole: strings.TrimSpace(p.String("role")),
 		AgentID:   strings.TrimSpace(p.String("agent_id")),
 		Model:     strings.TrimSpace(p.String("model")),
-		Limit:     p.Int("limit", 0),
+		// EVERY ATTEMPT AT ONE TRIGGER. A turn id names one run now, so
+		// a redelivered trigger is several rows here — and this is how a
+		// reader asks for the others. See ADR-0017.
+		WorkKey: strings.TrimSpace(p.String("work_key")),
+		Limit:   p.Int("limit", 0),
 	}
 	// FAILED IS THREE-VALUED, and the third value is the default: nil is
 	// every turn, true is the ones that carried a failure, false is the

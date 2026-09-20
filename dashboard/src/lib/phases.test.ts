@@ -13,6 +13,7 @@ import {
   fromLiveCall,
   fromPhaseEvent,
   decisionTone,
+  attempts,
   groupTurns,
   mergePhases,
   phaseKey,
@@ -100,6 +101,79 @@ describe("identity", () => {
     expect(merged[0]?.decision).toBe("done");
     expect(merged[0]?.response).toBe("final");
     expect(merged[0]?.live).toBe(false);
+  });
+
+  test("between two DURABLE records on one key the NEWER wins", () => {
+    // THE SHAPE THAT HID A WHOLE RETRY. A turn id used to be the work key,
+    // which a redelivery reproduces by design — so when a turn failed on auth
+    // and the broker redelivered it, the retry's `execute` record carried the
+    // identity the failed attempt already had. Both were real, different
+    // phases. This merge kept whichever the mount-time query applied last,
+    // which is the OLDEST, so the screen showed the dead attempt's `auth`
+    // failure for the whole time the retry was running.
+    //
+    // Run ids are unique per execution now (adr/0017), so this collision
+    // should not recur. The rule stays because a merge that silently prefers
+    // stale data on a key it cannot prove unique is what made it invisible.
+    const older = fromPhaseEvent(
+      phaseEvent({ failed: true, error_kind: "auth", response: "" }, "2026-01-01T00:00:09Z"),
+    )!;
+    const newer = fromPhaseEvent(
+      phaseEvent({ response: "done at last", total_tokens: 327000 }, "2026-01-01T00:02:00Z"),
+    )!;
+    // Both orders, because the caller's order is exactly what used to decide it.
+    for (const pair of [
+      [newer, older],
+      [older, newer],
+    ]) {
+      const merged = mergePhases(pair, []);
+      expect(merged).toHaveLength(1);
+      expect(merged[0]?.response).toBe("done at last");
+    }
+  });
+
+  test("a phase record carries the unit of work beside the run", () => {
+    const done = fromPhaseEvent(phaseEvent({ work_key: "wk-7" }))!;
+    expect(done.turnId).toBe("t1");
+    expect(done.workKey).toBe("wk-7");
+    // Absent on a record an engine from before the split wrote, and EMPTY
+    // rather than undefined so nothing downstream has to test for two
+    // absences.
+    expect(fromPhaseEvent(phaseEvent())!.workKey).toBe("");
+  });
+});
+
+describe("attempts at one trigger", () => {
+  function group(turnId: string, workKey: string, at: string) {
+    return groupTurns([
+      fromPhaseEvent(phaseEvent({ turn_id: turnId, work_key: workKey }, at))!,
+    ])[0]!;
+  }
+
+  test("a turn group carries the work key its phases name", () => {
+    expect(group("run-1", "wk-1", "2026-01-01T00:00:09Z").workKey).toBe("wk-1");
+  });
+
+  test("two runs of one trigger are numbered oldest first", () => {
+    const first = group("run-1", "wk-1", "2026-01-01T00:00:09Z");
+    const second = group("run-2", "wk-1", "2026-01-01T00:05:00Z");
+    // Newest first, which is the order the screens hold them in — the
+    // numbering must not follow it.
+    const got = attempts([second, first]);
+    expect(got.get("run-1")).toEqual({ index: 1, total: 2 });
+    expect(got.get("run-2")).toEqual({ index: 2, total: 2 });
+  });
+
+  test("a turn that ran once is not an attempt, and an empty key is not a group", () => {
+    // A LONE RUN HAS NOTHING TO DISAMBIGUATE, so tagging it "attempt 1/1"
+    // would put a re-run marker on every ordinary turn on the screen.
+    expect(attempts([group("run-1", "wk-1", "2026-01-01T00:00:09Z")]).size).toBe(0);
+    // And an empty work key is the ABSENCE of an identity — a trigger with
+    // nothing to collapse on. Grouping on it would report every unledgered
+    // turn as an attempt at every other.
+    const a = group("run-1", "", "2026-01-01T00:00:09Z");
+    const b = group("run-2", "", "2026-01-01T00:05:00Z");
+    expect(attempts([a, b]).size).toBe(0);
   });
 });
 
@@ -704,5 +778,28 @@ describe("a decision carries its own tone", () => {
     // case on the way out — the label lookup already lowercases, and a tone that
     // did not would lose the hue on one screen and not the next.
     expect(decisionTone("Execute", "blocked")).toBe("caution");
+  });
+});
+
+describe("a pre-split phase record's unit of work", () => {
+  // schema/0029 backfilled the `work_key` COLUMN from `turn_id` — which is
+  // where the work key lived before ADR-0017 split the two — and deliberately
+  // left the stored payloads alone: they record what that build published, and
+  // it published no such field. So a parser reading `payload.work_key` alone
+  // reports no unit of work for every turn older than the split, while the
+  // server answers the same question off the column for all of them. One
+  // authority, and it is the row's own field.
+  test("comes off the row's column, which the payload does not carry", () => {
+    const rec: EventRecord = { ...phaseEvent(), work_key: "wk-backfilled" };
+    const done = fromPhaseEvent(rec)!;
+    expect(done.workKey).toBe("wk-backfilled");
+  });
+
+  // AND A LIVE FRAME STILL WORKS: a phase event pushed on the socket carries
+  // its work key in the payload and no promoted column, because nothing has
+  // stored it yet.
+  test("falls back to the payload for a frame nothing has stored", () => {
+    const done = fromPhaseEvent(phaseEvent({ work_key: "wk-live" }))!;
+    expect(done.workKey).toBe("wk-live");
   });
 });

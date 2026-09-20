@@ -51,7 +51,13 @@ type Record struct {
 	Worker string `json:"worker"`
 	Model  string `json:"model"`
 
+	// TurnID is the RUN the phase belonged to, and WorkKey the unit of
+	// work behind it. Both, because a turn that fails without acting is
+	// redelivered and runs again: the run is what a cost row IS — each
+	// attempt really spent its tokens — and the work key is the only thing
+	// that says the two rows are attempts at one trigger. See ADR-0017.
 	TurnID    string `json:"turn_id"`
+	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
 
 	InputTokens  int `json:"input_tokens"`
@@ -141,7 +147,13 @@ type AgentRow struct {
 
 // TurnRow is one turn's spend, split by phase.
 type TurnRow struct {
+	// ONE ROW PER RUN, not per unit of work. Each attempt at a redelivered
+	// trigger really did spend what it spent, and summing them into one row
+	// would charge a turn with another's tokens — which is what the turns
+	// list did before the identities were split. WorkKey is what relates
+	// them; see ADR-0017.
 	TurnID  string `json:"turn_id"`
+	WorkKey string `json:"work_key,omitempty"`
 	Role    string `json:"role"`
 	Handle  string `json:"handle"`
 	AgentID string `json:"agent_id"`
@@ -295,7 +307,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 		turn := byTurn[r.TurnID]
 		if turn == nil {
 			turn = &TurnRow{
-				TurnID: r.TurnID, Role: role, Handle: opts.Handles[role],
+				TurnID: r.TurnID, WorkKey: r.WorkKey,
+				Role: role, Handle: opts.Handles[role],
 				StartedAt: r.Timestamp, EndedAt: r.Timestamp,
 				ByPhase: map[string]*Bucket{},
 			}

@@ -337,3 +337,122 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 		t.Fatal("PM's phases are empty, so the case above proves nothing")
 	}
 }
+
+// TWO RUNS OF ONE TRIGGER ARE TWO TURNS, and this is the case the whole
+// identity split exists for.
+//
+// A turn that fails without reaching outside the engine is NAK'd and
+// redelivered, so one trigger legitimately runs again — and a turn id used to
+// be the work key, which a redelivery reproduces. Both attempts therefore
+// landed in one `GROUP BY turn_id` bucket: `failed` was MAX over the two, so a
+// turn that failed on auth and then succeeded read as permanently failed; the
+// tokens were the sum of an attempt that spent nothing and one that spent
+// 327k; and the models were concatenated. The operator's screen said one turn
+// had done all of it.
+//
+// See ADR-0017.
+func TestTwoRunsOfOneWorkKeyAreTwoRowsWithTheirOwnOutcome(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	// Attempt one: the provider refused, nothing was spent.
+	seedRun(t, log, "run-1", "wk-1", base, "CEO", true, 0)
+	// Attempt two: the same trigger, redelivered, and this time it worked.
+	seedRun(t, log, "run-2", "wk-1", base.Add(2*time.Minute), "CEO", false, 327_000)
+
+	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("%d rows for two runs of one trigger, want 2: %+v", len(got), got)
+	}
+	// Newest first.
+	second, first := got[0], got[1]
+	if second.TurnID != "run-2" || first.TurnID != "run-1" {
+		t.Fatalf("rows are %s then %s, want run-2 then run-1", second.TurnID, first.TurnID)
+	}
+	if !first.Failed {
+		t.Error("the attempt that failed does not report itself failed")
+	}
+	if second.Failed {
+		t.Error("the attempt that SUCCEEDED inherited the earlier one's failure — " +
+			"which is the whole bug: a recovered turn read as permanently broken")
+	}
+	if first.TotalTokens != 0 || second.TotalTokens != 327_000 {
+		t.Errorf("tokens are %d and %d, want 0 and 327000 — a sum across attempts "+
+			"charges one turn with another's spend", first.TotalTokens, second.TotalTokens)
+	}
+	// AND THEY ARE STILL LINKABLE. Two rows an operator cannot tell are the
+	// same work is the other half of the failure, in the other direction.
+	if first.WorkKey != "wk-1" || second.WorkKey != "wk-1" {
+		t.Errorf("work keys are %q and %q, want both to name the one trigger",
+			first.WorkKey, second.WorkKey)
+	}
+}
+
+// AND THE QUESTION THE SPLIT CREATES IS ASKABLE. A turn id names one run, so
+// "every attempt at this trigger" needs a filter of its own — and schema/0029
+// ships an index for exactly it. A column declared, indexed and unreadable is
+// the failure `eventFilters`' own comment records about turn_id.
+func TestTheTurnListAnswersForEveryRunOfOneWorkKey(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	seedRun(t, log, "run-1", "wk-1", base, "CEO", true, 0)
+	seedRun(t, log, "run-2", "wk-1", base.Add(time.Minute), "CEO", false, 10)
+	seedRun(t, log, "run-3", "wk-2", base.Add(2*time.Minute), "CEO", false, 10)
+
+	got, err := log.Turns(t.Context(), store.TurnQuery{WorkKey: "wk-1"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, row := range got {
+		ids = append(ids, row.TurnID)
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []string{"run-1", "run-2"}) {
+		t.Errorf("the work-key filter answered %v, want both runs of wk-1 and nothing else", ids)
+	}
+}
+
+// seedRun writes one RUN of a turn: one phase and a completion, under its own
+// run id and a work key it may share with other runs.
+func seedRun(t *testing.T, log *store.EventLog, runID, workKey string, at time.Time,
+	role string, failed bool, tokens int,
+) {
+	t.Helper()
+	tags := map[string]string{
+		"turn_id": runID, "work_key": workKey, "trigger": "chat", "agent_role": role,
+	}
+	if failed {
+		tags["failed"] = "true"
+	}
+	phase := store.EventRecord{
+		ID:       runID + "-p0",
+		Type:     "agent_phase_completed",
+		Time:     at,
+		Category: "lifecycle", Actor: role,
+		Tags:  tags,
+		Spend: &store.Spend{TotalTokens: tokens},
+	}
+	if err := log.Append(t.Context(), phase); err != nil {
+		t.Fatalf("append %s: %v", phase.ID, err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"turn_id": runID, "work_key": workKey, "duration_ms": 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: runID + "-done", Type: "turn_completed", Time: at.Add(time.Second),
+		Category: "lifecycle", Actor: role,
+		Tags:    map[string]string{"turn_id": runID, "work_key": workKey},
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("append the completion: %v", err)
+	}
+}

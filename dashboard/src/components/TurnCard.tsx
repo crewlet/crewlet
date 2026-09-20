@@ -23,15 +23,19 @@ import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useNavigator } from "~/app/router.tsx";
-import { triggerHeadline, type TurnGroup } from "~/lib/phases.ts";
+import { triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
 
 export function TurnCard({
   group,
   row,
+  attempt,
   defaultOpen,
 }: {
   group: TurnGroup;
+  /** Which attempt at this trigger the turn was, when the screen holds more
+   *  than one — see `attempts`. Absent for the ordinary turn that ran once. */
+  attempt?: Attempt;
   /** The engine's own settled row for this turn, where the screen holds one.
    *  The card and the turns table above it are ONE turn on ONE screen and were
    *  reporting different numbers for it. */
@@ -109,6 +113,23 @@ export function TurnCard({
         {trigger?.integration && (
           <Tag appearance="outline" monospace title="where this turn's trigger came from">
             {trigger.integration}
+          </Tag>
+        )}
+        {/* A RE-RUN SAYS SO. A trigger whose turn fails without reaching
+            outside the engine is redelivered, so it runs again under a new id
+            — and two rows for one message, each with its own outcome, is
+            exactly what an operator reads as the engine having done the work
+            twice. Neutral, because being a second attempt is a fact about the
+            trigger rather than a fault. */}
+        {attempt && (
+          <Tag
+            appearance="outline"
+            title={
+              `attempt ${attempt.index} of ${attempt.total} at this trigger, among the turns ` +
+              `on this screen — a turn that failed without acting is redelivered and runs again`
+            }
+          >
+            attempt {attempt.index}/{attempt.total}
           </Tag>
         )}
         {group.live && (

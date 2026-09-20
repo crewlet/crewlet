@@ -40,7 +40,7 @@ func TestASubagentPhaseCarriesTheRoundItRanIn(t *testing.T) {
 	var mu sync.Mutex
 	base := emitter{
 		pub:   pub,
-		turn:  Turn{ID: "tn-1", AgentID: "agent-1"},
+		turn:  Turn{RunID: "tn-1", AgentID: "agent-1"},
 		role:  "Lead",
 		tally: &Spend{},
 		mu:    &mu,
@@ -94,7 +94,7 @@ func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
 	var mu sync.Mutex
 	base := emitter{
 		pub:   pub,
-		turn:  Turn{ID: "tn-1", AgentID: "agent-1"},
+		turn:  Turn{RunID: "tn-1", AgentID: "agent-1"},
 		role:  "Lead",
 		tally: &Spend{},
 		mu:    &mu,

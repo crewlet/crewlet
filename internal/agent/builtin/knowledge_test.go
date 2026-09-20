@@ -28,7 +28,7 @@ func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) []knowledge.
 func searchTurn() *turnctx.Turn {
 	role := &org.Role{Name: "Engineer", DeclaredHandle: "eng"}
 	return &turnctx.Turn{
-		ID: "t-1", Seat: role,
+		RunID: "run-1", WorkKey: "t-1", Seat: role,
 		Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}},
 	}
 }

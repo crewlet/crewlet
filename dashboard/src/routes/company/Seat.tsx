@@ -105,6 +105,7 @@ import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "
 import { useNow } from "~/lib/clock.ts";
 import { spanWords } from "~/lib/range.ts";
 import {
+  attempts,
   fromLiveCall,
   fromPhaseEvent,
   groupTurns,
@@ -725,6 +726,19 @@ export function SeatScreen({ handle }: { handle: string }) {
   }, [history.data, phaseEvents, agent, role]);
 
   const turns = useMemo(() => groupTurns(phases), [phases]);
+  // WHICH OF THESE ARE THE SAME WORK. A turn id names one run, so a trigger
+  // that failed without acting and came back is several cards here — and
+  // without this they read as the seat having been asked twice.
+  const attempt = useMemo(() => attempts(turns), [turns]);
+  // The same count the Cost screen takes, over this seat's spend rows: how
+  // many runs each trigger got in the window.
+  const spendReruns = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of spend.data?.by_turn ?? []) {
+      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
+    }
+    return counts;
+  }, [spend.data]);
   // THE ENGINE'S OWN ROW FOR EACH CARD. One turn, one set of figures: the card
   // reads its start and its duration off the same record the table above draws,
   // and falls back to its phases only where there is no row. They disagreed
@@ -1576,7 +1590,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </div>
                 <div className="col gap-2">
                   {liveTurns.map((g) => (
-                    <TurnCard key={g.turnId} group={g} row={turnRows.get(g.turnId)} defaultOpen />
+                    <TurnCard
+                      key={g.turnId}
+                      group={g}
+                      row={turnRows.get(g.turnId)}
+                      attempt={attempt.get(g.turnId)}
+                      defaultOpen
+                    />
                   ))}
                 </div>
               </section>
@@ -1592,6 +1612,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   key={g.turnId}
                   group={g}
                   row={turnRows.get(g.turnId)}
+                  attempt={attempt.get(g.turnId)}
                   defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
                 />
               ))}
@@ -2093,7 +2114,24 @@ export function SeatScreen({ handle }: { handle: string }) {
                       // to the turn, and a link inside it would fire both.
                       key: "id",
                       header: "Turn",
-                      cell: (t) => <KeyCell value={t.turn_id.slice(0, 8)} />,
+                      // THE RE-RUN MARKER, for the reason the Cost screen's
+                      // own table gives: a turn id names one RUN, so a
+                      // redelivered trigger is two rows with two real bills,
+                      // and unmarked they read as the seat having been paid
+                      // for twice. See `adr/0017`.
+                      cell: (t) => (
+                        <span className="row gap-1">
+                          <KeyCell value={t.turn_id.slice(0, 8)} />
+                          {t.work_key && (spendReruns.get(t.work_key) ?? 0) > 1 && (
+                            <Tag
+                              appearance="outline"
+                              title={`one of ${spendReruns.get(t.work_key)} runs of the same trigger in this window`}
+                            >
+                              re-run
+                            </Tag>
+                          )}
+                        </span>
+                      ),
                     },
                     {
                       key: "tokens",

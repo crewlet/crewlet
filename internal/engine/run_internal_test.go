@@ -331,13 +331,17 @@ func TestTheDispatchedRequestCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
 	t.Parallel()
 	req := Request{
 		WorkKey: "wk-1",
+		RunID:   "run-1",
 		Depth:   3,
 		Handle:  "ceo",
 	}
 	in := turnInputFor(req, turn.ToolReply("mattermost"))
 
-	if in.TurnID != "wk-1" {
-		t.Errorf("TurnID = %q, want the work key", in.TurnID)
+	// THE RUN, not the work key: a redelivered trigger re-derives the same
+	// work key by design, so a loop identified by it would log two
+	// executions under one id. See ADR-0017.
+	if in.RunID != "run-1" {
+		t.Errorf("RunID = %q, want the run id", in.RunID)
 	}
 	// The delegation cap reads this. Zero here bounds nothing at all.
 	if in.Depth != 3 {
@@ -360,7 +364,7 @@ func TestTheDispatchedRequestCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
 func TestEveryDerivableReplyReachesTheLoop(t *testing.T) {
 	t.Parallel()
 	for _, want := range []turn.Reply{turn.NoReply(), turn.ToolReply("slack"), turn.EngineReply()} {
-		if got := turnInputFor(Request{WorkKey: "wk"}, want).Reply; got != want {
+		if got := turnInputFor(Request{WorkKey: "wk", RunID: "run"}, want).Reply; got != want {
 			t.Errorf("Reply = %q, want %q", got, want)
 		}
 	}

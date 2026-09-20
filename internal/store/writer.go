@@ -43,10 +43,18 @@ var tagKeys = map[string]string{
 	"channel_id":       "channel_id",
 	"sender":           "sender",
 	"conversation_key": "conversation_key",
-	"requester":        "requester",
-	"target":           "target",
-	"recipient":        "recipient",
-	"closed_by":        "closed_by",
+	// The two turn identities. `turn_id` was MISSING here while
+	// internal/observe's copy of this map carried it, so this mapping and
+	// the one the engine actually writes through disagreed about a
+	// dimension [EventLog.Append] reads back out of the tags — see the
+	// fallback there. `work_key` is its counterpart: turn_id names one RUN
+	// and this names the unit of work behind it (ADR-0017).
+	"turn_id":   "turn_id",
+	"work_key":  "work_key",
+	"requester": "requester",
+	"target":    "target",
+	"recipient": "recipient",
+	"closed_by": "closed_by",
 	// Which THIRD-PARTY APP a notification event concerns. A tag rather than a
 	// payload read for the same reason as `failed` below: a listing
 	// deliberately never selects the payload column, so the Integrations
@@ -133,6 +141,7 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		Worker:       jsonString(body["worker"]),
 		Model:        jsonString(body["model"]),
 		TurnID:       jsonString(body["turn_id"]),
+		WorkKey:      jsonString(body["work_key"]),
 		Iteration:    jsonInt(body["iteration"]),
 		InputTokens:  jsonInt(body["input_tokens"]),
 		OutputTokens: jsonInt(body["output_tokens"]),

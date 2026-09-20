@@ -223,6 +223,7 @@ describe("turnFacts", () => {
       turnId: "t",
       loading: false,
       error: null,
+      attempt: null,
       events: [],
       cut: false,
       phases: [],

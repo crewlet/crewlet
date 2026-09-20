@@ -114,7 +114,7 @@ func pageActor(turn *turnctx.Turn) (pages.Actor, error) {
 	}
 	return pages.Actor{
 		Handle: seat.Handle(), Kind: pages.AuthorAgent,
-		TurnID: turn.ID, Chain: turn.Chain,
+		TurnID: turn.RunID, Chain: turn.Chain,
 	}, nil
 }
 

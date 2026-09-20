@@ -167,7 +167,8 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if agentID, why := seatAgentID(turn); why == "" {
 		note(ctx, t.events, turn, types.SkillRefined{
 			Agent: agentID, AgentHandle: handle, RoleName: turn.Role(),
-			TurnID: turn.ID, SkillName: updated.Name, SkillID: updated.ID,
+			TurnID: turn.RunID, WorkKey: turn.WorkKey,
+			SkillName: updated.Name, SkillID: updated.ID,
 			SkillVersion:   updated.Version,
 			RefinementKind: string(learning.RefineTool),
 		})

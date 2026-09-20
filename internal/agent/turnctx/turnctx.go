@@ -12,20 +12,33 @@
 // So a turn's inputs are an argument: [Turn], which the package name already
 // qualifies.
 //
+// # Two identities, never one
+//
+// A turn carries BOTH a [Turn.RunID] and a [Turn.WorkKey], and collapsing them
+// is the mistake ADR-0017 exists to stop being made again. They were one value
+// once — the field was called ID and documented as the work key — and the
+// consequence was that a redelivered trigger re-ran under the identity the
+// failed attempt already occupied: its phases, its live row and its sandbox
+// run all landed on top of the previous attempt's, so the retry was invisible
+// while it ran and indistinguishable from the failure afterwards.
+//
 // # What is still allowed to be ambient, and the bar it clears
 //
-// Three values, each read by a genuine leaf called from code with no turn
+// Two values, each read by a genuine leaf called from code with no turn
 // concept at all, each IMMUTABLE, and each failing SAFE when absent — nothing
 // branches on their presence to decide correctness:
 //
-//   - the work key (internal/workkey), read by store writers. Absent means "a
-//     turn with no ledgerable trigger", which is exactly the case that skips
-//     the duplicate guard.
 //   - the log fields, which decorate a line or do not.
 //   - the seat handle a model call belongs to (llm.WithSeat). Absent resolves
 //     to a named "shared" rather than an empty string, because the value
 //     becomes a home directory and auxiliary work — summarisation, the
 //     relevance filter — legitimately arrives unbound.
+//
+// The work key used to be a third, on the reasoning that store writers read it
+// from frames below the dispatch. They do not: the writes it guards run in the
+// reflection pass, a queue consumer on whichever node wins the delivery, and
+// they read the key off the event payload. The ambient channel had no
+// production reader at all and is gone; the key travels here, on [Turn].
 //
 // The config pin is deliberately NOT one of them: a turn reading config through
 // an ambient channel is how a mid-turn reload gets observed halfway, which is
@@ -51,11 +64,25 @@ import (
 // stored in a struct field that outlives a turn. Anything needing turn state
 // afterwards takes a copy of the values it wants.
 type Turn struct {
-	// ID is the work key — what identifies the unit of work this turn did.
-	// NOT a per-node turn id: two nodes completing one trigger mint two,
-	// and anything keyed on one records the duplicate instead of
-	// collapsing it.
-	ID string
+	// RunID names THIS EXECUTION of the turn, and nothing else. Minted
+	// fresh every time the engine runs a turn, so two runs of one trigger
+	// — which redelivery makes ordinary — are two different values.
+	//
+	// It is what every event's `turn_id` carries, what a detached sandbox
+	// run and an MCP bridge session are keyed on, and what a reader means
+	// when they say "open this turn". See ADR-0017.
+	RunID string
+
+	// WorkKey identifies the UNIT OF WORK this turn did — the set of
+	// trigger events it was dispatched for, stable across a re-run and
+	// across nodes. See [internal/workkey].
+	//
+	// It is what a write must be idempotent against: a re-run posts the
+	// same comment and files the same tracker operation, and only a key
+	// that survives the re-run collapses them. EMPTY is legitimate and
+	// means "a turn with no ledgerable trigger" — a scheduled fire, a
+	// sub-agent — which has no cross-run duplicate to collapse.
+	WorkKey string
 
 	// Seat is who is acting. THE authorization fact: a tool that speaks
 	// for a seat — asking a colleague, marking an onboarding step, writing
@@ -180,5 +207,8 @@ func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
 	if h := t.Handle(); h != "" {
 		chain = append(chain, h)
 	}
-	return &Turn{ID: t.ID, Seat: seat, Org: t.Org, Depth: depth, Chain: chain}, nil
+	return &Turn{
+		RunID: t.RunID, WorkKey: t.WorkKey,
+		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
+	}, nil
 }

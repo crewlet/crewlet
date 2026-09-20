@@ -161,6 +161,7 @@ func (w *Episodist) Reflect(ctx context.Context, t Turn) ([]events.Payload, erro
 		AgentHandle:   t.Event.AgentHandle,
 		RoleName:      t.Event.RoleName,
 		TurnID:        t.Event.TurnID,
+		WorkKey:       t.WorkKey(),
 		ReviewOutcome: t.Event.ReviewOutcome,
 		DurationMS:    t.Event.DurationMS,
 		ToolCount:     len(t.Event.ToolSequence),
@@ -182,13 +183,15 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 		Handle: t.Event.AgentHandle,
 		Role:   t.Event.RoleName,
 		TaskID: t.Event.TaskID,
-		// TurnID and WorkKey carry the SAME value on a raw row, because
-		// this engine mints one identity per unit of work and calls it
-		// the turn id (see turnctx.Turn.ID). They are separate columns
-		// because a COMPACTED row has a work key derived from the
-		// episodes it folded and no turn of its own.
+		// TWO DIFFERENT IDENTITIES, and they stopped being the same
+		// value when a turn id started naming one RUN: TurnID is the
+		// execution that produced this row, and WorkKey is the unit of
+		// work it did — which is what the unique index collapses, so a
+		// redelivered trigger that runs twice still leaves one episode.
+		// See [Turn.WorkKey] and ADR-0017. (A COMPACTED row has a work
+		// key derived from the episodes it folded and no turn at all.)
 		TurnID:          t.Event.TurnID,
-		WorkKey:         t.Event.TurnID,
+		WorkKey:         t.WorkKey(),
 		StartedAt:       started.UTC(),
 		EndedAt:         ended.UTC(),
 		Duration:        time.Duration(t.Event.DurationMS) * time.Millisecond,

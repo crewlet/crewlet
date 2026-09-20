@@ -8,11 +8,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 func episodist(t *testing.T, e *learning.Episodes,
@@ -36,7 +39,9 @@ func epTurn() learning.Turn {
 		Role: &org.Role{Name: "Dev"},
 		Event: types.TurnCompleted{
 			Agent: "agent-uuid", AgentHandle: "dev", RoleName: "Dev",
-			TurnID: "work-1", TaskID: "task-9",
+			// TWO IDENTITIES, as a post-split turn carries them: the run
+			// that produced the record, and the unit of work it did.
+			TurnID: "run-1", WorkKey: "work-1", TaskID: "task-9",
 			StartedAt: base, EndedAt: base.Add(3 * time.Second), DurationMS: 3000,
 			TaskSummary:   "the staging deploy keeps failing",
 			PlanSummary:   "read the pipeline, then reply",
@@ -116,6 +121,90 @@ func TestTheWorkKeyReachesTheRow(t *testing.T) {
 	again, _ := store.Recent(context.Background(), "dev", 10)
 	if len(again) != 1 {
 		t.Fatalf("the redelivery wrote a second row: %d rows", len(again))
+	}
+}
+
+// TWO RUNS OF ONE TRIGGER ARE ONE EPISODE, and this is the guard that stopped
+// holding when a turn id started naming a run rather than a unit of work.
+//
+// A turn that fails without acting is NAK'd and redelivered, so the same
+// trigger legitimately runs again — under a new turn id. Keyed on that, the
+// unique index has nothing to collide with and the retry writes a SECOND row:
+// the seat then recalls one piece of work twice, and every later skill
+// synthesis is weighted by a duplicate. The dedupe has to key on the identity
+// a redelivery reproduces, which is the work key. See ADR-0017.
+func TestTwoRunsOfOneTriggerCollapseToOneEpisode(t *testing.T) {
+	t.Parallel()
+	store := episodes(t)
+	w := episodist(t, store)
+
+	first := epTurn()
+	first.Event.TurnID, first.Event.WorkKey = "run-1", "wk-1"
+	reflectEpisode(t, w, first)
+
+	// The retry: a different run of the same unit of work.
+	second := epTurn()
+	second.Event.TurnID, second.Event.WorkKey = "run-2", "wk-1"
+	payloads, err := w.Reflect(context.Background(), second)
+	if err != nil {
+		t.Fatalf("Reflect: %v", err)
+	}
+	if len(payloads) != 0 {
+		t.Errorf("the retry announced %d events, want none — nothing was written",
+			len(payloads))
+	}
+	got, _ := store.Recent(context.Background(), "dev", 10)
+	if len(got) != 1 {
+		t.Fatalf("two runs of one trigger wrote %d episodes, want 1", len(got))
+	}
+	if got[0].WorkKey != "wk-1" {
+		t.Errorf("work key = %q, want the trigger's", got[0].WorkKey)
+	}
+	// AND THE ROW STILL NAMES THE RUN IT CAME FROM, which is a different
+	// fact: the work key says what was done, the turn id says which
+	// execution produced the record.
+	if got[0].TurnID != "run-1" {
+		t.Errorf("turn id = %q, want the run that actually wrote it", got[0].TurnID)
+	}
+}
+
+// AND THE TWO ERAS ARE TOLD APART BY SHAPE, because the wire cannot tell them
+// apart at all.
+//
+// A `turn_completed` from a build before the split carries no work key and its
+// turn id IS one; a post-split turn with no ledgerable trigger carries no work
+// key either, and its turn id is a RUN. The field is `omitempty`, so both
+// arrive as absent — and the two want opposite answers. Falling back for both
+// arms the counterparty guard with a value that means nothing, which is the
+// exact disarming [Counterparties.Record] keeps the last KEYED unit of work to
+// avoid.
+func TestTheWorkKeyFallbackReadsTheGrammarNotTheAbsence(t *testing.T) {
+	t.Parallel()
+	// An older build's event: the turn id is a derived key, so it IS one.
+	old := epTurn()
+	old.Event.TurnID, old.Event.WorkKey = workkey.Derive([]string{"evt-a"}), ""
+	if got := old.WorkKey(); got != old.Event.TurnID {
+		t.Errorf("work key = %q, want the turn id an older build carried it in", got)
+	}
+
+	// A post-split turn with no trigger key: the turn id is a run, and
+	// there is no unit of work to answer with.
+	unkeyed := epTurn()
+	unkeyed.Event.TurnID, unkeyed.Event.WorkKey = uuid.NewString(), ""
+	if got := unkeyed.WorkKey(); got != "" {
+		t.Errorf("work key = %q, want empty — a fabricated key disarms the "+
+			"counterparty dedupe for the next real one", got)
+	}
+	// Its DELIVERY still has an identity, or every unkeyed turn in the
+	// company would collapse onto one mark and reflect exactly once.
+	if got := unkeyed.DedupeKey(); got != unkeyed.Event.TurnID {
+		t.Errorf("dedupe key = %q, want the run", got)
+	}
+
+	fresh := epTurn()
+	fresh.Event.TurnID, fresh.Event.WorkKey = "run-1", "wk-1"
+	if got := fresh.WorkKey(); got != "wk-1" {
+		t.Errorf("work key = %q, want the event's own", got)
 	}
 }
 

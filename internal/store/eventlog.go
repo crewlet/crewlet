@@ -109,6 +109,22 @@ type EventRecord struct {
 	// are copies of five of these; the rest exist only here.
 	Tags map[string]string `json:"tags,omitempty"`
 
+	// WorkKey is the unit of work this row's run was an attempt at — see
+	// ADR-0017 and [ListQuery.WorkKey].
+	//
+	// OFF THE COLUMN, and it is the one promoted value that is NOT a copy
+	// of a tag. schema/0029 backfilled the column from `turn_id`, which is
+	// where the work key lived before the split, and it could not
+	// reasonably rewrite every historical tags blob to match — so for rows
+	// written before that migration the column holds the work key and
+	// `Tags["work_key"]` is empty. A reader going through the tags would
+	// therefore answer "no unit of work" for exactly the history the
+	// backfill exists to preserve, while `/events?work_key=` — which
+	// filters on the column — returned those same rows. One authority,
+	// and it is the column every other work-key reader already uses
+	// (turnlist's grouping, the phase-token rollup, the filter above).
+	WorkKey string `json:"work_key,omitempty"`
+
 	// Payload is the full serialized event. Nil on a listing — see above.
 	Payload json.RawMessage `json:"payload,omitempty"`
 
@@ -144,7 +160,14 @@ type Spend struct {
 	Worker    string `json:"worker,omitempty"`
 	Model     string `json:"model,omitempty"`
 
+	// TurnID and WorkKey are IDENTITY rather than cost, and they are here
+	// because this type is the carrier for every promoted column — see
+	// [EventLog.Append], which fills them for any event that names one and
+	// not only for the phase completions [SpendFor] reads. TurnID names one
+	// RUN of a turn; WorkKey names the unit of work it was dispatched for,
+	// which a re-run repeats and a run id does not. See ADR-0017.
 	TurnID    string `json:"turn_id,omitempty"`
+	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration,omitempty"`
 
 	InputTokens  int `json:"input_tokens,omitempty"`
@@ -175,11 +198,19 @@ type ListQuery struct {
 	TraceID  string
 	Actor    string
 
-	// TurnID selects one unit of agent work — every phase of it, its own
+	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
 	// inside it. Rows written before migration 0014 carry an empty
 	// turn_id and do not answer this filter; see the migration.
 	TurnID string
+
+	// WorkKey selects EVERY RUN of one unit of work — the attempts at a
+	// trigger that was redelivered, which TurnID by construction cannot
+	// ask for once it names one execution. Backed by the partial index
+	// schema/0029 ships; rows from before it carry the work key in
+	// turn_id, and that migration's backfill copies it across so the
+	// history answers this filter too. See ADR-0017.
+	WorkKey string
 
 	// RelatedAgent is a broad filter: events whose actor is the agent, or
 	// whose tags name it as agent_role / target / recipient / sender, plus
@@ -233,10 +264,10 @@ INSERT INTO crewlet_events (
 	trace_id, span_id, parent_span_id,
 	agent_id, agent_role, task_id, channel_id, sender,
 	summary, actor, tags, payload,
-	phase, host_phase, worker, model, turn_id, iteration,
+	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -310,6 +341,13 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	if spend.TurnID == "" {
 		spend.TurnID = tags["turn_id"]
 	}
+	// THE UNIT OF WORK BESIDE THE RUN, for the same reason and by the same
+	// route. A turn that fails without acting is redelivered, so one
+	// trigger legitimately runs several times: turn_id tells the attempts
+	// apart and this is what still groups them. See ADR-0017.
+	if spend.WorkKey == "" {
+		spend.WorkKey = tags["work_key"]
+	}
 	// IN ONE TRANSACTION with its party rows, because the party table is an
 	// INDEX of this one and an index that can be missing entries is not an
 	// index: an event stored without its parties is invisible to the filter
@@ -323,7 +361,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			tags["channel_id"], tags["sender"],
 			rec.Summary, rec.Actor, string(tagJSON), string(payload),
 			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
-			spend.TurnID, spend.Iteration,
+			spend.TurnID, spend.WorkKey, spend.Iteration,
 			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
 		); err != nil {
 			return err
@@ -376,7 +414,7 @@ func partiesOf(actor string, tags map[string]string) []string {
 // listColumns is every column a listing reads. `payload` is absent
 // deliberately — see EventRecord.Payload.
 const listColumns = `event_time, event_id, event_type, source, category,
-	summary, actor, trace_id, span_id, parent_span_id, tags`
+	summary, actor, trace_id, span_id, parent_span_id, tags, work_key`
 
 // qualifiedListColumns names the same columns on the log's own table.
 //
@@ -440,6 +478,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
+	addEq("work_key", q.WorkKey)
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a
 	// term the planner has to filter on.
@@ -738,26 +777,26 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 // The identity is (event_time, event_id) and a caller holding only an id — a
 // link, a line pasted from a log — has no time to seek with, so this reads the
 // id index and takes the newest match.
+//
+// THROUGH THE SHARED SCANNER although it wants one row, which is what
+// QueryRow would give it more directly. A second hand-written Scan is a second
+// copy of the agreement between `listColumns` and the destination list, and
+// that is precisely the drift [EventLog.scanPayloads] exists to prevent: the
+// `work_key` promotion added a column to the list, every listing picked it up,
+// and this reader kept a twelve-argument Scan that failed at RUNTIME — on the
+// one read a person reaches by pasting an id. LIMIT 1 makes the slice at most
+// one row, so the cost is one allocation on a path that serves a link.
 func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
-	row := l.db.sql.QueryRowContext(ctx,
+	recs, err := l.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE event_id = ? ORDER BY event_time DESC LIMIT 1", id)
-
-	var rec EventRecord
-	var micros int64
-	var tagJSON, payload string
-	if err := row.Scan(&micros, &rec.ID, &rec.Type, &rec.Source, &rec.Category,
-		&rec.Summary, &rec.Actor, &rec.TraceID, &rec.SpanID, &rec.ParentSpanID,
-		&tagJSON, &payload,
-	); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
-		}
+	if err != nil {
 		return EventRecord{}, fmt.Errorf("store: read event %s: %w", id, err)
 	}
-	finishRecord(&rec, micros, tagJSON)
-	rec.Payload = json.RawMessage(payload)
-	return rec, nil
+	if len(recs) == 0 {
+		return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
+	}
+	return recs[0], nil
 }
 
 // Purge deletes events past EventRetention and reports how many went.
@@ -848,7 +887,7 @@ func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, arg
 		var tagJSON, payload string
 		dest := []any{&micros, &rec.ID, &rec.Type, &rec.Source,
 			&rec.Category, &rec.Summary, &rec.Actor, &rec.TraceID,
-			&rec.SpanID, &rec.ParentSpanID, &tagJSON}
+			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey}
 		if withPayload {
 			dest = append(dest, &payload)
 		}
@@ -1007,7 +1046,7 @@ const (
 // rows, and json_extract runs only on the ones they keep.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
-       phase, host_phase, worker, model, turn_id, iteration,
+       phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
@@ -1207,7 +1246,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		)
 		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
-			&rec.TurnID, &rec.Iteration,
+			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
 			&rec.CostUSD,
 		); err != nil {

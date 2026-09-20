@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -39,8 +41,14 @@ import (
 // turnTelemetry is one turn's publishable identity, assembled once at the top
 // of the turn and used at both ends.
 type turnTelemetry struct {
-	handle    string
-	role      string
+	handle string
+	role   string
+	// runID is THIS EXECUTION's identity — minted once at the top of the
+	// turn and used at both ends, so a turn's opening phase event and its
+	// completion name the same run. See ADR-0017.
+	runID string
+	// workKey is the unit of work, stable across a re-run.
+	workKey   string
 	agentID   string
 	trigger   types.Trigger
 	convKey   string
@@ -59,6 +67,19 @@ type turnTelemetry struct {
 	skills []string
 }
 
+// newRunID mints the identity of ONE EXECUTION of a turn.
+//
+// A uuid rather than anything derived, and that is the whole point: every
+// derivable identity a turn has — the trigger's ids, the conversation, the
+// seat, the clock rounded to anything useful — is something a redelivery
+// reproduces, and reproducing it is exactly the bug ADR-0017 records. Two runs
+// of one trigger must not be able to collide however hard they try.
+//
+// Not a package-level counter either: a run id is read by other processes (a
+// detached sandbox row, a peer's dashboard), so it has to be unique across the
+// fleet rather than within this process.
+func newRunID() string { return uuid.NewString() }
+
 // describeTurn assembles the identity for one dispatch.
 //
 // The trigger is taken from the FIRST event of the partition. A coalesced
@@ -68,6 +89,8 @@ type turnTelemetry struct {
 func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
 	t := turnTelemetry{
 		handle:    req.Handle,
+		runID:     req.RunID,
+		workKey:   req.WorkKey,
 		convKey:   req.ConversationKey,
 		startedAt: time.Now().UTC(),
 	}
@@ -103,14 +126,25 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 }
 
 // runnerTurn is the identity handed to the phase runner.
-func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, chain []string,
-	task string, reply turn.Reply,
+//
+// TWO IDENTITIES, NEVER ONE. runID names this execution and is what every
+// event's turn_id carries; workKey names the unit of work and is what a write
+// has to be idempotent against. See ADR-0017 for what folding them into one
+// value cost.
+// Both identities come off the telemetry rather than off arguments, so the
+// events published at the two ends of a turn and the context its tools run
+// under cannot name different runs.
+func (t turnTelemetry) runnerTurn(company *Company,
+	depth int, chain []string, task string, reply turn.Reply,
 ) runner.Turn {
 	return runner.Turn{
-		ID: workKey, AgentID: t.agentID, Trigger: t.trigger,
+		RunID: t.runID, WorkKey: t.workKey,
+		AgentID:         t.agentID,
+		Trigger:         t.trigger,
 		ConversationKey: t.convKey, Trace: t.trace,
 		Context: &turnctx.Turn{
-			ID: workKey,
+			RunID:   t.runID,
+			WorkKey: t.workKey,
 			// The seat and the ORG both come off the pinned epoch, so a
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath
@@ -143,7 +177,7 @@ func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, c
 // A broker that refuses these events must not turn finished work into a failed
 // turn — the same rule the phase publisher states.
 func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
-	workKey string, spend runner.Spend, res turn.Result, err error,
+	spend runner.Spend, res turn.Result, err error,
 ) {
 	ended := time.Now().UTC()
 	failed := err != nil || res.Decision == phase.Failed
@@ -164,7 +198,8 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		OutputTokens:   spend.OutputTokens,
 		TotalTokens:    spend.Total(),
 		ToolExecutions: spend.ToolExecutions,
-		TurnID:         workKey,
+		TurnID:         t.runID,
+		WorkKey:        t.workKey,
 		ExecuteModel:   spend.ExecuteModel,
 		ReviewModel:    spend.ReviewModel,
 		// What this turn DELEGATED, beside what it spent itself. Kept
@@ -197,13 +232,14 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
-	e.publishFailure(ctx, t, workKey, res, err)
+	e.publishFailure(ctx, t, res, err)
 
 	e.publishEvent(ctx, events.New(types.TurnCompleted{
 		Agent:       t.agentID,
 		AgentHandle: t.handle,
 		RoleName:    t.role,
-		TurnID:      workKey,
+		TurnID:      t.runID,
+		WorkKey:     t.workKey,
 		StartedAt:   t.startedAt,
 		EndedAt:     ended,
 		DurationMS:  int(ended.Sub(t.startedAt) / time.Millisecond),
@@ -256,7 +292,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 // copy to keep in step: it is the ONE-LINE reason on a row about the turn,
 // where these are the failure itself, with the chain that was tried, the
 // ceiling that refused and the guard that fired.
-func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry, workKey string,
+func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 	res turn.Result, err error,
 ) {
 	// A breach and an error are not exclusive: an unhandled exception is
@@ -267,7 +303,8 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry, workKey st
 			RoleName: t.role,
 			Kind:     types.GuardKind(res.Breach.Kind),
 			Detail:   events.ClipDiagnostic(res.Breach.Detail),
-			TurnID:   workKey,
+			TurnID:   t.runID,
+			WorkKey:  t.workKey,
 		}, t.trace), t.role)
 	}
 	if err == nil {
@@ -283,6 +320,8 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry, workKey st
 		e.publishEvent(ctx, events.New(types.BudgetExhausted{
 			Agent:      t.agentID,
 			RoleName:   t.role,
+			TurnID:     t.runID,
+			WorkKey:    t.workKey,
 			BudgetType: types.BudgetScope(budget.Scope),
 			UsedTokens: budget.Used,
 			MaxTokens:  budget.Limit,
@@ -303,7 +342,8 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry, workKey st
 			AttemptCount:  len(exhausted.Attempted),
 			LastErrorKind: llm.KindOf(exhausted.Err).String(),
 			LastError:     events.ClipDiagnostic(exhausted.Error()),
-			TurnID:        workKey,
+			TurnID:        t.runID,
+			WorkKey:       t.workKey,
 		}, t.trace), t.role)
 	}
 }
@@ -358,7 +398,15 @@ func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string
 // under a different root from its first half.
 func (e *Engine) describeResume(ctx context.Context, company *Company, in resumeInput) turnTelemetry {
 	t := turnTelemetry{
-		handle:    in.Run.AgentHandle,
+		handle: in.Run.AgentHandle,
+		// THE SAME RUN, RESUMED — never a fresh one. A suspended executor
+		// is re-entered mid-round with the conversation it parked, so its
+		// remaining phases belong to the run that started them; minting a
+		// second id here would split one turn across two on every screen.
+		// The work key rides the row for the same reason its reply does:
+		// the resume sees no trigger and could not re-derive it.
+		runID:     in.Run.TurnID,
+		workKey:   in.Run.UnitOfWork(),
 		convKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,

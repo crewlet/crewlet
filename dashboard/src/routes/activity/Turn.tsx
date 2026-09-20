@@ -115,7 +115,7 @@ import {
   type PromptWeight,
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
-import type { EventRecord, FeedRow } from "~/protocol/index.ts";
+import type { EventRecord, FeedRow, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -283,6 +283,14 @@ export interface TurnView {
   iterations: number;
   /** Every trace this turn touched, store's list first — see [useTurnView]. */
   traceIds: string[];
+  /**
+   * Which attempt at its trigger this run was, when there was more than one,
+   * and the runs it shares that trigger with — oldest first.
+   *
+   * Null for the ordinary turn that ran once. The SERVER counts it: a count
+   * taken here would count only what this page happened to load.
+   */
+  attempt: { index: number; total: number; rows: TurnRow[] } | null;
 }
 
 export function useTurnView(turnId: string): TurnView {
@@ -345,6 +353,24 @@ export function useTurnView(turnId: string): TurnView {
   // in the gap is one neither frame can see.
   const cut = Boolean(data?.truncated);
 
+  // WHICH ATTEMPT AT ITS TRIGGER THIS IS, and where the others are.
+  //
+  // A turn id names one RUN (`adr/0017`), so a trigger that failed without
+  // reaching outside the engine and was redelivered is several turns — and
+  // this screen is where every deep link in the product lands. Arriving on
+  // the failed one with nothing saying a later one succeeded is how a reader
+  // concludes the work never happened; arriving on the second with nothing
+  // saying it is a retry is how they conclude the company did it twice.
+  //
+  // The server answers this: it holds the work key and the index, and
+  // counting from the page would count only what the page loaded.
+  const attempts = useMemo(() => data?.attempts ?? [], [data]);
+  const attempt = useMemo(() => {
+    if (attempts.length < 2) return null;
+    const index = attempts.findIndex((a) => a.turn_id === turnId);
+    return index < 0 ? null : { index: index + 1, total: attempts.length, rows: attempts };
+  }, [attempts, turnId]);
+
   // The phases the `turn` query knew about, plus the ones that have landed on
   // the stream since it was answered, plus whichever phase is running now.
   //
@@ -405,6 +431,7 @@ export function useTurnView(turnId: string): TurnView {
     error,
     events,
     cut,
+    attempt,
     phases,
     own,
     nested,
@@ -935,7 +962,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // weights, every trace the turn touched, and the JSON somebody attaches to
   // a bug report.
   const view = useTurnView(turnId);
-  const { loading, error, events, cut, phases, own, nested, rec, role } = view;
+  const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs } = view;
 
   const story = useMemo(() => tellStory(events), [events]);
@@ -1036,6 +1063,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <>
             {role && <Tag appearance="outline">{role}</Tag>}
             <Tag appearance="outline">{own.length} phases</Tag>
+            {/* A RE-RUN SAYS SO, and says where the others are. Neutral,
+                because being a second attempt is a fact about the trigger
+                rather than a fault — the attempt that FAILED carries the
+                problem badge beside this one, which is the pairing a reader
+                needs to see at once. */}
+            {attempt && (
+              <Tag
+                appearance="outline"
+                title={
+                  `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
+                  `that fails without reaching outside the engine is redelivered and runs again`
+                }
+              >
+                attempt {attempt.index}/{attempt.total}
+              </Tag>
+            )}
             {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records
                 alone. `phases.some(p => p.failed)` misses every turn the
                 engine killed BETWEEN phases — a refused charge, an exhausted
@@ -1089,6 +1132,30 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               >
                 The seat
               </Button>
+            )}
+            {/* THE OTHER ATTEMPTS, reachable rather than merely announced.
+                The badge above says this is attempt 2 of 2; a reader who has
+                landed on the failed one needs to get to the one that worked,
+                and a deep link out of a tracker comment or an event payload
+                is exactly how they landed here. Each button says whether that
+                attempt failed, so the pair reads as the story it is. */}
+            {attempt?.rows.map((row, i) =>
+              row.turn_id === turnId ? null : (
+                <Button
+                  key={row.turn_id}
+                  size="small"
+                  variant="secondary"
+                  leadingIcon={<LayersGlyph size="xs" />}
+                  onClick={() => nav.to(["activity", "turns", row.turn_id])}
+                  title={
+                    `attempt ${i + 1} of ${attempt.total} at the same trigger` +
+                    (row.failed ? ", which carried a failure" : "")
+                  }
+                >
+                  Attempt {i + 1}
+                  {row.failed ? " (failed)" : ""}
+                </Button>
+              ),
             )}
             {traceIds.length > 1 ? (
               // NAMED, not collapsed. Two traces mean the turn was resumed

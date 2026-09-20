@@ -79,8 +79,11 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 		DelegationDepth: req.Depth,
 		DelegationChain: ask.DelegationChain,
 		// The ANSWERING turn is what produced this, so it is the parent
-		// of whatever the reply wakes.
-		ParentTurnID: req.WorkKey,
+		// of whatever the reply wakes — and it is the RUN, matching what
+		// the asking side stamps (internal/agent/builtin/a2a.go): a
+		// parent pointer that named the unit of work could not say which
+		// attempt at it actually answered. See ADR-0017.
+		ParentTurnID: req.RunID,
 	}
 	if c.Org != nil {
 		if seat := c.Org.AgentSeatByHandle(req.Handle); seat != nil {

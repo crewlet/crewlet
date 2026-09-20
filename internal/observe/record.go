@@ -54,6 +54,12 @@ var taggedKeys = map[string]string{
 	// no answer. A trace is NOT a substitute: one trace can span several
 	// turns, and a turn resumed after a restart can span several traces.
 	"turn_id": "turn_id",
+	// The unit of work behind that run. turn_id names ONE EXECUTION, which
+	// is what a phase row, a live call and the turns list are keyed on —
+	// and a trigger that fails without acting is redelivered, so one unit
+	// of work legitimately produces several. This is what still groups
+	// them, and the only identity a re-run reproduces. See ADR-0017.
+	"work_key": "work_key",
 	// Which conversation (a Slack thread, a Jira issue, a PR) the event
 	// belongs to. channel_id does NOT cover it: that is set on A2A events
 	// alone and never on the phase records that carry the model's

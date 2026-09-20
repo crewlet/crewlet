@@ -44,7 +44,7 @@ func cpTurn(interactions ...types.InboundInteraction) learning.Turn {
 		Role: &org.Role{Name: "Dev"},
 		Event: types.TurnCompleted{
 			Agent: "agent-uuid", AgentHandle: "dev", RoleName: "Dev",
-			TurnID: "work-1", TaskSummary: "reply to Sam",
+			TurnID: "run-1", WorkKey: "work-1", TaskSummary: "reply to Sam",
 			ToolSequence: []string{"reply"}, ReviewOutcome: "done",
 			Interactions: interactions,
 		},
@@ -344,7 +344,11 @@ func TestASecondTurnCountsAgain(t *testing.T) {
 		t.Fatalf("first Reflect: %v", err)
 	}
 	second := cpTurn()
-	second.Event.TurnID = "work-2"
+	// A SECOND TURN IS A SECOND UNIT OF WORK, which is what the count is
+	// counting. A second RUN of the same trigger is the other case, and it
+	// deliberately does not count — see
+	// TestARedeliveredTurnDoesNotCountTwice.
+	second.Event.TurnID, second.Event.WorkKey = "run-2", "work-2"
 	if _, err := w.Reflect(context.Background(), second); err != nil {
 		t.Fatalf("second Reflect: %v", err)
 	}

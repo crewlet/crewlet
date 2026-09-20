@@ -29,6 +29,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
   return {
     key: "t1|execute|1",
     turnId: "t1",
+    workKey: "wk-1",
     phase: "execute",
     iteration: 1,
     role: "Dev A",

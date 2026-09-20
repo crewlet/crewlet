@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // ReflectGroup is the dispatcher's consumer group.
@@ -61,6 +62,54 @@ type Turn struct {
 	// It lives on the envelope, never on the payload, so it has to be
 	// handed down explicitly, because nothing in a turn travels ambiently.
 	Trace events.TraceContext
+}
+
+// WorkKey is the unit of work this turn did, or "" when it did none that can
+// be collapsed on.
+//
+// IT IS NOT THE TURN ID, and the readers below used to take it from there
+// because one value carried both meanings. A turn that fails without acting is
+// NAK'd and redelivered, so one unit of work legitimately RUNS several times;
+// a turn id now names one of those runs, and keying the episode on it would
+// write a row per attempt — which is precisely the duplicate
+// [internal/workkey] exists to collapse. See ADR-0017.
+//
+// EMPTY IS AN ANSWER, and inventing a value for it is the failure this
+// shape avoids. A turn with no ledgerable trigger — a scheduled fire — has no
+// cross-run duplicate to collapse, and a guard armed with a run id in that
+// slot is worse than one armed with nothing: [Counterparties.Record] keeps the
+// last KEYED unit of work precisely so an unkeyed observation cannot disarm
+// the next redelivery's dedupe, and a fabricated key walks straight through
+// that.
+//
+// FALLING BACK ONLY ON SHAPE. A `turn_completed` from a build before the split
+// carries no work key and its turn id IS one, and a rolling upgrade guarantees
+// some of those — but so does a post-split turn with no trigger key, and the
+// wire cannot tell the two apart because the field is `omitempty`. The GRAMMAR
+// can: see [workkey.IsDerived].
+func (t Turn) WorkKey() string {
+	if t.Event.WorkKey != "" {
+		return t.Event.WorkKey
+	}
+	if workkey.IsDerived(t.Event.TurnID) {
+		return t.Event.TurnID
+	}
+	return ""
+}
+
+// DedupeKey is what the redelivery guard remembers, and it is a DIFFERENT
+// question from [Turn.WorkKey].
+//
+// That one asks "which unit of work is this, if any", and answers "" honestly.
+// This asks "have I already processed this delivery", which always has an
+// answer — so it falls back to the run, and an unkeyed turn is deduped per
+// execution rather than every unkeyed turn in the company collapsing onto one
+// empty mark and reflecting exactly once.
+func (t Turn) DedupeKey() string {
+	if key := t.WorkKey(); key != "" {
+		return key
+	}
+	return t.Event.TurnID
 }
 
 // Settled reports whether the turn reached a terminal outcome.
@@ -424,21 +473,48 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		}
 	}
 
+	turn := Turn{Role: role, Event: tc, Trace: tr}
+
 	// Redelivery guard. Every backend may redeliver, and reflection is not
 	// idempotent: each pass is a fresh auxiliary-LLM call that can write a
 	// second, differently-worded row for the same fact.
+	//
+	// ON THE WORK KEY, not the run. "The same fact" is a property of the
+	// unit of work, and a turn that fails without acting is NAK'd and runs
+	// again — so a mark keyed on the run would let every redelivery take a
+	// full second pass: a second diary row (agent_diary has no dedupe of
+	// its own), a second skill draft, a second refinement. The episode row
+	// and the interaction count would still collapse on their own indexes,
+	// which is what would make the duplication invisible in the two places
+	// anybody looks. See ADR-0017.
 	//
 	// Marked AFTER the budget gate and never released. The budget is the
 	// only transient refusal, and taking the mark after it is what lets a
 	// redelivery get a real pass once the ceiling moves — so no path left
 	// here wants a mark released, and a release on a path that cannot
 	// happen is a release that does nothing.
-	if !r.mark(tc.TurnID) {
-		log.DebugContext(ctx, "reflection_skipped_duplicate", "turn_id", tc.TurnID)
+	// A PARKED TURN DOES NOT SPEND IT, and that is the one condition on
+	// this guard. A suspended executor publishes `turn_completed` carrying
+	// the suspend's own self_iterate, and its RESUMED half publishes under
+	// the same run — so marking the park refused the resume as a duplicate,
+	// and a seat that does its work through `run_sandbox` reflected on
+	// nothing, ever: no episode, no diary row, no counterparty profile, no
+	// skill, with an empty memory tab as the only symptom.
+	//
+	// The pass still RUNS for a parked turn, because one worker legitimately
+	// wants it: observing who you talked to does not depend on what the
+	// agent decided to do next, so the counterparty profiler takes no
+	// [Turn.Settled] gate. What a redelivered park can now repeat is that
+	// one worker's auxiliary call — and its own durable guard
+	// (`last_work_key`) still stops the interaction being counted twice,
+	// which is the half that would have been wrong rather than merely
+	// expensive.
+	if turn.Settled() && !r.mark(turn.DedupeKey()) {
+		log.DebugContext(ctx, "reflection_skipped_duplicate", "turn_id", tc.TurnID,
+			"dedupe_key", turn.DedupeKey())
 		return Reflection{Skip: SkipDuplicate}
 	}
 
-	turn := Turn{Role: role, Event: tc, Trace: tr}
 	if !turn.Engaged() {
 		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
 			"agent_handle", tc.AgentHandle, "plan_decision", string(tc.PlanDecision),
@@ -449,7 +525,8 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		// first is the gate working.
 		r.publish(ctx, turn, types.ReflectionCompleted{
 			Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
-			TurnID: tc.TurnID, WorkersRun: 0, ReviewOutcome: tc.ReviewOutcome,
+			TurnID: tc.TurnID, WorkKey: turn.WorkKey(),
+			WorkersRun: 0, ReviewOutcome: tc.ReviewOutcome,
 		})
 		return Reflection{Skip: SkipNoEngagement}
 	}
@@ -493,7 +570,8 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// pass is over.
 	r.publish(ctx, turn, types.ReflectionCompleted{
 		Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
-		TurnID: tc.TurnID, WorkersRun: len(out.Ran), ReviewOutcome: tc.ReviewOutcome,
+		TurnID: tc.TurnID, WorkKey: turn.WorkKey(),
+		WorkersRun: len(out.Ran), ReviewOutcome: tc.ReviewOutcome,
 	})
 	return out
 }
@@ -536,11 +614,15 @@ func (r *Reflector) publish(ctx context.Context, t Turn, payload events.Payload)
 	}
 }
 
-// mark records a turn id, reporting whether it is the first sighting.
-func (r *Reflector) mark(turnID string) bool {
+// mark records a turn's [Turn.DedupeKey], reporting whether it is the first
+// sighting.
+//
+// The unit of work where there is one, not the run: a run id would let every
+// redelivery of one trigger take a full second pass.
+func (r *Reflector) mark(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.seen.mark(turnID)
+	return r.seen.mark(key)
 }
 
 // recentTurns is a bounded set of recently-seen ids with FIFO eviction.

@@ -308,8 +308,41 @@ type Actor struct {
 	// answers "what did this credential do".
 	OperatorID string
 
+	// TurnID is the RUN that produced this write — provenance, so an
+	// audit can walk from an item back to the execution that wrote it.
 	TurnID string
-	Chain  []string
+
+	// WorkKey is the unit of work behind that run, and it is what the
+	// derived operation and comment ids are seeded from. It has to be the
+	// one that SURVIVES a re-run: a redelivered trigger runs again with a
+	// new TurnID, and an id seeded from that would post the same comment
+	// twice. See [Actor.OperationSeed] and ADR-0017.
+	WorkKey string
+
+	Chain []string
+}
+
+// OperationSeed is what a derived, idempotent id is built from.
+//
+// THE WORK KEY WHERE THERE IS ONE, because that is the identity a redelivery
+// reproduces and therefore the only one that can collapse a re-run's writes
+// into the first attempt's.
+//
+// THE RUN WHERE THERE IS NOT. A turn with no ledgerable trigger — a scheduled
+// fire, a resumed run whose dispatch is long gone — has no cross-run duplicate
+// to collapse, but it still has ROUNDS: an executor that calls the same update
+// twice in one run should write once, and seeding from "" made every such call
+// mint a fresh id and write again. Falling back to the run keeps the
+// within-run guarantee without inventing a cross-run one.
+//
+// EMPTY OUTSIDE A TURN, which is the operator surface: their MCP client made
+// one call, nothing will redeliver it, and an invented key would be a lie
+// about what produced the write.
+func (a Actor) OperationSeed() string {
+	if a.WorkKey != "" {
+		return a.WorkKey
+	}
+	return a.TurnID
 }
 
 // settle waits for a write to reach this node's projection.
@@ -353,10 +386,11 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		return Actor{}, err
 	}
 	return Actor{
-		Handle: seat.Handle(),
-		Kind:   tracker.AuthorAgent,
-		TurnID: turn.ID,
-		Chain:  turn.Chain,
+		Handle:  seat.Handle(),
+		Kind:    tracker.AuthorAgent,
+		TurnID:  turn.RunID,
+		WorkKey: turn.WorkKey,
+		Chain:   turn.Chain,
 	}, nil
 }
 
@@ -376,11 +410,17 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 // no turn and no redelivery — their MCP client made one call — so there is
 // nothing to deduplicate against and an invented key would be a lie about
 // what produced the comment.
+//
+// THROUGH [Actor.OperationSeed] rather than reading a field, because which of
+// a turn's two identities an idempotent id is built from is one rule and this
+// is its second caller. Written out here it would be the same rule spelled
+// twice, free to disagree — the shape internal/whsec and internal/textcut
+// exist because of.
 func turnKey(turn *turnctx.Turn) string {
 	if turn == nil {
 		return ""
 	}
-	return turn.ID
+	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey}.OperationSeed()
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -1461,10 +1501,11 @@ func handles(all ...string) []string {
 // where the shape comes from: the turn's key where there is one, a fresh uuid
 // where there is not.
 func opIDFor(actor Actor, verb, object string) string {
-	if actor.TurnID == "" {
+	seed := actor.OperationSeed()
+	if seed == "" {
 		return verb + "-" + object + "-" + uuid.NewString()
 	}
-	return actor.TurnID + "-" + verb + "-" + object
+	return seed + "-" + verb + "-" + object
 }
 
 // ---- update_work_item -------------------------------------------------- //
@@ -2167,7 +2208,7 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 // every node: two nodes applying one record must write one row, so an id
 // generated at apply time would produce two.
 func commentID(actor Actor, taskID string) string {
-	seed := actor.TurnID
+	seed := actor.OperationSeed()
 	if seed == "" {
 		seed = uuid.NewString()
 	}

@@ -6,10 +6,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
+	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // TestMain silences the engine logger. Every Open logs a line per applied
@@ -32,4 +35,27 @@ func TestPendingStoreContract(t *testing.T) {
 	sandboxtest.Run(t, func(*testing.T) sandbox.PendingStore {
 		return sandbox.NewCoordStore(memory.NewFleet())
 	})
+}
+
+// A ROW PARKED BEFORE THE SPLIT STILL KNOWS ITS UNIT OF WORK.
+//
+// Nothing rewrites a parked row, so a run suspended by a build from before
+// ADR-0017 carries no `work_key` and its `turn_id` IS one. A resume days later
+// has no trigger left to re-derive from, so reading the raw field would dedupe
+// its conversation entry and its tracker writes against nothing.
+func TestAPreSplitRunStillAnswersForItsUnitOfWork(t *testing.T) {
+	t.Parallel()
+	key := workkey.Derive([]string{"evt-a"})
+	for name, tc := range map[string]struct {
+		run  sandbox.PendingRun
+		want string
+	}{
+		"post-split, keyed":  {sandbox.PendingRun{TurnID: uuid.NewString(), WorkKey: key}, key},
+		"pre-split row":      {sandbox.PendingRun{TurnID: key}, key},
+		"post-split, no key": {sandbox.PendingRun{TurnID: uuid.NewString()}, ""},
+	} {
+		if got := tc.run.UnitOfWork(); got != tc.want {
+			t.Errorf("%s: UnitOfWork = %q, want %q", name, got, tc.want)
+		}
+	}
 }
