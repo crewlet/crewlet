@@ -169,6 +169,15 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// equally lost the right to run. They go back unhandled so the
 		// successor gets them, rather than being run by a consumer that
 		// has just admitted it should not.
+		//
+		// UNHANDLED IS NOT UNCHARGED. These messages were FETCHED, which
+		// is where this broker's counter moves, so their delivery is
+		// already spent by the time the loop gets here — nakAll only
+		// decides whether the last one dead-letters with a copy or is
+		// discarded by MaxDeliver in silence. That is the contract's rule
+		// and not this backend's shape: see [queue.DeliveriesLeft], and
+		// internal/queue/memory, whose mailbox is a slice and therefore
+		// has to charge a take deliberately.
 		if a.blocked() {
 			a.nakAll(ctx, part.Items)
 			continue

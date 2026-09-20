@@ -35,10 +35,14 @@
 // Redelivery matches the broker's shape: the budget counts redeliveries AFTER
 // the first delivery (so N+1 total attempts), an exhausted message moves to
 // the dead-letter subject rather than being destroyed, and EVERY return that
-// puts a message back spends one — a deferral as much as a nak. That last
-// clause is the contract's rather than this backend's convenience: a free
-// handoff here would model a broker nobody runs and certify a bound
-// production does not have.
+// puts a message back spends one — a deferral as much as a nak, and the
+// partitions a blocked drain never dispatched as much as the one that blocked
+// it. That last clause is the contract's rather than this backend's
+// convenience: a free handoff here would model a broker nobody runs and
+// certify a bound production does not have. On the only broker this engine
+// ships, leaving the mailbox IS the delivery — its counter moves when a
+// message is FETCHED — so nothing it drained can be given back for free, and a
+// twin whose mailbox is a slice has to charge for a take deliberately.
 package memory
 
 import (

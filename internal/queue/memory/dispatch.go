@@ -199,8 +199,12 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 			// attachment.blocked(), all four conditions) and did not stop
 			// the twin, and a test written against the twin certified a
 			// behaviour production does not have.
-			b.restoreLocked(sub, parts[i:], inChunk)
+			//
+			// THE REST OF THE DRAIN IS CHARGED FOR THE HAND-BACK, exactly
+			// as the partition that stopped it was: see [Broker.restoreLocked].
+			dead := b.restoreLocked(sub, parts[i:], inChunk, m.client.maxRedeliveries)
 			b.mu.Unlock()
+			b.logDeadLetters(ctx, sub, dead)
 			return
 		}
 		b.mu.Unlock()
@@ -233,16 +237,39 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 // partition to the front, so restoring ahead of it would reverse the very order
 // this guard exists to keep.
 //
+// EACH OF THEM PAYS A DELIVERY, through the same boundary every other hand-back
+// goes through — which is why this returns what it dead-lettered. These events
+// left the mailbox with the chunk, and on the only broker this engine ships
+// leaving the mailbox IS the delivery: JetStream's counter moves when the
+// message is FETCHED, so by the time the loop discovers it may not run the
+// rest of the drain the count is already spent, and it returns the remainder
+// through the identical budget check (see jetstream.dispatchBatch, which naks
+// the undispatched partitions). A twin that spliced them back untouched handed
+// the remainder of every blocked drain back on a counter that never moves —
+// the same divergence the deferral itself carried until the twin's Defer was
+// made to cost what the broker's does, left standing for every partition of
+// the drain but the one that stopped it.
+//
 // The splice point is found by SCANNING the leading run of chunk events, not by
 // a length delta. A delta assumes the mailbox only grew at the front, and
 // publishing appends at the TAIL — a handler that publishes lets one land
 // mid-loop, and the splice point then lands inside the pre-existing tail and
 // reorders exactly what this is protecting.
-func (b *Broker) restoreLocked(sub *subscription, remaining []queue.Partition[*events.Event], inChunk map[*events.Event]struct{}) {
+func (b *Broker) restoreLocked(
+	sub *subscription,
+	remaining []queue.Partition[*events.Event],
+	inChunk map[*events.Event]struct{},
+	budget int,
+) []deadLetter {
 	var undispatched []*events.Event
 	for _, part := range remaining {
 		undispatched = append(undispatched, part.Items...)
 	}
+	// Charged BEFORE the splice, so what is spliced back is what survived:
+	// an event whose budget the hand-back just spent belongs on the
+	// dead-letter subject, not at the head of a mailbox no budget can ever
+	// retire it from.
+	keep, dead := b.chargeLocked(sub, undispatched, budget)
 	restored := 0
 	for _, ev := range sub.mail {
 		if _, fromChunk := inChunk[ev]; !fromChunk {
@@ -250,11 +277,12 @@ func (b *Broker) restoreLocked(sub *subscription, remaining []queue.Partition[*e
 		}
 		restored++
 	}
-	spliced := make([]*events.Event, 0, len(sub.mail)+len(undispatched))
+	spliced := make([]*events.Event, 0, len(sub.mail)+len(keep))
 	spliced = append(spliced, sub.mail[:restored]...)
-	spliced = append(spliced, undispatched...)
+	spliced = append(spliced, keep...)
 	spliced = append(spliced, sub.mail[restored:]...)
 	sub.mail = spliced
+	return dead
 }
 
 // invoke runs one delivery and applies the handler's outcome.
@@ -345,6 +373,14 @@ func (b *Broker) invoke(
 		log.WarnContext(ctx, failureEvent, append(attrs, "error", errText(res.Err))...)
 	case queue.OutcomeAck:
 	}
+	b.logDeadLetters(ctx, sub, dead)
+}
+
+// logDeadLetters reports what a charge retired, and is called with the broker
+// lock RELEASED for the reason [Broker.invoke] gives above: a log write this
+// package does not control must not be made while holding the mutex that
+// guards every subscription and every peer on this broker.
+func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []deadLetter) {
 	for _, d := range dead {
 		log.ErrorContext(ctx, "event_dead_lettered", "topic", sub.topic, "group", sub.group,
 			"event_type", d.ev.Type, "redeliveries", d.redeliveries)
@@ -398,9 +434,32 @@ func runHandler(ctx context.Context, call func(context.Context) queue.Result) (r
 	return call(ctx)
 }
 
-// redeliverOrDeadLetterLocked returns the events that exhausted their budget,
-// for the caller to log once it has released the lock.
+// redeliverOrDeadLetterLocked charges a hand-back and returns the events to the
+// FRONT of the mailbox, handing back the ones that exhausted their budget for
+// the caller to log once it has released the lock.
+//
+// The front is where an outcome the HANDLER gave puts them, because a
+// conversation depends on order and the handler saw these before anything
+// queued behind them. The blocked-drain path charges the same way and splices
+// elsewhere — see [Broker.restoreLocked] — which is why the charge itself is
+// [Broker.chargeLocked] and neither path owns it.
 func (b *Broker) redeliverOrDeadLetterLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
+	keep, dead := b.chargeLocked(sub, evs, budget)
+	sub.mail = prepend(keep, sub.mail)
+	return dead
+}
+
+// chargeLocked spends one delivery on each event and separates the ones that
+// survive it from the ones it just retired.
+//
+// THE ONE PLACE A DELIVERY IS SPENT in this backend, for the reason
+// [attachment.returnMsg] is that place in the JetStream one: a hand-back costs
+// a delivery whatever put the message back — a nak, a deferral, or a drain
+// this consumer was told mid-flight it may not finish — so a second site
+// deciding the boundary is a second answer to where the dead-letter line is.
+// It does not touch the mailbox: where the survivors go back is the caller's,
+// and the two callers differ precisely there.
+func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int) ([]*events.Event, []deadLetter) {
 	var keep []*events.Event
 	var dead []deadLetter
 	for _, ev := range evs {
@@ -419,8 +478,7 @@ func (b *Broker) redeliverOrDeadLetterLocked(sub *subscription, evs []*events.Ev
 		sub.redeliveries[ev.ID] = count
 		keep = append(keep, ev)
 	}
-	sub.mail = prepend(keep, sub.mail)
-	return dead
+	return keep, dead
 }
 
 // prepend returns head followed by tail, allocating rather than shifting in

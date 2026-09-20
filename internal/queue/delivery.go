@@ -116,6 +116,15 @@ func WithHeadroom(ctx context.Context, perMessage []Headroom) context.Context {
 // internal/queue/memory, whose twin spends one for the same reason the broker
 // does rather than modelling a cheaper broker nobody runs.
 //
+// "ANY OTHER RETURN" INCLUDES THE ONE NO HANDLER ASKED FOR. A batch loop that
+// finds itself blocked between partitions — a deferral it just applied, a
+// hold, a pause, a detach — hands the partitions it never dispatched back, and
+// those pay a delivery each as well. They were drained, which on a fetching
+// broker is already the delivery; a backend that returned them uncounted would
+// charge one partition of a drain the broker's price and the rest of it
+// nothing. Certified by
+// Batch/an_undispatched_partition_pays_for_its_hand_back.
+//
 // # Why the count and not the budget
 //
 // A caller must not do the subtraction itself. The budget is a BACKEND's

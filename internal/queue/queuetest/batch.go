@@ -686,6 +686,112 @@ func (s *suite) runBatch(t *testing.T) {
 		})
 	})
 
+	t.Run("an_undispatched_partition_pays_for_its_hand_back", func(t *testing.T) {
+		t.Parallel()
+		// WHAT THE REST OF A STOPPED DRAIN COSTS, which is the same as
+		// what the partition that stopped it costs: one delivery each.
+		//
+		// The two cases above certify that the loop STOPS and that the
+		// undispatched partitions come back in order. Neither says what
+		// coming back is charged, and the two backends answered that
+		// differently for as long as nothing asked. JetStream FETCHES a
+		// drain, so its counter has already moved on every message in it
+		// before the loop discovers it may not finish — the remainder
+		// goes back through the same budget check as a failure. The twin
+		// spliced its undispatched partitions into the mailbox untouched,
+		// so on a seat whose drains are stopped over and over — a lease
+		// that keeps moving, an inbox held for one parked coding run
+		// after another — the same message rode round for ever on a
+		// counter that never moved, while the identical message on the
+		// shipped broker was walking through its twenty-five.
+		//
+		// That is the LAST HALF of the divergence the deferral's own cost
+		// had: one partition of a drain paying the broker's price and
+		// every other partition of the same drain paying nothing. The
+		// contract states one rule for all of it — see
+		// queue.DeliveriesLeft — so this certifies the rule rather than
+		// either backend's mechanism.
+		//
+		// A HOLD RATHER THAN A DEFERRAL, because the hold is released in
+		// place: ResumeTopic clears it and the same attachment carries
+		// on, so the held-back partition comes back to a handler that can
+		// read what it has left. A deferral would quiesce the attachment,
+		// and un-quiescing it is a different verb testing a different
+		// thing.
+		//
+		// OBSERVED AS A COMPARISON rather than against a literal, for the
+		// reason the mixed-count case gives: the two readings are taken
+		// through the same accessor in the same run, so an extra
+		// redelivery on the way here cannot turn the rule into a timing
+		// test. What must hold is that the partition handed back
+		// undispatched comes back with LESS than a never-delivered one,
+		// which is false by exactly one if the hand-back was free.
+		newQueueWithAttempts := s.needAttempts(t)
+		const attempts = 5
+		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+
+		const topic, group = "topic.charged", "grp"
+		var (
+			mu     sync.Mutex
+			first  = map[string]int{}
+			parked bool
+		)
+		j := newJournal()
+		subscribeBatch(ctx, t, q, topic, group,
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				conv := firstConv(t, evs)
+				left, known := queue.DeliveriesLeft(hctx)
+
+				mu.Lock()
+				if _, seen := first[conv]; !seen && known {
+					first[conv] = left
+				}
+				park := !parked
+				parked = true
+				mu.Unlock()
+
+				if park {
+					// The seat parks while the REST of this batch is
+					// still waiting to run, so the second partition
+					// goes back having been drained and never
+					// dispatched — the state this case is about.
+					if err := q.PauseTopic(hctx, topic, group, "queuetest-charged"); err != nil {
+						t.Errorf("PauseTopic: %v", err)
+					}
+				}
+				j.record(conv)
+				return queue.Ack()
+			}, queue.NewBatchOptions(lingerFor.Seconds(), 20))
+
+		fillOneBatch(ctx, t, q, topic, group, "a", "b")
+		j.awaitLabels(t, "only the first partition to be handled", "a")
+		j.staysAt(t, 1, "the hold did not stop the batch")
+
+		if err := q.ResumeTopic(ctx, topic, group, "queuetest-charged"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+		j.awaitLabels(t, "the held-back partition to come back", "a", "b")
+
+		mu.Lock()
+		defer mu.Unlock()
+		fresh, freshOK := first["a"]
+		handed, handedOK := first["b"]
+		if !freshOK || !handedOK {
+			t.Fatalf("the handler read %v, want a headroom for each partition: "+
+				"a backend that states nothing cannot be asked what a hand-back "+
+				"cost", first)
+		}
+		if handed >= fresh {
+			t.Errorf("the partition handed back undispatched reported %d deliveries "+
+				"left and the never-delivered one %d: a drain the consumer stopped "+
+				"is handed back, and every hand-back spends a delivery — the "+
+				"partition that stopped it is charged, so the rest of it cannot be "+
+				"free. (If this backend split the fill into separate batches there "+
+				"was no undispatched remainder to charge and this case never ran "+
+				"the loop it is named for; see fillOneBatch.)", handed, fresh)
+		}
+	})
+
 	t.Run("a_publish_during_the_batch_does_not_move_the_splice", func(t *testing.T) {
 		t.Parallel()
 		// The restore point for the undispatched partitions is found by
