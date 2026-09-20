@@ -255,13 +255,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 //
 // A RECOVERED PANIC SETTLES THIS, NOT THE DELIVERY. Recording a constituent
 // as worked is what stops its copies ever running, so recording the whole
-// delivery would be wrong in two directions. The tail of a partition that would
-// not merge is requeued before its head runs, and a panic in the head's turn
-// would mark the tail worked while its copies sat on the queue waiting to be:
-// the exact loss [inbox.Degraded] keys the head apart to prevent. And a
-// constituent the completion ledger had already dropped would be put on the
-// record a second time, as panicked, beside the record saying it had already
-// been worked.
+// delivery would be wrong in three directions. The tail of a partition that
+// would not merge is requeued before its head runs, and a panic in the head's
+// turn would mark the tail worked while its copies sat on the queue waiting to
+// be: the exact loss [inbox.Degraded] keys the head apart to prevent. A park
+// hands the WHOLE delivery back the same way. And a constituent the completion
+// ledger had already dropped would be put on the record a second time, as
+// panicked, beside the record saying it had already been worked.
+//
+// EVERY NARROWING HAPPENS BEFORE THE REQUEUE IT DESCRIBES, never after. A
+// requeue publishes one event at a time, so a panic inside one leaves some
+// copies on the queue and the rest unpublished; narrowed afterwards, this
+// would still be claiming the published ones at the moment they stopped being
+// its to claim.
 type holding struct{ events []*events.Event }
 
 // dispatch is [Dispatcher.Dispatch]'s body, separated so the recovery around
@@ -286,7 +292,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				return queue.Nak(fmt.Errorf("engine: pause %s: %w", handle, err))
 			}
 		}
-		return d.park(ctx, handle, screening)
+		return d.park(ctx, handle, screening, held)
 	case inbox.ActionPark:
 		if screening.AwaitingSandbox && d.answered(ctx, handle, screening.Events) {
 			// The delivery WAS the answer, and the resume it triggered has
@@ -294,7 +300,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// the question it just answered.
 			return queue.Ack()
 		}
-		return d.park(ctx, handle, screening)
+		return d.park(ctx, handle, screening, held)
 	}
 
 	surviving := d.dropWorked(ctx, handle, screening.Events)
@@ -348,12 +354,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				return queue.Nak(fmt.Errorf(
 					"engine: %s: no requeue path for a partition that would not merge", handle))
 			}
+			// The tail's copies are the queue's the moment they are
+			// published, and they are published one at a time: narrowed
+			// AFTER the call, a panic part-way through it would record a
+			// tail whose copies are already waiting to run. Only the head
+			// is ever this delivery's to settle.
+			held.events = head
 			if err := d.Park(ctx, handle, tail); err != nil {
 				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
-			// The tail's copies are the queue's now; only the head is
-			// this delivery's to settle.
-			held.events = head
 			routing = inbox.Routing{WorkKey: headKey, Events: head}
 			trigger = head
 		} else {
@@ -655,7 +664,14 @@ func first(evs []*events.Event) *events.Event {
 	return nil
 }
 
-func (d *Dispatcher) park(ctx context.Context, handle string, s inbox.Screening) queue.Result {
+func (d *Dispatcher) park(ctx context.Context, handle string, s inbox.Screening, held *holding) queue.Result {
+	// NARROWED BEFORE THE REQUEUE, not after it. [Engine.park] publishes one
+	// event at a time, so a panic inside it leaves some copies on the queue
+	// and the rest unpublished — and recording the delivery would then mark
+	// the published ones worked, which is the one thing that stops them ever
+	// running. The unpublished ones are lost to the ack either way; the
+	// published ones are only lost if this frame claims them.
+	held.events = nil
 	if d.Park == nil {
 		// No park path wired. Acking would drop the work; NAK returns it
 		// to the broker, which is the only honest answer.

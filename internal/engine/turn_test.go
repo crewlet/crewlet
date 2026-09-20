@@ -665,6 +665,97 @@ func TestAPanicForAnUnknownSeatIsStillSettled(t *testing.T) {
 	}
 }
 
+// A PANIC WHILE REQUEUING CLAIMS NOTHING IT HAS ALREADY HANDED BACK.
+//
+// A park requeues the whole delivery and acks, one publish per event, so a
+// panic part-way through leaves some copies on the queue and the rest
+// unpublished. The unpublished ones are lost to the ack whatever this frame
+// does; the published ones are lost only if it records them, because a
+// completion record is what stops a copy ever running. So the park narrows
+// what it holds to nothing BEFORE it publishes, rather than after.
+func TestAPanicWhileRequeuingLeavesThePublishedCopiesToRun(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	first, second := ev("notification"), ev("notification")
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	d.Identify = func(string) (string, string) { return "CEO", "a-1" }
+	// The seat is parked on a detached run, so the whole delivery is
+	// requeued rather than worked.
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
+			AwaitingSandbox: true}
+	}
+	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
+		r.parked = append(r.parked, evs[:1])
+		panic("the broker client died mid-requeue")
+	}
+	ctx := context.Background()
+
+	got := d.Dispatch(ctx, "ceo", []*events.Event{first, second})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK: a redelivery reaches the same defect", got.Outcome)
+	}
+	if len(r.parked) != 1 || len(r.parked[0]) != 1 {
+		t.Fatalf("the requeue did not publish before it panicked: %v", r.parked)
+	}
+	keys := []string{
+		workkey.Derive([]string{first.ID.String()}),
+		workkey.Derive([]string{second.ID.String()}),
+	}
+	for _, key := range completions.Worked(ctx, "ceo", keys) {
+		if key {
+			t.Error("a panicking requeue recorded what it had already published, " +
+				"so that copy is dropped unrun when the seat takes its next delivery")
+		}
+	}
+	if len(r.reqs) != 0 {
+		t.Error("a parked seat ran a turn")
+	}
+}
+
+// AND THE SAME HOLDS WHEN THE REQUEUE ITSELF PANICS PART-WAY.
+//
+// The degraded path requeues the tail one event at a time, so a panic inside
+// that loop leaves some of the tail's copies on the queue. Only the head is
+// ever this delivery's to settle, and it stops being answerable for the tail
+// the moment the first copy is published — so the narrowing happens BEFORE the
+// requeue, not after. Narrowed after, this frame records a tail whose copies
+// are already waiting to run, and a completion record is what stops a copy
+// ever running.
+func TestAPanicWhileRequeuingADegradedTailKeepsNoClaimOnIt(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	d.Identify = func(string) (string, string) { return "CEO", "a-1" }
+	ctx := context.Background()
+
+	head := said("ana", "first", clock)
+	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
+	notifyStamp(opaque, "slack:C1")
+	// Publishes the first copy, then dies — the shape [Engine.park]'s own
+	// loop has, one Publish per event.
+	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
+		r.parked = append(r.parked, evs)
+		panic("the broker client died mid-requeue")
+	}
+
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK: a redelivery reaches the same defect", got.Outcome)
+	}
+	tailKey := workkey.Derive([]string{opaque.ID.String()})
+	if completions.Worked(ctx, "ceo", []string{tailKey})[tailKey] {
+		t.Error("a panicking requeue recorded the tail it was part-way through " +
+			"publishing, so that copy is dropped unrun")
+	}
+	if len(r.reqs) != 0 {
+		t.Error("the head ran although the requeue never returned")
+	}
+}
+
 // A PANIC SETTLES WHAT THE DELIVERY STILL HOLDS, NOT WHAT IT ARRIVED WITH.
 //
 // A partition that will not merge requeues its tail before its head runs, so
