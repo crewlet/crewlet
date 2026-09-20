@@ -170,7 +170,7 @@ type CoordinatorOptions struct {
 	// a gate asking whether this particular ending had a suspended turn
 	// behind it — is a second opinion about what the store has already
 	// answered and a fifth chance to get the enumeration wrong. See
-	// [Coordinator.finish].
+	// [Coordinator.endRecord].
 	//
 	// ONE OPTION RATHER THAN ONE PER REASON, because three rounds of
 	// hand-enumerating the ways a run stops each missed one, and a second
@@ -179,15 +179,26 @@ type CoordinatorOptions struct {
 	// say which — [types.SandboxClarificationRequested] and
 	// [types.SandboxRunFailed] — rather than a parameter nothing else needs.
 	//
-	// It is reported from exactly two places, which are the only two that
-	// can take a suspended turn out of the engine's hands:
-	// [Coordinator.finish], the one place a run's record is deleted, and
-	// [Coordinator.park], the one stop that is not an ending. Both report
-	// only where the transition was THIS call's — the same gate the failure
-	// announcement takes, since a run a newer lease owns or one somebody else
-	// ended first is that party's to settle, to explain and to drop the holds
-	// of. Over-reporting is harmless and under-reporting is the defect, so a
-	// path that cannot tell reports.
+	// IT IS REPORTED WHERE THE TRANSITION IS MADE, NOT WHERE A LIST SAYS,
+	// which is what this contract no longer has to enumerate. Every ending
+	// deletes the run's record, and every deletion goes through
+	// [Coordinator.endRecord], which reports; the one stop that is not an
+	// ending, [Coordinator.park], reports for itself. So there are two
+	// reporting sites for two kinds of transition, however many callers
+	// reach them — a settle, a reap, a retirement, a lost claim, and
+	// whatever ends a run next. This doc said "exactly two places" and then
+	// named the two CALLERS it was thinking of, which was already three by
+	// the time it was written: a retirement ends runs too, and it reported
+	// separately because it cannot use [Coordinator.finish]. Counting
+	// callers is the same hand-enumeration that missed four endings in a
+	// row; keying the report to the deletion is what ends it.
+	//
+	// Both report only where the transition was THIS call's — the same gate
+	// the failure announcement takes, since a run a newer lease owns or one
+	// somebody else ended first is that party's to settle, to explain and to
+	// drop the holds of. Over-reporting is harmless and under-reporting is
+	// the defect, so a path that cannot tell reports: a delete that errored
+	// may have landed, and it reports rather than staying quiet.
 	//
 	// After the durable write and before the announcement, never the other
 	// way round: until the park is on the row the completion can still be
@@ -643,9 +654,9 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // ([Coordinator.unclaim]).
 //
 // THE ONE STOP THAT IS NOT AN ENDING, which is why the report is made here and
-// not only in [Coordinator.finish]: the run is alive and a person can move it,
-// but the turn that suspended into it has stopped and will not come back to
-// say so. A park whose write did not land is neither a stop nor a park, and
+// not only in [Coordinator.endRecord]: the run is alive and a person can move
+// it, but the turn that suspended into it has stopped and will not come back
+// to say so. A park whose write did not land is neither a stop nor a park, and
 // reports nothing here — the settle that may follow makes its own report.
 //
 // The seat is freed only once the question is on the row. A clarification wait
@@ -1003,7 +1014,7 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 	// stranded row all over again.
 	settleCtx, cancel := detached(ctx)
 	defer cancel()
-	settled, ended, err := c.pending.Finish(settleCtx, run.TurnID, fenceOf(run), claimedOnly)
+	settled, ended, err := c.endRecord(settleCtx, run, fenceOf(run), claimedOnly)
 	if err != nil {
 		log.ErrorContext(ctx, "sandbox_claimed_settle_failed",
 			"turn_id", run.TurnID, "error", err.Error(), "cause", cause.Error(),
@@ -1025,8 +1036,9 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 		"turn_id", run.TurnID, "sandbox_id", settled.SandboxID, "error", cause.Error(),
 		"detail", "the run's record could not be read after the resume, so it was ended on "+
 			"the status the store still held rather than left in the claim")
+	// The stop went with the deletion, inside [Coordinator.endRecord]; what
+	// is left is the box that record named.
 	_ = c.reclaimBox(ctx, settleCtx, settled)
-	c.reportStopped(ctx, settled)
 }
 
 // unclaim hands a claimed tail back, so the signal's retry can win the flip
@@ -1136,8 +1148,8 @@ func claimedFrom(run PendingRun) string {
 // Announced only when this call ended the run. One that a newer lease owns,
 // or that somebody else ended first, is that party's to settle and to explain,
 // and a second announcement would name a reason the run did not end for. The
-// engine is told on the same gate, by [Coordinator.finish] itself — see
-// [CoordinatorOptions.Stopped].
+// engine is told on the same gate, by the deletion inside
+// [Coordinator.endRecord] — see [CoordinatorOptions.Stopped].
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
 	ended := c.finish(ctx, run, fenceOf(run))
 	// Out of whichever set the record was in: this path settles a claimed
@@ -1178,10 +1190,15 @@ const (
 
 // reportStopped tells the engine one suspended turn has stopped.
 //
-// One helper rather than a nil check at each of the two call sites, so "a stop
-// is reported" is one statement rather than two that have to keep agreeing. A
-// caller that wired nothing gets a no-op, which is a valid build: nothing above
-// this package need hold anything up while a turn works.
+// One helper rather than a nil check at each site, so "a stop is reported" is
+// one statement rather than several that have to keep agreeing. A caller that
+// wired nothing gets a no-op, which is a valid build: nothing above this
+// package need hold anything up while a turn works.
+//
+// Its callers are [Coordinator.park] and [Coordinator.endRecord], and nothing
+// else may become one: an ending reports by deleting the record, which is what
+// stops the next ending from having to remember. See
+// [CoordinatorOptions.Stopped].
 func (c *Coordinator) reportStopped(ctx context.Context, run PendingRun) {
 	if c.stopped == nil {
 		return
@@ -1264,21 +1281,20 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	}
 }
 
-// finish ends a run: its box is reclaimed, its record deleted, and — where the
-// ending was this call's — the stop REPORTED.
-// Reports whether the ending is this call's, which is what licenses the caller
-// to announce it: false when a newer lease owns the run or somebody else had
-// already ended it.
+// endRecord deletes a run's record — while its status is one this ending is
+// licensed for — and REPORTS THE STOP where the deletion was this call's.
 //
 // THE ONE PLACE A RUN'S RECORD IS DELETED, which is what makes it the one place
 // that can say a suspended turn is over, and why the report is made here rather
-// than by each caller. Three rounds of hand-enumerating the callers each missed
-// one; a report keyed to the deletion cannot be missed by a path that deletes.
-// It fires on exactly the gate the caller's own announcement takes, because it
-// IS that gate — the ending being this call's — so a losing racer neither
-// announces a reason the run did not end for nor drops a hold belonging to
-// whoever did end it. And before any caller's announcement, which is a publish
-// that can block: what comes down is a claim on somebody's screen.
+// than by each ending. Three rounds of hand-enumerating those endings each
+// missed one, and the count in [CoordinatorOptions.Stopped] was wrong again the
+// moment a fourth arrived; a report keyed to the deletion cannot be missed by a
+// path that deletes, and needs no count. It fires on exactly the gate a
+// caller's own announcement takes, because it IS that gate — the ending being
+// this call's — so a losing racer neither announces a reason the run did not
+// end for nor drops a hold belonging to whoever did end it. And before any
+// caller's announcement, which is a publish that can block: what comes down is
+// a claim on somebody's screen.
 //
 // It reports for a turn that came back too — a collected run whose resumed
 // executor finished, which every ordinary completion is. That is deliberate:
@@ -1287,6 +1303,34 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 // suspended when we got here" would be a second opinion about a question the
 // store has already answered. Over-reporting costs a map lookup;
 // under-reporting is the defect. See [CoordinatorOptions.Stopped].
+//
+// A DELETE THAT COULD NOT BE WRITTEN REPORTS TOO, for the same asymmetry: the
+// write may have landed, and neither caller can tell. One has already
+// reclaimed the box, so its turn is over whatever the record says; the other
+// retries on its next tick, where a second report finds nothing left to drop.
+//
+// Reports the record it deleted, whether the ending was this call's, and the
+// delete's own error — which is what a caller that can RETRY needs and a
+// settle has no use for.
+func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, fence Fence, whileIn []string,
+) (PendingRun, bool, error) {
+	settled, ended, err := c.pending.Finish(ctx, run.TurnID, fence, whileIn)
+	if err != nil {
+		c.reportStopped(ctx, run)
+		return PendingRun{}, false, err
+	}
+	if !ended {
+		return PendingRun{}, false, nil
+	}
+	c.reportStopped(ctx, settled)
+	return settled, true, nil
+}
+
+// finish ends a run: its box is reclaimed, its record deleted, and — where the
+// ending was this call's — the stop REPORTED.
+// Reports whether the ending is this call's, which is what licenses the caller
+// to announce it: false when a newer lease owns the run or somebody else had
+// already ended it.
 //
 // IN THAT ORDER, for the reason [PendingStore.Finish] gives: a record that
 // outlives its box is reaped by the next recovery pass, while a box that
@@ -1313,20 +1357,16 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) b
 	// whatever the row says now, this run is over and its record must not
 	// outlive it. The narrow license belongs to the one settle that has not
 	// touched the box yet — see [Coordinator.settleClaimed].
-	_, ended, err := c.pending.Finish(killCtx, run.TurnID, fence, Active)
+	_, ended, err := c.endRecord(killCtx, run, fence, Active)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the run's box is reclaimed but its record was not deleted; the seat's "+
 				"next recovery pass reaps it")
 		// The ending is this call's whatever the record says, for the
 		// reason above: the box is gone and the turn is over.
-		ended = true
+		return true
 	}
-	if !ended {
-		return false
-	}
-	c.reportStopped(ctx, run)
-	return true
+	return ended
 }
 
 // detached is the context a teardown runs under.
@@ -1513,7 +1553,15 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 				run.TurnID, handle, err))
 			continue
 		}
-		_, ended, err := c.pending.Finish(ctx, run.TurnID, fence, Active)
+		// THE SAME ENDING EVERY OTHER PATH MAKES, which is what keeps
+		// the stop report out of this function: a retirement does not
+		// use [Coordinator.finish] — it keeps the record of a box it
+		// could not reclaim, and it runs under the caller's context
+		// rather than a detached one — but the delete and the report
+		// are one helper both reach, so the seat that is gone from the
+		// company tells whoever is holding something up for its turn
+		// without this path having to remember to.
+		_, ended, err := c.endRecord(ctx, run, fence, Active)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",
 				run.TurnID, handle, err))
@@ -1524,15 +1572,6 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 			// it if it was lost.
 			continue
 		}
-		// REPORTED HERE RATHER THAN BY [Coordinator.finish], which this
-		// path deliberately does not use: a retirement keeps the record of
-		// a box it could not reclaim, so its retry still knows the box
-		// exists. The rule is the same one and so is the gate — a run this
-		// call ended tells whoever is holding something up for its turn.
-		// The seat is gone from the company, so a hold for it has usually
-		// been taken down with the seat already; this is what covers the
-		// order in which it has not.
-		c.reportStopped(ctx, run)
 		c.announceFailure(ctx, run, types.SandboxFailureSeatRemoved,
 			"the seat was removed from the company and not restored within the retirement "+
 				"grace, so its run was ended; any work it pushed is on its branch")

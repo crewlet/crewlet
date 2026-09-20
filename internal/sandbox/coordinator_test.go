@@ -1021,9 +1021,11 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 // collect failed kept it up for the life of the process.
 //
 // EVERY ENDING, NOT EVERY ENDING SOMEBODY ENUMERATED. The report is made by
-// [Coordinator.finish], the one place a run's record is deleted, so the cases
-// below are evidence rather than the rule: a path added later reports because
-// it deletes, not because anybody remembered. That includes a run whose turn
+// [Coordinator.endRecord], the one place a run's record is deleted, so the
+// cases below are evidence rather than the rule: a path added later reports
+// because it deletes, not because anybody remembered. That is what makes a
+// retirement — which ends runs without going through [Coordinator.finish] at
+// all — one of them rather than a third site somebody has to remember. That includes a run whose turn
 // came back and ended its own hold — the sentence "this run is over, stop
 // holding anything up for its turn" is simply TRUE there, the resume frame has
 // already acted on it, and a gate would be a second opinion about a question
@@ -1121,6 +1123,30 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted: %v", err)
 			}
+		}, []string{"swe/t1"}},
+		{"a run ended because its seat left the company", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			// The retirement does not go through the settle every other
+			// path uses — it keeps the record of a box it could not
+			// reclaim — so it is the ending most likely to be forgotten,
+			// and it was: the contract's own doc named two reporting
+			// sites and this was the third.
+			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+				t.Fatalf("RetireSeat: %v", err)
+			}
+		}, []string{"swe/t1"}},
+		{"an ending whose record could not be deleted", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.coordinator.pending = &refusingStore{
+				inner: rig.pending, refuse: []string{"Finish"},
+			}
+			// A delete that errored MAY have landed, and nothing here
+			// can tell. The retirement retries on its next tick, where a
+			// second report finds nothing left to drop — while staying
+			// quiet is the indicator standing over an agent that stopped.
+			_ = rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12)
 		}, []string{"swe/t1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
