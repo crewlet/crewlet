@@ -8,7 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -27,7 +26,18 @@ const searchHits = 6
 //
 // A query reaches a backend's own query language through the seam, and a
 // model that pasted a whole thread in would search on prose no ranker can
-// use. Four hundred characters is a long sentence and several keywords.
+// use. Four hundred bytes is a long sentence and several keywords.
+//
+// REFUSED, NOT CUT, which is the same call [ToolAnswerBytes] makes one
+// direction over and the same one [github.com/crewlet/crewlet/internal/tracker.MaxQueryText]
+// makes on the query it bounds. A cut query is not a shorter query — it is a
+// DIFFERENT one, and the hits that come back are a plausible answer to
+// something the model never asked, which it has no way to detect: the results
+// are real pages, ranked, about the half of the sentence that survived. The
+// cut was silent besides, so the tool's own `clip` sits two files away
+// refusing to shorten an echoed argument for exactly this reason — "a
+// shortened echo names a query the model never sent". A refusal naming the
+// field costs one round and is the one failure a model reliably fixes.
 const searchQueryMax = 400
 
 // KnowledgeSearcher is query-time search over the team knowledge base, as
@@ -119,12 +129,17 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_knowledge needs a `query`: a few keywords describing " +
 			"what you are looking for."), nil
 	}
-	// textcut, not a byte slice: a plain query[:n] splits whatever
-	// multi-byte rune straddles the cut, and the invalid UTF-8 that
-	// produces is substituted by the JSON encoder, read by a backend as a
-	// replacement character, and rejected outright by some. The cap is
-	// bytes because that is what a backend's own limit is measured in.
-	query = textcut.Bytes(query, searchQueryMax)
+	// NAMES THE FIELD AND THE BOUND, and says what to send instead — see
+	// [searchQueryMax] for why this is a refusal rather than a cut. The
+	// bound is bytes because that is the unit a backend's own limit is
+	// measured in, and the refusal reports bytes so the two agree.
+	if len(query) > searchQueryMax {
+		return failed(fmt.Sprintf("That `query` is %d bytes and search_knowledge "+
+			"takes at most %d. Send 2-8 keywords or key phrases — identifiers, "+
+			"error codes, service names — rather than the task or the thread: "+
+			"a ranker scores terms, and prose this long matches everything "+
+			"weakly and nothing well.", len(query), searchQueryMax)), nil
+	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this
 	// tool refuse every call on the operator surface, where it is
