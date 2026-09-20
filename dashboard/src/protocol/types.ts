@@ -1618,6 +1618,10 @@ export interface ConversationsAnswer {
   entries: ConversationEntry[];
   /** False when this node holds no conversation ledger at all. */
   available: boolean;
+  /** True when the seat holds more threads than this page shows. Covers the
+   *  roster only: `entries` is the whole thread as the ledger holds it,
+   *  because the write-time trim is what bounds it. */
+  truncated: boolean;
 }
 
 /** One open or closed agent-to-agent channel. */

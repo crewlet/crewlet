@@ -91,13 +91,23 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	return map[string]any{"hits": hits, "available": true}, nil
 }
 
-// The conversation page, and its ceiling.
+// The THREAD-LIST page, and its ceiling.
 //
-// BOTH ARE LOAD-BEARING, because the ledger is UNBOUNDED WITHOUT THEM: its
-// `Threads` and `History` apply a `LIMIT` only when one is positive, so a zero
-// or a negative reads a seat's whole ledger through this process. That is the
-// shape a surface must never hand a store — a seat on a busy chat workspace
-// accumulates a thread per channel and a trim limit's worth of turns in each.
+// LOAD-BEARING, because that list is UNBOUNDED WITHOUT IT: `Threads` applies a
+// `LIMIT` only when one is positive, so a zero or a negative reads every key a
+// seat has ever spoken under through this process, and a seat on a busy chat
+// workspace accumulates one per channel for as long as the retention sweep
+// keeps them.
+//
+// IT DOES NOT GOVERN A THREAD'S HISTORY, which is the correction: one page
+// size served both reads, and they are not the same question. A thread's
+// entries are bounded by the WRITER — `Record` trims to `conversation
+// .max_entries` on every write — so a second cut here bought nothing on a
+// default company (20 kept against a 50 asked for) and silently dropped a
+// conversation's OPENING on one that raised the knob, since `History` orders
+// newest-first to make `LIMIT` keep the recent turns and reverses afterwards.
+// It also tied the two together: asking for a longer channel roster changed
+// how much of a thread came back with it.
 //
 // FIFTY is the default, which is [tracker.MaxInboxRows]' own figure for the
 // same reason: this list is WORKED rather than scrolled — a reader is looking
@@ -145,9 +155,17 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	limit := conversationPage(p.Int("limit", 0))
-	threads, err := s.Conversations.Threads(ctx, handle, limit)
+	// ONE ROW PAST THE PAGE, the evidence idiom this tree uses everywhere a
+	// read is cut: a page that filled is otherwise indistinguishable from a
+	// seat holding exactly that many threads, and the probe row is dropped
+	// before anything renders it.
+	threads, err := s.Conversations.Threads(ctx, handle, limit+1)
 	if err != nil {
 		return nil, err
+	}
+	truncated := len(threads) > limit
+	if truncated {
+		threads = threads[:limit]
 	}
 	rows := make([]map[string]any, 0, len(threads))
 	for _, t := range threads {
@@ -162,9 +180,18 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 		"conversations": rows,
 		"entries":       []ledger.Session{},
 		"available":     true,
+		// SAYS WHAT IS MISSING. Only the roster can be cut now — the
+		// entries below are what the ledger holds.
+		"truncated": truncated,
 	}
 	if key := strings.TrimSpace(p.String("conversation")); key != "" {
-		entries, err := s.Conversations.History(ctx, handle, key, limit)
+		// WHAT THE SEAT ITSELF WOULD SEE: the same unbounded read the turn
+		// path takes on every turn, because the bound is the trim rather
+		// than a page. A number here could only ever be wrong — the value
+		// that would make it right is `conversation.max_entries`, which
+		// this layer does not hold — and being wrong low cuts a thread's
+		// opening off a screen whose whole purpose is reading the thread.
+		entries, err := s.Conversations.History(ctx, handle, key, 0)
 		if err != nil {
 			return nil, err
 		}
