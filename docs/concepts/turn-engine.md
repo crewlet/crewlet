@@ -387,7 +387,7 @@ bounds the whole thing economically; the ceiling is a sanity check.
 ```mermaid
 flowchart TD
     A["phase loop hits max_tool_rounds (ExhaustedRounds)"]
-    B["judge LLM (llm_judge → llm → default fallback chain)<br/>sees: phase, the turn's ask, tool log (last 12 calls), last assistant text<br/>returns: extend(N, reason) | rescue(reason)"]
+    B["judge LLM (llm_judge → llm → default fallback chain)<br/>sees: phase, the turn's ask, the round's plan, tool log (last 12 calls), what the phase last said<br/>returns: extend(N, reason) | rescue(reason)"]
     C["<b>extend</b> → re-enter toolloop.Run with the same messages<br/>+ N more rounds on the same provider"]
     D["<b>rescue</b> → the engine writes an `incomplete` outcome and the reviewer judges the record<br/>(also fires when the ceiling is reached or the judge call failed)"]
     A --> B
@@ -399,6 +399,21 @@ flowchart TD
     classDef warning stroke:#f59e0b
     linkStyle 2 stroke:#f59e0b,color:#f59e0b
 ```
+
+**The evidence is bounded where it has to be, and nowhere else.** The tool
+log's arguments render through the same budget the [prior-work
+ledger](#prior-work-ledger-across-self_iterate-rounds) uses — each *value*
+shortened and whole *keys* dropped shortest-first with a `+N more` — rather
+than by cutting the rendered blob, because a blob cut drops whichever keys
+sort last and the discriminating argument (a channel, a key, a page id) is
+usually the shortest one: two calls to different pages then render
+identically and a phase that was working reads as a loop. The round's plan
+and the judge's own reason are carried whole. Only two things are still
+shortened, and each for a reason the other blocks do not have: the turn's
+**ask**, which is whatever woke the seat and is the one value nothing else
+bounds, keeps its opening; and **what the phase last said**, which is every
+assistant message of the loop concatenated, keeps its *tail* — the closing
+sentence is what distinguishes a phase about to finish from one thrashing.
 
 The judge is best-effort: any failure (timeout, provider error, parse
 error) maps to a conservative `rescue` decision so a flaky judge can

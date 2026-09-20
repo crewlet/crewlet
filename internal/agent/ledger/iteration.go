@@ -108,6 +108,27 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 	return strings.Join(lines, "\n")
 }
 
+// RenderArgs renders ONE call's arguments within a budget, for a caller that
+// builds its own line shape.
+//
+// Exported because a second renderer had already been written against the same
+// evidence — the extension judge's, which joined the sorted keys with
+// fmt.Sprintf and head-cut the whole blob. That is the precise failure
+// [elideValue] and [fitArguments] exist to prevent, re-derived by somebody who
+// had not read them: a head cut on a serialised object drops whichever keys
+// SORT LAST, and the discriminating argument (channel, key, page_id) is usually
+// the shortest one. A judge comparing two calls to tell progress from thrashing
+// was handed two lines that had lost exactly the argument that differed.
+//
+// So the budget lives here, with the two rules that make it safe — elide per
+// VALUE, then drop whole KEYS shortest-first and say "+N more" — and a caller
+// that wants numbered lines rather than bullets writes the line and asks this
+// for the arguments. [FormatCalls] is still the whole-block renderer; this is
+// the half a differently-shaped log needs.
+func RenderArgs(args map[string]any, opts FormatOptions) string {
+	return renderArgs(args, opts)
+}
+
 func renderArgs(args map[string]any, opts FormatOptions) string {
 	if len(args) == 0 {
 		return ""

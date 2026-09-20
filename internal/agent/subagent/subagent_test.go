@@ -1882,6 +1882,53 @@ func TestADependentTaskWaitsAndIsGivenTheAnswer(t *testing.T) {
 	}
 }
 
+// A LONG ANSWER REACHES ITS DEPENDENT WHOLE.
+//
+// It used to be cut at a 16 KB budget with a marker, and the marker was not a
+// rescue: [Result.Answer] renders a submission as JSON, so a cut answer is an
+// unparseable fragment and the marker only tells the dependent that the input
+// it was asked to work from is missing — not what was in it. The budget's own
+// doc made this argument ("worse than none, since a model reads the fragment
+// as the whole answer") and then cut anyway. Nothing is unbounded by dropping
+// it: an answer is the upstream worker's own submitted payload, bounded by
+// that worker's generation, and one budget covers the whole call.
+func TestALongDependencyAnswerIsNotCut(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	// Past any plausible byte budget, with the discriminator at the very
+	// END — which is where a head cut takes it from.
+	long := strings.Repeat("findings about the incident. ", 2000) + "VERDICT: the cache."
+	var mu sync.Mutex
+	var synthesisPrompt string
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+		body := userText(req)
+		if strings.Contains(body, "gather A") {
+			return answer(long, 1, 1), nil
+		}
+		mu.Lock()
+		synthesisPrompt = body
+		mu.Unlock()
+		return answer("done", 1, 1), nil
+	}}
+	cfg := baseConfig(t, w, p)
+
+	run(t, cfg, subagent.Request{Tasks: []subagent.Task{
+		{ID: "synth", SystemPrompt: "s", Prompt: "reconcile it", After: []string{"a"}},
+		{ID: "a", SystemPrompt: "s", Prompt: "gather A"},
+	}})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(synthesisPrompt, "VERDICT: the cache.") {
+		t.Errorf("the dependent was handed a cut answer, so its input ends "+
+			"where somebody else decided rather than where the worker stopped "+
+			"(%d bytes of prompt)", len(synthesisPrompt))
+	}
+	if strings.Contains(synthesisPrompt, "…") {
+		t.Error("the injected answer carries an elision marker")
+	}
+}
+
 // A TASK WHOSE INPUT NEVER ARRIVED IS SKIPPED, not run on nothing. Feeding a
 // dependent a missing answer produces a confident wrong one.
 func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
