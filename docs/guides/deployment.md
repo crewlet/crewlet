@@ -225,8 +225,9 @@ reasons:
 Then placement retries for as long as the cluster answers "no suitable
 peers", inside the per-create provisioning budget — **30 seconds** on a solo
 node and **2 minutes** on a member with peers, because the two creates are not
-the same call underneath. See *A clustered node is given longer to create
-them* below.
+the same call underneath. See
+[A clustered node is given longer to create them](#a-clustered-node-is-given-longer-to-create-them)
+below.
 
 The clustered accept budget is four times the solo one because a member
 starting alongside its peers is competing with them for the same disk and the
@@ -370,7 +371,9 @@ consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
 
-**A clustered node is given longer to create them than a solo one.** Every
+#### A clustered node is given longer to create them
+
+Every
 one of those creates is a local file-store setup on a solo node and a raft
 round trip on a member of a cluster, against a metadata group whose peers are
 themselves still booting — so the budget branches: **30 seconds** per create
