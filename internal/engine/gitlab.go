@@ -6,13 +6,11 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -37,72 +35,37 @@ import (
 // the engine name a tool-specific variable that the seat's actual tools do
 // not read.
 
-// gitlabIdentities remembers which account each seat credential
-// authenticates as.
+// gitlabIdentities remembers which account each seat token authenticates as.
 //
-// KEYED ON THE TOKEN, which is what makes an apply free: identity is a
-// function of the credential, credentials change rarely, and a config
-// revision that touched something else must not spend one request per seat
-// to re-learn what it already knows. A rotated token is a cache miss and
-// costs exactly one request, which is correct — it may well be a different
-// account.
+// KEYED ON THE TOKEN, and the cache's rules — one request per credential
+// however many callers want it, a failed lookup left for the next pass — are
+// [identityCache]'s. What is this surface's own is the client it builds, the
+// account GitLab calls a username, and what it logs when a lookup fails.
 type gitlabIdentities struct {
-	mu      sync.Mutex
-	byToken map[string]string
+	identityCache[string]
 }
 
-// resolve fills in the accounts behind any credentials not already known.
+// resolve fills in the accounts behind any tokens not already known.
 //
-// CONCURRENTLY, bounded by the number of distinct credentials. Sequentially
-// this is one round trip per seat on the boot path, which on a company of
-// thirty seats against a slow instance is thirty timeouts end to end.
-//
-// A seat whose lookup FAILS is left unresolved rather than failing the boot:
-// the instance may be briefly down, and the next apply retries. What that
-// costs is that seat's inbound routing until then, which is the honest
-// consequence and is reported per seat.
+// See [identityCache.resolve] for what "fills in" promises: one request per
+// token however many callers race it, and a caller that waited holds the
+// answer by the time this returns, which is what the register below depends
+// on.
 func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []string) {
-	g.mu.Lock()
-	if g.byToken == nil {
-		g.byToken = map[string]string{}
-	}
-	var missing []string
-	for _, token := range tokens {
-		if _, known := g.byToken[token]; !known {
-			missing = append(missing, token)
-		}
-	}
-	g.mu.Unlock()
-	if len(missing) == 0 {
-		return
-	}
-
-	found := make([]string, len(missing))
-	provision.ResolveConcurrently(len(missing), func(i int) {
-		token := missing[i]
+	g.identityCache.resolve(ctx, tokens, func(token string) string {
 		client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
 		if err != nil {
 			log.WarnContext(ctx, "gitlab_seat_client_failed", "error", err.Error())
-			return
+			return ""
 		}
 		username, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no code-host events until a lookup "+
-					"succeeds; the reconcile loop retries it on this surface's "+
-					"own pass, so nothing has to be applied")
-			return
+				"detail", unresolvedSeatDetail("code-host events"))
+			return ""
 		}
-		found[i] = username
+		return username
 	})
-
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for i, username := range found {
-		if username != "" {
-			g.byToken[missing[i]] = username
-		}
-	}
 }
 
 // register binds each resolved seat to its account in the given registry.
@@ -113,9 +76,7 @@ func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []str
 // identities are the opposite — facts about a live server, carried across an
 // apply by the transport that resolved them.)
 func (g *gitlabIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) int {
-	g.mu.Lock()
-	known := maps.Clone(g.byToken)
-	g.mu.Unlock()
+	known := g.snapshot()
 
 	var registered int
 	for seat := range c.Org.AllRoles() {
@@ -373,9 +334,7 @@ func gitlabPrompt() notify.Prompt { return gitlab.Prompt{} }
 // unresolved names the seats holding a code-host credential that resolves to
 // no account. See [jiraIdentities.unresolved].
 func (g *gitlabIdentities) unresolved(c *Company, env *config.Resolver) []string {
-	g.mu.Lock()
-	known := maps.Clone(g.byToken)
-	g.mu.Unlock()
+	known := g.snapshot()
 
 	var out []string
 	for seat := range c.Org.AllRoles() {

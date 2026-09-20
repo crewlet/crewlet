@@ -99,7 +99,7 @@ roles:
 `
 	c := companyWith(t, doc)
 	reg := notify.NewRegistry(c.Org)
-	ids := &githubIdentities{byToken: map[string]string{"ghp-seat": "SreLead"}}
+	ids := &githubIdentities{identityCache[string]{known: map[string]string{"ghp-seat": "SreLead"}}}
 
 	if got := ids.register(reg, c, config.NewResolver(nil)); got != 1 {
 		t.Fatalf("registered %d seats", got)
@@ -136,7 +136,7 @@ roles:
 `
 	c := companyWith(t, doc)
 	reg := notify.NewRegistry(c.Org)
-	ids := &githubIdentities{byToken: map[string]string{"ghp-old": "somebody-else"}}
+	ids := &githubIdentities{identityCache[string]{known: map[string]string{"ghp-old": "somebody-else"}}}
 	ids.register(reg, c, config.NewResolver(nil))
 
 	if id := reg.ExternalID(github.Backend, "sre-lead"); id != "acme-sre-lead" {
@@ -176,7 +176,7 @@ roles:
 `
 	c := companyWith(t, doc)
 	reg := notify.NewRegistry(c.Org)
-	ids := &githubIdentities{byToken: map[string]string{"ghp-reviewer": "rev-account"}}
+	ids := &githubIdentities{identityCache[string]{known: map[string]string{"ghp-reviewer": "rev-account"}}}
 
 	if got := ids.register(reg, c, config.NewResolver(nil)); got != 2 {
 		t.Fatalf("registered %d seats, want both shapes", got)

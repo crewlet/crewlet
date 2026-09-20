@@ -3,15 +3,12 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The hosted code host, wired.
@@ -35,76 +32,39 @@ import (
 // the engine name a tool-specific variable that the seat's actual tools do
 // not read.
 
-// githubIdentities remembers which account each seat credential
-// authenticates as.
+// githubIdentities remembers which account each seat token authenticates as.
 //
-// KEYED ON THE TOKEN, which is what makes an apply free: identity is a
-// function of the credential, credentials change rarely, and a config
-// revision that touched something else must not spend one request per seat
-// to re-learn what it already knows. A rotated token is a cache miss and
-// costs exactly one request, which is correct — it may well be a different
-// account.
+// KEYED ON THE TOKEN, and the cache's rules — one request per credential
+// however many callers want it, a failed lookup left for the next pass — are
+// [identityCache]'s. What is this surface's own is the client it builds, the
+// account GitHub calls a login, and what it logs when a lookup fails.
 type githubIdentities struct {
-	mu      sync.Mutex
-	byToken map[string]string
+	identityCache[string]
 }
 
-// resolve fills in the accounts behind any credentials not already known.
+// resolve fills in the accounts behind any tokens not already known.
 //
-// CONCURRENTLY and bounded — see [identityLookups]. Sequentially this is one
-// round trip per seat on the boot path, which on a company of thirty seats is
-// thirty timeouts end to end against a degraded API; unbounded it is thirty
-// simultaneous connections to one third-party app, which is the shape an abuse
-// detector is built to notice.
-//
-// A seat whose lookup FAILS is left unresolved rather than failing the boot:
-// GitHub may be briefly down or rate-limiting, and the next apply retries.
-// What that costs is that seat's inbound routing until then, which is the
-// honest consequence and is reported per seat.
+// See [identityCache.resolve] for what "fills in" promises: one request per
+// token however many callers race it, and a caller that waited holds the
+// answer by the time this returns, which is what the register below depends
+// on.
 func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens []string) {
-	g.mu.Lock()
-	if g.byToken == nil {
-		g.byToken = map[string]string{}
-	}
-	var missing []string
-	for _, token := range tokens {
-		if _, known := g.byToken[token]; !known {
-			missing = append(missing, token)
-		}
-	}
-	g.mu.Unlock()
-	if len(missing) == 0 {
-		return
-	}
-
-	found := make([]string, len(missing))
-	provision.ResolveConcurrently(len(missing), func(i int) {
-		token := missing[i]
+	g.identityCache.resolve(ctx, tokens, func(token string) string {
 		client, err := github.NewClient(github.ClientOptions{
 			APIBase: api, WebBase: web, Token: token,
 		})
 		if err != nil {
 			log.WarnContext(ctx, "github_seat_client_failed", "error", err.Error())
-			return
+			return ""
 		}
 		login, err := client.Me(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "github_seat_identity_unresolved", "error", err.Error(),
-				"detail", "this seat receives no code-host events until a lookup "+
-					"succeeds; the reconcile loop retries it on this surface's "+
-					"own pass, so nothing has to be applied")
-			return
+				"detail", unresolvedSeatDetail("code-host events"))
+			return ""
 		}
-		found[i] = login
+		return login
 	})
-
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for i, login := range found {
-		if login != "" {
-			g.byToken[missing[i]] = login
-		}
-	}
 }
 
 // register binds each resolved seat to its account in the given registry.
@@ -115,9 +75,7 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 // identities are the opposite — facts about a live server, carried across an
 // apply by the transport that resolved them.)
 func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) int {
-	g.mu.Lock()
-	known := maps.Clone(g.byToken)
-	g.mu.Unlock()
+	known := g.snapshot()
 
 	var (
 		registered int
@@ -388,9 +346,7 @@ func githubWirable(cfg *config.GitHub, env *config.Resolver) error {
 //
 // See [jiraIdentities.unresolved] for the rest of the contract.
 func (g *githubIdentities) unresolved(c *Company, env *config.Resolver) []string {
-	g.mu.Lock()
-	known := maps.Clone(g.byToken)
-	g.mu.Unlock()
+	known := g.snapshot()
 
 	byApp := map[string]bool{}
 	for role := range c.Config.EachRole() {
