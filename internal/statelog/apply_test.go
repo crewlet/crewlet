@@ -1320,10 +1320,12 @@ func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 
 // A CLEAN APPLY COUNTS NO TRANSACTION ABORTS.
 //
-// `apply.tx.aborts` is the number that says whether this driver's transaction
-// conflicts are row-scoped or database-scoped on the operator's own hardware,
-// and the constant it justifies was chosen against a MEASURED ZERO: a non-zero
-// count means the retry budget is being spent rather than held in reserve.
+// `apply.tx.aborts` is the number that says whether an apply's body is ever
+// run twice on the operator's own hardware, and it reads zero by
+// construction: the store's write transactions hold the file's lock from
+// their BEGIN, so nothing committing elsewhere in the file can abort one. A
+// non-zero count means the retry budget is being spent rather than held in
+// reserve.
 //
 // An instrument that recorded on every run would be useless in the direction
 // that matters — the reserve would read as spent on a healthy fleet — and it
