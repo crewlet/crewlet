@@ -300,8 +300,13 @@ CREATE TABLE tracker_projects (
     -- cleared by the walk's last record.
     rank_respread_pending  INTEGER NOT NULL DEFAULT 0,
     -- Set by the APPLIER from one indexed probe when it writes a rank a sibling
-    -- already holds, and cleared the same way — which is what makes a duplicate
-    -- a repairable observable rather than only a published number.
+    -- already holds — which is what makes a duplicate a repairable observable
+    -- rather than only a published number. It is NOT cleared the same way: the
+    -- apply path only ever sets it, and the sole clear is the fleet-singleton
+    -- duty's own local write on the node that holds the duty, so a peer's copy
+    -- stays set. That is why the column is outside the identity claim (see
+    -- internal/tracker's Domain.ClaimsIdentity) and why nothing may read it as
+    -- a fleet-wide fact.
     rank_duplicate_pending INTEGER NOT NULL DEFAULT 0,
     -- MAINTAINED, never scanned: updated in the task apply when a status group
     -- changes or a task enters, leaves or is removed from the project. One row
