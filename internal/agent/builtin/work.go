@@ -799,8 +799,8 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if len(answer.Groups) > 0 {
 		result["groups"] = answer.Groups
 		result["groups_overlap"] = answer.GroupsOverlap
-		if answer.GroupsDropped > 0 {
-			result["groups_dropped"] = answer.GroupsDropped
+		if answer.GroupsTruncated {
+			result["groups_truncated"] = true
 		}
 	}
 	if len(answer.Totals) > 0 {

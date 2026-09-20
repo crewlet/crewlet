@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -605,13 +606,81 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 	var lanes int
 	for _, group := range answer.Groups {
 		lanes += len(group.Subgroups)
-		if group.SubgroupsDropped < 0 {
-			t.Errorf("column %s reports %d dropped lanes",
-				group.Key, group.SubgroupsDropped)
+		// THE FLAG AND THE CAP AGREE. A column that reports itself cut
+		// must actually be at the bound, and one at the bound with more
+		// behind it must report itself cut — the count this replaced
+		// could only ever read 1, so nothing here could check it.
+		if group.SubgroupsTruncated && len(group.Subgroups) != tracker.MaxSubgroups {
+			t.Errorf("column %s says its lanes were cut but carries %d of %d",
+				group.Key, len(group.Subgroups), tracker.MaxSubgroups)
 		}
 	}
 	if lanes == 0 {
 		t.Fatal("a two-axis board drew no lanes, so the cap assertion above " +
 			"is about a shape this reader does not produce")
+	}
+}
+
+// AN OVERFLOWING BOARD SAYS SO, AND THE FLAG AGREES WITH THE BOUND.
+//
+// This reported a NUMBER that could only ever be 1. `groupCounts` selects
+// `LIMIT limit+1` — one row past the bound, as evidence — and the overflow was
+// `len(out) - limit` over that, so a board with two hundred assignee columns
+// told its reader "1 more column did not fit". A wrong number stated as a fact
+// is worse than the silence the rule was written against, because a reader
+// acts on it: the dashboard printed it verbatim and the tool answer carried it
+// to a model.
+func TestAnOverflowingBoardSaysSoRatherThanCountingWrong(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// One status column with more lanes than MaxSubgroups, which is the
+	// cheap way to overflow groupCounts: the same function serves both
+	// axes, so the column path is the same assertion at MaxGroups.
+	lanes := tracker.MaxSubgroups + 4
+	for i := range lanes {
+		task := newTask(fmt.Sprintf("g%02d", i))
+		task.Status, task.StatusGroup = tracker.StatusTodo, tracker.StatusTodo.Group()
+		task.Assignee = fmt.Sprintf("seat%02d", i)
+		if _, err := r.writer.CreateTask(t.Context(), "op-g"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status",
+		"group_by2": "assignee", "group_limit": 1,
+	})
+	todo := groupOf(t, answer, string(tracker.StatusTodo))
+	if !todo.SubgroupsTruncated {
+		t.Fatalf("a column with %d lanes drew %d and reported nothing, so it "+
+			"reads as a company with %d people",
+			lanes, len(todo.Subgroups), len(todo.Subgroups))
+	}
+	// THE PAGE STAYS AT THE BOUND: the evidence row is evidence, never an
+	// answer. Without this the flag could be right while the board quietly
+	// carried one lane more than it is allowed to.
+	if len(todo.Subgroups) != tracker.MaxSubgroups {
+		t.Errorf("the column carries %d lanes, want the bound of %d",
+			len(todo.Subgroups), tracker.MaxSubgroups)
+	}
+
+	// AND A BOARD THAT FITS SAYS NOTHING, so the flag is not simply always
+	// on — which is the mutation a bool invites where a count did not.
+	small := newRoundTrip(t)
+	seedBoard(t, small)
+	fits := small.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status",
+		"group_by2": "assignee", "group_limit": 1, "show_closed": "true",
+	})
+	for _, group := range fits.Groups {
+		if group.SubgroupsTruncated {
+			t.Errorf("column %s reports itself cut at %d lanes",
+				group.Key, len(group.Subgroups))
+		}
+	}
+	if fits.GroupsTruncated {
+		t.Error("a five-task board reports its columns cut")
 	}
 }

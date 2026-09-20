@@ -220,7 +220,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// only `items` renders a populated board as an empty one.
 	if answer.Groups != nil {
 		out["groups"] = answer.Groups
-		out["groups_dropped"] = answer.GroupsDropped
+		out["groups_truncated"] = answer.GroupsTruncated
 		out["groups_overlap"] = answer.GroupsOverlap
 	}
 	if answer.Totals != nil {

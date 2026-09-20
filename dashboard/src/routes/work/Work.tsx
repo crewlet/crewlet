@@ -705,10 +705,13 @@ export function Work({ project = "" }: { project?: string }) {
             total.
           </Callout>
         )}
-        {data?.groups_dropped ? (
+        {/* NO NUMBER, because the server does not have one. It reads a single
+            row past the bound as evidence rather than counting the overflow,
+            so the count this used to print was always "1" — on a board with
+            two hundred columns as much as on one with sixty-five. */}
+        {data?.groups_truncated ? (
           <Callout variant="warning">
-            {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit and
-            are not shown. Narrow the board to bring them into range.
+            More columns did not fit and are not shown. Narrow the board to bring them into range.
           </Callout>
         ) : null}
 
