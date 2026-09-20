@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -148,18 +149,41 @@ type ManifestOptions struct {
 	Homepage string
 }
 
+// AppNameMax is GitHub's own ceiling on an app name, in CHARACTERS.
+//
+// Runes rather than bytes, which is why this is not a [textcut] budget: GitHub
+// counts characters, and a company whose name is not ASCII would be refused at
+// a third of its real allowance by a byte count.
+const AppNameMax = 34
+
 // AppName is the name GitHub registers a seat's app under.
 //
-// GLOBALLY UNIQUE AND AT MOST 34 CHARACTERS, which is GitHub's rule and the
-// one constraint that shapes this. A name built from the seat alone collides
-// the second time any two companies both have an `sre-lead`, and the failure
-// arrives as a manifest rejection an operator cannot do anything about.
+// GLOBALLY UNIQUE AND AT MOST [AppNameMax] CHARACTERS, which is GitHub's rule
+// and the one constraint that shapes this. A name built from the seat alone
+// collides the second time any two companies both have an `sre-lead`, and the
+// failure arrives as a manifest rejection an operator cannot do anything
+// about. So the company's own name leads and the seat follows.
 //
-// So the company's own name leads, the seat follows, and the whole is cut to
-// fit. Cut on a RUNE boundary through textcut, because a name sliced through
-// a multi-byte character is rejected by GitHub as malformed rather than as
-// too long.
-func AppName(company, seat string) string {
+// # And an over-long one is REFUSED, not cut
+//
+// This cut to fit, and the cut destroyed the very uniqueness the composition
+// exists to provide. Once the company name alone runs long, every seat's app
+// is the same prefix of the company name and the seat — the only part that
+// distinguishes them — is what falls off the end: "Acme Corporation
+// International sre-lead" and "…sre-manager" both become "Acme Corporation
+// International sre". The second seat's creation then fails on GitHub's
+// global uniqueness with a duplicate-name error naming a string the operator's
+// config does not contain, which is precisely the "rejection an operator
+// cannot do anything about" this function was written to prevent.
+//
+// The refusal is the one [github.com/crewlet/crewlet/internal/slack.Manifest]
+// already gives for the same vendor rule, in the same words: "silently cutting
+// to them puts an app in the operator's workspace under a name their config
+// does not contain — and two roles sharing a 35-character prefix become two
+// apps a person cannot tell apart. The operator can shorten a role name; only
+// they can decide which words to lose." The tree held both answers to one
+// question; it now holds Slack's.
+func AppName(company, seat string) (string, error) {
 	parts := make([]string, 0, 2)
 	for _, part := range []string{company, seat} {
 		if trimmed := strings.TrimSpace(part); trimmed != "" {
@@ -170,16 +194,15 @@ func AppName(company, seat string) string {
 	if name == "" {
 		name = "Crewlet agent"
 	}
-	return cut(name, 34)
-}
-
-// cut shortens to n runes without splitting one.
-func cut(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
+	if n := utf8.RuneCountInString(name); n > AppNameMax {
+		return "", fmt.Errorf(
+			"github: the app name %q for this seat is %d characters and GitHub "+
+				"caps one at %d — shorten the company's `name` or the seat's "+
+				"`name` in the company config; cutting it here would give two "+
+				"seats the same app name, which GitHub refuses globally",
+			name, n, AppNameMax)
 	}
-	return strings.TrimSpace(string(runes[:n]))
+	return name, nil
 }
 
 // BuildManifest describes the app one seat needs.

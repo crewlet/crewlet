@@ -43,21 +43,65 @@ func TestAnAppNameFitsGitHubsGlobalNamespace(t *testing.T) {
 		"short enough":   {"Acme", "sre-lead", "Acme sre-lead"},
 		"no company":     {"", "sre-lead", "sre-lead"},
 		"nothing at all": {"", "", "Crewlet agent"},
+		// EXACTLY AT THE BOUND IS SERVED, so the refusal is for what is
+		// past it rather than for what reaches it.
+		"exactly at the bound": {strings.Repeat("c", 25), "sre-lead",
+			strings.Repeat("c", 25) + " sre-lead"},
 	} {
-		if got := github.AppName(tc.company, tc.seat); got != tc.want {
+		got, err := github.AppName(tc.company, tc.seat)
+		if err != nil {
+			t.Errorf("%s: AppName: %v", name, err)
+			continue
+		}
+		if got != tc.want {
 			t.Errorf("%s: AppName = %q, want %q", name, got, tc.want)
 		}
 	}
-	long := github.AppName(strings.Repeat("company", 6), "sre-lead")
-	if len([]rune(long)) > 34 {
-		t.Errorf("a long name is %d runes, past GitHub's 34", len([]rune(long)))
+}
+
+// AN OVER-LONG APP NAME IS REFUSED, NOT CUT — and the cut is what made two
+// seats collide.
+//
+// This shortened to fit, and the cut destroyed the uniqueness the composition
+// exists for: once the company name alone runs long, the seat is what falls
+// off the end, so every seat under that company becomes the same 34-character
+// prefix. GitHub refuses a duplicate app name globally, so the SECOND seat's
+// creation failed at the vendor with an error naming a string the operator's
+// config does not contain — the exact "rejection an operator can do nothing
+// about" the composition was written to prevent.
+//
+// It is the call `slack.Manifest` already makes for the same vendor rule: the
+// operator can shorten a role name, and only they can decide which words to
+// lose.
+func TestAnOverLongAppNameIsRefusedRatherThanCut(t *testing.T) {
+	t.Parallel()
+	company := strings.Repeat("c", 30)
+	lead, err := github.AppName(company, "sre-lead")
+	if err == nil {
+		t.Fatalf("an over-long name was accepted as %q", lead)
 	}
-	// CUT ON A RUNE BOUNDARY. A name sliced through a multi-byte character
-	// is refused by GitHub as malformed rather than as too long, which
-	// names nothing an operator can act on.
-	wide := github.AppName(strings.Repeat("π", 40), "seat")
-	if !json.Valid([]byte(`"` + wide + `"`)) {
-		t.Errorf("a cut name is not valid text: %q", wide)
+	// NAMES THE FIELD AND BOTH NUMBERS, or the operator cannot act on it.
+	for _, want := range []string{"name", "34"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+	// THE COLLISION THE CUT CAUSED. Two different seats under one long
+	// company name produced one identical app name; both are refused now,
+	// and neither is silently turned into the other.
+	manager, mErr := github.AppName(company, "sre-manager")
+	if mErr == nil {
+		t.Fatalf("an over-long name was accepted as %q", manager)
+	}
+	if lead == manager && lead != "" {
+		t.Errorf("two seats still resolve to one app name: %q", lead)
+	}
+
+	// CHARACTERS, NOT BYTES. GitHub counts characters, so a name of 30
+	// two-byte runes is inside the cap and must not be refused for its
+	// byte length.
+	if _, err := github.AppName(strings.Repeat("π", 25), "seat"); err != nil {
+		t.Errorf("a 30-character name was refused on its byte count: %v", err)
 	}
 }
 
