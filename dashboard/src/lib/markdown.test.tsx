@@ -144,6 +144,20 @@ describe("a company page", () => {
     expect(el.querySelector("hr")).not.toBeNull();
   });
 
+  it("names a fenced block for a recipe that exists", () => {
+    // WHAT THE NAME COSTS WHEN IT IS WRONG. This block was `class="code
+    // plain"`, and neither name is a recipe for a `pre` — `.grid-th.plain` is
+    // a table header and nothing declares `.code` at all. So a fenced sample
+    // in a page body, a work item's description or a phase prompt rendered
+    // with no surface and, worse, with a `pre`'s own `white-space: pre` and
+    // `overflow: visible`: one long line pushed the whole PAGE sideways. The
+    // class is what ties the block to its recipe, so it is what is asserted —
+    // and `md-code` is the family the other three block classes are already
+    // in, which is the reason a missing one is now conspicuous.
+    const el = draw(source);
+    expect(el.querySelector("pre")?.className).toBe("md-code");
+  });
+
   it("renders a task list as ticked and unticked boxes nobody can click", () => {
     const el = draw(source);
     const boxes = [...el.querySelectorAll<HTMLInputElement>("input[type=checkbox]")];

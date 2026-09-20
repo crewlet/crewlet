@@ -31,10 +31,12 @@
  * that is safe by construction rather than by exhaustive denial.
  *
  * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections]) without
- * rendering anything, for the surfaces whose subject is a RECORD rather than a
- * reading of one — a phase prompt, which an operator needs back verbatim and
- * which has no structure but its headings. That walk shares this file's
- * [HEADING] and [FENCE] rather than restating them; see its own note.
+ * rendering anything, for a surface that needs the document's OUTLINE and its
+ * source both — a phase prompt, tens of kilobytes with no structure but its
+ * headings, which its screen folds on those headings and then renders one
+ * section at a time. A walk that rendered as it split could hand back neither.
+ * It shares this file's [HEADING] and [FENCE] rather than restating them; see
+ * its own note.
  */
 
 import { createElement, type ReactNode } from "react";
@@ -363,11 +365,13 @@ export interface Section {
  * Split a document into its ATX-heading sections.
  *
  * WHY IT IS NOT [parseBlocks]. That walk answers "what does this document
- * RENDER to", and a caller that wants sections wants the opposite: the source
- * back, unchanged, grouped under the headings somebody wrote. A phase prompt
- * is the case — it is a RECORD, so an operator reading one needs the bytes the
- * model was handed rather than this renderer's reading of them, and the
- * headings are the only structure a ~30 kB document has.
+ * RENDER to", and a caller that wants sections wants something it cannot get
+ * from the answer: the source back, unchanged, grouped under the headings
+ * somebody wrote. A phase prompt is the case — the headings are the only
+ * structure a ~30 kB document has, and its screen needs each block's SOURCE so
+ * it can render that block on its own (or hand the whole record back byte for
+ * byte). Rendering first and sectioning after would have to reassemble
+ * markdown out of React nodes to do either.
  *
  * WHY IT IS HERE AND NOT BESIDE THAT CALLER: what a heading IS and where a
  * fenced block suspends the grammar are decisions [parseBlocks] has already
@@ -651,9 +655,21 @@ function renderBlock(block: Block, key: string): ReactNode {
     case "paragraph":
       return createElement("p", { key }, renderInline(block.text, key));
     case "code":
+      // `md-code`, in the same family as `md-table`, `md-tasks` and
+      // `md-task-body`. It was `code plain`, which is two names this
+      // stylesheet spends on something else — `.grid-th.plain` is a table
+      // header — and NEITHER of them was ever a recipe for this block. So a
+      // fenced sample in a page body, a work item's description, a comment or
+      // a phase prompt had no surface, no padding and, because a `pre`
+      // defaults to `white-space: pre` with `overflow: visible`, no way to
+      // contain a long line: one line of JSON pushed the whole page 678px
+      // wider than its own viewport (measured at 700px). The forward half of
+      // the class gate could not see it either, because it read a `className`
+      // ATTRIBUTE and this is a property in a props object — which is the
+      // other half of why it stayed silent, and is fixed in that gate.
       return createElement(
         "pre",
-        { key, className: "code plain", "data-lang": block.lang || undefined },
+        { key, className: "md-code", "data-lang": block.lang || undefined },
         createElement("code", null, block.text),
       );
     case "quote":

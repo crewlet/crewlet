@@ -2798,6 +2798,28 @@ a.work-cal-chip {
   accent-color: var(--accent);
   opacity: 0.85;
 }
+/* A FENCED BLOCK WRAPS RATHER THAN SCROLLING, which is the whole of the fix
+   and also the design system's own default: uilet's CodeBlock wraps unless a
+   caller turns it off, because "a sideways scrollbar is a line nobody finds
+   the end of". A `pre` is `white-space: pre` with `overflow: visible` out of
+   the box, so before this recipe existed one long line of JSON in a page
+   body, a work item's description or a phase prompt pushed the PAGE sideways
+   — 1378px of scroll width in a 700px viewport, measured. Scrolling the block
+   instead would have fixed the page and owed a tab stop, since a scroll
+   container no keyboard can reach is content no keyboard can read; wrapping
+   owes nothing.
+
+   `overflow-wrap: anywhere` rather than `break-word` because these lines have
+   no spaces to break at: a minified payload, a base64 blob and a long path
+   are each one word to a line breaker. */
+.prose.md pre.md-code {
+  background: var(--surface-inset);
+  border-radius: var(--r-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .prose.md blockquote {
   margin: 0;
   padding-inline-start: var(--space-3);
