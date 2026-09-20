@@ -123,39 +123,3 @@ describe("the token namespace", () => {
     expect(missing).toEqual(["fake.css:6 reads --nope, which nothing declares"]);
   });
 });
-
-/**
- * A NUMBER THIS TREE RESTATES FROM THE PACKAGE, held against the package.
- *
- * `--select-menu-w-max` is the cap `components.css` grows a portalled dropdown
- * panel to, and it is deliberately the SAME number `@crewlethq/ui`'s Select
- * caps an `auto`-width picker at — a list has no business standing wider than
- * the control it belongs to may. It cannot be read with `var()`: the panel is
- * portalled to the document body, so a property declared on `.crewlet-select`
- * never reaches it and the fallback would quietly be the value every time.
- *
- * So it is written twice, and this is what stops the two drifting. A bump that
- * retunes the picker's cap fails HERE, naming both numbers, rather than
- * leaving a panel that may grow past the trigger it hangs from — which is a
- * difference nobody sees until an option is long enough to reach it.
- */
-describe("the dropdown cap", () => {
-  const selectCSS = () => {
-    // Through the SUBPATH the package actually exports, which is the one
-    // `classes.test.ts` already reads for the same reason: the package has no
-    // main entry, so resolving its name alone throws.
-    const dist = join(require_.resolve("@crewlethq/ui/styles.css"), "..");
-    const sheet = readdirSync(dist).find((f) => /^Select-.*\.css$/.test(f));
-    if (!sheet) throw new Error("no Select stylesheet in @crewlethq/ui/dist");
-    return readFileSync(join(dist, sheet), "utf8");
-  };
-
-  test("is the package's own cap for a picker", () => {
-    const theirs = /--crewlet-select-auto-max-width:\s*([^;]+);/.exec(selectCSS());
-    const ours = /--select-menu-w-max:\s*([^;]+);/.exec(
-      readFileSync(join(STYLES, "tokens.css"), "utf8"),
-    );
-    expect(theirs?.[1]?.trim()).toBeDefined();
-    expect(ours?.[1]?.trim()).toBe(theirs?.[1]?.trim());
-  });
-});

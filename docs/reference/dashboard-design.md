@@ -466,45 +466,32 @@ cannot carry, which is the path THROUGH the tree.
 ### A dropdown's list sizes to its options
 
 The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode,
-and this tree composes three rules onto it — all about the same moment, an
-option longer than the trigger that opened the list.
+and for a while this tree carried three rules compensating for it. All three
+are gone: they were fixed in the package, and `0.4.4` is the first release that
+carries them.
 
-- **A row is never shrunk below its own content.** The panel's list is a column
-  flex scroller and each option carries an explicit `min-height`, which
-  replaces the automatic minimum that would otherwise hold a flex item at its
-  content size — so a list taller than the panel shrank every row to exactly
-  that height instead of scrolling, and a two-line row overflowed eleven pixels
-  onto its neighbour. Six of `My work`'s nine seat rows were drawn over each
-  other. `flex: none` is what a row in a scroller wants: the scroller absorbs
-  the excess, one row deep.
-- **One line per option.** The package already sets `overflow: hidden` and
-  `text-overflow: ellipsis` on an option's label and neither does anything to
-  text allowed to wrap; `white-space: nowrap` is the half that was missing, and
-  the hint element beside it in the same family states the rule for itself ("a
-  hint that broke across two lines turned every row in the list a different
-  height").
-- **The panel sizes to its options, not to the value showing.** The component
-  places the list with the TRIGGER'S measured width, which is right for a form
-  field and wrong for a toolbar picker: `width="auto"` sizes that trigger to
-  its current answer and caps it deliberately, so the panel inherited a bound
-  that was only ever about not pushing a filter bar around — and a popup, out
-  of flow, can push nothing. `min-width: max-content` beats the inline width,
-  so it only ever grows the panel and only when an option needs it. Two caps,
-  tighter wins: `--select-menu-w-max`, which is the package's own ceiling for a
-  picker (restated because the panel is portalled out of reach of the property,
-  and held against the installed stylesheet by `styles/tokens.test.ts`), and
-  the viewport under it on a phone.
+What they were is worth keeping, because the shapes recur. A row in the panel
+shrank below its own content — an explicit `min-height` on a flex item replaces
+the automatic content minimum, so a list taller than its panel squeezed every
+row before it scrolled, and the overflow drew over the next row. An option's
+label declared `overflow: hidden` and `text-overflow: ellipsis` and no
+`white-space`, and neither of the first two does anything to text that is
+allowed to wrap, so the ellipsis was inert. And the panel was placed with the
+TRIGGER's width while its height was measured off the panel, in the same object
+literal — which pinned a toolbar picker's list to whatever its current answer
+happened to be, made `align="right"` compute the same number as `align="left"`,
+and clamped a panel that had grown as though it had not, so it hung over the
+viewport's edge.
 
-What this does **not** fix, stated rather than left to be found: the component
-clamps the panel's placement with the trigger's width rather than the panel's,
-so a picker whose right edge sits within (panel − trigger) of the viewport's
-right edge hangs over it, by at most the distance between the package's own
-floor and its own cap. Nothing here is laid out that way — every `.toolbar` is
-a left-anchored flex row and every picker in one is ahead of its `.spacer` —
-and it cannot be fixed from a stylesheet, because the panel is `position:
-fixed` with `left` written inline and no CSS term can know how much room is
-left to its right. The fix belongs in the `placePopup` call that already
-measures the panel's own height.
+**A rule compensating for a package is a rule with an expiry date, and it is
+the consumer's job to notice.** These were written with the diagnosis attached
+precisely so they could be deleted rather than inherited — the last of them
+said outright that the fix belonged upstream, in the `placePopup` call that
+already measured the panel's own height. It does now. Nothing in this tree
+styles `.crewlet-select__menu`, `.crewlet-listbox__option` or
+`.crewlet-select__option-label` any more, and `styles/classes.test.ts` is what
+keeps that true: a rule on a package class has to earn an `ALLOWED` entry with
+a reason, so the next one cannot arrive quietly or outlive its cause.
 
 ### An object's own facts
 
