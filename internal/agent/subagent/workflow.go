@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -321,16 +320,6 @@ func assignWaves(tasks []resolved) error {
 	return nil
 }
 
-// dependencyBudget caps what one task's injected dependency results may cost.
-//
-// 16 KB per dependency, because a submission is the parent's own declared
-// shape and truncating it silently would hand a dependent half a JSON
-// document — worse than none, since a model reads the fragment as the whole
-// answer. Past the cap the answer is elided WITH the elision marked, so the
-// worker can see something was cut and say so rather than reasoning over a
-// gap it cannot detect.
-const dependencyBudget = 16 << 10
-
 // withDependencies prefixes a task's prompt with the answers it waited for.
 //
 // In the USER message rather than the system prompt: the system prompt is the
@@ -353,7 +342,27 @@ func withDependencies(prompt string, deps []Result) string {
 			b.WriteString(" (worker: " + d.Worker + ")")
 		}
 		b.WriteString("\n")
-		b.WriteString(ledger.Elide(d.Answer(), dependencyBudget))
+		// WHOLE, and the marked cut this replaced was the argument
+		// against itself. Its own doc said truncating "would hand a
+		// dependent half a JSON document — worse than none, since a model
+		// reads the fragment as the whole answer" — and then cut, which
+		// hands the dependent exactly that: [Result.Answer] renders a
+		// submission as JSON, so a cut answer is an unparseable fragment
+		// and the marker only says the input it was asked to work from is
+		// missing, not what was in it. The whole point of `after` is that
+		// the parent declares the shape once and the results travel
+		// without being re-typed.
+		//
+		// Nothing is unbounded by dropping it: an answer is the worker's
+		// own submit_result payload, bounded by that worker's generation
+		// cap, and the call's token budget covers the whole graph.
+		//
+		// The cap was also a unit bug. It was written 16 << 10 and
+		// documented as "16 KB", and [ledger.Elide] spends RUNES — its own
+		// doc says so — so a CJK answer got three times the stated budget
+		// and an emoji-bearing one four. A number nobody could read off
+		// the constant is a number nobody was tuning.
+		b.WriteString(d.Answer())
 		b.WriteString("\n")
 	}
 	b.WriteString("\n---\n\n")

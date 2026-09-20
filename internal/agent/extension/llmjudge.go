@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -62,11 +60,37 @@ const (
 	// prompt whose point is being cheap.
 	judgeCallsShown = 12
 
-	// judgeArgsShown bounds one call's rendered arguments. Enough to tell
-	// two calls to the same tool apart, which is the entire discrimination
-	// the judge has to make, and not enough for one pasted document to
-	// crowd out the rest of the log.
-	judgeArgsShown = 200
+	// judgeTaskShown bounds the turn's ask in the prompt.
+	//
+	// THE ONE VALUE HERE THAT NOTHING ELSE BOUNDS. A task is whatever woke
+	// the seat — a chat message, or a webhook body somebody pasted an
+	// incident report into — so it is the only block that can arrive
+	// arbitrarily large, and the judge runs on a cheap model whose context
+	// is the smallest in the deployment. The HEAD is kept because an ask
+	// leads with what is being asked.
+	//
+	// Four thousand bytes rather than the 1500 this was: 1500 cut an
+	// ordinary issue body mid-sentence, and a judge ruling on half an ask
+	// reads the calls it cannot match to anything as drift — which biases
+	// it toward rescue on long tasks, precisely the turns that legitimately
+	// need more rounds. 4000 is [ledger.RenderedArtifactLimit]'s order,
+	// carries any real trigger whole, and is still a fraction of the
+	// smallest context the shipped models offer.
+	judgeTaskShown = 4000
+
+	// judgeLastTextShown bounds the phase's own last words.
+	//
+	// A BOUND IS EARNED HERE because [toolloop.Result.Text] is the AGGREGATE
+	// — every assistant message of the loop concatenated, thinking included
+	// — so its size is the round cap times the phase's max_tokens rather
+	// than one message.
+	//
+	// THE TAIL, through [ledger.ElideTail], which is the whole point of the
+	// block: it is headed "What it last said" and a head cut rendered what
+	// the phase said FIRST, so the sentence that most distinguishes a phase
+	// about to finish from one thrashing was the one systematically
+	// dropped. 2000 runes holds the closing exchange.
+	judgeLastTextShown = 2000
 )
 
 // ErrNoVerdict reports an answer the judge could not read as a decision.
@@ -153,8 +177,16 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	}
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {
+		// THE WHOLE ANSWER, because the question this line exists to
+		// answer is "did the verdict appear LATER, after prose?" —
+		// [ParseVerdict] refuses to search past the first non-empty line,
+		// and [JudgeMaxTokens]' own note says a thinking model spends its
+		// cap reasoning. A 200-byte head cut can never show that, so the
+		// bound removed the root cause it was written to record. It is not
+		// an unbounded log line either way: the provider was capped at
+		// JudgeMaxTokens, so this is bounded by construction.
 		log.DebugContext(ctx, "extension_judge_unparsed", "model", j.key,
-			"answer", textcut.Ellipsis(completion.Content, 200),
+			"answer", completion.Content,
 			"output_tokens", completion.OutputTokens)
 		return spent, err
 	}
@@ -202,12 +234,19 @@ func renderJudgeRequest(req Request) string {
 
 	if task := strings.TrimSpace(req.Task); task != "" {
 		b.WriteString("\n## Task\n")
-		b.WriteString(textcut.Ellipsis(task, 1500))
+		b.WriteString(textcut.Ellipsis(task, judgeTaskShown))
 		b.WriteString("\n")
 	}
 	if plan := strings.TrimSpace(req.PlanSummary); plan != "" {
+		// WHOLE. This is the executor's own intent line, which every other
+		// reader in the engine renders whole — the later rounds, the
+		// reviewer, the conversation ledger — and it is the STANDARD the
+		// judge measures the tool log against. Cutting it hid the back half
+		// of a multi-step plan, which is the half a phase that has run out
+		// of rounds is still working on, so the judge saw calls it could
+		// not match to anything and read them as drift.
 		b.WriteString("\n## Plan\n")
-		b.WriteString(textcut.Ellipsis(plan, 1000))
+		b.WriteString(plan)
 		b.WriteString("\n")
 	}
 
@@ -231,7 +270,7 @@ func renderJudgeRequest(req Request) string {
 
 	if last := strings.TrimSpace(req.LastText); last != "" {
 		b.WriteString("\n## What it last said\n")
-		b.WriteString(textcut.Ellipsis(last, 800))
+		b.WriteString(ledger.ElideTail(last, judgeLastTextShown))
 		b.WriteString("\n")
 	}
 	b.WriteString("\nVerdict:")
@@ -242,34 +281,51 @@ func renderJudgeRequest(req Request) string {
 // its neighbours. The arguments are the discrimination — a log of bare tool
 // names cannot tell a loop from a sequence — so they are included and
 // bounded rather than dropped.
+//
+// THE BUDGET IS THE LEDGER'S, not one of this package's own, and that is the
+// whole of what changed here. This rendered the sorted keys into one string
+// and head-cut the blob at 200 bytes, which is the failure
+// [ledger.RenderArgs] exists to prevent and whose doc names it: a head cut on
+// a serialised object drops whichever keys SORT LAST, and the discriminating
+// argument — channel, key, page_id — is usually the shortest one. A call
+// carrying a long `body` and a short `url` therefore rendered with the url
+// gone, so two calls to different pages became byte-identical and the judge
+// read a phase that was working as one looping. The ledger elides per VALUE
+// and drops whole KEYS shortest-first with a "+N more", which keeps the
+// identifiers and bounds the line, and it is now the only implementation of
+// that rule in the tree.
 func renderJudgeCall(n int, c ledger.Call) string {
 	line := fmt.Sprintf("%d. %s(%s)", n, c.Name,
-		textcut.Ellipsis(collapseSpace(renderArgs(c.Args)), judgeArgsShown))
+		collapseSpace(ledger.RenderArgs(c.Args, judgeArgs)))
 	if c.Failed {
 		// The FAILURE is the signal, and the text after it is what tells
 		// a second identical failure from a different one — which is the
 		// difference between a phase retrying usefully and a phase stuck.
-		line += " -> failed: " + textcut.Ellipsis(collapseSpace(c.Result), 120)
+		//
+		// [ledger.ValueLimit] rather than the 120 this carried, for the
+		// same one-implementation reason: the ledger bounds this exact
+		// value — a tool's own output on a failure — one package over, and
+		// its doc is where the justification lives. 120 cut an ordinary
+		// wrapped tool error mid-reason, so "HTTP 422: Validation Failed:
+		// body is too long (maximum is 65536)" reached the judge without
+		// the part that says what to do, and two different failures
+		// rendered the same.
+		line += " -> failed: " + ledger.Elide(collapseSpace(c.Result), ledger.ValueLimit)
 	}
 	return line + "\n"
 }
 
-// renderArgs renders a call's arguments in a stable order.
+// judgeArgs is the ledger's per-value budget, with its read cap OFF.
 //
-// SORTED, because Go map iteration is randomised and this text is the
-// judge's only way to tell two calls apart: the same call rendered with its
-// keys in a different order reads as a different call, which turns a loop
-// into apparent progress at random.
-func renderArgs(args map[string]any) string {
-	if len(args) == 0 {
-		return ""
-	}
-	keys := slices.Sorted(maps.Keys(args))
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, args[k]))
-	}
-	return strings.Join(parts, ", ")
+// Skip and Reads are empty and MaxReadCalls is zero on purpose: those three
+// shape what a LEDGER carries — a record of deliveries, where a read is noise
+// — and the judge's question is the opposite one. It has to see every call
+// the loop made, reads most of all, because a phase re-reading the same page
+// twenty times is exactly the thrashing it is asked to detect. Only the two
+// size budgets carry over.
+var judgeArgs = ledger.FormatOptions{
+	ValueLimit: ledger.ValueLimit,
+	BlobLimit:  ledger.BlobLimit,
 }
 
 // ParseVerdict reads a judge's answer.
@@ -338,16 +394,25 @@ func judgeRounds(rest []string) (n int, counted bool) {
 // judgeReason is the evidence, from whatever the model put after the verdict:
 // the rest of the verdict line if there is any, and otherwise the next
 // non-empty line.
+//
+// WHOLE. It used to be cut at 300 bytes on both paths, which was a second
+// bound on a quantity [JudgeMaxTokens] had already capped one function
+// earlier — the answer cannot be longer than the completion the provider was
+// allowed to write. And it is the one string here that reaches a model, a
+// dashboard and a log at once: it rides the nudge back into the phase, it is
+// what a screen shows beside "extended by 8 rounds", and it is what an
+// operator asking why a phase never gets extended reads. A sentence cut at
+// 300 bytes is the worst of those three.
 func judgeReason(rest []string, countConsumed bool, following []string) string {
 	if countConsumed && len(rest) > 0 {
 		rest = rest[1:]
 	}
 	if tail := strings.TrimSpace(strings.Join(rest, " ")); tail != "" {
-		return textcut.Ellipsis(tail, 300)
+		return tail
 	}
 	for _, raw := range following {
 		if line := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "`*#>-")); line != "" {
-			return textcut.Ellipsis(line, 300)
+			return line
 		}
 	}
 	return ""

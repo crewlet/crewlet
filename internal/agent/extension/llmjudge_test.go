@@ -160,7 +160,7 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	user := model.seen.Messages[1].Content
 	for _, want := range []string{
 		"github_get_pull_request", // the tool log
-		"number=7",                // and its arguments
+		`{"number":7}`,            // and its arguments, in the ledger's own form
 		"reply to the review comment",
 		"read the thread, then post",
 		"Most you may grant now: 8",
@@ -267,3 +267,106 @@ func TestAWiredJudgeGrantsRoundsThroughThePolicy(t *testing.T) {
 
 // EACH PHASE IS TOLD ITS OWN WAY OUT.
 //
+
+// THE DISCRIMINATING ARGUMENT SURVIVES A BULKY NEIGHBOUR.
+//
+// This is the whole reason the judge renders through the ledger's budget
+// rather than its own. It used to join the sorted keys into one string and
+// head-cut the blob at 200 bytes, so a call carrying a long `body` and a short
+// `url` rendered with the url gone — `body` sorts first, `url` sorts last, and
+// the cut took the tail. Two calls that differed only in the page they touched
+// became byte-identical, and a judge whose entire question is "is this phase
+// repeating itself" was handed the evidence for yes.
+func TestALongArgumentDoesNotEatTheIdentifier(t *testing.T) {
+	t.Parallel()
+	call := func(url string) ledger.Call {
+		return ledger.Call{Name: "wiki_update", Args: map[string]any{
+			"body": strings.Repeat("prose about the incident. ", 200),
+			"url":  url,
+		}}
+	}
+	model := &answering{answer: "RESCUE\nx"}
+	req := extension.Request{
+		Phase: phase.Execute,
+		Calls: []ledger.Call{call("/runbooks/alpha"), call("/runbooks/beta")},
+	}
+	if _, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	rendered := model.seen.Messages[1].Content
+	for _, want := range []string{"/runbooks/alpha", "/runbooks/beta"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the judge cannot see %q, so two different calls read as a loop:\n%s",
+				want, rendered)
+		}
+	}
+	// AND THE LINE IS STILL BOUNDED: the bulky value is what gives way, not
+	// the identifier. Without this the test would pass on "render everything".
+	if len(rendered) > 4000 {
+		t.Errorf("the prompt is %d bytes, so one pasted document crowds out the log",
+			len(rendered))
+	}
+}
+
+// THE BLOCK HEADED "WHAT IT LAST SAID" CARRIES WHAT IT LAST SAID.
+//
+// Result.Text is the AGGREGATE of every assistant message in the loop, so it
+// needs a bound — but the bound was a HEAD cut, which rendered what the phase
+// said FIRST under a heading promising the opposite. The closing sentence is
+// the one that most distinguishes a phase about to finish from one thrashing,
+// and it was the one systematically dropped.
+func TestTheLastThingSaidIsTheTailNotTheHead(t *testing.T) {
+	t.Parallel()
+	model := &answering{answer: "RESCUE\nx"}
+	req := judgeReq()
+	req.LastText = "OPENING: thinking about it. " +
+		strings.Repeat("middle reasoning that runs on and on. ", 300) +
+		"CLOSING: posting the reply now."
+	if _, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	rendered := model.seen.Messages[1].Content
+	if !strings.Contains(rendered, "CLOSING: posting the reply now.") {
+		t.Error("the judge was not shown what the phase last said")
+	}
+	if strings.Contains(rendered, "OPENING: thinking about it.") {
+		t.Error("the block rendered the head, so the bound is cutting the wrong end")
+	}
+}
+
+// THE JUDGE'S OWN REASON IS NOT CUT.
+//
+// It was bounded at 300 bytes, a second bound on a quantity JudgeMaxTokens had
+// already capped one function earlier. It is also the one string that reaches
+// a model, a dashboard and a log at once — it rides the nudge back into the
+// phase — and a sentence cut mid-clause is worst for the operator asking why a
+// phase never gets extended.
+func TestTheJudgesReasonIsCarriedWhole(t *testing.T) {
+	t.Parallel()
+	reason := "it is fetching a different page each round and the last two " +
+		strings.Repeat("calls resolved distinct issue keys, so this is a walk rather than a loop; ", 8)
+	// BOTH PATHS. judgeReason reads the rest of the verdict LINE when there
+	// is any and the next non-empty line otherwise, and each used to carry
+	// its own copy of the cut — so a test exercising one of them says
+	// nothing about the other.
+	for _, tc := range []struct {
+		name   string
+		answer string
+	}{
+		{"on the line after the verdict", "EXTEND 4\n" + reason},
+		{"on the verdict line itself", "EXTEND 4 " + reason},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			model := &answering{answer: tc.answer}
+			got, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), judgeReq())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Reason != strings.TrimSpace(reason) {
+				t.Errorf("the reason came back %d bytes of %d:\n%s",
+					len(got.Reason), len(strings.TrimSpace(reason)), got.Reason)
+			}
+		})
+	}
+}

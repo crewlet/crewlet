@@ -206,3 +206,22 @@ func elideTail(text string, limit int) string {
 // something outside the engine; the draft, the round's own account of it and
 // the reviewer's notes are carried whole (see budgets.go).
 func Elide(text string, limit int) string { return elide(text, limit) }
+
+// ElideTail trims text to its LAST limit runes, marked.
+//
+// The counterpart of [Elide], and the choice between them is about where the
+// value's payoff sits rather than about taste. A head cut is right for a value
+// that leads with what identifies it — an error chain that wraps outward, a
+// title. A TAIL cut is right for a value that leads with the working and ends
+// with the answer: a round's produced text, where the draft follows the
+// thinking that produced it, so a head-preserving cut keeps the reasoning and
+// drops the deliverable.
+//
+// Exported for the extension judge, whose "What it last said" block was doing
+// the opposite of what its own heading promised: it head-cut the tool loop's
+// aggregate text, so the block named "last" rendered what the phase said
+// FIRST — and the sentence that most distinguishes a phase about to finish
+// from one thrashing is the one it ends on.
+//
+// A limit of 0 or less means unbounded, the same contract [Elide] carries.
+func ElideTail(text string, limit int) string { return elideTail(text, limit) }
