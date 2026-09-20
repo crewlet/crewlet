@@ -270,7 +270,9 @@ describe("the frame's layout", () => {
 
     // THE SUBGRID CHAIN IS UNWOUND. The wide layout is one grid whose head,
     // body, bands and rows adopt its tracks; a card is the opposite shape, so
-    // each goes back to a block and the row becomes its own two-column grid.
+    // each goes back to a block and each CELL becomes its own flex line —
+    // label, then value. Not a two-column grid on the row: that is the shape
+    // the next assertion but one says was tried and is wrong.
     expect(block(narrow, ".grid-wrap")).toMatch(/display:\s*block/);
     expect(block(narrow, ".grid-head")).toMatch(/display:\s*none/);
     expect(block(narrow, ".grid-row")).toMatch(/display:\s*block/);
@@ -292,6 +294,53 @@ describe("the frame's layout", () => {
     expect(narrow.slice(narrow.indexOf(".grid-cell[data-label]::before"))).toMatch(
       /flex:\s*0 0 \d/,
     );
+  });
+
+  // AND THAT BASIS IS A WIDTH, NOT A REQUEST.
+  //
+  // `flex: 0 0 7rem` reads like a fixed column and is not one while the label
+  // cannot break: `min-width` on a flex item is `auto`, which floors the item
+  // at its own min-content size, and the min-content size of a `nowrap` line
+  // is the whole string. A head wider than 7rem therefore grew its OWN label
+  // box and pushed only ITS value right, in a card whose entire point is that
+  // the labels line up without a track to line them up with.
+  //
+  // It shipped, and it is invisible in every other gate: jsdom computes no
+  // layout, so a rendered grid stays green through every value of this, and
+  // only ONE head of the 111 this build declares is over the basis — which is
+  // why no screenshot of the tracker or the audit ever showed it either.
+  // Measured at 390px on the provisioning-passes grid: RAN, SURFACE, HOW IT
+  // ENDED, TOOK and FINDINGS each put their value 136px from the card's edge,
+  // and WHAT IT CONCLUDED drew a 128.03px label box and put its own at
+  // 152.03px, in 197.97px of room instead of 214px. CONVERSATION, the widest
+  // head that does fit, is 93.09px.
+  //
+  // BOTH DECLARATIONS, and neither holds alone — the reason this is one case
+  // rather than two. Dropping `nowrap` only moves the floor from the string
+  // to its longest WORD, measured at 184.06px for a 24-letter one; and
+  // `overflow-wrap` with `nowrap` still in place has nothing to break at, so
+  // the pair either fixes the column or does not.
+  test("a card's label column holds its basis whatever the head says", () => {
+    const css = sheet("frame.css");
+
+    // EVERY block that draws the label, wherever it sits, because a gate that
+    // forbids a declaration has to see all of them — a second copy in a
+    // narrower breakpoint would otherwise put `nowrap` back unseen.
+    const drawn = mentioning(css, "[data-label]::before");
+    for (const { sel, body } of drawn) {
+      expect(body, `${sel} cannot floor the label at its own string`).not.toMatch(
+        /white-space:\s*nowrap/,
+      );
+    }
+
+    const label = block(css, ".grid-cell[data-label]::before");
+    // THE SCAN FOUND THE RULE, not an empty match: a renamed selector would
+    // make every assertion above vacuous and still green.
+    expect(label).toMatch(/content:\s*attr\(data-label\)/);
+    expect(label).toMatch(/flex:\s*0 0 7rem/);
+    // A HEAD WITH NO SPACE TO BREAK AT still has to break, which is the same
+    // declaration `.grid-cell .truncate` carries one level down for values.
+    expect(label).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   // A VALUE OWNS ITS LINE IN A CARD, so the wide layout's pixel cut is wrong
@@ -563,12 +612,13 @@ describe("the frame's layout", () => {
   // `Shell.tsx` drops the engine's word when the READER collapses the rail,
   // and that `collapsed` is a React state rather than this breakpoint. The two
   // are independent: at 960 and below the rail is 48px wide by media query
-  // with `collapsed` still false, so "connected" rendered at 61px inside a
-  // 48px column and spilled out of both sides of it. Measured at 900px.
+  // with `collapsed` still false, leaving the pill 31px — and "connected" laid
+  // out at its own 55.22px inside it, 12.11px past each side of the pill and
+  // past the 48px column itself. Measured at 900px.
   //
-  // It comes back in the bottom bar, where a row is 56px and the workspace
-  // labels come back too — the pair has to move together or the rail carries a
-  // word beside eight unlabelled glyphs.
+  // It comes back in the bottom bar, where a row floors at 56px and grows for
+  // its label, and the workspace labels come back too — the pair has to move
+  // together or the rail carries a word beside eight unlabelled glyphs.
   test("the rail's own labels leave and return together", () => {
     const css = sheet("frame.css");
     const at = (px: number): string => {
@@ -864,11 +914,43 @@ describe("the frame's layout", () => {
     // THE TRAIL IS THE ONE THING THAT GIVES WAY, and it stops before the way
     // back out is gone. `flex-grow` is the `.spacer` this replaced; the large
     // shrink factor is the ordering against the viewer chip and the search
-    // trigger; and the floor is what keeps `overflow: hidden` from clipping
-    // the ancestors, which at `min-width: 0` rendered the trail as "Activit".
+    // trigger; and the floor is what keeps the trail from being squeezed to
+    // nothing beside a screen's own controls, which at `min-width: 0` rendered
+    // it as "Activit". 20ch is what the NARROWEST line can give — measured at
+    // 178.8px, 20.25ch, at a 310px and a 350px viewport — and not what the
+    // deepest address needs.
     const crumbs = block(base, ".crumbs");
     expect(crumbs).toMatch(/flex:\s*1 100 auto/);
     expect(crumbs).toMatch(/min-width:\s*20ch/);
+
+    // AND THE INLINE OVERFLOW IS REACHABLE, because no floor covers every
+    // address: `workspaces/crumbs.ts` builds THREE fixed ancestors on three
+    // admin routes, and the widest of them — "Admin / Configuration /
+    // Revisions /" — is 26.53ch, 31.53ch beside the 5ch stub, against a line
+    // that hands the trail 218.8px at a 390px viewport. Under `overflow:
+    // hidden` that was a BOX clip with no ellipsis, because the ancestors are
+    // `flex: 0 0 auto` and there is nothing left to ellipsise once they alone
+    // are too wide: the bar drew "Admin / Configuration / Revisions" with the
+    // last letter shaved and the object's own crumb outside the clip at zero
+    // pixels. `router.test.ts` holds the premise — which trail is deepest —
+    // and this holds what the trail does about it.
+    expect(crumbs, "the trail clips its overflow again").not.toMatch(/(^|[;\s])overflow:\s*hidden/);
+    expect(crumbs).toMatch(/overflow-x:\s*auto/);
+    // THE BLOCK AXIS STILL CLIPS. `overflow-x: auto` alone computes the other
+    // axis from `visible` to `auto`, which puts a vertical scrollport on a
+    // 21px line box inside a 52px bar.
+    expect(crumbs).toMatch(/overflow-y:\s*hidden/);
+    // A THUMB ON THE TRAIL MUST NOT DRAG THE PAGE BEHIND IT, the rule the
+    // broken bar's own control group and the phone rail both take.
+    expect(crumbs).toMatch(/overscroll-behavior-x:\s*contain/);
+    // AND THE SCROLLBAR IS NOT DRAWN, for `.crewlet-tabs--pill`'s reason: on a
+    // 52px bar it would sit on the baseline the trail is drawn on. Both halves
+    // — the standard property and the WebKit pseudo-element — or the browsers
+    // disagree about a bar in the chrome.
+    expect(crumbs).toMatch(/scrollbar-width:\s*none/);
+    expect(base, "the trail's scrollbar is hidden in one engine and drawn in the other").toMatch(
+      /\.crumbs::-webkit-scrollbar\s*\{[^}]*display:\s*none/,
+    );
 
     // AND THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION. It
     // wraps, so a shrink does not shave a label, it drops the last control

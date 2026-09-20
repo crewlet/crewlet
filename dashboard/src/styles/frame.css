@@ -17,16 +17,20 @@
 
      The label is still the point of the rail — a row a reader has to learn by
      its icon is a row they hover — and the longest workspace name
-     ("Knowledge") needs 60px of it at `--fs-3xs`, which is why this was raised
-     from 68 (it ellipsed to "Knowle…") to a flat 80 in the first place. What
-     80 does not fit is the two segmented controls UNDER those labels, and that
-     is not a taste question: a pill row is three hit targets at
+     ("Knowledge") measures 58.27px at `--fs-3xs`, which a rail cannot hand it
+     until the rail is 72px: the border, `.rail-rows`' inset and the row's own
+     padding take 13px before any text is reached, so the floor is 71.27 and a
+     71px rail still ellipsed. That is why this was raised from 68, where it
+     drew as "Knowled…", to a flat 80 in the first place. What 80 does not fit
+     is the two segmented controls UNDER those labels, and that is not a taste
+     question: a pill row is three hit targets at
      `--size-target-min`, which is 24px because WCAG 2.2 says a pointer target
      may not stand smaller, plus two 2px gaps and the row's own 2px padding —
      80px, and not one pixel of it is negotiable. Inside an 80px rail, after
-     the foot's own inset, the row had 71px, so the third option of each
-     control was drawn OUTSIDE its own pill: "dark" and "comfortable" hung over
-     the rail's edge with no ground under them, permanently, on every screen.
+     the border and the foot's own inset, each control had 63px to draw those
+     80 in, so its third option landed OUTSIDE it — and 6px past the rail's own
+     edge as well: "dark" and "comfortable" hung there with no ground under
+     them, permanently, on every screen.
 
      So the width is composed from the thing that cannot shrink, and the label
      floor is met with room to spare rather than by coincidence. The `+ 1px` is
@@ -644,24 +648,80 @@
    why it may not shrink by so much as a fraction of a pixel.
 
    AND IT STOPS AT 20ch, which is the correction to the obvious `min-width: 0`.
-   At zero the trail is clipped as a BOX — `overflow: hidden`, with no
-   ellipsis, because the clip happens outside the text — and what is clipped
-   is its right-hand end, so a 1200px bar rendered the way back out as
-   "Activit". The last part already floors at `5ch` (see below), so the
-   remainder is the ancestors, and those are the one thing on this bar the
-   reader cannot reconstruct from anywhere else. Measured at `--fs-sm`:
-   "Activity / Turns /" is 15ch and "Admin / Infrastructure /" is 19ch, the
-   deepest fixed ancestry the route table can produce, and 20ch holds either
-   beside the stub. Below that the container query gives the controls a line
-   of their own and the trail has the bar to itself. */
+   At zero the trail gives way until the way back out is gone, and the way back
+   out is the one thing on this bar the reader cannot reconstruct from anywhere
+   else — a 1200px bar rendered it as "Activit". The last part already floors
+   at `5ch` (see below), so what the floor protects is the ancestors.
+
+   20ch IS WHAT THE NARROWEST LINE CAN GIVE, which is a different number from
+   what the deepest address needs. Measured in Chromium against the shipped
+   stylesheets, at `--fs-sm` (14px Inter, so 1ch is 8.83px and 20ch is
+   176.6px): the least the trail's own line ever hands it is 178.8px — 20.25ch
+   — at a 310px and at a 350px viewport, where it sits beside the drawer
+   toggle, the viewer chip and the search trigger. 21ch is over that at some
+   widths and 22ch is over it at every one, and a floor the line cannot honour
+   does not widen the trail — it pushes the search trigger, the command
+   palette's only pointer affordance, onto a row of its own.
+
+   IT IS NOT ENOUGH FOR EVERY ADDRESS, AND NO FLOOR IS. This note used to say
+   "Admin / Infrastructure /" was the deepest fixed ancestry the route table
+   can produce and that 20ch held it beside the stub; neither is true.
+   `workspaces/crumbs.ts` builds THREE fixed ancestors on three admin routes —
+   measured, "Admin / Configuration / Revisions /" is 26.53ch, "Admin /
+   Infrastructure / Domains /" is 25.93ch and "Admin / Tools / Servers /" is
+   19.02ch — so the first of those wants 31.53ch (278.4px) beside the 5ch
+   stub, a hundred pixels more than the narrowest line has. Twelve of the
+   twenty fixed ancestries the table can produce want more than 20ch beside the
+   stub. The two this note quoted are two that do not, and their real widths
+   are 12.82ch ("Activity / Turns /", quoted as 15ch) and 17.92ch ("Admin /
+   Infrastructure /", quoted as 19ch) — 22.92ch beside the stub, over the floor
+   that was said to hold it.
+
+   SO THE OVERFLOW SCROLLS RATHER THAN BEING LOST. `overflow: hidden` clipped
+   it as a BOX, with no ellipsis because the clip happens outside the text —
+   and the ancestors are `flex: 0 0 auto` (see below), so once they alone are
+   wider than the trail there is nothing left to ellipsise and the cut lands
+   wherever the pixels ran out. Measured on `#/admin/config/revisions/<id>` at
+   a 390px viewport: 218.8px of trail against 278.4px of address, drawn as
+   "Admin / Configuration / Revisions" with the final letter shaved and NOTHING
+   after it — no separator, no ellipsis, and the object's own crumb pushed
+   outside the clip at zero pixels wide, although `.crumb-here` floors at 5ch
+   precisely to keep an ellipsised stub. At 360px it reads "Admin /
+   Configuration / Revi". `overflow-x: auto` is the instrument `.page-controls`
+   takes one breakpoint down, for the same reason given there: past the edge is
+   unreachable, and a thumb, a trackpad or a shift-wheel reaches a scroller.
+
+   IT IS THE USER'S GESTURE THAT THIS BUYS, AND ONLY THAT — the difference is
+   narrower than it looks and worth writing down, because `overflow: hidden` is
+   a scrollport too. Script can scroll one, and so can focus: tabbing to the
+   last ancestor link scrolled it into view under `hidden` exactly as it does
+   under `auto` (measured, both). What no gesture reached was everything past
+   it, because the object's own crumb is a `<span>` and nothing focuses it —
+   so on the surface where this bites, a phone, the trail had no way at all to
+   be moved. The scrollbar goes for `.crewlet-tabs--pill`'s reason in
+   screens.css — on a 52px bar it would sit on the baseline the trail is drawn
+   on — and `overflow-y` stays hidden, so the block axis clips exactly as it
+   did.
+
+   Below the container query the controls take a line of their own — not the
+   trail, which keeps sharing the first one with the drawer toggle, the viewer
+   chip and the search trigger. That line is the narrowest the trail ever has,
+   and it is the one the floor above is measured on. */
 .crumbs {
   display: flex;
   align-items: center;
   gap: 2px;
   flex: 1 100 auto;
   min-width: 20ch;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   font-size: var(--fs-sm);
+}
+
+.crumbs::-webkit-scrollbar {
+  display: none;
 }
 
 .crumb-part {
@@ -712,7 +772,14 @@
      crumb measured zero pixels wide, so the trail ended at a separator with
      nothing after it. A floor of a few characters keeps an ellipsised stub,
      which is what `text-overflow` is for and what tells a reader the trail
-     has a last part at all. */
+     has a last part at all.
+
+     THE FLOOR IS A WIDTH, NOT A PLACE, which is the half it cannot do on its
+     own: where the ancestors are already wider than the trail the stub is
+     still 5ch, it is simply laid out past the trail's right-hand edge —
+     measured at zero visible pixels on `#/admin/config/revisions/<id>` at a
+     390px viewport. What reaches it there is the scroller `.crumbs` above
+     takes, not this. */
   min-width: 5ch;
 }
 
@@ -1415,11 +1482,17 @@
   /* AND THE ENGINE'S WORD GOES WITH THEM. `Shell.tsx` already drops it when
      the READER collapses the rail — but that `collapsed` is a React state and
      this is a breakpoint, and the two are independent: at 960 and below the
-     rail is 48px wide with `collapsed` still false, so "connected" rendered at
-     61px inside a 48px column and spilled out of both sides of it. The dot is
-     the state and the word is the label for it, and the labels are already
-     gone here. It comes back with them in the bottom bar below, where a row is
-     56px wide and can hold one. */
+     rail is 48px wide with `collapsed` still false, which leaves the pill 31px
+     once the rail's border and the foot's inset are taken. `.truncate` does
+     not save it, because it clips at its OWN box and a centred column item is
+     free to be wider than the box around it: measured at a 900px viewport,
+     "connected" laid out at its full 55.22px, 12.11px past each side of the
+     pill and past the 48px column itself — 4.11px off the window's left edge
+     and 3.11px past the column's right one. "unreachable" is 64.44px and
+     spills 8.72px and 7.72px. The dot is the state and the word is the label
+     for it, and the labels are already gone here. It comes back with them in
+     the bottom bar below, where the foot is a row of the bar and the pill has
+     63.22px to draw in. */
   .rail-engine > .truncate {
     display: none;
   }
@@ -1496,15 +1569,35 @@
 /* ---- The rail's engine pill ---------------------------------------------- */
 
 /* THE PILL STACKS, exactly as `.rail-row` above does, and for the same
-   reason: the rail is 68px wide and this row carries a dot, a word and an
-   in-flight count side by side. "connected" needs about 52px at `--fs-3xs`,
-   which with the dot, the count, two gaps and the padding does not fit — so
-   `.truncate` cut the one word in the chrome that says whether the engine is
-   reachable down to "co…", permanently, on every screen. A status indicator
+   reason: a dot, a word and an in-flight count do not fit on one line of it.
+
+   THE PILL IS NOT THE RAIL, which is the width that matters here. The rail's
+   column is `--rail-w` — 97px at density 1, and 94.11 or 99.23 at the other
+   two, since the insets it composes scale — but its own `border-right` and
+   the foot's inset are spent before this box begins, so the pill is
+   `--rail-foot-w` wide, a flat 80px at every density, and its `--space-1`
+   padding leaves 72px of content (70.9px at comfortable, 73.46px at
+   compact).
+
+   Measured in Chromium against the shipped stylesheets, at `--fs-3xs` — 11px
+   Inter, and a font size is the one token density does not scale, so these
+   are the widths at all three. The four words `Shell.tsx` puts here are
+   "unreachable" at 64.44px, "connected" at 55.22px, "no config" at 49.06px
+   and "refused" at 39.91px. So the longest alone wants 64.44 of the 72, and a
+   row owes 6px more to the dot and 2px to the gap between it and the word:
+   72.44 into 72, with nothing else on the line at all, which draws as
+   "unreacha…".
+
+   AND THE COUNT IS WHAT MAKES THAT THE GOOD CASE. It renders whenever the
+   engine has work in flight, and the marks then measure 19.14px at one digit
+   and 26.27px at two, leaving the word 50.86px and 43.73px — so a row cut the
+   one piece of chrome that says whether the engine is reachable down to
+   "3 connec…", exactly while the engine was busiest. A status indicator
    nobody can read is a status indicator that is not there.
 
-   The dot and the count share the first line because they are both marks; the
-   word takes the second, where it has the rail's whole width. */
+   Stacked, the word has the pill's whole 72px and every one of the four fits,
+   the longest with 7.56px to spare. The dot and the count share the first
+   line because they are both marks; the word takes the second. */
 .rail-engine {
   display: flex;
   flex-direction: column;
@@ -1861,7 +1954,9 @@ button.histogram-bar[data-empty]:hover {
      THE SUBGRID CHAIN IS UNWOUND DELIBERATELY. `.grid-wrap` above is the one
      grid and the head, body, bands and rows adopt its tracks with `subgrid`.
      A card layout is the opposite shape, so each of them goes back to being a
-     block and the row becomes a two-column grid of its own — label, value. */
+     block and each CELL becomes a flex line of its own — label, then value.
+     Not a two-column grid on the row: that shape was tried and is wrong for
+     the reason written against `.grid-cell` below. */
   .grid-wrap {
     display: block;
   }
@@ -1898,10 +1993,15 @@ button.histogram-bar[data-empty]:hover {
      at 390px: `work-type`, `work-prio` and two tag spans each broke out past
      the viewport. A flex line per cell takes any number of children, because
      the cell keeps the flex box it already has in the wide layout.
-     A FIXED BASIS is what lines the labels up without a shared track. 7rem
-     clears the longest head this product has at `--fs-3xs` uppercase
-     (ASSIGNEE, PRIORITY, UPDATED) and leaves the value the rest of a 390px
-     card. */
+     A FIXED BASIS is what lines the labels up without a shared track, and
+     7rem is MEASURED rather than chosen. At `--fs-3xs` uppercase with the
+     0.05em tracking the rule below sets, the widest head that still fits on
+     one line is CONVERSATION at 93.09px, so 112px clears it with 19px to
+     spare and leaves the value the rest of a 390px card. ASSIGNEE, PRIORITY
+     and UPDATED — which this comment used to call the longest heads this
+     product has — are 58.78px, 54.69px and 54.94px, nowhere near it. Exactly
+     one head is over: WHAT IT CONCLUDED, on the provisioning-passes grid, at
+     128.03px. What happens to it is the rule below. */
   .grid-cell {
     display: flex;
     align-items: baseline;
@@ -1915,15 +2015,43 @@ button.histogram-bar[data-empty]:hover {
      column head was a glyph or empty carries no attribute and draws no label —
      see DataGrid.tsx — so `::before` is generated only where there is a word
      for it, and that cell's value then spans both tracks rather than leaving
-     an empty label column. */
+     an empty label column.
+
+     AND THE LABEL WRAPS INSIDE THE BASIS RATHER THAN PUSHING PAST IT. A basis
+     on a `nowrap` item is a REQUEST, not a width: `min-width` on a flex item
+     is `auto`, which floors the item at its own min-content size, and the
+     min-content size of a line that cannot break is the whole string. So the
+     one head over 112px drew its label box at 128.03px and started ITS value
+     16.03px right of every other value in the same card — measured at 390px
+     on the provisioning-passes grid, where RAN, SURFACE, HOW IT ENDED, TOOK
+     and FINDINGS all put their value 136px from the card's edge and WHAT IT
+     CONCLUDED put its own at 152.03px, in 197.97px of room instead of 214px.
+     A card's whole point is that the labels line up without a track, so the
+     one cell that opts out of the basis is the one that looks broken.
+
+     Letting the label wrap is the trade `.num-col` already took in
+     components.css for the same problem: a heading longer than its column
+     wraps, visibly, and the column holds. The alternative — pinning the box
+     with `min-width: 0` and keeping `nowrap` — is the one that file rejects
+     in the same breath, because the label then paints over the value beside
+     it.
+
+     `overflow-wrap: anywhere` is what makes that unconditional, and it is the
+     declaration `.grid-cell .truncate` below carries for the same reason one
+     level down. Wrapping alone only moves the floor from the string to its
+     longest WORD, so a one-word head wider than the column would push the
+     value exactly as before: measured at 184.06px for a 24-letter one, while
+     the longest single word the product declares today, CONVERSATION, is
+     93.09px and never breaks. `anywhere` puts the min-content size at one
+     character, so the basis is what the box IS, whatever a head says. */
   .grid-cell[data-label]::before {
     content: attr(data-label);
     flex: 0 0 7rem;
+    overflow-wrap: anywhere;
     font-size: var(--fs-3xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-muted);
-    white-space: nowrap;
   }
 
   /* `shrink` and `right` are COLUMN shapes and there are no columns here: a

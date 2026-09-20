@@ -468,7 +468,7 @@ content box is the viewport, the content-sized columns alone exceed it, and
 every flexible track resolves to zero — the title column vanishing to make room
 for a due date.
 
-So the head goes and each cell draws its own name beside its value. Three
+So the head goes and each cell draws its own name beside its value. Four
 things follow from that, and each is a rule a new column has to keep:
 
 - **A column with no word in its head declares one.** `header` is what the head
@@ -483,6 +483,18 @@ things follow from that, and each is a rule a new column has to keep:
   cut the one field the reader opened the list for and left the rest of the
   card empty underneath it. What bounds the value instead is the engine — a
   title is at most `tracker.MaxTitle`.
+- **A head longer than the label column wraps inside it.** The label is a
+  fixed 7rem — 112px — so every value in a card starts at the same place with
+  no track to line them up with, and 7rem is what the heads measure: the widest
+  that fits on one line is CONVERSATION at 93.09px. A basis on a line that
+  cannot break is a request rather than a width, though: `min-width` on a flex
+  item is `auto`, which floors it at its own content, so the one head over the
+  basis grew its label box to 128.03px and started only ITS value 16.03px right
+  of every other value in the card — measured at 390px on the provisioning
+  passes, five values 136px from the card's edge and WHAT IT CONCLUDED's at
+  152.03px. The label wraps instead, and breaks mid-word where it has nowhere
+  else to break, which is the trade `.num-col` takes one layout over: a heading
+  longer than its column wraps, visibly, and the column holds.
 - **The sort control goes with the head.** That is the real cost of the shape
   and it is the right trade: a column head a reader cannot see is not an
   affordance, and `sort=` is in the URL — so a sorted list still arrives sorted
@@ -749,11 +761,26 @@ So the bar does not wrap, and three rules make that safe:
 
 - **The trail is what gives way**, and it takes the free space too, which
   retired the `.spacer` that used to sit between it and the controls. It stops
-  at a floor: with `min-width: 0` the trail is clipped as a BOX — no ellipsis,
-  because the clip is outside the text — and what is clipped is its right-hand
-  end, so a 1200 px bar rendered the way back out as "Activit". The floor is
-  the deepest fixed ancestry the route table can produce plus the stub the last
-  crumb already floors at.
+  at a floor of 20ch, and then it SCROLLS. The floor is what the narrowest line
+  the trail ever sits on can give it — 178.8 px, 20.25ch, so 21ch is already
+  over it, measured at a 310 px and a 350 px viewport where the trail shares a
+  line with the drawer toggle, the viewer chip and the search trigger — which
+  is a different number from what the deepest address needs, and deliberately
+  the smaller of the two: a floor a line cannot honour does not widen the
+  trail, it pushes the search trigger onto a row of its own. So the floor is
+  not the guarantee, and past it the overflow is reachable rather than lost.
+  Under `overflow: hidden` the cut was a BOX — no ellipsis, because the clip is
+  outside the text, and the ancestors do not shrink, so once they alone are too
+  wide there is nothing left to ellipsise. `crumbs.ts` builds three fixed
+  ancestors on three admin routes, the widest being `Admin / Configuration /
+  Revisions /` at 26.53ch — 31.53ch beside the 5ch stub the last crumb floors
+  at — against a line that hands the trail 218.8 px at a 390 px viewport, where
+  it drew "Admin / Configuration / Revisions" with the last letter shaved, no
+  separator after it, and the object's own crumb laid out past the edge at zero
+  visible pixels. `overflow-x: auto` is what `.page-controls` already takes one
+  breakpoint down, for the same reason: past the edge is unreachable, out of
+  sight is not. The scrollbar is not drawn — on a 52 px bar it would sit on the
+  baseline the trail is drawn on — and the block axis still clips.
 - **The control group may not shrink at all.** It wraps, so a shrink does not
   shave a label off a button, it drops the last control onto a row of its own —
   and a flex container distributes shrinkage proportionally in one pass, with
