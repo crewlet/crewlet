@@ -246,11 +246,14 @@ provider_fallback          # the chain moved to its next provider. One per
                            # where the next event is llm_unavailable
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's final prompt, measured in BYTES
-                           # (system_bytes / user_bytes) plus a token
-                           # approximation. A separate row rather than a
-                           # derivation: the prompts themselves are on
-                           # agent_phase_completed, and measuring them there
-                           # means hauling every phase payload back
+                           # plus a token approximation. The keys are
+                           # system_chars / user_chars and say chars because
+                           # they always have — frozen by ADR-0006, since a
+                           # renamed key reads back as 0 on every stored row.
+                           # A separate row rather than a derivation: the
+                           # prompts themselves are on agent_phase_completed,
+                           # and measuring them there means hauling every
+                           # phase payload back
 
 # webhook: no event type; the receiver writes the delivery's row itself,
 #          with the provider's exact bytes as the payload

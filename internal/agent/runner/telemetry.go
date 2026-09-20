@@ -353,9 +353,9 @@ const openingRound = -1
 // anyone comparing builds can apply their own ratio rather than inheriting
 // this one.
 //
-// MEASURED IN BYTES, which is what len() of a Go string is and what the
-// fields are now named for. See [types.PromptSize] for why the previous
-// "chars" spelling was a quantity nobody was actually computing.
+// MEASURED IN BYTES, which is what len() of a Go string is and what the Go
+// fields are named for. The WIRE KEYS still say chars and deliberately do not
+// move — see [types.PromptSize], which carries the whole reason.
 func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, system, user string) {
 	if !e.on() {
 		return

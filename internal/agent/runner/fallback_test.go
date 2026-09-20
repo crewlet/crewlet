@@ -259,7 +259,7 @@ func TestAPhaseMeasuresItsPromptInBytesRatherThanRunes(t *testing.T) {
 			"agree and this case cannot tell them apart", user)
 	}
 	if got[0].UserBytes != user {
-		t.Errorf("user_bytes = %d, want %d (the bytes the provider received); "+
+		t.Errorf("UserBytes = %d, want %d (the bytes the provider received); "+
 			"a rune count would report %d",
 			got[0].UserBytes, user, utf8.RuneCountInString(userText(sent)))
 	}

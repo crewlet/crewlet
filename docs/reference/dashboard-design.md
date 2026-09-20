@@ -1542,8 +1542,12 @@ Four rules replace it, and each one names what it fixes.
    of a Go string. Nothing rounded it back — a byte formatter printed `24 KB`
    under a tooltip asserting characters — and the two only agree on ASCII, so
    a roster of non-Latin names or a chat thread with emoji in it silently made
-   "the count" a different quantity per company. `system_bytes` / `user_bytes`
-   on the wire; see `PromptSize`.
+   "the count" a different quantity per company. The **labels** were what
+   lied, so the labels were fixed; the wire keys stay `system_chars` /
+   `user_chars`, frozen by ADR-0006, because a key is an identifier rather
+   than an assertion and renaming one reads back as `0 B` on every row already
+   in the store. The reader therefore takes one key each and no
+   both-spellings chain. See `PromptSize`.
 
 3. **A healthy turn must be able to say so — and only when it can.** A set
    defined by subtraction (`type !== …`) has no meaningful empty state, so

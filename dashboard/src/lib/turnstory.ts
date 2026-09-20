@@ -205,10 +205,16 @@ export interface PromptWeight {
   /** The engine's own approximation, off `prompt.size`. */
   approximateTokens: number;
   /**
-   * BYTES, which is what the engine measures — `len()` of a Go string. The
-   * fields said `chars` and carried bytes, so the panel printed "24 KB" under
-   * a tooltip claiming it had counted characters; the two only agree on
-   * ASCII. See `PromptSize` in internal/events/types/turn.go.
+   * BYTES, which is what the engine measures — `len()` of a Go string — read
+   * off the wire keys `system_chars` / `user_chars`.
+   *
+   * THE NAMES DISAGREE ON PURPOSE. The measurement has always been bytes and
+   * the keys have always said chars, and the panel used to print "24 KB"
+   * under a tooltip claiming it had counted characters; the two units only
+   * agree on ASCII. The label is what was lying, so the label was fixed. The
+   * KEY is a peer contract frozen by ADR-0006 — renaming it would read back
+   * as a rendered 0 on every row already in the store — so it stays, and
+   * `PromptSize` in internal/events/types/turn.go carries the full reason.
    */
   systemBytes: number;
   userBytes: number;
@@ -269,8 +275,13 @@ export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
       phase: String(p.phase ?? ""),
       iteration: Number(p.iteration ?? 0),
       approximateTokens: tokens,
-      systemBytes: Number(p.system_bytes ?? 0),
-      userBytes: Number(p.user_bytes ?? 0),
+      // ONE KEY EACH, never a both-spellings chain. The wire key never
+      // moved, so there is no second spelling to accept — and a `??` would
+      // not have rescued one anyway: scalars in the catalogue carry no
+      // omitempty, so a relayed event asserts `0` rather than omitting the
+      // key, and `??` does not fall through on 0.
+      systemBytes: Number(p.system_chars ?? 0),
+      userBytes: Number(p.user_chars ?? 0),
       runs: 1,
       minTokens: tokens,
       maxTokens: tokens,

@@ -213,8 +213,8 @@ describe("what each phase's prompt weighed", () => {
         phase,
         iteration,
         approximate_tokens: tokens,
-        system_bytes: 24_000,
-        user_bytes: 2_800,
+        system_chars: 24_000,
+        user_chars: 2_800,
         ...over,
       },
     });
@@ -260,9 +260,9 @@ describe("what each phase's prompt weighed", () => {
     // in; the earlier ones measured a prompt the turn then threw away. The
     // range is the only thing those discarded rows still had to say.
     const rows = promptWeights([
-      size("execute", 1, 6_807, { system_bytes: 24_000 }),
-      size("execute", 1, 6_807, { system_bytes: 24_000 }),
-      size("execute", 1, 6_616, { system_bytes: 23_000 }),
+      size("execute", 1, 6_807, { system_chars: 24_000 }),
+      size("execute", 1, 6_807, { system_chars: 24_000 }),
+      size("execute", 1, 6_616, { system_chars: 23_000 }),
     ]);
     expect(rows[0]!.approximateTokens).toBe(6_616);
     expect(rows[0]!.systemBytes).toBe(23_000);
@@ -296,5 +296,34 @@ describe("what each phase's prompt weighed", () => {
 
   test("an event with no payload is skipped rather than counted as a zero row", () => {
     expect(promptWeights([event("prompt.size"), event("agent_phase_started")])).toEqual([]);
+  });
+
+  // THE WIRE KEYS ARE `system_chars` / `user_chars`, AND THAT IS LOAD-BEARING.
+  //
+  // The measurement is bytes and the keys say chars — the names disagree on
+  // purpose, because the key is a peer contract frozen by ADR-0006 while the
+  // label was the thing that lied. Renaming the reader to the honest spelling
+  // is the tempting tidy-up and it is silent: every row already in the store
+  // carries the old key, `Number(undefined ?? 0)` is 0, and the panel renders
+  // "0 B" beside a truthful token count rather than declining to draw. This
+  // case is what makes that tidy-up fail loudly instead.
+  test("a payload keyed the honest way reads zero, which is why the reader keeps the frozen key", () => {
+    const [row] = promptWeights([
+      event("prompt.size", {
+        payload: {
+          turn_id: "t-1",
+          phase: "execute",
+          iteration: 1,
+          approximate_tokens: 6807,
+          system_bytes: 24_000,
+          user_bytes: 2_800,
+        },
+      }),
+    ]);
+    expect(row!.systemBytes).toBe(0);
+    expect(row!.userBytes).toBe(0);
+    // And the token count still arrives, which is exactly what makes the
+    // zero read as a fact rather than as a row that failed to load.
+    expect(row!.approximateTokens).toBe(6807);
   });
 });

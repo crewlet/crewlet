@@ -206,7 +206,7 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   mount({
     events: [
       phase("2026-09-13T10:01:30Z", 90_000),
-      promptSize({ approximate_tokens: 7400, system_bytes: 24000, user_bytes: 1200 }),
+      promptSize({ approximate_tokens: 7400, system_chars: 24000, user_chars: 1200 }),
     ],
   });
   expect(await screen.findByText("Prompt sent")).toBeTruthy();
@@ -225,9 +225,9 @@ test("a phase measured more than once collapses to one row that says how many", 
   mount({
     events: [
       phase("2026-09-13T10:01:30Z", 90_000),
-      promptSize({ approximate_tokens: 6807, system_bytes: 24000, user_bytes: 2800 }),
-      promptSize({ approximate_tokens: 6807, system_bytes: 24000, user_bytes: 2800 }),
-      promptSize({ approximate_tokens: 6616, system_bytes: 23000, user_bytes: 2800 }),
+      promptSize({ approximate_tokens: 6807, system_chars: 24000, user_chars: 2800 }),
+      promptSize({ approximate_tokens: 6807, system_chars: 24000, user_chars: 2800 }),
+      promptSize({ approximate_tokens: 6616, system_chars: 23000, user_chars: 2800 }),
     ],
   });
   await screen.findByText("Prompt sent");
@@ -266,7 +266,7 @@ test("every figure column sits inside the box the rows are sized as", async () =
         timestamp: "2026-09-13T10:00:00Z",
         payload: { turn_id: TURN, onboarding_hint_hit: true, onboarding_hint_bytes: 1016 },
       }),
-      promptSize({ approximate_tokens: 7400, system_bytes: 24_000, user_bytes: 1200 }),
+      promptSize({ approximate_tokens: 7400, system_chars: 24_000, user_chars: 1200 }),
     ],
   });
   // BOTH TABLES, asserted by their own headings first: the prefetch half's

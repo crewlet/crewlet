@@ -98,16 +98,38 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // exactly the cost schema/0015 promoted the spend columns out of the payload
 // to avoid. Six small integers per phase answer the question at a scan.
 //
-// BYTES, NOT CHARACTERS, and the two fields said characters while carrying
-// len() of a Go string — which is bytes. Nothing rounded it back: the
-// dashboard renders both with a byte formatter, so a panel headed "System"
-// printed "24 KB" under a tooltip asserting it had counted characters. The
-// units coincide on ASCII and diverge on exactly the prompts worth measuring
-// — a roster of non-Latin names, a Slack thread with emoji in it, a CJK
-// knowledge block — where a UTF-8 rune is two to four bytes and the "count"
-// silently became a different quantity per company. The byte is the honest
-// one here anyway: it is what a vendor's request body is bounded in and what
-// this engine can measure without a tokenizer.
+// BYTES, NOT CHARACTERS, UNDER KEYS THAT SAY CHARS — and the split between
+// those two halves is the whole of it. The measurement is len() of a Go
+// string, which is bytes, and the wire keys have said `chars` since the event
+// was written. Nothing rounded that back: the dashboard renders both with a
+// byte formatter, so a panel headed "System" printed "24 KB" under a tooltip
+// asserting it had counted characters. The units coincide on ASCII and
+// diverge on exactly the prompts worth measuring — a roster of non-Latin
+// names, a Slack thread with emoji in it, a CJK knowledge block — where a
+// UTF-8 rune is two to four bytes and "the count" silently became a different
+// quantity per company. The byte is the honest one here anyway: it is what a
+// vendor bounds a request body in and what this engine can measure without a
+// tokenizer.
+//
+// So the Go names, the doc, the dashboard's labels and the docs say bytes,
+// and THE KEYS DO NOT MOVE. A key is an identifier rather than an assertion —
+// nothing decodes `system_chars` and divides by a rune width — so renaming it
+// corrects no arithmetic and costs every row already written. ADR-0006 is
+// additive-only and marked `Tag-status: unreleased`, which is to say it binds
+// before any release precisely because a rolling upgrade is a contract
+// between PEERS: a renamed tag is a dropped field on whichever half has not
+// upgraded yet. Here the drop would not even read as absence — the payload is
+// stored verbatim and read back raw by the Turn screen over a 30-day window,
+// where a missing key coerces to 0 and renders "0 B" beside a correct
+// `approximate_tokens`. A confidently wrong row, on every turn taken before
+// the upgrade, from one restart of one node. `plan_summary` and the `execute`
+// phase are frozen for the same reason, and say so where they are defined.
+//
+// Adding a second key instead is the other half of the trap: one integer with
+// two identities, undeletable under ADR-0006, and — since scalars here carry
+// no omitempty — a build relaying an older event would emit
+// `"system_bytes":0` beside a truthful `"system_chars":24000`, asserting zero
+// rather than saying nothing.
 //
 // Addressed like every other phase event, so the size a turn actually paid is
 // readable on that turn rather than only in aggregate.
@@ -121,8 +143,11 @@ type PromptSize struct {
 	Iteration         int    `json:"iteration"`
 	Phase             Phase  `json:"phase"`
 	ApproximateTokens int    `json:"approximate_tokens"`
-	SystemBytes       int    `json:"system_bytes"`
-	UserBytes         int    `json:"user_bytes"`
+	// A BYTE COUNT under a key that says chars. The Go name is what is
+	// honest; the key is frozen by ADR-0006 — see the note above, and grep
+	// for either spelling to land on it.
+	SystemBytes int `json:"system_chars"`
+	UserBytes   int `json:"user_chars"`
 }
 
 // EventType is the "prompt.size" wire type.
