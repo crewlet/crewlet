@@ -300,7 +300,7 @@ export function Inbox() {
             <Band
               title="Notices"
               count={inbox.data ? notices.length : null}
-              note="What reached you, and the one reason of twenty it reached you under."
+              note="What reached you, and the one reason of nineteen it reached you under."
               controls={
                 /* THREE SCOPES, EXACTLY ONE CHOSEN. As a facet rail this could
                    carry no count on any data — "All" and "Snoozed" are rows this

@@ -39,7 +39,7 @@ const (
 	TrackerVectorsWildcard = TrackerVectorsPrefix + ".>"
 )
 
-// The FIFTEEN object kinds are NOT constants here, and that is deliberate.
+// The FOURTEEN object kinds are NOT constants here, and that is deliberate.
 //
 // A kind is one bare word — "task", "project", "turn" — and the guard that
 // makes this package worth having derives its markers from these constants:

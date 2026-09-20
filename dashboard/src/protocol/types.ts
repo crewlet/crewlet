@@ -3129,7 +3129,7 @@ export interface WorkMyWork {
 /** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
  *
  *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
- *  WHY this change found this person, as one of twenty, in the precedence
+ *  WHY this change found this person, as one of nineteen, in the precedence
  *  order that decided it. A notice also says whether it ASKS something of them
  *  (`addressed`) or merely informs, and whether it arrived only because nobody
  *  better was found (`fallback`). */
@@ -3222,7 +3222,7 @@ export interface WorkSearchAnswer {
 
 /** One person a change reached, and why.
  *
- *  `reason` is the ONE of twenty that named them — the resolution is ordered
+ *  `reason` is the ONE of nineteen that named them — the resolution is ordered
  *  and a handle appears once — and `addressed` is whether the notice ASKS
  *  something of them rather than informing them. */
 export interface RoutingRecipient {

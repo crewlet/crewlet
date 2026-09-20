@@ -273,8 +273,9 @@ func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 // that "a gap of any length is caught up on the next tick" did not hold for a
 // row the predicate could not name.
 //
-// The fix is [Applier.recomputeSpans]' — the row's own status delta decides,
-// not its kind — and this case is written against a kind that is not `status`
+// The fix is the one [Applier.stampStatusEntered] is gated by — the row's own
+// status delta decides, not its kind — and this case is written against a kind
+// that is not `status`
 // so that a scan keyed back on the announced word goes red.
 func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	t.Parallel()

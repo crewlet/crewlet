@@ -19,13 +19,13 @@ import (
 // this reads that back rather than re-deriving a judgement the router made
 // with more information.
 //
-// # Twenty reasons, THREE FRAMES
+// # Nineteen reasons, THREE FRAMES
 //
-// The router distinguishes twenty reasons because the routing rules genuinely
+// The router distinguishes nineteen reasons because the routing rules genuinely
 // differ — a blocker's dependent and a goal's owner are reached by different
 // paths. What a RECIPIENT needs to be told collapses to three: somebody is
 // asking you, this is your work, or this is activity you follow. A prompt with
-// twenty openers would be twenty places for one sentence to drift, and the
+// nineteen openers would be nineteen places for one sentence to drift, and the
 // reason itself is rendered in the header either way.
 //
 // # This prompt DOES name tools, and that is the exception rather than a lapse

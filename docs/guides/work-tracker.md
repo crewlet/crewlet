@@ -916,7 +916,7 @@ primary key is `(record_id, recipient)`, so both directions are index reads and
 neither costs the other anything.
 
 Read it at `GET /work/routing/{record_id}`, or open an item's **Woke** tab in
-the dashboard. Every recipient names the one reason of twenty that found them,
+the dashboard. Every recipient names the one reason of nineteen that found them,
 whether the notice *asks* something of them, and whether they were reached only
 because nobody better was found — a lead who hears about a report's task
 because the report has left, with the rank saying which substitute they were.

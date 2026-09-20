@@ -102,7 +102,7 @@ type UnblockScan struct {
 //
 // A row CARRYING a status delta is a status change, whatever it was filed
 // under — and the kind cannot be trusted for this, for exactly the reason
-// [Applier.recomputeSpans] states beside the same predicate. The kind is ONE
+// [Applier.stampStatusEntered] is gated on the same predicate. The kind is ONE
 // word a writer chose for a patch that may have moved several things, so a
 // change that moved the status and something else is filed under the something
 // else and was invisible here.

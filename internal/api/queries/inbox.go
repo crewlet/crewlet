@@ -15,7 +15,7 @@ import (
 // THE READER HAS ALWAYS EXISTED — `tracker.Reader.Inbox`, written, tested and
 // swept on a 365-day retention — and nothing registered it as a question, so
 // the richest record this engine keeps about a person reached no screen. Each
-// notice names the ONE reason of twenty under which it found them, whether it
+// notice names the ONE reason of nineteen under which it found them, whether it
 // ASKS something or merely informs, whether it arrived only because nobody
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
@@ -83,7 +83,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
-// reasonNames is the twenty, for a refusal that says what would have worked.
+// reasonNames is the nineteen, for a refusal that says what would have worked.
 func reasonNames() []string {
 	out := make([]string, 0, len(tracker.Reasons))
 	for _, r := range tracker.Reasons {

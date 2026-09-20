@@ -41,7 +41,7 @@ var SpendColumns = []string{
 // row. A sixth, the binary vector table, is DERIVED — a pure function of a
 // table that is itself outside the identity claim.
 var ReproducibleTables = []string{
-	// The eighteen object tables.
+	// The fifteen object tables.
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
 	"tracker_task_keys", "tracker_projects",
 	"tracker_counters", "tracker_tagsets", "tracker_catalogues",

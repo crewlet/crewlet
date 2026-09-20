@@ -831,7 +831,7 @@ const (
 	ChangePersonUpdated ChangeKind = "person_updated"
 )
 
-// ChangeKinds are the thirty-two.
+// ChangeKinds are the twenty-eight.
 //
 // TWENTY-EIGHT AGAINST FOURTEEN SUBJECTS, and the gap is not an
 // inconsistency: five commit classes carry no notification at all — a turn, a

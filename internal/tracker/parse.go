@@ -54,7 +54,7 @@ const (
 // Three things, and only three: it turns a decoded record into the candidate
 // set, it asks the party registry whether each handle is still a seat, and it
 // renders what survives as the spine's own shape. Every rule about WHO — the
-// twenty reasons, their precedence, the mute, the fallback — lives in
+// nineteen reasons, their precedence, the mute, the fallback — lives in
 // recipients.go, where it can be exercised without a registry, a webhook or an
 // organization.
 type Parser struct {

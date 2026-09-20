@@ -20,7 +20,7 @@ import "slices"
 // Reason is why one handle hears about a change.
 type Reason string
 
-// The twenty reasons, as they are written onto the log and into
+// The nineteen reasons, as they are written onto the log and into
 // `tracker_notifications`.
 //
 // THIS ORDER IS NOT THE PRECEDENCE — [Reasons] is, and it deliberately differs.

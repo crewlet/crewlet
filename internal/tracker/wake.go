@@ -412,7 +412,7 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	}
 	if len(moved) > MaxDeltas {
 		// DETERMINISTICALLY, by field name: a card that showed a
-		// different thirty-two on two nodes would be one screen
+		// different twenty-eight on two nodes would be one screen
 		// disagreeing with another about what changed.
 		names := make([]string, 0, len(moved))
 		for name := range moved {

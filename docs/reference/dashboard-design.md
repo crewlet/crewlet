@@ -308,7 +308,7 @@ been able to answer.** Search is the ranking a seat gets from `search_work` —
 BM25 over the engine's own index — which the operator reading the same company
 had no access to at all; the board's `q=` is an escaped substring over an
 excerpt and answers something else. The item's **Woke** tab is who one change
-actually reached and under which of twenty reasons, which is the fact no
+actually reached and under which of nineteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
 say why. And a seat's **Conversations** tab is its own thread ledger — the only
 account of what a seat said on a surface this engine does not own. Every one of
@@ -654,7 +654,7 @@ that has re-decided what counts as primary gets its own badge without the
 client knowing anything about it.
 
 **The wake reason opens every row.** The applier records, per change and per
-recipient, the ONE reason of twenty under which that person heard about it.
+recipient, the ONE reason of nineteen under which that person heard about it.
 Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
 Jira and ClickUp can all tell you that you were notified, and none can tell you
 why. The client carries no copy of the split — that is a property of the person,

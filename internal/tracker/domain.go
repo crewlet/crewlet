@@ -58,7 +58,7 @@ func (Domain) Stream() statelog.StreamSpec {
 	}
 }
 
-// arbitratedKinds is the thirteen, derived from the enum rather than typed
+// arbitratedKinds is the twelve, derived from the enum rather than typed
 // again — a list written twice is a kind that arbitrates in one place and not
 // the other, which wedges that subject the first time a gate drops a record.
 func arbitratedKinds() []string {
