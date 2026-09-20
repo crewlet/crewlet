@@ -20,13 +20,13 @@
  * retained history".
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
 import { CloseGlyph, SearchGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
-import { eventHistoryLabel, newestFirst, plural, tsKey } from "~/lib/format.ts";
+import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -91,15 +91,23 @@ const LOG_OFFER: Offer = {
   buckets: ["minute", "hour", "day"],
 };
 
-/** Whether two instants fall on the same local day. */
-function sameDay(a: string, b: string): boolean {
-  const x = new Date(a);
-  const y = new Date(b);
-  return (
-    x.getFullYear() === y.getFullYear() &&
-    x.getMonth() === y.getMonth() &&
-    x.getDate() === y.getDate()
-  );
+/**
+ * Which day a row belongs to, AS THE HEADING WOULD DRAW IT.
+ *
+ * The obvious version reads `getFullYear/getMonth/getDate` off a `Date`,
+ * which is the BROWSER's local day — and `fmtDate` renders in the zone the
+ * reader chose (`lib/prefs.ts`). A reader viewing a company in another zone
+ * then got rows grouped on one day boundary under a heading naming another:
+ * around midnight, the rows under "14 September" were the ones that fell on
+ * the 14th *here*.
+ *
+ * So the key IS the label. Two rows are the same day when they draw the same
+ * heading, which is true by construction rather than by two pieces of date
+ * arithmetic agreeing — the same reason the recents cap counts the rows a rail
+ * draws rather than a number beside them.
+ */
+export function dayKey(ts: string): string {
+  return fmtDate(ts);
 }
 
 export function Activity() {
@@ -400,16 +408,24 @@ export function Activity() {
         {rows.length ? (
           <div className="list">
             {rows.map((ev, i) => (
-              // THE DATE, once per day. A list that pages back a month
-              // rendered every row as a bare wall clock, so 09:14 on the
+              // THE DATE, once per day, AS A BAND. A list that pages back a
+              // month rendered every row as a bare wall clock, so 09:14 on the
               // fourteenth and 09:14 three weeks earlier were the same string
-              // in the same column. `EventRow` has always taken this prop and
-              // one screen passed it.
-              <EventRow
-                key={ev.id}
-                event={ev}
-                showDate={i === 0 || !sameDay(rows[i - 1]!.timestamp, ev.timestamp)}
-              />
+              // in the same column — which is what `EventRow`'s `showDate`
+              // was for, and it answered it in the wrong place. The prop put
+              // a full `fmtDateTime` in the 62px track a wall clock is sized
+              // for, so one row per day wrapped to three lines and the feed
+              // read as a rendering fault rather than as a date marker. A
+              // date is a property of the ROWS UNDER IT rather than of the
+              // first of them, so it is a heading between days: the column
+              // stays right for the ninety-nine per cent, and the one row
+              // that has something extra to say says it at full width.
+              <Fragment key={ev.id}>
+                {(i === 0 || dayKey(rows[i - 1]!.timestamp) !== dayKey(ev.timestamp)) && (
+                  <div className="list-day">{dayKey(ev.timestamp)}</div>
+                )}
+                <EventRow event={ev} />
+              </Fragment>
             ))}
           </div>
         ) : (

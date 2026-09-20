@@ -50,6 +50,26 @@ const KEY = "crewlet_starred";
  */
 export const MaxStars = 50;
 
+/**
+ * WHAT THIS TAB IS PAINTING, and nothing else.
+ *
+ * It exists for one reason: `useSyncExternalStore` requires a snapshot that is
+ * REFERENTIALLY STABLE between renders, and a fresh parse of localStorage
+ * returns a new array every time, which makes React loop. It is a render
+ * snapshot, so it may be stale — another tab's writes do not reach it until a
+ * `storage` event or a reload.
+ *
+ * SO IT IS NEVER THE BASE OF A WRITE. That is `stored()` below, and the
+ * separation is the whole of what stops one tab destroying another's list:
+ * `write` replaces the WHOLE key, so a mutation built on a snapshot taken
+ * before the other tab wrote hands back a list missing everything it did.
+ * Reproduced over one origin: tab A stars two pages, tab B stars a third, and
+ * the stored list is tab B's one star — with `toggleStar` returning
+ * `"starred"`, so the reader is told it worked. This list refuses at the cap
+ * on the stated grounds that silently evicting a decision is the one
+ * behaviour a bookmark list may not have, and this path silently evicted up
+ * to forty-nine of them.
+ */
 let cache: Star[] | null = null;
 const listeners = new Set<() => void>();
 
@@ -65,15 +85,23 @@ function valid(row: unknown): row is Star {
   );
 }
 
-function read(): Star[] {
-  if (cache) return cache;
+/** What is STORED, parsed fresh. The base of every write. */
+function stored(): Star[] {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    cache = Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxStars) : [];
+    return Array.isArray(parsed) ? parsed.filter(valid).slice(0, MaxStars) : [];
   } catch {
-    cache = [];
+    // A private window, blocked site data, or a value somebody's other tab
+    // wrote in a shape this build does not have.
+    return [];
   }
+}
+
+/** The snapshot this tab renders. See [cache]. */
+function read(): Star[] {
+  if (cache) return cache;
+  cache = stored();
   return cache;
 }
 
@@ -110,7 +138,7 @@ export function starredIn(stars: readonly Star[], path: string[]): boolean {
 
 /** Whether this path is starred, read straight from storage. */
 export function isStarred(path: string[]): boolean {
-  return starredIn(read(), path);
+  return starredIn(stored(), path);
 }
 
 /**
@@ -126,7 +154,10 @@ export function isStarred(path: string[]): boolean {
 export function toggleStar(entry: Omit<Star, "at">): "starred" | "unstarred" | "full" {
   if (entry.path.length === 0) return "full";
   const key = keyOf(entry.path);
-  const held = read();
+  // STORED, NOT THE RENDER SNAPSHOT — see [cache]. A write replaces the whole
+  // key, so building it on what this tab last painted hands back a list
+  // missing everything another tab has done since.
+  const held = stored();
   const without = held.filter((s) => keyOf(s.path) !== key);
   if (without.length !== held.length) {
     write(without);
@@ -143,9 +174,32 @@ export function toggleStar(entry: Omit<Star, "at">): "starred" | "unstarred" | "
   return "starred";
 }
 
+/**
+ * Subscribe, and follow ANOTHER TAB while anybody is.
+ *
+ * `storage` fires in every OTHER document of the origin, so this is what
+ * lets a second tab's star reach this one's rail rather than waiting for a
+ * reload. Installed on the first subscriber and removed with the last: the
+ * event only matters to a surface that is drawing the list, and every WRITE
+ * reads storage for itself (see [cache]), so correctness does not depend on
+ * having heard it.
+ *
+ * `e.key === null` is a `localStorage.clear()`, which names no key and
+ * invalidates everything.
+ */
 function subscribe(fn: () => void): () => void {
+  if (listeners.size === 0) window.addEventListener("storage", follow);
   listeners.add(fn);
-  return () => listeners.delete(fn);
+  return () => {
+    listeners.delete(fn);
+    if (listeners.size === 0) window.removeEventListener("storage", follow);
+  };
+}
+
+function follow(e: StorageEvent): void {
+  if (e.key !== null && e.key !== KEY) return;
+  cache = null;
+  for (const fn of listeners) fn();
 }
 
 /** The reader's stars, in the order they were kept. */

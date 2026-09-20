@@ -137,8 +137,6 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           </Button>
         }
       </PageActions>
-      {loading && <Skeleton variant="text" rows={6} label="Loading the trace" />}
-
       {/* THE OBJECT'S OWN HEADER, and the trace id with it. The id used to be
           a lone `PageNote` under the page bar — the hand-rolled half of what
           `ObjectHeader` draws as an eyebrow — and the three facts beside it
@@ -152,6 +150,9 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         title={name || "Trace"}
         facts={facts}
       />
+      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header the id
+          alone is enough to draw — see the same note on the turn screen. */}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the trace" />}
       <QueryState
         error={error}
         loading={loading}

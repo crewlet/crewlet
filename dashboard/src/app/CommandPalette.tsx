@@ -16,7 +16,7 @@ import { Input, Kbd, useBodyScrollLock, useLayerContainer, useModalLayer } from 
 import { DESTINATIONS } from "./nav.ts";
 import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useRecents, forgetAll } from "~/lib/recents.ts";
+import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
@@ -120,7 +120,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const agents = useAgents();
   const org = useOrg();
   const tools = useTools();
-  const recents = useRecents();
+  // VISIT ORDER HERE, ARRIVAL ORDER IN THE RAIL. The palette is opened fresh
+  // and closes, so its re-sort is invisible and "where you just were" is what
+  // an empty query should rank first; the sidebar's Recent section is drawn
+  // and navigated by position, so it may not re-sort under the pointer. See
+  // `lib/recents.ts`.
+  const recents = useRecentsByVisit();
   const prefs = useViewerPrefs();
   const route = useRoute();
   const [q, setQ] = useState("");

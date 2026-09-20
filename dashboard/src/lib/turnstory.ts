@@ -371,3 +371,62 @@ function block(
     note,
   };
 }
+
+/**
+ * A band's rows, with a repeat rendered ONCE and counted.
+ *
+ * A provider chain that falls through on every phase of a self-iterating turn
+ * publishes one `provider_fallback` per attempt, and `SummaryFor` renders the
+ * same sentence for each: the fields that tell the attempts apart — the phase
+ * and the iteration — are on the payload and not in the line. So a turn that
+ * lost its chain three times over seven phases drew eight byte-identical rows
+ * of "default failed (auth) — no provider left in the chain" under a heading
+ * that said 13, and the five rows that said something ELSE were what a reader
+ * had to find among them.
+ *
+ * COUNTED, NOT DROPPED. Eight attempts is the fact: it is the difference
+ * between one provider that is misconfigured and one that is flapping, and
+ * `problemCount` goes on counting every one of them, because the heading is a
+ * count of what went wrong rather than of what this list draws.
+ *
+ * CONSECUTIVE ONLY. The axis of every band is time — each row renders its own
+ * instant — so merging across an intervening different row would either lie
+ * about when the run happened or reorder the band to make the lie true. A run
+ * carries its first and last instants and the row prints the span.
+ *
+ * THE KEY IS WHAT THE READER CAN SEE plus the one thing they cannot: the type,
+ * the summary, and the failed flag. Two rows a reader cannot tell apart are
+ * what this exists for; two that merely share a sentence while one of them
+ * failed are not.
+ *
+ * A PURE FUNCTION OVER VALUES, for the reason `textindex`'s arithmetic and
+ * `tracker`'s coercion table are: a rule that can only be exercised by
+ * rendering a screen is a rule nobody re-measures.
+ */
+export interface Run {
+  /** The first event of the run — its id keys the row and its link. */
+  event: EventRecord;
+  /** How many rows it stands for, 1 for an ordinary row. */
+  count: number;
+  /** The last event of the run; the same object as `event` when count is 1. */
+  last: EventRecord;
+}
+
+export function collapseRuns(events: readonly EventRecord[]): Run[] {
+  const out: Run[] = [];
+  for (const event of events) {
+    const open = out[out.length - 1];
+    if (open && sameRow(open.last, event)) {
+      open.count += 1;
+      open.last = event;
+      continue;
+    }
+    out.push({ event, count: 1, last: event });
+  }
+  return out;
+}
+
+/** Whether two rows would draw identically — see [collapseRuns]. */
+function sameRow(a: EventRecord, b: EventRecord): boolean {
+  return a.type === b.type && a.summary === b.summary && isFailed(a) === isFailed(b);
+}

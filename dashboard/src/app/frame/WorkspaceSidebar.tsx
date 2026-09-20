@@ -91,7 +91,18 @@ export interface SidebarSection {
   key: string;
   label?: string;
   rows: SidebarRow[];
-  /** Collapsible sections remember nothing: a tree is read, not configured. */
+  /**
+   * Whether this section folds.
+   *
+   * IT REMEMBERS NOTHING: a tree is read, not configured, so a fold lasts as
+   * long as the sidebar is mounted and a reload opens it again.
+   *
+   * It had no renderer for as long as it existed, so the two sections that
+   * ask for it — Starred and Recent, the ones built from what this reader
+   * kept and opened — were declared foldable and were not. Those are also the
+   * two that grow: a dozen stars and eight recents push a workspace's own
+   * tree below the scroll, and the rail's whole job is the tree.
+   */
   collapsible?: boolean;
   /** Rendered in place of rows when there are none — never a blank section. */
   empty?: ReactNode;
@@ -329,6 +340,7 @@ export function WorkspaceSidebar({
 }) {
   const route = useRoute();
   const [filter, setFilter] = useState("");
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const needle = filter.trim().toLowerCase();
   const shown = useMemo(
     () =>
@@ -368,16 +380,46 @@ export function WorkspaceSidebar({
           />
         </div>
         <div className="side-tree">
-          {shown.map((section) => (
-            <div key={section.key} className="side-section">
-              {section.label && <div className="side-section-label">{section.label}</div>}
-              {section.rows.length > 0
-                ? section.rows.map((row) => (
-                    <Row key={row.key} row={row} depth={0} filter={needle} current={current} />
-                  ))
-                : section.empty && <div className="side-empty">{section.empty}</div>}
-            </div>
-          ))}
+          {shown.map((section) => {
+            // FOLDED ONLY WHERE THE READER FOLDED IT. `folded` holds the
+            // sections they shut rather than the ones they left open, so a
+            // section that appears later — Starred the first time anything is
+            // starred — is open without anybody having to seed a default for
+            // it.
+            //
+            // AND A FILTER OPENS EVERYTHING. A needle that matches inside a
+            // folded section would otherwise render nowhere, which is
+            // indistinguishable from a search that found nothing — the same
+            // rule [Row] keeps for a branch the reader is standing in.
+            const open = needle !== "" || !folded[section.key];
+            return (
+              <div key={section.key} className="side-section">
+                {section.label &&
+                  (section.collapsible ? (
+                    <button
+                      className="side-section-label foldable"
+                      aria-expanded={open}
+                      onClick={() => setFolded((was) => ({ ...was, [section.key]: open }))}
+                    >
+                      {open ? (
+                        <KeyboardArrowDownGlyph size="xs" />
+                      ) : (
+                        <ChevronRightGlyph size="xs" />
+                      )}
+                      {section.label}
+                    </button>
+                  ) : (
+                    <div className="side-section-label">{section.label}</div>
+                  ))}
+                {open &&
+                  (section.rows.length > 0
+                    ? section.rows.map((row) => (
+                        <Row key={row.key} row={row} depth={0} filter={needle} current={current} />
+                      ))
+                    : section.empty && <div className="side-empty">{section.empty}</div>)}
+              </div>
+            );
+          })}
           {shown.length === 0 && <div className="side-empty">Nothing here matches “{filter}”.</div>}
         </div>
       </aside>

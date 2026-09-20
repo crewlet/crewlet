@@ -139,6 +139,31 @@ with `rgba(176, 152, 255, …)`, so the whole product read violet and the accent
 had nothing to separate itself from. A near-neutral ground with one saturated
 accent is what makes the accent mean "here".
 
+**Three opaque rungs, and the names say which.** The design system publishes
+nine surface names over exactly three colours in every state of the cascade:
+the page, one step above it, and one step above that. `--bg` is the page,
+`--surface-panel` is the chrome, a card, a panel or a grid, and
+`--surface-raised` is the only step a panel can show — a block inside a card,
+a grid's head, a badge on the rail, a pill lifted out of a well. Below that
+there is `--surface-inset`, a translucent recess that darkens the ground in
+light and lifts it in dark, so it reads as a well on whatever it lands on.
+There is no fourth rung: a block inside a block inside a card reaches for a
+border or the inset, not for a colour that does not exist.
+
+The ramp was four names over those three values, and the collision was at the
+bottom, where the chrome lives. `--surface-1` resolved to the page's own
+colour, so the page bar, the rail, the workspace sidebar, every card and every
+grid painted the page and were told apart from it by a 1px border — twenty-two
+declarations, none of which drew anything. `--surface-2` was the other end of
+it: the colour every `Card` already paints, so inside a card it drew nothing
+either, which is how the calendar's out-of-month cells came back as a uniform
+grid. A numbered ramp cannot state which rung a thing stands on, so nothing
+about either rule looked wrong in the file. The rungs are named after where
+they stand, and `styles/surfaces.test.ts` measures them against the installed
+palette: every rung a different colour from every other, in all three states,
+and a card on the panel rung so the sentence every surface comment rests on
+stays true across a tokens bump.
+
 ### Type
 
 Two self-hosted variable faces — **Inter** and **JetBrains Mono**, the `latin`
@@ -546,6 +571,30 @@ rounded up to the same visible sliver.
 which is the gesture every log tool has and the reason the axis is worth having:
 "what happened in that spike" is the question the spike creates.
 
+**A date is a band, not a wider cell.** A row's time column is sized for a wall
+clock, which is right for every row in a log but the first of each day — and
+that one used to render the full instant in the same 62 px track, so it wrapped
+to three lines and the feed read as a rendering fault rather than as a date
+marker. A date is a property of the rows *under* it rather than of the first of
+them, so it is a heading between days, at the list's own inset, parked at
+`--sticky-top` like every other band so the day a reader is inside stays named
+while they scroll it.
+
+**And a repeat is drawn once, counted.** Where a log is about one object — a
+turn's bands — a consecutive run of rows a reader cannot tell apart collapses
+into one carrying the count and the span of its first and last instants. It is
+counted rather than dropped: a chain that fell through eight times is a
+different fact from one that fell through once, and the heading above still
+counts what went wrong rather than what the list draws. Consecutive only,
+because the axis is time and a merge across an intervening row would either lie
+about when or reorder the band to make the lie true.
+
+**Every row in the product takes one inset**, `--row-inline`, and it is the
+step `Card.Header` pads by — because a row list usually sits in a card, and
+seven row classes each writing their own literal is how four panels on the turn
+page came to draw their content four pixels inside their own titles while the
+panels between them did not.
+
 **`FacetRail`** is the other half — one dimension of the list, as chips that
 narrow it. Two screens had two of these and they disagreed about the one thing
 that matters: whether a count is over what is **loaded** or over what **exists**.
@@ -619,9 +668,9 @@ none of it:
 |---|---|
 | `AppRail` | the workspaces, the badges, the engine pill, theme and density. `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
-| `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link |
+| `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
-| `ObjectHeader` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those |
+| `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
 | `DetailRail` | the peek's chrome — resizable, a drawer under 1180 px |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
@@ -654,6 +703,48 @@ identical rows pointing at different places, which is strictly worse than the
 two ids they replaced. The crumb draws an unlabelled segment in the mono face
 for the same reason it draws a handle in it — an identifier has to look like
 one.
+
+### The page bar shrinks, and breaks on its own width
+
+The bar holds four things: the trail, the screen's own controls (portalled in
+by `PageActions`), the viewer chip and the search trigger. On a busy screen
+they do not all fit, and what it used to do about that was `flex-wrap: wrap`
+at every width.
+
+**A wrapping flex container does not shrink, it breaks.** Items are assigned to
+lines by their size BEFORE any shrinking, and shrinking only happens within a
+line that is already drawn — so `wrap` meant "never ellipsise the trail, always
+break", and every ellipsis rule the breadcrumb carries was unreachable at the
+width it was written for. The break then lands in source order, which put it
+after the screen's controls: on `#/activity/turns/<id>` at a 1919 px window
+with the rail and the sidebar open, the viewer chip and the search trigger —
+the command palette's only pointer affordance — sat alone at the left of a
+second line under the breadcrumb, with a hundred pixels spare on the first.
+
+So the bar does not wrap, and three rules make that safe:
+
+- **The trail is what gives way**, and it takes the free space too, which
+  retired the `.spacer` that used to sit between it and the controls. It stops
+  at a floor: with `min-width: 0` the trail is clipped as a BOX — no ellipsis,
+  because the clip is outside the text — and what is clipped is its right-hand
+  end, so a 1200 px bar rendered the way back out as "Activit". The floor is
+  the deepest fixed ancestry the route table can produce plus the stub the last
+  crumb already floors at.
+- **The control group may not shrink at all.** It wraps, so a shrink does not
+  shave a label off a button, it drops the last control onto a row of its own —
+  and a flex container distributes shrinkage proportionally in one pass, with
+  no way to say "empty that one first", so at a 1250 px bar the group's 0.13 px
+  share of the overflow put "Copy link" on a second row while the trail still
+  had 250 px to give. A `max-width` is the valve that keeps a group wider than
+  the whole bar wrapping rather than running past the edge.
+- **The one break is a container query**, because what overflows is the BAR and
+  a viewport query cannot see it. The rail and an open workspace sidebar take
+  330 px, so a 1919 px window and a 1440 px window with the sidebar shut give
+  the same bar — which is why `@media (max-width: 860px)` was still the only
+  place the controls were allowed their own line while the bar was breaking at
+  1587. `.page` is the container; below the width at which a floored trail
+  cannot sit beside the controls, they take the row under it and scroll. The
+  phone block keeps its own tightening and nothing else.
 
 ### Moving, and going back
 
@@ -922,13 +1013,46 @@ The scopes are named in the palette's footer with the one in use marked: a
 sigil nobody is told about is a feature that does not exist.
 
 An empty palette offers **recents** — the last few objects this reader opened,
-newest first, per browser. Objects only: anything the rail or a sidebar
-already lists is left out, because a recents list repeating the navigation
-beside it costs a reader a scan and tells them nothing. The label stored is
-the one the **screen** resolved, which lands a render after the route — so a
-recents row says what a turn did, what a trace began at, what a coding run was
-asked for, and falls back to the id only where nothing has named the object
-yet. See [A screen publishes what the chrome needs](#the-frame).
+most recently visited first, per browser. Objects only: anything the rail or a
+sidebar already lists is left out, because a recents list repeating the
+navigation beside it costs a reader a scan and tells them nothing. The label
+stored is the one the **screen** resolved, which lands a render after the route
+— so a recents row says what a turn did, what a trace began at, what a coding
+run was asked for, and falls back to the id only where nothing has named the
+object yet. See [A screen publishes what the chrome needs](#the-frame).
+
+**The same places, in two orders, and the surface decides which.** The palette
+is opened fresh, ranks what it offers and closes, so it has a re-sort boundary
+and takes VISIT order: "where I just was" is what an empty query should put
+first. The workspace sidebar's Recent section is DRAWN, navigated by position
+and read while it is being used, so it takes ARRIVAL order — a place the reader
+has not been enters at the top, and going back to one already there moves
+nothing. Stored as one list either way; only the read is sorted, because
+storing the ranking is what made the rail jump. The cap is per workspace for
+the same reason it exists at all — eight is a claim about the DRAWN list, and
+since the rail grew its section the drawn list is one workspace's share, so a
+morning in Work could empty the Activity rail while the number said eight.
+A route no workspace owns is not remembered: nothing could ever draw it.
+
+**And a name is never replaced by an identifier.** Every screen publishes its
+object's name a render after the route, so the first write of every navigation
+carries the raw segment — a uuid for a turn — and the second carries the name.
+Overwriting on the first is fine on a first visit and wrong on a revisit:
+opening a recent re-navigates to it, so the row the reader pressed lost its
+title to a hex string at the instant they pressed it, until the query came
+back. `remember` takes whether a screen supplied the label, asked once of the
+published labels rather than as a flag each crumb branch would have to set —
+fourteen places to keep in step, of which the four nobody updated would go on
+downgrading in silence. A place nothing has EVER named still stores its id,
+because an object with no name has that and nothing else. Pressing the third Recent row
+used to send it to the first and slide the two above it down, under the
+pointer, at the instant it was hit — and nothing can soften that, because the
+row's React key is its path, so the browser moves the existing node rather than
+crossfading anything. No launcher re-sorts a drawn list on use; a rail
+navigated by position is only faster than searching for as long as it holds
+still. The cap evicts by last visit for the same reason: the entry to lose is
+the one nobody has opened in longest, never whichever sits at the bottom of a
+list that no longer moves.
 
 A `>` command that would change nothing is not offered: the list omits the
 theme and the density already in use, because a control that says "switch to
@@ -1718,6 +1842,26 @@ card put the trigger's integration in the same row, size and shape as the
 phase tags, so `EXECUTE  REVIEW  mattermost` read as three phases, one of them
 a chat product. The trigger and its source are one fact and belong on one
 line; the phases are a different one.
+
+**A page bar holds what you can DO; an object header holds what the object
+IS.** The turn page had it the other way round for five of its marks — the
+seat, the phase count, the attempt, the problem count and "nothing went wrong"
+were all portalled into `PageActions`, beside Copy turn and Download turn. It
+cost three things at once. The bar reached ten items and broke onto a second
+line on a laptop (see [The page bar
+shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width)). The reader's eye
+had to travel to the far right corner and back for a fact about the object
+named forty pixels below. And two of the five were the fact line repeated:
+`Agent CEO` and `7 phases` sat directly above `SEAT Agent CEO` and `PHASES 7`
+— a chip that repeats the fact under it is not a second reading of the turn,
+it is the same reading twice, so those two went rather than moved.
+
+`ObjectHeader` has carried a `status` slot for exactly this all along, and one
+of the five was already in it. **State goes there, and the marks are derived
+where BOTH frames can reach them** — on the turn's view rather than on the
+page, so the peek gets them too. A rail opened over a failed turn used to show
+no problem badge at all, which is the one mark a reader opening that rail is
+looking for.
 
 **A qualifier follows what it qualifies.** Moving that chip onto the trigger
 line put it in FRONT of the text, which is its own mistake: the eye landed on

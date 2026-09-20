@@ -521,6 +521,50 @@ test("a turn that ran once carries no attempt badge", async () => {
     ],
     events: [phase("2026-09-13T10:00:02Z", 1000)],
   });
-  await screen.findByText("1 phases");
+  // THE BARRIER IS THE FACT, not a chip beside it. This waited on the page
+  // bar's "1 phases" tag, which was the `PHASES 1` fact repeated 40px higher
+  // up the screen and went when the header took the turn's state back — so
+  // the wait is on the fact itself, which is where the count was always
+  // stated.
+  // …and the fact rather than the Phases CARD, which is a second element
+  // with the same word in it.
+  const phases = (await screen.findAllByText("Phases")).find((el) =>
+    el.classList.contains("fact-label"),
+  );
+  expect(phases?.parentElement?.textContent).toContain("1");
   expect(screen.queryByText(/attempt \d+\/\d+/)).toBeNull();
+});
+
+/**
+ * A ROW IS STYLED BY THE RULE THAT FILED IT.
+ *
+ * `bandOf` puts a row in "What went wrong" through `isFailed`, which reads the
+ * payload's own flag as well as the promoted `failed` column — the first is
+ * what a LIVE event carries and the second is all that survives into history,
+ * which is why `internal/events` declares the pair once in Go. The row used to
+ * style on `event.failed` alone, so a live failure appeared in the panel with
+ * no red edge and no glyph: the same turn drawn two ways on one screen.
+ */
+test("a failure carried only on the payload is still drawn as one", async () => {
+  mount({
+    events: [
+      phase("2026-09-13T10:00:02Z", 1000),
+      event({
+        type: "provider_fallback",
+        timestamp: "2026-09-13T10:00:03Z",
+        summary: "default failed (auth) — no provider left in the chain",
+        // AS A LIVE EVENT DOES: the flag is on the payload and the promoted
+        // column is still false.
+        failed: false,
+        payload: { turn_id: TURN, failed: true },
+      }),
+    ],
+  });
+  const row = await screen.findByText(/no provider left in the chain/);
+  const link = row.closest("a");
+  expect(link, "the row is not rendered as a turn row").toBeTruthy();
+  expect(
+    link!.className,
+    "the panel filed it as a failure and the row drew it as ordinary work",
+  ).toContain("failed");
 });

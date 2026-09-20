@@ -49,7 +49,7 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
   Button,
@@ -109,13 +109,17 @@ import {
 import {
   prefetchBlocks,
   promptWeights,
+  collapseRuns,
+  isFailed,
   tellStory,
   TURN_STOP,
   type PrefetchBlock,
   type PromptWeight,
+  type Run,
+  type Story,
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
-import type { EventRecord, FeedRow, TurnRow } from "~/protocol/index.ts";
+import type { EventRecord, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -281,6 +285,30 @@ export interface TurnView {
   workerCount: number;
   /** The highest self-iterate round its own phases reached. */
   iterations: number;
+  /**
+   * The turn's own events, sorted into the bands both frames read them in.
+   *
+   * ON THE VIEW rather than on the screen, because the header's state marks
+   * are made from it and the header is one component in two frames. Computed
+   * twice — once here and once beside the page's bands — it would be two
+   * `tellStory` passes over one array on every streamed frame of a running
+   * turn, and the page's own copy is the one that would quietly stop matching
+   * the badge above it.
+   */
+  story: Story;
+  /** How many things went wrong, counted the way [problemCount] counts. */
+  trouble: number;
+  /**
+   * Nothing went wrong, AND this turn is in a position to claim it.
+   *
+   * Only on a FINISHED turn with a record to claim it from, and over the
+   * WHOLE turn: a running turn has not been asked since it started, a turn
+   * whose events fell out of the store's window has nothing to say either
+   * way, and a turn read to the store's cap has rows neither frame saw, any
+   * of which could be the failure. "Nothing went wrong", "nothing was read"
+   * and "not everything was read" must not render alike.
+   */
+  clean: boolean;
   /** Every trace this turn touched, store's list first — see [useTurnView]. */
   traceIds: string[];
   /**
@@ -425,6 +453,12 @@ export function useTurnView(turnId: string): TurnView {
   // the tile ever gave, under a caption claiming otherwise.
   const measured = field(rec.learning, "duration_ms");
 
+  // WHAT WENT WRONG, and whether this turn may say nothing did. Both are read
+  // by the header, which is one component in two frames, so they are derived
+  // once here rather than on each screen — see the fields' own notes above.
+  const story = useMemo(() => tellStory(events), [events]);
+  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
+
   return {
     turnId,
     loading,
@@ -457,6 +491,9 @@ export function useTurnView(turnId: string): TurnView {
     // — and one word over two quantities put "Rounds 1" directly above "3r" for
     // the same turn on the same screen.
     iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
+    story,
+    trouble,
+    clean: trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning),
   };
 }
 
@@ -632,20 +669,89 @@ export function turnFacts(view: TurnView): Fact[] {
 }
 
 /**
- * The one state a turn's facts cannot state.
+ * What state this turn is in, beside its own title.
  *
  * Everything in the fact line is settled when the turn ends — an outcome, a
  * duration, a bill — so a turn still in flight reads as a turn that recorded
- * none of them. The badge is the difference, and it is the only thing in this
- * header that carries a tone, because running is a STATE and a seat, an id and
- * a token count are identity.
+ * none of them. These are the marks that answer the rest, and they carry the
+ * only tones in this header, because each of them is a STATE where a seat, an
+ * id and a token count are identity.
+ *
+ * THEY WERE IN THE PAGE BAR, portalled in beside Copy turn and Download turn,
+ * and that is the mistake this replaces. The bar's own subject is "where you
+ * are, and what you can do about it": five state chips in its action slot are
+ * neither, they pushed a turn page's bar to ten items so it broke onto a
+ * second line at 1587px, and the reader's eye had to travel to the far right
+ * corner and back for a fact about the object named 40px below. `ObjectHeader`
+ * has carried a `status` slot for exactly this all along — "a status glyph or
+ * pill — state, never identity" — and one of these five was already in it.
+ *
+ * TWO OF THEM DID NOT MOVE, THEY WENT: the seat and the phase count were
+ * `Agent CEO` and `7 phases` in the bar directly above `SEAT Agent CEO` and
+ * `PHASES 7` in the fact line. A chip repeating the fact under it is not a
+ * second reading of the turn, it is the same reading twice.
+ *
+ * ON THE VIEW, so the peek gets them too. A rail opened from a turns row
+ * showed no problem badge at all — the one mark a reader opening a rail over
+ * a failed turn is looking for — because the count lived on the page.
  */
 function turnStatus(view: TurnView): ReactNode {
-  if (!view.running) return undefined;
+  const { attempt } = view;
   return (
-    <Tag variant="info" dot>
-      running
-    </Tag>
+    <>
+      {view.running && (
+        <Tag variant="info" dot>
+          running
+        </Tag>
+      )}
+      {/* A RE-RUN SAYS SO, and says where the others are. Neutral, because
+          being a second attempt is a fact about the trigger rather than a
+          fault — the attempt that FAILED carries the problem badge beside
+          this one, which is the pairing a reader needs to see at once. */}
+      {attempt && (
+        <Tag
+          appearance="outline"
+          title={
+            `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
+            `that fails without reaching outside the engine is redelivered and runs again`
+          }
+        >
+          attempt {attempt.index}/{attempt.total}
+        </Tag>
+      )}
+      {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records alone.
+          `phases.some(p => p.failed)` misses every turn the engine killed
+          BETWEEN phases — a refused charge, an exhausted chain, a guard that
+          fired — which are precisely the turns with no failed phase record to
+          find. */}
+      {view.trouble > 0 && (
+        <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
+          {view.trouble === 1 ? "1 problem" : `${view.trouble} problems`}
+        </Tag>
+      )}
+      {view.clean && (
+        <Tag
+          variant="success"
+          leadingIcon={<CheckGlyph size="xs" />}
+          title="no guard fired, no provider fell through, no call was refused"
+        >
+          nothing went wrong
+        </Tag>
+      )}
+      {/* WHAT THE VIEW IS MISSING, in the header, because every other badge
+          beside it is a claim made from these rows. The `trace` answer has
+          carried this flag all along and its screen renders it; `turn` did not
+          carry one at all, so a cut turn looked exactly like a short one. */}
+      {view.cut && (
+        <Tag
+          variant="warning"
+          leadingIcon={<WarningGlyph size="xs" />}
+          title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
+        >
+          middle not shown
+        </Tag>
+      )}
+    </>
   );
 }
 
@@ -951,18 +1057,42 @@ function list(items: string[]): string {
  * header already dates, so a clock is the whole useful part of the timestamp
  * and the rest was pushing rows to three lines tall.
  */
-function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
+function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
+  const { event, count, last } = run;
+  // THE SPAN, WHERE THERE IS ONE. A run's clock is two instants and a single
+  // row's is one, and the two must not render alike: "15:42:15" over a row
+  // standing for eight attempts would date the first and silently claim the
+  // rest happened then too. Identical clocks collapse back to one, because
+  // eight attempts inside a second are not a span a reader can act on.
+  const from = fmtTime(event.timestamp);
+  const to = fmtTime(last.timestamp);
+  const span = count > 1 && to !== from ? `${from}–${to}` : from;
+  // `isFailed`, NOT `event.failed`. The band this row is in was chosen by
+  // `bandOf`, which asks `isFailed` — and that reads the payload's own flag as
+  // well as the promoted column, because a LIVE event carries the first and
+  // only history carries the second (see `lib/turnstory.ts`). Read one of the
+  // two here and a failure the panel filed under "What went wrong" rendered
+  // with no red edge and no glyph, which is the same turn drawn two ways on
+  // one screen. `collapseRuns` keys on `isFailed` too, so this is also what
+  // stops two rows it deliberately kept apart from drawing identically.
+  const failed = isFailed(event);
   return (
     <a
-      className={cx("turn-row", event.failed && "failed")}
+      className={cx("turn-row", failed && "failed")}
       href={href(["activity", "events", event.id])}
-      title={fmtDateTime(event.timestamp)}
+      title={
+        count > 1
+          ? `${count} identical events, ${fmtDateTime(event.timestamp)} to ${fmtDateTime(
+              last.timestamp,
+            )} — this opens the first`
+          : fmtDateTime(event.timestamp)
+      }
     >
       <time className="feed-time" dateTime={event.timestamp}>
-        {fmtTime(event.timestamp)}
+        {span}
       </time>
       <span className="what truncate">
-        {event.failed && (
+        {failed && (
           <ErrorGlyph
             size="xs"
             style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
@@ -971,6 +1101,15 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
         {withoutActor(event.summary, actor) || event.type}
       </span>
       <span className="feed-tail">
+        {/* THE COUNT BEFORE THE TYPE, because it qualifies the SENTENCE to
+            its left rather than the wire name to its right. Absent at one:
+            "×1" on every ordinary row is a column that says nothing on all
+            but a handful of them. */}
+        {count > 1 && (
+          <span className="t-num run-count" title={`${count} of these, one after another`}>
+            ×{count}
+          </span>
+        )}
         <span className="muted mono truncate">{event.type}</span>
       </span>
     </a>
@@ -991,11 +1130,19 @@ export function withoutActor(summary: string, actor: string): string {
   return rest || summary;
 }
 
+/**
+ * One band of a turn's rows.
+ *
+ * COLLAPSED HERE rather than in the panel that noticed the problem, so all
+ * four bands answer the same way: a repeat is a repeat wherever it lands, and
+ * a rule applied to one list is a rule the next list silently does not have.
+ */
 function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
+  const runs = useMemo(() => collapseRuns(events), [events]);
   return (
     <div className="list">
-      {events.map((e) => (
-        <TurnEventRow key={e.id} event={e} actor={actor} />
+      {runs.map((run) => (
+        <TurnEventRow key={run.event.id} run={run} actor={actor} />
       ))}
     </div>
   );
@@ -1009,9 +1156,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // a bug report.
   const view = useTurnView(turnId);
   const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
-  const { running, durationMs } = view;
+  const { running, durationMs, story } = view;
 
-  const story = useMemo(() => tellStory(events), [events]);
   const prefetch = useMemo(
     () => prefetchBlocks(story.given.find((e) => e.type === "prefetch_summary")),
     [story],
@@ -1035,14 +1181,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   usePageLabels(name ? { [turnId]: name } : {});
 
   const title = turnTitle(view);
-  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
-  // Only claimable on a FINISHED turn with a record to claim it from, and
-  // over the WHOLE turn. A running turn has not been asked about since it
-  // started; a turn whose events fell out of the store's window has nothing
-  // to say either way; and a turn read to the store's cap has rows this page
-  // never saw, any of which could be the failure — "nothing went wrong",
-  // "nothing was read" and "not everything was read" must not render alike.
-  const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
   const traceIds = view.traceIds;
   const traceId = traceIds[0] ?? "";
@@ -1104,69 +1242,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
+      {/* WHAT THIS PAGE CAN DO — and nothing about what the turn IS. Five
+          state chips used to open this slot (the seat, the phase count, the
+          attempt, the problem count, "nothing went wrong"), which took the
+          bar to ten items and broke it onto a second line on a laptop. They
+          are the object header's `status` now; see [turnStatus]. */}
       <PageActions>
-        {
-          <>
-            {role && <Tag appearance="outline">{role}</Tag>}
-            <Tag appearance="outline">{own.length} phases</Tag>
-            {/* A RE-RUN SAYS SO, and says where the others are. Neutral,
-                because being a second attempt is a fact about the trigger
-                rather than a fault — the attempt that FAILED carries the
-                problem badge beside this one, which is the pairing a reader
-                needs to see at once. */}
-            {attempt && (
-              <Tag
-                appearance="outline"
-                title={
-                  `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
-                  `that fails without reaching outside the engine is redelivered and runs again`
-                }
-              >
-                attempt {attempt.index}/{attempt.total}
-              </Tag>
-            )}
-            {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records
-                alone. `phases.some(p => p.failed)` misses every turn the
-                engine killed BETWEEN phases — a refused charge, an exhausted
-                chain, a guard that fired — which are precisely the turns with
-                no failed phase record to find. */}
-            {trouble > 0 && (
-              <Tag variant="danger" leadingIcon={<ErrorGlyph size="xs" />}>
-                {trouble === 1 ? "1 problem" : `${trouble} problems`}
-              </Tag>
-            )}
-            {/* A HEADER BADGE, not a banner at the foot of the page. "This
-                turn was clean" is a property of the turn, so it belongs where
-                the reader already looks for the turn's state — beside the
-                phase count and in the slot the problem badge would occupy.
-                A full-width banner said the same thing at ten times the
-                weight, after everything, reading as an announcement about
-                nothing. */}
-            {clean && (
-              <Tag
-                variant="success"
-                leadingIcon={<CheckGlyph size="xs" />}
-                title="no guard fired, no provider fell through, no call was refused"
-              >
-                nothing went wrong
-              </Tag>
-            )}
-            {/* WHAT THE VIEW IS MISSING, in the header, because every other
-                badge beside it is a claim made from these rows. The `trace`
-                answer has carried this flag all along and its screen renders
-                it; `turn` did not carry one at all, so a cut turn looked
-                exactly like a short one. */}
-            {cut && (
-              <Tag
-                variant="warning"
-                leadingIcon={<WarningGlyph size="xs" />}
-                title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
-              >
-                middle not shown
-              </Tag>
-            )}
-          </>
-        }
         {
           <>
             {role && (
@@ -1180,8 +1261,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               </Button>
             )}
             {/* THE OTHER ATTEMPTS, reachable rather than merely announced.
-                The badge above says this is attempt 2 of 2; a reader who has
-                landed on the failed one needs to get to the one that worked,
+                The header's badge says this is attempt 2 of 2; a reader who
+                has landed on the failed one needs to get to the one that worked,
                 and a deep link out of a tracker comment or an event payload
                 is exactly how they landed here. Each button says whether that
                 attempt failed, so the pair reads as the story it is. */}
@@ -1252,8 +1333,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </>
         }
       </PageActions>
-      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
-
       {/* THE OBJECT'S OWN HEADER, and the turn id with it. The id used to be
           a lone `PageNote` under the page bar — a hand-rolled identity line,
           which is exactly the eyebrow `ObjectHeader` draws — and the facts
@@ -1267,6 +1346,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         status={turnStatus(view)}
         facts={turnFacts(view)}
       />
+      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header that is
+          drawn from the id and needs no answer to exist. Above it, it was six
+          rows of grey pushing the header down the page and then letting it
+          spring back the moment the query landed — so opening a turn moved
+          the one part of the screen that had been readable all along. The
+          screen is keyed on the turn id (`app/App.tsx`), so this runs on
+          every navigation between turns, not only on a cold open. */}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
       <QueryState
         error={error}
         loading={loading}
@@ -1378,11 +1465,19 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             >
               <Card.Title>Also published</Card.Title>
             </Card.Header>
-            <div className="list">
-              {story.rest.map((e) => (
-                <EventRow key={e.id} event={e as unknown as FeedRow} showDate />
-              ))}
-            </div>
+            {/* THE SCREEN'S OWN ROW, like the three bands above it. This band
+                alone rendered the activity feed's row with the date forced
+                on, which is the exact shape `.turn-row` exists to replace: a
+                FOUR-column grid (time, actor, summary, tail) taking three
+                children, so the summary landed in the 132px actor track and a
+                full date wrapped to three lines inside the 62px time one.
+                Every row was three lines tall, in a different grid and a
+                different height from the panels above it, naming the same
+                seat on each. The `as unknown as FeedRow` cast was the tell —
+                an `EventRecord` is not a `FeedRow`. Nothing is lost: the row
+                carries the full instant in its title, and the header dates
+                the turn. */}
+            <EventList events={story.rest} actor={role} />
           </Card>
         )}
 

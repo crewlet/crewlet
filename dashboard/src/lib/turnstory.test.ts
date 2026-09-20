@@ -8,7 +8,14 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { ABSORBED, bandOf, prefetchBlocks, promptWeights, tellStory } from "./turnstory.ts";
+import {
+  ABSORBED,
+  bandOf,
+  collapseRuns,
+  prefetchBlocks,
+  promptWeights,
+  tellStory,
+} from "./turnstory.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
 function event(type: string, over: Partial<EventRecord> = {}): EventRecord {
@@ -325,5 +332,67 @@ describe("what each phase's prompt weighed", () => {
     // And the token count still arrives, which is exactly what makes the
     // zero read as a fact rather than as a row that failed to load.
     expect(row!.approximateTokens).toBe(6807);
+  });
+});
+
+/**
+ * A repeat is drawn once and counted.
+ *
+ * `ProviderFallback.SummaryFor` renders the same sentence for every attempt —
+ * the phase and the iteration that tell them apart are on the payload and not
+ * in the line — so a turn that lost its chain on every phase drew eight
+ * byte-identical rows and the rows that said something else had to be found
+ * among them.
+ */
+describe("a run of identical rows", () => {
+  const row = (type: string, summary: string, timestamp: string, failed = false): EventRecord =>
+    ({ id: `${type}-${timestamp}`, type, summary, timestamp, failed }) as unknown as EventRecord;
+
+  const chain = "default failed (auth) — no provider left in the chain";
+
+  test("draws one row, counted, spanning the first and the last", () => {
+    const runs = collapseRuns([
+      row("provider_fallback", chain, "2026-09-13T15:42:15Z"),
+      row("provider_fallback", chain, "2026-09-13T15:42:16Z"),
+      row("provider_fallback", chain, "2026-09-13T15:42:18Z"),
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.count).toBe(3);
+    // THE FIRST KEYS THE ROW and the last closes the span: a row that opened
+    // on the last event would date the run by its end.
+    expect(runs[0]?.event.timestamp).toBe("2026-09-13T15:42:15Z");
+    expect(runs[0]?.last.timestamp).toBe("2026-09-13T15:42:18Z");
+  });
+
+  test("never merges across a row that says something else", () => {
+    // The axis is time — every row renders its own instant — so a merge that
+    // reached over the `llm_unavailable` between two fallbacks would either
+    // lie about when the run happened or reorder the band to make it true.
+    const runs = collapseRuns([
+      row("provider_fallback", chain, "2026-09-13T15:42:15Z"),
+      row("llm_unavailable", "LLM unavailable for Agent CEO", "2026-09-13T15:42:16Z", true),
+      row("provider_fallback", chain, "2026-09-13T15:42:18Z"),
+    ]);
+    expect(runs.map((r) => r.count)).toEqual([1, 1, 1]);
+  });
+
+  test("keeps a failure apart from a line that merely reads the same", () => {
+    // Two rows a reader cannot tell apart are what this exists for; two that
+    // share a sentence while one of them failed are not — the failed one
+    // draws a glyph and a red edge the other does not.
+    const runs = collapseRuns([
+      row("provider_fallback", chain, "2026-09-13T15:42:15Z", false),
+      row("provider_fallback", chain, "2026-09-13T15:42:16Z", true),
+    ]);
+    expect(runs).toHaveLength(2);
+  });
+
+  test("leaves a band with nothing repeated exactly as it was", () => {
+    const rows = [
+      row("provider_fallback", chain, "2026-09-13T15:42:15Z"),
+      row("turn.guard_breach", "guard max_iter", "2026-09-13T15:48:37Z", true),
+    ];
+    expect(collapseRuns(rows).map((r) => r.event)).toEqual(rows);
+    expect(collapseRuns([])).toEqual([]);
   });
 });

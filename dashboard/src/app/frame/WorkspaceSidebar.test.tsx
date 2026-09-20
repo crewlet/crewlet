@@ -247,3 +247,64 @@ test("a row's count carries what it counted, or there is no count", () => {
   const bare = screen.getByText("Nothing counted").closest("a")!;
   expect(bare.querySelector(".side-count")).toBeNull();
 });
+
+/**
+ * A section that says it folds, folds.
+ *
+ * `collapsible` was declared, set by `useKeptSections` on Starred and Recent,
+ * and read by nothing — so the two sections the reader is offered a fold for
+ * were the two that had none. They are also the two that grow: a dozen stars
+ * and eight recents push a workspace's own tree below the scroll, and the
+ * rail's whole job is the tree.
+ */
+const KEPT: SidebarSection[] = [
+  { key: "fixed", rows: [{ key: "turns", label: "Turns", path: ["activity", "turns"] }] },
+  {
+    key: "recents",
+    label: "Recent",
+    collapsible: true,
+    rows: [{ key: "r1", label: "A turn that failed", path: ["activity", "turns", "abc"] }],
+  },
+];
+
+function kept() {
+  return render(
+    <Router>
+      <WorkspaceSidebar title="Activity" sections={KEPT} />
+    </Router>,
+  );
+}
+
+test("a collapsible section folds away and comes back", () => {
+  kept();
+  const head = screen.getByRole("button", { name: /Recent/ });
+  expect(head.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.queryByText("A turn that failed")).not.toBeNull();
+
+  fireEvent.click(head);
+  expect(head.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByText("A turn that failed")).toBeNull();
+  // THE TREE'S OWN ROWS ARE UNTOUCHED — folding what you kept is not folding
+  // where you can go.
+  expect(screen.queryByText("Turns")).not.toBeNull();
+
+  fireEvent.click(head);
+  expect(screen.queryByText("A turn that failed")).not.toBeNull();
+});
+
+test("a filter opens a section the reader folded away", () => {
+  // The same rule a folded BRANCH keeps: a needle that matched inside a shut
+  // section would render nowhere, which is indistinguishable from a search
+  // that found nothing.
+  kept();
+  fireEvent.click(screen.getByRole("button", { name: /Recent/ }));
+  expect(screen.queryByText("A turn that failed")).toBeNull();
+
+  fireEvent.change(screen.getByLabelText("Filter Activity"), { target: { value: "failed" } });
+  expect(screen.queryByText("A turn that failed")).not.toBeNull();
+});
+
+test("a section that does not fold has no control to press", () => {
+  kept();
+  expect(screen.queryByRole("button", { name: /^Turns$/ })).toBeNull();
+});
