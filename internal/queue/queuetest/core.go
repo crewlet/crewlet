@@ -446,8 +446,14 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("defer_delivery_leaves_the_event_and_stops_consuming", func(t *testing.T) {
 		t.Parallel()
 		// The third handler outcome, and the one a lost seat needs. It
-		// neither claims the work (ack) nor spends the message's
-		// dead-letter budget (nak).
+		// does not claim the work (ack) and it does not leave the
+		// attachment taking more of it: the events go back, in order,
+		// and this consumer stops.
+		//
+		// What it COSTS is a delivery, on every backend — see
+		// a_deferral_spends_one_delivery_like_every_other_hand_back.
+		// The budget is sized for handoffs, which is why one deferral
+		// here is nowhere near the dead-letter boundary.
 		backlog := s.needBacklog(t)
 		deadLetters := s.needDeadLetters(t)
 		q := s.start(ctx, t)
@@ -467,7 +473,9 @@ func (s *suite) runCore(t *testing.T) {
 			return equalStrings(labelsOf(backlog(q, "topic.d", "grp")), []string{"e1", "e2"})
 		})
 		if got := deadLetters(q, "topic.d", "grp"); len(got) != 0 {
-			t.Fatalf("a deferral spent dead-letter budget: %v", labelsOf(got))
+			t.Fatalf("one deferral killed a healthy event: %v. A deferral spends a "+
+				"delivery, but a budget sized for handoffs must absorb far more "+
+				"than one of them", labelsOf(got))
 		}
 	})
 

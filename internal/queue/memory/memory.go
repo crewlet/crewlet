@@ -33,8 +33,12 @@
 // flags another pass instead of nesting one (see dispatch.go).
 //
 // Redelivery matches the broker's shape: the budget counts redeliveries AFTER
-// the first delivery (so N+1 total attempts), and an exhausted message moves to
-// the dead-letter subject rather than being destroyed.
+// the first delivery (so N+1 total attempts), an exhausted message moves to
+// the dead-letter subject rather than being destroyed, and EVERY return that
+// puts a message back spends one — a deferral as much as a nak. That last
+// clause is the contract's rather than this backend's convenience: a free
+// handoff here would model a broker nobody runs and certify a bound
+// production does not have.
 package memory
 
 import (
@@ -96,13 +100,13 @@ const (
 	//
 	// JetStream is the twin to track because it is the only broker this
 	// engine ships. It budgets 25 rather than the 10 a free-handoff broker
-	// needs because its deferral returns via Nak and spends an attempt —
-	// and this twin, whose Defer costs nothing, would otherwise sit on a
-	// budget less than half the production one. Where the twin's default
-	// disagrees with the real backend, every test written against the twin
-	// is calibrated to a broker nobody runs. See
-	// internal/queue/jetstream/stream.go maxDeliver; if it moves, this
-	// moves with it.
+	// needs because its deferral returns via Nak and spends an attempt, and
+	// this twin's deferral now spends one for the same reason — so the two
+	// budgets have to match in the quantity they denote as well as in what
+	// they are spent on. Where the twin's default disagrees with the real
+	// backend, every test written against the twin is calibrated to a broker
+	// nobody runs. See internal/queue/jetstream/stream.go maxDeliver; if it
+	// moves, this moves with it.
 	defaultMaxRedeliveries = 24
 
 	// defaultMaxHistory bounds the published-event log this backend keeps

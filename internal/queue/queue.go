@@ -127,22 +127,34 @@ const (
 	// right to do — a seat whose lease moved, a node serving a stale
 	// config. Acking would claim work it will not perform.
 	//
-	// WHAT IT COSTS DIFFERS BY BACKEND, and the contract says so rather
-	// than pretending otherwise. The in-memory twin returns the events
-	// without touching their counters. A real broker has no "give this
-	// back without counting it": returning a message promptly means a Nak,
-	// and a Nak spends one of its deliveries — so the delivery budget is
-	// sized to cover handoffs as well as failures, and the backend
-	// dead-letters at the boundary rather than letting the broker's own
-	// MaxDeliver backstop discard a healthy event with nothing recorded.
-	// The alternative, letting the ack timer expire instead, parks a
-	// seat's whole mailbox for the ack window on every lease movement.
+	// IT COSTS ONE DELIVERY, exactly as a Nak does, on every backend. No
+	// broker here has a "give this back without counting it": returning a
+	// message promptly means a Nak, and a Nak spends one of its deliveries
+	// — so the delivery budget is sized to cover handoffs as well as
+	// failures, and the backend dead-letters at the boundary rather than
+	// letting the broker's own MaxDeliver backstop discard a healthy event
+	// with nothing recorded. The alternative, letting the ack timer expire
+	// instead, parks a seat's whole mailbox for the ack window on every
+	// lease movement.
+	//
+	// THIS USED TO DIFFER BY BACKEND, and the contract said so: the
+	// in-memory twin returned the events without touching their counters,
+	// gated behind a conformance capability. That made one rule two —
+	// DeliveriesLeft's doc asserted every return spends one while the
+	// suite's own flag asserted a deferral spends nothing — and it made the
+	// twin the only backend its own handoff case was ever run against. The
+	// twin spends one now, so the sentence above is true of everything that
+	// implements this contract.
+	//
+	// WHAT EVERY BACKEND OWES IS UNCHANGED, and it is the weaker claim the
+	// capability used to protect: a deferral must not kill a HEALTHY event.
+	// That is answered by sizing the budget so handoffs cannot exhaust it,
+	// not by making the handoff free.
 	//
 	// When the consumer closes, the broker returns the message to
-	// whoever attaches next, in order and at zero accrued redeliveries.
-	// Never substitute a republish: that sends the event to the topic
-	// tail while its prefetched siblings replay from the head,
-	// reordering the conversation.
+	// whoever attaches next, in order. Never substitute a republish: that
+	// sends the event to the topic tail while its prefetched siblings
+	// replay from the head, reordering the conversation.
 	OutcomeDefer
 )
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,11 +29,13 @@ import (
 //     destroyed a neighbouring group's subscription on the same subject.
 //     Decommissioning one role silently decommissions its neighbours; the same
 //     keyed-by-topic mistake that the pause holds already had to be fixed for.
-//   - A deferral spent the message's dead-letter budget. The contract says
-//     precisely why it must not — a NAK "would spend dead-letter budget on a
-//     message nothing is wrong with, and a healthy event eventually dies after
-//     enough handoffs" — and nothing tested it, so a seat that changes hands
-//     often would lose healthy work with no failure anywhere.
+//   - A deferral did not spend the message's dead-letter budget. The case
+//     here once required exactly that and had it backwards: every backend's
+//     deferral returns the message with a Nak, which spends one, and what
+//     keeps a healthy event alive across handoffs is a budget sized for them
+//     rather than a handoff that costs nothing. What a wrong backend gets
+//     away with is the opposite mistake — handing a message back for ever on
+//     a counter that never moves.
 //   - Quiesce that reports "no attachment" set the quiesce flag anyway,
 //     leaving a (topic, group) nothing can be delivered on.
 //
@@ -47,15 +50,23 @@ import (
 // the check costs. This suite has made that mistake twice: it required a free
 // deferral, which JetStream trades away (a deferred message costs a
 // redelivery there, measured), and it required head-replay on nak, which only
-// the twin does. Both are [Capabilities] flags now, not requirements.
+// the twin does.
+//
+// The two repairs went opposite ways, and the difference is the lesson.
+// Head-replay is a genuine degradation — the contract does not state an order
+// for a redelivered message and the engine depends on neither answer — so it
+// is a [Capabilities] flag. The deferral cost was not: the contract DOES
+// state it (see queue.OutcomeDefer), a flag exempting the twin left the case
+// certifying the twin against itself, and the repair was to make the twin
+// match the broker. A flag is for a property the contract leaves open, never
+// for one backend's disagreement with a rule the contract states.
 //
 // The four cases below were checked that way rather than by waiting for a
 // failure. The contract defines all four attachment verbs and permits none of
-// these writes; the only nearby exceptions are the deferral cost (gated as
-// FreeDeferral) and Unquiesce not needing to reclaim a prefetch on a pull
-// backend, which nothing here asserts either way. Delete-and-recreate resets
-// the cursor and so is unusable as a reattach, which is the same conclusion
-// case A reaches from the other direction.
+// these writes; the only nearby exception is Unquiesce not needing to reclaim
+// a prefetch on a pull backend, which nothing here asserts either way.
+// Delete-and-recreate resets the cursor and so is unusable as a reattach,
+// which is the same conclusion case A reaches from the other direction.
 func (s *suite) runNegativePaths(t *testing.T) {
 	ctx := t.Context()
 
@@ -199,42 +210,54 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 	})
 
-	t.Run("a_deferral_spends_no_dead_letter_budget", func(t *testing.T) {
+	t.Run("a_deferral_spends_one_delivery_like_every_other_hand_back", func(t *testing.T) {
 		t.Parallel()
-		// A seat whose lease moved is not a failed handler. If a deferral
-		// charged the message, an event handed between nodes often enough
-		// would be dead-lettered while nothing was ever wrong with it —
-		// and a busy seat changes hands often.
+		// A DEFERRAL COSTS WHAT A NAK COSTS, on every backend.
 		//
-		// NOT universal, and the skip above says why: a backend whose
-		// deferral is a nak spends a count on every handoff and absorbs it
-		// with a larger budget instead. What every backend owes is that a
-		// healthy event does not die from being handed over; this case
-		// certifies the stronger form, for the backends that offer it.
+		// No broker here has a "give this back without counting it":
+		// returning a message promptly means a Nak, and a Nak spends one
+		// of its deliveries. So the budget is sized to cover handoffs as
+		// well as failures — 25 rather than the 10 a free-handoff broker
+		// would need — and that, not a free handoff, is what keeps a
+		// healthy event alive across the seat movements a busy company
+		// makes.
 		//
-		// Observed through what budget remains: after one deferral the
-		// event must still have its FULL retry budget, so a two-attempt
-		// queue still gives two failing deliveries before dead-lettering.
-		// A deferral that charged one would leave only one.
-		if !s.caps.FreeDeferral {
-			t.Skip("backend implements deferral with a nak, which costs " +
-				"one delivery count by design; see the FreeDeferral " +
-				"capability")
-		}
+		// THIS CASE USED TO REQUIRE THE OPPOSITE, gated behind a
+		// FreeDeferral capability that only the in-memory twin declared.
+		// Two things were wrong with that and both are why it is written
+		// this way now. A capability the twin declares and the shipped
+		// broker does not runs its case against the twin ALONE, which is
+		// the one shape a shared conformance suite exists to prevent. And
+		// it made one contract into two documents that disagreed:
+		// queue.DeliveriesLeft said every return that puts a message back
+		// spends one, while the flag said a deferral spends nothing. The
+		// twin spends one now.
+		//
+		// OBSERVED ON THE CONTRACT'S OWN NUMBER rather than on a count of
+		// deliveries, because the number is what a caller acts on: a
+		// three-attempt queue must count 2, 1, 0 across a deferral and
+		// two failures exactly as it would across three failures. A
+		// deferral that cost nothing would report 2 twice.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(ctx, t, newQueueWithAttempts(t, 2))
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
-		naks := newJournal()
-		var deferred bool
-		subscribe(ctx, t, q, "topic.budget", "grp", func(context.Context, *events.Event) queue.Result {
-			if !deferred {
-				deferred = true
-				return queue.Defer("lease moved")
-			}
-			naks.record("nak")
-			return queue.Nak(errors.New("still failing"))
-		})
+		headroom := newJournal()
+		var attempts int
+		subscribe(ctx, t, q, "topic.budget", "grp",
+			func(hctx context.Context, _ *events.Event) queue.Result {
+				attempts++
+				left, known := queue.DeliveriesLeft(hctx)
+				if !known {
+					headroom.record("unknown")
+					return queue.Ack()
+				}
+				headroom.record(strconv.Itoa(left))
+				if attempts == 1 {
+					return queue.Defer("lease moved")
+				}
+				return queue.Nak(errors.New("still failing"))
+			})
 
 		publish(ctx, t, q, "topic.budget", newEvent("e0"))
 		// Wait for the QUIESCE, not for the backlog.
@@ -261,10 +284,14 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			t.Fatalf("Unquiesce: %v", err)
 		}
 
-		naks.await(t, "the full retry budget to survive the deferral",
-			func(seen []string) bool { return len(seen) == 2 })
-		naks.staysAt(t, 2, "the event outlived its budget")
-		awaitState(t, "the event to dead-letter only after its own budget",
+		headroom.awaitLabels(t, "the headroom to count down across the deferral "+
+			"exactly as it would across a failure", "2", "1", "0")
+		headroom.staysAt(t, 3, "the event outlived its budget")
+		// AND THE BOUNDARY IS THE SAME ONE. The delivery that reported no
+		// headroom left is the last: the hand-back after it dead-letters,
+		// with a copy on the dead-letter subject rather than a healthy
+		// event discarded by a broker backstop in silence.
+		awaitState(t, "the event to dead-letter after the delivery with no headroom left",
 			func() bool { return len(deadLetters(q, "topic.budget", "grp")) == 1 })
 	})
 

@@ -24,7 +24,13 @@
 // the suite was wrong more often than the backend was. What that looked like:
 //
 //   - It required a deferral to cost nothing. JetStream trades that away
-//     deliberately and raises MaxDeliver to absorb it. Now FreeDeferral.
+//     deliberately and raises MaxDeliver to absorb it, so this became the
+//     FreeDeferral capability — and that was the wrong repair. A capability
+//     the TWIN declares and the shipped broker does not runs its case against
+//     the twin alone, and it put the suite's own flag against the contract's
+//     own sentence, which says every return that puts a message back spends a
+//     delivery. The twin spends one now and the flag is gone; what the case
+//     certifies on both backends is the contract's number.
 //   - It required a nak to replay from the head. JetStream returns redelivered
 //     messages behind never-delivered ones, so only the twin does this. Now
 //     HeadReplayOnNak.
@@ -319,28 +325,6 @@ type Capabilities struct {
 	// event reaches exactly one member and that the load is shared, which
 	// is the part every broker owes.
 	StrictRoundRobin bool
-
-	// FreeDeferral declares that a deferral costs the message nothing —
-	// it returns unacked with no redelivery accrued, so its dead-letter
-	// budget is whole afterwards.
-	//
-	// A capability rather than a requirement, for the same measured reason
-	// as HeadReplayOnNak and from the same decision. The in-memory twin
-	// returns a deferred batch untouched, so a seat handoff there is free;
-	// on JetStream nothing is released by closing, so deferral is
-	// implemented with Nak() and costs one delivery count — and MaxDeliver
-	// was re-derived from 10 to 25 precisely to absorb handoffs.
-	//
-	// It is the twin that declares this and the shipped broker that does
-	// not, which is worth saying plainly: the case it gates certifies the
-	// twin against itself, not production.
-	//
-	// The invariant every backend still owes is the one the contract
-	// states: a deferral must not cause a HEALTHY event to die. A backend
-	// that spends a count per handoff satisfies it by sizing the budget so
-	// handoffs cannot exhaust it, not by making the handoff free. This flag
-	// only asks a backend that IS free to stay free.
-	FreeDeferral bool
 
 	// HeadReplayOnNak declares that a negatively acknowledged event
 	// returns to the FRONT of the mailbox, ahead of events already queued

@@ -262,9 +262,19 @@ func (b *Broker) restoreLocked(sub *subscription, remaining []queue.Partition[*e
 // Ack drops the events — they were removed from the mailbox before the call.
 // Nak returns them to the FRONT (order is what a conversation depends on) with
 // their redelivery counters bumped, and a message past the budget moves to the
-// dead-letter subject instead of being destroyed. Defer returns them without
-// bumping anything and quiesces the attachment: a seat whose lease moved is not
-// a failed handler and must not spend the message's dead-letter budget.
+// dead-letter subject instead of being destroyed.
+//
+// DEFER COSTS EXACTLY WHAT A NAK COSTS, and quiesces the attachment as well.
+// This twin used to return a deferred batch untouched, which modelled a broker
+// nobody runs: the only broker this engine ships has no "give this back
+// without counting it", so its deferral IS a Nak and spends one delivery —
+// which is why its budget was re-derived from 10 to 25 to absorb handoffs.
+// A twin that handed them back free certified the handoff bound production
+// does not have, and made the contract's own sentence ("every return that
+// puts a message back spends one") false on one of its two backends. What
+// every backend still owes is that a healthy event does not die from being
+// handed over, and both answer it the same way now: by sizing the budget so
+// handoffs cannot exhaust it.
 func (b *Broker) invoke(
 	ctx context.Context,
 	sub *subscription,
@@ -306,7 +316,12 @@ func (b *Broker) invoke(
 		// the subscription would also stop the peer that now owns it from
 		// picking these very events up.
 		client.quiescing[m.key] = struct{}{}
-		sub.mail = prepend(evs, sub.mail)
+		// THROUGH THE SAME BOUNDARY AS A NAK, because a hand-back spends
+		// a delivery whatever it meant — see the doc above. The
+		// dead-letter that ends it is the contract's too: a message whose
+		// deliveries went on handoffs is dead-lettered with a line rather
+		// than circling a mailbox no budget can ever retire it from.
+		dead = b.redeliverOrDeadLetterLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeNak:
 		dead = b.redeliverOrDeadLetterLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeAck:
