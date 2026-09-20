@@ -199,10 +199,24 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// REFUSED BEFORE THE STATE IS MINTED. An app name past GitHub's own
+	// ceiling used to be cut to fit, which gave two seats under a long
+	// company name the same app name — and GitHub refuses that globally, so
+	// the second seat's creation failed at the vendor with a duplicate-name
+	// error naming a string the operator's config does not contain. The
+	// operator is the only one who can decide which words to lose.
+	name, err := github.AppName(company.Name, seat.Name)
+	if err != nil {
+		httpjson.FailWith(w, http.StatusConflict, codeAppNameTooLong, map[string]string{
+			"hint": err.Error(),
+		})
+		return
+	}
+
 	state := s.appFlow.signer.Mint(handle, manifestTTL)
 	manifest := github.BuildManifest(github.ManifestOptions{
 		Seat:        handle,
-		Name:        github.AppName(company.Name, seat.Name),
+		Name:        name,
 		DeliveryURL: strings.TrimRight(base, "/") + "/webhooks/github/" + handle,
 		RedirectURL: strings.TrimRight(base, "/") + "/webhooks/github-app",
 		SetupURL:    strings.TrimRight(base, "/") + "/webhooks/github-app?installed=" + handle,

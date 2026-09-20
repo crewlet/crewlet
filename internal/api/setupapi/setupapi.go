@@ -70,6 +70,7 @@ const (
 	codeSeatRequired     = httpjson.Code("seat_required")
 	codeNoSuchSeat       = httpjson.Code("no_such_seat")
 	codeNoPublicURL      = httpjson.Code("no_public_url")
+	codeAppNameTooLong   = httpjson.Code("app_name_too_long")
 	codeRevisionAdvanced = httpjson.Code("revision_advanced")
 	codeLiteralInConfig  = httpjson.Code("literal_in_config")
 	codeValidationError  = httpjson.Code("validation_error")
