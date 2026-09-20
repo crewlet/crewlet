@@ -45,11 +45,18 @@ import (
 //
 // # Why closing is reversible
 //
-// A drain is not always a shutdown. The posture path sheds a node's seats on
-// config divergence and CONVERGES it back, and [seat.Host.ResumeClaiming]
-// exists for exactly that. A gate that latched shut would leave such a node
+// A gate that latched shut would leave a node that drained and then stayed
 // holding seats, attached to their mailboxes and refusing every turn — the
-// same permanently-deaf seat OnAdmission exists to prevent, one layer up.
+// same permanently-deaf seat OnAdmission exists to prevent, one layer up. So
+// closing swaps the channel rather than latching, and [Node.ResumeClaiming]
+// swaps a fresh one back in.
+//
+// THAT NODE DOES NOT EXIST IN THIS TREE. The reversibility was written for the
+// posture path — a node shedding on config divergence and converging back —
+// and that path gates ADMISSION instead, so [Node.ResumeClaiming] has no
+// production caller and every drain that happens is a shutdown. The property
+// is kept because it is free and the alternative fails silently; it is not
+// evidence that something reverses a drain.
 type gate struct {
 	// slots is the semaphore. A buffered channel rather than a
 	// sync.Cond, because the wait has to select against two other things

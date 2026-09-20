@@ -408,9 +408,16 @@ func (n *Node) seatReleaseBudget() time.Duration {
 // the exact cost step 3 exists to avoid, paid precisely when a caller took
 // this doc's advice and passed a deadline.
 //
-// Drain does not stop the node. A drained node still renews presence-free and
-// can be told to claim again (the config-plane shed-then-converge path);
+// Drain does not stop the node: a drained node still renews presence-free and
+// the layers beneath are all reversible, so it could be told to claim again.
 // Stop is what ends it.
+//
+// NOTHING IN THIS TREE REVERSES IT. [Node.ResumeClaiming] has no production
+// caller — the config plane's shed path gates admission rather than draining
+// the node — and the one caller Drain does have, [engine.Engine.Drain], is a
+// shutdown: it latches a flag the HTTP surface refuses new work on and never
+// clears it. So read the reversibility below as a property of the parts, not
+// as a path somebody takes.
 func (n *Node) Drain(ctx context.Context) {
 	n.host.BeginDrain(ctx)
 
@@ -595,13 +602,21 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 	return nil
 }
 
-// ResumeClaiming undoes [Node.Drain] for a node that is staying.
+// ResumeClaiming undoes [Node.Drain] for a node that is staying. It re-opens
+// the concurrency gate, re-admits the seats the drain quiesced and tells the
+// host to claim again — in that order, so no delivery arrives at a gate that
+// is still shut.
 //
-// The posture path's other half: a node that shed on config divergence and
-// then converged must serve again rather than sit out until it restarts. It
-// re-opens the concurrency gate, re-admits the seats the drain quiesced and
-// tells the host to claim again — in that order, so no delivery arrives at a
-// gate that is still shut.
+// NO PRODUCTION CALLER. It was written for the posture path's other half — a
+// node that shed on config divergence and then converged serving again rather
+// than sitting out until it restarts — and that path was built differently:
+// [engine.Reconciler]'s shed gates ADMISSION and never drains the node, so
+// nothing here is ever undone. Whether the shed should drain, or this should
+// go, is a design decision of its own; until it is taken, do not reach for
+// this as though the engine already used it. [engine.Engine.Drain], the one
+// caller of [Node.Drain], is one-way by construction: it latches a flag the
+// HTTP surface refuses new work on and never clears it, so a resume through
+// here would leave the node serving turns while its routes answer 503.
 //
 // It is not the inverse of [Node.Stop]. Stop releases the seats; this is for
 // a node that still holds them.
