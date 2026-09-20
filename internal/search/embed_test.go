@@ -712,3 +712,96 @@ func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
 func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
 }
+
+// A LONG DOCUMENT IS FINDABLE BY ITS TAIL, end to end: the duty splits it, a
+// real broker carries a record per window, this node's applier writes them,
+// and the two-stage search answers from the rows.
+//
+// This is the whole point of chunking, and no unit test over the splitter can
+// see it: the old duty cut every source at 8 KiB, so a query matching only
+// text below that cut returned the document it did NOT match instead — and
+// every layer in between was individually correct.
+func TestALongDocumentIsFoundByTextPastTheOldCut(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+
+	// The distinguishing words sit well past 8 KiB; before them is filler
+	// the other task matches just as well.
+	filler := strings.Repeat("the platform has many procedures. ", 400)
+	h.seedTasks(map[string]string{
+		"t-long":  filler + "rate limits and 429 backoff in the gitlab client",
+		"t-other": filler + "the page cache size the store asks for at open",
+	})
+
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	h.drain()
+
+	if got := h.vectors(); got <= 2 {
+		t.Fatalf("two documents of %d bytes produced %d vector(s): they were "+
+			"cut rather than chunked", len(filler), got)
+	}
+
+	vector, err := h.embedder.Embed(t.Context(), "429 rate limit backoff")
+	if err != nil {
+		t.Fatalf("embed the query: %v", err)
+	}
+	var hits []search.SemanticHit
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		var err error
+		hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+			Vector: pack(vector), Model: embedModel,
+			Dim: h.embedder.Width(), Limit: 5,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("the search returned %d hits over two documents — a document "+
+			"is one hit however many windows it has", len(hits))
+	}
+	if hits[0].ID != "t-long" {
+		t.Errorf("the nearest hit is %q: the words the query shares with "+
+			"t-long are past the old cut, so they reached no vector",
+			hits[0].ID)
+	}
+}
+
+// A DOCUMENT THAT SHRANK LOSES THE WINDOWS IT NO LONGER FILLS.
+//
+// The anti-join that selects stale sources is driven by the SOURCE rows, and
+// they say only that the document is current — so nothing else will ever
+// mention the orphaned windows. Left behind, they hold text the document no
+// longer contains and stay findable by meaning for ever.
+func TestADocumentThatShrankDropsItsExtraWindows(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+
+	h.seedTasks(map[string]string{
+		"t-1": strings.Repeat("a long first draft with plenty of prose. ", 500),
+	})
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	h.drain()
+	before := h.vectors()
+	if before < 3 {
+		t.Fatalf("the long draft produced %d vector(s), want several", before)
+	}
+
+	// Rewritten to one line. The version moves, so the duty re-selects it.
+	h.seedTasks(map[string]string{"t-1": "cut to one line."})
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	h.drain()
+
+	if got := h.vectors(); got != 1 {
+		t.Errorf("the document holds %d vector(s) after shrinking to one "+
+			"window, down from %d: the rest carry text it no longer contains "+
+			"and nothing else will ever select them", got, before)
+	}
+}

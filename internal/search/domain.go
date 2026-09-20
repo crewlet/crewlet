@@ -31,12 +31,21 @@ const (
 	// (`stream.tracker_vectors_max_bytes`) instead, together with every
 	// other state log, inside what the broker can actually grant.
 	//
-	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
+	// ONE MESSAGE PER WINDOW, so the stream's size is the corpus rather
 	// than its history: at the packed 12 KiB a 3 072-wide vector costs,
-	// plus its envelope, 740 000 sources — this engine's declared
+	// plus its envelope, 740 000 windows — this engine's declared
 	// supported corpus per node — is ≈ 9.1 GB. Sixteen gibibytes is that
 	// with room for the width to change under it and for the transition
 	// window in which both models' records are on the stream.
+	//
+	// PER WINDOW RATHER THAN PER DOCUMENT is what chunking changed, and
+	// the multiplier is not the one it looks like: the median document is
+	// under [EmbedChunkBytes] and is exactly one window, so the number
+	// rises only for the long documents — which were not on this stream in
+	// any complete form before, because everything past the old 8 KiB cut
+	// was never embedded at all. A company whose corpus is long-form does
+	// have a real multiple to plan for, and the headroom above is where it
+	// comes from.
 	//
 	// Crossing it REFUSES an append rather than dropping the oldest
 	// record. A dropped vector is a document that silently stops being
@@ -46,7 +55,13 @@ const (
 	// VectorLogMaxAge is how long a message survives.
 	//
 	// NON-ZERO ONLY BECAUSE THIS DOMAIN IS COMPACTED, and it is what
-	// collects the forget tombstones: a withdrawn source leaves a record
+	// collects the forget tombstones — and, since chunking, the retained
+	// records of windows a document no longer has. A page cut from five
+	// windows to two leaves three subjects nothing publishes to again:
+	// their rows go at the next apply (see [Applier.trimChunks]) and their
+	// messages go here.
+	//
+	// A withdrawn source leaves a record
 	// that exists to tell a replaying node the vector is gone, and once
 	// the embed it supersedes is also gone there is nothing left for it to
 	// say. Ninety days, because that is comfortably longer than the
@@ -100,14 +115,20 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 		return statelog.Envelope{}, err
 	}
 	return statelog.Envelope{
-		V:       env.V,
-		Kind:    string(env.Subject.Source),
-		Subject: statelog.Subject{Kind: string(env.Subject.Source), ID: env.Subject.ID},
-		Op:      string(env.Op),
-		OpID:    env.OpID,
-		Gen:     env.Gen,
-		Scope:   env.Scope,
-		Writer:  env.Writer,
+		V:    env.V,
+		Kind: string(env.Subject.Source),
+		// THE WINDOW, not the document. This stream retains one message
+		// per subject, so a subject naming the document alone would keep
+		// whichever of a long page's windows was published last and drop
+		// the rest before any applier saw them.
+		Subject: statelog.Subject{
+			Kind: string(env.Subject.Source), ID: env.Subject.Token(),
+		},
+		Op:     string(env.Op),
+		OpID:   env.OpID,
+		Gen:    env.Gen,
+		Scope:  env.Scope,
+		Writer: env.Writer,
 	}, nil
 }
 

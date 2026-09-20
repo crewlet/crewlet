@@ -76,14 +76,14 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	container := vec.Container
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors
-			(source, source_id, container, search_shard, model, dim,
+			(source, source_id, chunk, container, search_shard, model, dim,
 			 source_rev, text_sha, embedding, embedded_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		-- THE SHARD IS ABSENT FROM THE UPDATE on purpose: it is a pure
 		-- function of the two conflict columns, so an existing row's
 		-- bucket cannot change. See [Indexer.upsertOne] for what
 		-- re-stamping it would cost the one time it did anything.
-		ON CONFLICT (source, source_id) DO UPDATE SET
+		ON CONFLICT (source, source_id, chunk) DO UPDATE SET
 			container   = excluded.container,
 			model       = excluded.model,
 			dim         = excluded.dim,
@@ -93,7 +93,11 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 			embedded_at = excluded.embedded_at,
 			version     = excluded.version
 		WHERE excluded.version > kb_vectors.version`,
-		string(vec.Subject.Source), vec.Subject.ID, container,
+		string(vec.Subject.Source), vec.Subject.ID, vec.Subject.Chunk, container,
+		// THE DOCUMENT'S BUCKET, not the chunk's. Every window of one
+		// document shares it, because the fan-out divides the corpus by
+		// document and a window that landed in another node's range is a
+		// window its own document's scan would never reach.
 		ShardOf(string(vec.Subject.Source), vec.Subject.ID), vec.Model, vec.Dim,
 		int64(vec.SourceRev), vec.TextSHA, vec.Embedding,
 		store.EncodeTime(vec.CreatedAt), version)
@@ -119,14 +123,14 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	// which is the entire reason the first stage costs nothing to maintain.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors_bin
-			(source, source_id, container, search_shard, model, dim, bits)
-		VALUES (?, ?, ?, ?, ?, ?, vector1bit(?))
-		ON CONFLICT (source, source_id) DO UPDATE SET
+			(source, source_id, chunk, container, search_shard, model, dim, bits)
+		VALUES (?, ?, ?, ?, ?, ?, ?, vector1bit(?))
+		ON CONFLICT (source, source_id, chunk) DO UPDATE SET
 			container    = excluded.container,
 			model        = excluded.model,
 			dim          = excluded.dim,
 			bits         = excluded.bits`,
-		string(vec.Subject.Source), vec.Subject.ID, container,
+		string(vec.Subject.Source), vec.Subject.ID, vec.Subject.Chunk, container,
 		// THE SAME CALL, in the same transaction as the row above. Two
 		// shards for one document is a document the candidate scan finds
 		// in one bucket and the rerank looks for in another.
@@ -135,18 +139,84 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 		return 0, fmt.Errorf("search: write the sign code for %s at %s: %w",
 			vec.Subject, at, err)
 	}
-	return 2, nil
+
+	// THE WINDOWS THIS DOCUMENT NO LONGER HAS GO, in the same transaction
+	// and under the same position guard.
+	//
+	// A page cut from five windows to two would otherwise keep three rows
+	// holding text it no longer contains — findable by meaning for ever,
+	// and selected by nothing, because the anti-join is driven by the
+	// source rows and they say only that the document is current.
+	//
+	// GUARDED ON `version <`, which is what makes it safe to run on every
+	// embed rather than once: a record applied out of order can only ever
+	// delete rows OLDER than itself, so an older peer's record cannot
+	// remove windows a newer one just wrote.
+	//
+	// A ZERO COUNT DELETES NOTHING. It is what a build that predates this
+	// field writes, and reading it as "this document has no windows" would
+	// let such a record erase the whole document on every node that
+	// applied it.
+	trimmed, err := a.trimChunks(ctx, tx, vec, version)
+	if err != nil {
+		return 0, err
+	}
+	return 2 + trimmed, nil
 }
 
-// forget removes both rows for a source that is gone.
+// trimChunks removes the windows at or above the count this record states.
+func (a Applier) trimChunks(ctx context.Context, tx *sql.Tx, vec VectorRecord,
+	version int64) (int, error) {
+
+	if vec.Chunks <= 0 {
+		return 0, nil
+	}
+	source, id := string(vec.Subject.Source), vec.Subject.ID
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM kb_vectors
+		 WHERE source = ? AND source_id = ? AND chunk >= ? AND version < ?`,
+		source, id, vec.Chunks, version)
+	if err != nil {
+		return 0, fmt.Errorf("search: trim the stale windows of %s at %d: %w",
+			vec.Subject, version, err)
+	}
+	moved, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if moved == 0 {
+		return 0, nil
+	}
+	// The narrow table carries no version of its own — it follows the wide
+	// row's guard rather than a second copy of it, exactly as the write
+	// above does — so it is trimmed by the same ordinal.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM kb_vectors_bin
+		 WHERE source = ? AND source_id = ? AND chunk >= ?`,
+		source, id, vec.Chunks); err != nil {
+		return 0, fmt.Errorf("search: trim the stale sign codes of %s: %w",
+			vec.Subject, err)
+	}
+	return int(moved) * 2, nil
+}
+
+// forget removes both rows for ONE WINDOW that is gone.
+//
+// PER CHUNK, because the subject is per chunk: a source that disappears is
+// forgotten one window at a time, and so is a source that merely SHRANK —
+// a document falling from five windows to two gets a forget on each of the
+// three it no longer fills. Deleting the whole document here instead would
+// make the two cases indistinguishable and would delete four live windows
+// every time the duty re-embedded a long page.
 //
 // GUARDED BY THE POSITION exactly as the write is: a forget below what this
 // node already holds is a redelivery replayed after a newer embed, and applying
 // it would delete a vector the fleet has since recomputed.
 func (a Applier) forget(ctx context.Context, tx *sql.Tx, subject Subject, at statelog.Position) (int, error) {
 	res, err := tx.ExecContext(ctx,
-		`DELETE FROM kb_vectors WHERE source = ? AND source_id = ? AND version < ?`,
-		string(subject.Source), subject.ID, at.Packed())
+		`DELETE FROM kb_vectors
+		  WHERE source = ? AND source_id = ? AND chunk = ? AND version < ?`,
+		string(subject.Source), subject.ID, subject.Chunk, at.Packed())
 	if err != nil {
 		return 0, fmt.Errorf("search: forget the vector for %s at %s: %w",
 			subject, at, err)
@@ -159,8 +229,9 @@ func (a Applier) forget(ctx context.Context, tx *sql.Tx, subject Subject, at sta
 		return 0, nil
 	}
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM kb_vectors_bin WHERE source = ? AND source_id = ?`,
-		string(subject.Source), subject.ID); err != nil {
+		`DELETE FROM kb_vectors_bin
+		  WHERE source = ? AND source_id = ? AND chunk = ?`,
+		string(subject.Source), subject.ID, subject.Chunk); err != nil {
 		return 0, fmt.Errorf("search: forget the sign code for %s at %s: %w",
 			subject, at, err)
 	}
