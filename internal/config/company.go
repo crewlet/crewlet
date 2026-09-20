@@ -503,9 +503,9 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
 	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
-	// and the failure that produces is silence: an operator sets working
-	// days and a timezone, nothing reads either, and the calendar keeps
-	// shading Saturday.
+	// and the failure that produces is silence: an operator sets a
+	// timezone the authored dates of somebody else's tracker will never
+	// be read in.
 	//
 	// The check is against the DERIVED backend rather than the literal
 	// field, because an empty `backend` with no Jira integration IS

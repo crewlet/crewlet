@@ -87,3 +87,36 @@ func TestTheRetiredSnapshotCeilingNamesTheDirectory(t *testing.T) {
 		}
 	}
 }
+
+// AND THE RETIRED WORKING CALENDAR NAMES NOTHING AT ALL.
+//
+// A third kind of answer, beside "here is what replaced it" and "the
+// mechanism moved": the setting did not move and nothing took it over — its
+// only reader is gone. `non_working_weekdays` existed so a sprint's burndown
+// guideline could skip the days nobody worked, and with sprints removed no
+// figure this engine computes is measured against a working week.
+//
+// It is in the table because it SHIPPED IN THE EXAMPLE COMPANY, which is the
+// table's own admission rule — somebody has it written down. Told to "use X
+// instead" they would go looking for an X that does not exist, so the refusal
+// says plainly that there is none.
+func TestTheRetiredWorkingCalendarNamesNoReplacement(t *testing.T) {
+	t.Parallel()
+	_, err := ParseCompany([]byte("name: Acme\ntracker:\n  native:\n" +
+		"    non_working_weekdays:\n      - saturday\n"))
+	if err == nil {
+		t.Fatal("a retired key was accepted")
+	}
+	if !errors.Is(err, ErrUnknownField) {
+		t.Errorf("want %v, got %v", ErrUnknownField, err)
+	}
+	if strings.Contains(err.Error(), "check the spelling") {
+		t.Errorf("a key the example company shipped was reported as a "+
+			"misspelling: %v", err)
+	}
+	for _, want := range []string{"NOTHING replaced it", "Delete the line"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+}
