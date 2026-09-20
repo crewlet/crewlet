@@ -401,7 +401,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// turn must not also be spliced into somebody's coding run. The park
 	// cannot read the ledger at all — a parked partition is never marked
 	// done — so it offers what it has.
-	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle) {
+	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, surviving) {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
 		case sandbox.AnswerConsumed:
@@ -762,7 +762,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 }
 
 // mayOfferAnswer reports whether this delivery still has the deliveries to
-// spare for the answer route, on what the MESSAGE carries.
+// spare for the answer route, on what the MESSAGES carry.
 //
 // THE OFFER IS WHAT IS GATED, not the hand-back. A deferred answer goes back
 // with a NAK, and on the broker this engine ships every return spends one of
@@ -776,6 +776,18 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // [sandbox.MaxAnswerAttempts], which is the second clause and bounds one
 // process's thrash.
 //
+// EACH EVENT'S OWN COUNT, never the partition's, and the distinction is the
+// whole of this frame. [queue.DeliveriesLeft] is the SMALLEST of the
+// partition's — the right answer to "will handing this batch back dead-letter
+// something" and the wrong one to the question asked here, which is whether
+// the reply this route may be owed can still afford an attempt. Read as the
+// latter it refused a clarification reply on its FIRST delivery, with a whole
+// budget in hand, because some older message on the same conversation was
+// near its own — and it kept refusing every later reply on that conversation,
+// since a spent message stays in the partition. So the gate asks
+// [queue.DeliveriesLeftFor] per event and [sandbox.MayOfferAnswer] folds
+// them, which is where the reasoning for that fold lives.
+//
 // ONLY THE FREE-SEAT OFFER, which is the one whose deferral NAKs. The park
 // branch above offers too, and must keep doing so with no reserve at all: a
 // delivery it does not consume is REPUBLISHED by the park, which is a new
@@ -783,23 +795,44 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // this guard is protecting. Gating it would only cost the seat an answer it
 // could have taken.
 //
-// ON THIS NODE'S LOG when it refuses, because the delivery then becomes an
-// ordinary turn while a coding run may still be parked on its question: that
-// is the answer route giving up its claim on a message, and it is invisible
-// anywhere else.
-func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string) bool {
-	left, known := queue.DeliveriesLeft(ctx)
-	if sandbox.MayOfferAnswer(left, known) {
-		return true
+// ON THIS NODE'S LOG EITHER WAY, and the two lines are different facts.
+// Refusing means the delivery becomes an ordinary turn while a coding run may
+// still be parked on its question — the answer route giving up its claim on a
+// message, invisible anywhere else. Offering while the PARTITION's own number
+// is inside the reserve means the hand-back this may cause will also spend a
+// co-partitioned message that has nearly nothing left, which is the cost this
+// gate deliberately accepts and therefore the one an operator reading a
+// `dead_lettered` line needs told in advance.
+func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*events.Event) bool {
+	perMessage := make([]sandbox.AnswerHeadroom, 0, len(evs))
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		left, known := queue.DeliveriesLeftFor(ctx, ev.ID)
+		perMessage = append(perMessage, sandbox.AnswerHeadroom{Left: left, Known: known})
 	}
-	log.WarnContext(ctx, "sandbox_answer_headroom_reserved",
-		"seat", handle, "deliveries_left", left,
-		"reserve", sandbox.AnswerDeliveryReserve,
-		"detail", "this message has spent nearly all of its deliveries, so what "+
-			"is left is kept for the ordinary route rather than offered to a "+
-			"parked coding run again; handing it back once more risks the "+
-			"broker dead-lettering the reply instead")
-	return false
+	least, leastKnown := queue.DeliveriesLeft(ctx)
+	if !sandbox.MayOfferAnswer(perMessage) {
+		log.WarnContext(ctx, "sandbox_answer_headroom_reserved",
+			"seat", handle, "deliveries_left", least,
+			"reserve", sandbox.AnswerDeliveryReserve,
+			"detail", "every message of this delivery has spent nearly all of its "+
+				"deliveries, so what is left is kept for the ordinary route rather "+
+				"than offered to a parked coding run again; handing it back once "+
+				"more risks the broker dead-lettering the reply instead")
+		return false
+	}
+	if leastKnown && least <= sandbox.AnswerDeliveryReserve {
+		log.WarnContext(ctx, "sandbox_answer_offered_over_a_spent_sibling",
+			"seat", handle, "partition_deliveries_left", least,
+			"reserve", sandbox.AnswerDeliveryReserve,
+			"detail", "a message of this delivery still has the deliveries to spare, "+
+				"so a parked coding run is being offered it; another message in the "+
+				"same partition is inside the reserve, and a hand-back returns the "+
+				"whole partition, so that one may dead-letter")
+	}
+	return true
 }
 
 // answered offers a delivery to a coding run of this seat that is waiting for

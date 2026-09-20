@@ -564,6 +564,24 @@ const (
 	// observable should find another way to observe it.
 	lingerFor = 50 * time.Millisecond
 
+	// mixedCountLinger is the window the mixed-delivery-count case needs,
+	// and it is longer than lingerFor for one specific reason.
+	//
+	// That case has to put a REDELIVERED message and a NEVER-DELIVERED one
+	// in the same drain, which is the only way to build a partition whose
+	// messages sit at different delivery counts. The redelivered half comes
+	// back on the backend's own nak spacing (25ms seed doubling to a 50ms
+	// ceiling in the JetStream harness), so the window a fresh publish
+	// opens has to outlast that spacing — and lingerFor is the SAME ORDER
+	// as it, which makes whether the two meet a coin toss rather than a
+	// property.
+	//
+	// 400ms is about eight times the harness's ceiling, so the meeting is
+	// determined by the backend's ordering rather than by the scheduler,
+	// and the case still costs well under settleFor. It is nowhere near
+	// queue.MaxLingerSeconds, so no backend has to refuse it.
+	mixedCountLinger = 400 * time.Millisecond
+
 	// racingWindow is the linger a case gets when its SETUP has to complete
 	// while the window is still open — the pause and stop cases, where the
 	// window must be open when the verb lands AND must expire afterwards.

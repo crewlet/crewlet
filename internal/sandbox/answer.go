@@ -148,11 +148,19 @@ const MaxAnswerAttempts = 10
 // backend's dead-letter budget, it is no longer offered to a parked run.
 //
 // THE CLAUSE THAT MAKES THE HEADROOM CLAIM TRUE, because it is measured on
-// what the MESSAGE carries — queue.DeliveriesLeft, stated by the backend at
-// the handler boundary — rather than on what any one process remembers. Every
-// bound in this file resets when a seat moves or a node restarts, and the
-// broker's does not; see [MaxAnswerAttempts] for the reply that was
-// dead-lettered by the gap between those two facts.
+// what the MESSAGE carries — queue.DeliveriesLeftFor, stated per message by
+// the backend at the handler boundary — rather than on what any one process
+// remembers. Every bound in this file resets when a seat moves or a node
+// restarts, and the broker's does not; see [MaxAnswerAttempts] for the reply
+// that was dead-lettered by the gap between those two facts.
+//
+// PER MESSAGE, which is the whole of what it measures and was briefly not:
+// gated on the PARTITION's number instead — the smallest of its messages' —
+// the reserve refused a person's clarification reply that was on its first
+// delivery with a full budget in hand, because some other message on the same
+// conversation happened to be near its own. That is the original defect from
+// the other side: the reply spent on an ordinary turn while a parked run was
+// still owed it. See [MayOfferAnswer].
 //
 // FIVE, AND WHAT CONSUMES THEM. The reserve is exactly what the ordinary
 // route is left holding, since the offer stops with this many deliveries
@@ -183,24 +191,80 @@ const MaxAnswerAttempts = 10
 // least afford to have less.
 const AnswerDeliveryReserve = 5
 
+// AnswerHeadroom is what the transport said about ONE message of a delivery:
+// how many further deliveries it has, and whether the transport said at all.
+//
+// The pair queue.DeliveriesLeftFor returns, carried as a value so the rule
+// below is exercisable without a queue, a broker or a partition — the same
+// separation internal/agent/extension's Policy is built on and for the same
+// reason: a policy that can only be reached through live machinery is a
+// policy nobody re-measures.
+type AnswerHeadroom struct {
+	// Left is how many further deliveries this message has before the
+	// transport dead-letters it.
+	Left int
+
+	// Known is whether the transport stated Left at all. FALSE IS NOT A
+	// ZERO: see [MayOfferAnswer].
+	Known bool
+}
+
 // MayOfferAnswer reports whether a delivery may still be offered to a parked
-// coding run, given how many further deliveries it has before the transport
+// coding run, given what each of its messages has left before the transport
 // dead-letters it.
 //
-// Takes the pair queue.DeliveriesLeft returns, so a caller composes the two
-// rather than re-deciding what an absent count means. AN ABSENT COUNT IS NOT
-// A SPENT ONE: a transport that did not say leaves the route exactly as it
-// was before this clause existed, bounded by [MaxAnswerAttempts] and
-// [answerWindow] alone. The alternative — reading silence as "no headroom" —
-// would turn every delivery on a node whose metadata is unreadable into an
-// ordinary turn, which spends the reply on the one failure this whole type
-// exists to prevent.
+// PER MESSAGE, AND ANY OF THEM IS ENOUGH. A delivery is a partition, and its
+// messages sit at different counts as a matter of course: a conversation
+// whose earlier message has been handed back a dozen times keeps collecting
+// fresh replies, and each of those arrives with a whole budget. The question
+// this answers is whether the answer route can still afford an attempt at the
+// reply it may be owed — so it is enough that ONE message here still has the
+// deliveries, because that is the one an answer would come on.
+//
+// THE SMALLEST IS THE WRONG FOLD HERE, and it was what this read: the
+// partition's number, [queue.DeliveriesLeft], which is the right answer to a
+// different question ("will handing this batch back dead-letter something").
+// Gated on it, a fresh reply was refused the answer route outright whenever
+// any co-partitioned message was near its own budget — and once one message
+// on a conversation is spent, EVERY later reply on it is refused, so the
+// route is poisoned for that conversation for good. The cost of that refusal
+// is the defect this whole route exists to end: the reply is consumed by an
+// ordinary turn while a run is still parked on the question it answers.
+//
+// WHAT THE OTHER FOLD WOULD HAVE BOUGHT, stated plainly because it is a real
+// trade and not an oversight: a hand-back returns the whole partition, so
+// offering on one message's headroom can spend the last delivery of another
+// and dead-letter it. That message is not saved by refusing — the ordinary
+// route hands the same partition back on its own failures at exactly the same
+// cost — and the two endings are not equal even when it is. A dead-letter is
+// LOUD: a copy on the dead-letter subject and a `dead_lettered` line naming
+// the deliveries it took. A reply spent on an unrelated turn is SILENT, and
+// what it leaves behind is a paused box waiting out its pause TTL for an
+// answer that already arrived. Where the quiet failure is the worse one, the
+// route offers; the dispatcher says so on the log when the partition's own
+// number is inside the reserve, so the loud one is never a surprise either.
+//
+// AN ABSENT COUNT IS NOT A SPENT ONE: a transport that did not say leaves the
+// route exactly as it was before this clause existed, bounded by
+// [MaxAnswerAttempts] and [answerWindow] alone. The alternative — reading
+// silence as "no headroom" — would turn every delivery on a node whose
+// metadata is unreadable into an ordinary turn, which spends the reply on the
+// one failure this whole type exists to prevent. An EMPTY list is the same
+// silence: nothing was stated about anything.
 //
 // Here rather than in the dispatcher because the rule belongs with the number
 // it reads, and because a rule stated in a frame that also holds a queue, a
 // screening and a turn is one nobody can exercise on its own.
-func MayOfferAnswer(left int, known bool) bool {
-	return !known || left > AnswerDeliveryReserve
+func MayOfferAnswer(perMessage []AnswerHeadroom) bool {
+	if len(perMessage) == 0 {
+		return true
+	}
+	for _, h := range perMessage {
+		if !h.Known || h.Left > AnswerDeliveryReserve {
+			return true
+		}
+	}
+	return false
 }
 
 // maxAnswerDeliveries is how many of one run's deliveries this node keeps a

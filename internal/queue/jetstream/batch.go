@@ -179,17 +179,16 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 			evs[i] = d.ev
 		}
 
-		msgs := make([]jetstream.Msg, len(part.Items))
-		for i, d := range part.Items {
-			msgs[i] = d.msg
-		}
-
 		a.q.beginHandler()
-		// THE PARTITION'S OWN HEADROOM, which is the SMALLEST of its
-		// messages': one outcome covers all of them, so a hand-back
-		// spends a delivery of every one and the message nearest its
-		// budget is the one that dead-letters first.
-		res := runBatchHandler(a.withDeliveriesLeft(ctx, msgs...), a.log, evs, h)
+		// EACH MESSAGE'S OWN HEADROOM, and the partition's folded from
+		// them by the contract. Both, because they answer different
+		// questions: one outcome covers the whole partition, so a
+		// hand-back spends a delivery of every message in it and the
+		// nearest its budget is the one that dead-letters first — while
+		// a handler deciding what to do with ONE of these events has to
+		// ask what THAT message has left. See [queue.DeliveriesLeft] and
+		// [queue.DeliveriesLeftFor].
+		res := runBatchHandler(a.withHeadroom(ctx, part.Items...), a.log, evs, h)
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)

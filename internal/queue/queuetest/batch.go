@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,14 +121,9 @@ func (s *suite) runBatch(t *testing.T) {
 		// partition's handler spends the budget the same way: one
 		// outcome, applied to every message it was handed.
 		//
-		// WHAT IS NOT DRIVEN HERE is a partition whose messages sit at
-		// DIFFERENT counts, which must report the smallest of them.
-		// Building one needs a redelivery and a fresh publish to meet in
-		// the same drain, which is a race on any backend with fetch
-		// latency and impossible on one that dispatches inline. The fold
-		// is [queue.LeastDeliveriesLeft] instead — one function both
-		// backends call, with its own case — so the rule cannot be two
-		// rules however each backend reads its own counters.
+		// A partition whose messages sit at DIFFERENT counts is the next
+		// case, which is where the two numbers a handler is told stop
+		// being the same number.
 		newQueueWithAttempts := s.needAttempts(t)
 		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
@@ -150,6 +146,156 @@ func (s *suite) runBatch(t *testing.T) {
 		publish(ctx, t, q, "t.left", newConvEvent("a", "c1"))
 
 		j.awaitLabels(t, "the partition's headroom to count down", "2", "1", "0")
+	})
+
+	t.Run("a_partition_at_mixed_counts_tells_each_message_its_own_headroom", func(t *testing.T) {
+		t.Parallel()
+		// TWO NUMBERS, BECAUSE ONE CANNOT ANSWER BOTH QUESTIONS.
+		//
+		// A partition's messages sit at different delivery counts as a
+		// matter of course: a conversation whose first message has been
+		// handed back keeps collecting fresh replies, and each of those
+		// arrives with a whole budget. So a handler is told BOTH — the
+		// partition's own headroom ([queue.DeliveriesLeft], the smallest,
+		// which answers "will handing this batch back dead-letter
+		// something") and each message's ([queue.DeliveriesLeftFor],
+		// which answers "how much is left of THIS one").
+		//
+		// Reading the first where the second is meant is a defect with a
+		// name: the engine's sandbox answer route gated its offer on the
+		// partition's number and so refused a person's clarification
+		// reply that was on its FIRST delivery, because an older message
+		// on the same conversation was near its own budget — and kept
+		// refusing every later reply on that conversation, since the
+		// spent message stays in the partition. See
+		// internal/sandbox.MayOfferAnswer.
+		//
+		// HOW THE MIXED PARTITION IS BUILT, since the previous round of
+		// this work recorded that it could not be. It needs a redelivery
+		// and a never-delivered message to meet in ONE drain, and the two
+		// halves that make that deterministic are:
+		//
+		//   - the fresh message is published BY THE HANDLER, on its first
+		//     invocation, before that invocation hands the first message
+		//     back. On an inline-dispatch twin that is the only ordering
+		//     that works at all: nothing else runs between the nak and
+		//     the next chunk, so a publish from the test goroutine can
+		//     never land in between. On a fetching backend it puts the
+		//     fresh message in the stream before the nak, so it is
+		//     already available when the next drain opens its window.
+		//   - the linger window is [mixedCountLinger] rather than
+		//     lingerFor, so it outlasts the nak spacing the redelivered
+		//     half comes back on instead of racing it.
+		//
+		// The assertion is RELATIONAL rather than two literals, because
+		// a backend is entitled to an extra redelivery on the way here
+		// and the rule does not depend on how many: the two counts must
+		// DIFFER, and the partition's must be the smaller. On the common
+		// path the numbers are attempts-2 and attempts-1.
+		newQueueWithAttempts := s.needAttempts(t)
+		const attempts = 6
+		q := startQueue(ctx, t, newQueueWithAttempts(t, attempts))
+
+		const topic, group, conv = "t.mixed", "g", "c1"
+		older := newConvEvent("older", conv)
+		fresher := newConvEvent("fresher", conv)
+
+		var (
+			mu                 sync.Mutex
+			seeded             bool
+			rounds             int
+			readings           map[string]int
+			partLeft           int
+			partKnown, missing bool
+		)
+		j := newJournal()
+		subscribeBatch(ctx, t, q, topic, group,
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				mu.Lock()
+				first := !seeded
+				seeded = true
+				rounds++
+				round := rounds
+				mu.Unlock()
+
+				if first {
+					// Published from INSIDE the handler; see above.
+					// A failure here is recorded rather than
+					// fataled: this is not the test goroutine.
+					if err := q.Publish(hctx, topic, fresher); err != nil {
+						j.record("publish failed: " + err.Error())
+						return queue.Ack()
+					}
+					return queue.Nak(errors.New("hand the first one back"))
+				}
+				if len(evs) < 2 {
+					// They have not met yet. Hand it back and let
+					// the next drain try, bounded by the budget so
+					// a backend that never pairs them fails loudly
+					// instead of hanging.
+					if round < attempts-1 {
+						return queue.Nak(errors.New("still waiting for the pair"))
+					}
+					mu.Lock()
+					missing = true
+					mu.Unlock()
+					j.record("never met")
+					return queue.Ack()
+				}
+
+				got := make(map[string]int, len(evs))
+				var unstated bool
+				for _, ev := range evs {
+					left, known := queue.DeliveriesLeftFor(hctx, ev.ID)
+					if !known {
+						unstated = true
+						continue
+					}
+					got[labelOf(ev)] = left
+				}
+				left, known := queue.DeliveriesLeft(hctx)
+
+				mu.Lock()
+				readings, partLeft, partKnown, missing = got, left, known, unstated
+				mu.Unlock()
+				j.record("paired")
+				return queue.Ack()
+			}, queue.NewBatchOptions(mixedCountLinger.Seconds(), 20))
+
+		publish(ctx, t, q, topic, older)
+		j.await(t, "a redelivery and a fresh publish to reach one handler together",
+			func(seen []string) bool { return len(seen) == 1 })
+
+		mu.Lock()
+		defer mu.Unlock()
+		if missing {
+			t.Fatalf("the partition never carried both messages with both counts "+
+				"stated (saw %v): a handler cannot ask what one message has left "+
+				"if the backend states nothing for it", j.all())
+		}
+		olderLeft, olderOK := readings["older"]
+		fresherLeft, fresherOK := readings["fresher"]
+		if !olderOK || !fresherOK {
+			t.Fatalf("the handler read %v, want a count for each of the two "+
+				"messages in the partition", readings)
+		}
+		if olderLeft >= fresherLeft {
+			t.Errorf("the redelivered message reported %d deliveries left and the "+
+				"never-delivered one %d: a per-message count that cannot tell them "+
+				"apart is the partition's number wearing another name, which is what "+
+				"refused a reply with a whole budget in hand",
+				olderLeft, fresherLeft)
+		}
+		if !partKnown || partLeft != olderLeft {
+			t.Errorf("the partition reported (%d, %v), want (%d, true): one outcome "+
+				"covers every message, so the partition's headroom is its NEAREST "+
+				"message's", partLeft, partKnown, olderLeft)
+		}
+		if fresherLeft > attempts-1 {
+			t.Errorf("a never-delivered message reported %d deliveries left on a "+
+				"%d-attempt budget: the count is the headroom AFTER the delivery in "+
+				"hand", fresherLeft, attempts)
+		}
 	})
 
 	t.Run("failing_partition_redelivers_only_itself", func(t *testing.T) {

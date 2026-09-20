@@ -104,6 +104,19 @@ func inThread(kind, conversation string) *events.Event {
 	return e
 }
 
+// headroom states what a backend says about a delivery: each message's own
+// remaining deliveries, from which the contract folds the partition's.
+//
+// Written out per event rather than as one number, because the gate under
+// test reads each message's own — see [Dispatcher.mayOfferAnswer].
+func headroom(ctx context.Context, perMessage map[*events.Event]int) context.Context {
+	hs := make([]queue.Headroom, 0, len(perMessage))
+	for ev, left := range perMessage {
+		hs = append(hs, queue.Headroom{ID: ev.ID, Left: left})
+	}
+	return queue.WithHeadroom(ctx, hs)
+}
+
 // notifyStampedIn is one notification with both keys stated outright, for the
 // cases that need two events in one partition.
 func notifyStampedIn(partition, conversation string) *events.Event {
@@ -1530,11 +1543,12 @@ func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 				return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 			}
 
+			reply := inThread("notification", "chat:C1")
 			ctx := context.Background()
 			if tc.stated {
-				ctx = queue.WithDeliveriesLeft(ctx, tc.left)
+				ctx = headroom(ctx, map[*events.Event]int{reply: tc.left})
 			}
-			got := d.Dispatch(ctx, "swe", []*events.Event{inThread("notification", "chat:C1")})
+			got := d.Dispatch(ctx, "swe", []*events.Event{reply})
 
 			if tc.wantOffer {
 				if offers != 1 {
@@ -1598,7 +1612,7 @@ func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
 	answer := inThread("notification", "chat:C1")
 	left := 24 // a message on its first delivery of a 25-delivery budget
 	for {
-		got := d.Dispatch(queue.WithDeliveriesLeft(context.Background(), left),
+		got := d.Dispatch(headroom(context.Background(), map[*events.Event]int{answer: left}),
 			"swe", []*events.Event{answer})
 		if got.Outcome != queue.OutcomeNak {
 			break
@@ -1653,7 +1667,7 @@ func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 	answer := inThread("notification", "chat:C1")
 	// A full budget throughout, so nothing but the per-process clause can
 	// end this: the reserve is never approached.
-	ctx := queue.WithDeliveriesLeft(context.Background(), 24)
+	ctx := headroom(context.Background(), map[*events.Event]int{answer: 24})
 	var got queue.Result
 	for range sandbox.MaxAnswerAttempts {
 		got = d.Dispatch(ctx, "swe", []*events.Event{answer})
@@ -1668,6 +1682,105 @@ func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 	}
 	if got.Outcome != queue.OutcomeAck {
 		t.Errorf("outcome = %v, want an ack once the attempts are spent", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Errorf("the ordinary turn ran %d times, want once", len(r.reqs))
+	}
+}
+
+// AND A SPENT SIBLING DOES NOT SPEAK FOR A FRESH REPLY.
+//
+// THE PARTITION'S HEADROOM IS THE SMALLEST OF ITS MESSAGES', and this gate
+// must not read it. A conversation whose earlier message has been handed back
+// until it is inside the reserve keeps collecting replies, and each of those
+// arrives on its FIRST delivery with a whole budget: gated on the partition's
+// number, every one of them is refused the answer route outright, for as long
+// as the spent message stays in the partition. That is the defect this whole
+// route exists to end, arrived at from the other side — the reply consumed by
+// an ordinary turn while a run is still parked on the question it answers.
+//
+// The fresh reply is what must be offered, and one message with the
+// deliveries to spare is enough: see [sandbox.MayOfferAnswer] for why the
+// co-partitioned message is not saved by a refusal.
+func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var offers int
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offers++
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	// One conversation, two messages at very different counts: the older
+	// one has been handed back until it is inside the reserve, the reply
+	// is on its first delivery of a 25-delivery budget.
+	spent := notifyStampedIn("chat:C1", "chat:C1")
+	reply := notifyStampedIn("chat:C1", "chat:C1")
+	ctx := headroom(context.Background(), map[*events.Event]int{
+		spent: 1,
+		reply: 24,
+	})
+
+	got := d.Dispatch(ctx, "swe", []*events.Event{spent, reply})
+
+	if offers != 1 {
+		t.Fatalf("the delivery was offered %d times, want once: the reply has a "+
+			"whole budget in hand, and a parked run is still owed it however "+
+			"little the message batched beside it has left", offers)
+	}
+	if got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak: the run is still owed this answer", got.Outcome)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
+	}
+}
+
+// AND WHEN EVERY MESSAGE IS SPENT THE ROUTE STILL LETS GO.
+//
+// The fold is "any", not "always": a partition whose messages are ALL inside
+// the reserve has nothing left to offer with, and what is left belongs to the
+// ordinary route. Without this, reading each message's own count instead of
+// the partition's would simply have removed the bound.
+func TestAPartitionWhoseMessagesAreAllSpentIsNotOffered(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
+	}
+	var offers int
+	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
+		*events.Event,
+	) (sandbox.AnswerDisposition, error) {
+		offers++
+		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
+	}
+
+	first := notifyStampedIn("chat:C1", "chat:C1")
+	second := notifyStampedIn("chat:C1", "chat:C1")
+	ctx := headroom(context.Background(), map[*events.Event]int{
+		first:  sandbox.AnswerDeliveryReserve,
+		second: 1,
+	})
+
+	got := d.Dispatch(ctx, "swe", []*events.Event{first, second})
+
+	if offers != 0 {
+		t.Fatalf("a delivery with nothing outside the reserve was offered %d times: "+
+			"handing it back again risks the broker dead-lettering the reply", offers)
+	}
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack: what is left of these messages belongs "+
+			"to the ordinary route now", got.Outcome)
 	}
 	if len(r.reqs) != 1 {
 		t.Errorf("the ordinary turn ran %d times, want once", len(r.reqs))
