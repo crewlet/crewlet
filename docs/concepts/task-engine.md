@@ -179,7 +179,7 @@ A human can also assign directly in the PM tool — the same webhook fires, the 
 
 There is no special escalation mechanism in Crewlet. When an agent is blocked or out of its depth, it hands off the same way a human would:
 
-- The agent reaches its manager from the executor with the colleague-surface tool that fits where the work lives: a Jira comment, a Slack mention, or `a2a_ask` for tight-loop sync. If the blocker only becomes clear at review, the reviewer returns `self_iterate` with a note saying so, and the executor's next round makes the outreach.
+- The agent reaches its manager from the executor with the colleague-surface tool that fits where the work lives: a Jira comment, a Slack mention, or `a2a_ask` for tight-loop sync. If the blocker only becomes clear at review, the reviewer returns `self_iterate` with a note saying so, and the executor's next round makes the outreach. Once the handoff *has* been made, the reviewer ends the turn `done`: the manager's reply is what re-triggers the agent, so no further round of that turn can produce it.
 - The `getting-unstuck` tool skill (see `examples/tool-skills/getting-unstuck.md`) teaches the agent the discipline: include what you tried, options you see, your recommendation, and urgency. Never hand a naked problem.
 - The agent's identity prompt names its manager, so the handoff target is always resolvable.
 
@@ -213,7 +213,7 @@ flowchart TD
     subgraph blocked["Agent-detected blocker"]
         direction TB
         A["Agent (e.g. Junior Engineer)<br/>working on task, encounters blocker"]
-        B["The executor calls the colleague-surface tool for the manager<br/>(or the reviewer returns self_iterate so the next round makes it),<br/>targeting the surface that fits where the work lives"]
+        B["The executor calls the colleague-surface tool for the manager<br/>(or the reviewer returns self_iterate so the next round makes it),<br/>targeting the surface that fits where the work lives.<br/>Once it has fired, the reviewer ends the turn done"]
         C["Colleague-surface tool fires<br/>(slack / jira / confluence / a2a)"]
         D["Manager sees the mention on the same surface they already<br/>use for human teammates; their next turn fires when they reply"]
         A --> B --> C --> D
