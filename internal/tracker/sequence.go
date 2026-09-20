@@ -196,6 +196,9 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	if err := checkTextCaps(task.ID, &task.Title, &task.Body, nil); err != nil {
 		return WriteResult{}, err
 	}
+	if err := checkChecklistCaps(task.ID, task.Checklists); err != nil {
+		return WriteResult{}, err
+	}
 	// BEFORE THE MINT, because the catalogue check runs inside it. The
 	// other two defaults below cannot: they are applied after the key is
 	// minted and nothing validates them.

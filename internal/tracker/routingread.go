@@ -220,7 +220,7 @@ const MaxRoutingRows = MaxWatchers + // watchers
 	MaxDependents + // unblocked
 	MaxDependents + // dependents
 	MaxThreadParticipants +
-	MaxChecklists + // checklist_assignees
+	MaxChecklistAssignees + // checklist_assignees
 	MaxGoalOwners +
 	MaxGoalMembers +
 	MaxMentions +

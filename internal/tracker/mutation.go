@@ -1145,7 +1145,7 @@ func (n *Notify) checkSnapshot() error {
 		{"unblocked", len(n.Snapshot.Unblocked), MaxDependents},
 		{"dependents", len(n.Snapshot.Dependents), MaxDependents},
 		{"thread_participants", len(n.Snapshot.ThreadParticipants), MaxThreadParticipants},
-		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklists},
+		{"checklist_assignees", len(n.Snapshot.ChecklistAssignees), MaxChecklistAssignees},
 		{"goal_owners", len(n.Snapshot.GoalOwners), MaxGoalOwners},
 		{"goal_members", len(n.Snapshot.GoalMembers), MaxGoalMembers},
 		{"mentions", len(n.Mentions), MaxMentions},
