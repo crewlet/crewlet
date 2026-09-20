@@ -1305,9 +1305,16 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 // under-reporting is the defect. See [CoordinatorOptions.Stopped].
 //
 // A DELETE THAT COULD NOT BE WRITTEN REPORTS TOO, for the same asymmetry: the
-// write may have landed, and neither caller can tell. One has already
-// reclaimed the box, so its turn is over whatever the record says; the other
-// retries on its next tick, where a second report finds nothing left to drop.
+// write may have landed, and no caller can tell. None has to, because of the
+// PROPERTY EVERY CALLER SATISFIES rather than anything particular each one does
+// next: IT HAS ALREADY FINISHED WITH THE RUN BEFORE IT ASKS. Nothing a caller
+// leaves behind resumes the turn whether the delete landed or not — a record
+// that survives one is an unresumable tail, ended by some later pass whose own
+// report finds nothing left to drop. So the stop is true at the moment it is
+// reported, on a branch that cannot establish what the record says. The
+// property is what is written down here because the alternative was not: this
+// paragraph reasoned from what each caller does next, and was a caller short
+// the moment a third one reached it.
 //
 // Reports the record it deleted, whether the ending was this call's, and the
 // delete's own error — which is what a caller that can RETRY needs and a
