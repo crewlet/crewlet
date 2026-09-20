@@ -49,7 +49,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxBytes:      TrackerLogMaxBytes,
 		Duplicates:    TrackerLogDuplicates,
 		Replay:        statelog.ReplayStrict,
-		// THIRTEEN OF THE FIFTEEN KINDS. A turn is additive and races
+		// TWELVE OF THE FOURTEEN KINDS. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable
 		// read behind every other one and write an anchor row per read

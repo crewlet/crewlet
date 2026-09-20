@@ -60,8 +60,8 @@ made during a burst.
 
 ### `applied` is not permanent
 
-Two gates can drop a record **after** a node has applied it, and both are
-deliberate:
+Three gates can drop a record **after** a node has applied it, and all three
+are deliberate:
 
 - **The eviction gate.** A record written by a node the fleet evicted before
   the record's own position is dropped everywhere. A node that applied it
@@ -69,9 +69,15 @@ deliberate:
 - **The deletion gate.** A record about a task a purge destroyed applies
   nowhere, for ever. This is what stops a redelivery months later resurrecting
   rows an operator deliberately removed.
+- **The retirement gate.** A record naming a kind the engine once published and
+  no longer applies is read past rather than faulted on. It is the only one of
+  the three that is about the *build* rather than about the fleet or an
+  operator's decision — see [the other direction](#the-other-direction-a-kind-that-was-removed).
 
-Neither is a bug being worked around. They are what make an eviction and a
-purge mean something on a system where the log outlives the decision.
+None is a bug being worked around. The first two are what make an eviction and
+a purge mean something on a system where the log outlives the decision; the
+third is what lets the engine stop writing a kind without stranding the nodes
+that still have to read past one.
 
 ### A record whose scope meets a deferred scope is deferred too
 
@@ -192,6 +198,30 @@ met a retained one is applied after it, which is what makes the objects' rows
 a prefix of their history again rather than a hole. A record still above the
 new build's version stays retained, with everything it covers, until a build
 that reads it boots.
+
+### The other direction: a kind that was removed
+
+The deferral above handles a **newer** peer's records, and it is keyed on the
+record *version*. The mirror case is a record from an **older** peer naming a
+kind the new build has removed, and the version gate cannot see it: the record
+is at a version the new build reads perfectly, and it is the *kind* that is
+gone. It would reach the applier's dispatch, match nothing, and fault.
+
+So a removed kind is **retired** rather than deleted. It stops being
+publishable — nothing mints a subject for it and no table is classified for
+it — and it goes on being consumable, producing no rows, which is what the
+retirement gate does. Without that, one old peer publishing during an upgrade,
+or one old record still inside the log's retention window, stops the *newest*
+node's applier at that position for as long as the record is in the log:
+`stream.tracker_retention` bounds that, and nothing does where the trim cannot
+advance.
+
+A retired record is reported like any other gated one — a
+`statelog_record_gated` line naming `retired`, and the
+`crewlet.statelog.records_gated` counter under the same `gate` value. A kind
+that was never published is not retired and still faults, which is what keeps
+this from hiding a writer publishing a kind it never declared. Sprints, removed
+from the work tracker, are the first retired kind.
 
 ## The five capacity ceilings
 
