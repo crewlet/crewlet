@@ -311,10 +311,31 @@ type EventQueue interface {
 	Unquiesce(ctx context.Context, topic, group string) (bool, error)
 
 	// Detach closes this process's consumers, leaving the subscription.
-	// Non-destructive: cursor and retained mail survive, so unacked
-	// messages return to the next attacher in order with no accrued
-	// redeliveries. Releases this attachment's pause holds — a hold that
-	// outlived a detach would leave a re-attaching node silently deaf.
+	//
+	// NON-DESTRUCTIVE, WHICH IS A CLAIM ABOUT THE MAIL AND NOT ABOUT THE
+	// COST. The subscription, its cursor and everything it retains all
+	// survive, so nothing is lost and whoever attaches next gets the lot,
+	// including what was published while nothing was attached. That is
+	// what makes a seat handoff cheap and an unowned seat safe.
+	//
+	// WHAT THIS DOES COST is one delivery of each message the consumer
+	// had taken and not settled. Those go back the way every hand-back
+	// goes back, because no backend here has a "return this without
+	// counting it" — see DeliveriesLeft, which is the one place that rule
+	// and the blockers that trigger it are written down, a detach among
+	// them. The partitions a stopped drain never dispatched are charged
+	// on the same terms as the one that stopped it. A message under a
+	// RUNNING handler is the exception, and not because it is cheaper:
+	// the handler runs to completion and its own outcome settles it.
+	//
+	// A message that goes back may return BEHIND events that were never
+	// delivered rather than at the head. The backends genuinely differ
+	// there (queuetest.Caps.HeadReplayOnNak), so nothing above this
+	// package may depend on either answer — within-conversation order
+	// comes from event timestamps, which is what OrderForDispatch is for.
+	//
+	// Releases this attachment's pause holds — a hold that outlived a
+	// detach would leave a re-attaching node silently deaf.
 	//
 	// Detach does NOT wait for a running handler. It stops the
 	// subscription taking new work and returns; a handler already

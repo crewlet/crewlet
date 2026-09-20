@@ -119,9 +119,18 @@ func TestConformance(t *testing.T) {
 //
 // JetStream is the twin to track because it is the only broker this engine
 // ships. Its budget is 25 rather than the 10 a free-handoff broker needs
-// because a deferral there returns via Nak and spends an attempt; this twin
-// defers for free and would otherwise sit on less than half the production
-// budget, calibrating every test written against it to a broker nobody runs.
+// because every path back to it — the Nak a deferral, a hold, a pause or a
+// detach returns through — spends an attempt.
+//
+// THAT REASONING NOW APPLIES TO BOTH BACKENDS, and this paragraph used to say
+// the opposite twenty lines under the capability note that retired it: it
+// argued the default had to be 25 because "this twin defers for free and would
+// otherwise sit on less than half the production budget". The twin has not
+// deferred for free since b1cff6f — it spends one for the same reason the
+// broker does — so what makes the value load-bearing is no longer a
+// divergence to compensate for but the plain fact that a handoff costs the
+// same on both, and a twin sized differently would calibrate every test
+// written against it to a broker nobody runs.
 //
 // SCOPE, measured by counterfactual rather than assumed, because a landing
 // check on this test proves only that the test reads the constant. The one
