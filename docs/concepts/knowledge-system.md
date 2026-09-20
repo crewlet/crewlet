@@ -397,6 +397,17 @@ Shared knowledge **is** the backend — there is no separate engine-managed stor
 | `crewlet confluence import` ([below](#publishing-knowledge-docs)) | `knowledge.Searcher` (live query) | Same |
 | Agents via `reflect_and_persist` (in-flight) and `PersistDecider` (post-turn) | `agent_diary` (hybrid vector ∪ recency selection → aux-LLM filter) | The writing agent only |
 
+**The company's chat is not in this corpus, and it is not a gap.** Chat has an
+index of its own and a tool of its own (`search_messages`), and a knowledge
+query never reaches it. Two reasons, and the first is one this page already
+acts on: a work item's comment thread is not indexed either, because a thread
+is a conversation *about* something rather than a statement of it, and one busy
+conversation would outrank every page written on purpose for any word said in
+passing. The second is arithmetic — chat has no semantic half at all, because
+a year of it at the declared census needs several times the whole supported
+vector corpus, and what would pay for it is the embeddings on this page. See
+[Chat § Search](chat.md#search) and `adr/0019`.
+
 Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense: it renders straight into the executor's system prompt via the section builders in `internal/agent/prompts`. There is no startup seed step and no reconcile pass, because the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
 
 ---
