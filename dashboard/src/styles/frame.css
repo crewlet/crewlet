@@ -1064,8 +1064,21 @@
   color: inherit;
 }
 
+/* A NO-OP UNTIL NOW, and nothing could see it: `.cell-seat` takes `color:
+   inherit` and a grid row's colour IS `--text`, so "hover moves it to
+   `--text`" moved it nowhere, and what actually answered the pointer was the
+   baseline's hover underline that this application never wanted. With that
+   reset, hovering a seat name changed nothing at all.
+
+   The step is the other direction here, and it has to be: the rungs move a
+   link TOWARD `--text` when it starts at the accent ink, and this register
+   deliberately starts at `--text` so a grid of seat names does not read as a
+   page of links. Onto the accent's one text rung is the same move in reverse,
+   and it says what the row's own wash cannot — that this NAME is the link
+   rather than the row. `.wl-who` in screens.css is the same object and takes
+   the same answer. */
 .cell-seat:hover {
-  color: var(--text);
+  color: var(--accent-ink);
 }
 
 .cell-status {

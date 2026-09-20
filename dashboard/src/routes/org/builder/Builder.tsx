@@ -1945,7 +1945,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
             {p.link === "integrations" && (
               <>
                 {" "}
-                <a className="t-link" href={href(screenPath("integrations"))}>
+                <a className="t-link prose-link" href={href(screenPath("integrations"))}>
                   Open Integrations
                 </a>
               </>
@@ -1953,7 +1953,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
             {p.link === "schedules" && (
               <>
                 {" "}
-                <a className="t-link" href={href(screenPath("schedules"))}>
+                <a className="t-link prose-link" href={href(screenPath("schedules"))}>
                   Open Schedules
                 </a>
               </>

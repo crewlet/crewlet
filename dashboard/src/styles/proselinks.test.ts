@@ -107,6 +107,55 @@ export function unclassified(source: string): number[] {
   return lines;
 }
 
+/**
+ * An anchor whose JSX puts a SPACE between it and the text before it.
+ *
+ * The scan above refuses the shape where nobody classified an anchor at all.
+ * It cannot refuse the shape where somebody classified it WRONG — a chrome
+ * class on an anchor that is a word in a line — and that is what fifteen
+ * anchors were: `.t-link` on the remedy trailing a sentence ("…so it has no
+ * channel to set. Open Integrations"), distinguished from the sentence by
+ * colour. The baseline's hover underline had been standing in for the mark,
+ * which no keyboard or touch reader ever saw; resetting it is what made the
+ * gap visible rather than what opened it.
+ *
+ * # `{" "}` IS THE TELL, and it is a fact about the source rather than a guess
+ *
+ * JSX collapses whitespace around a newline, so an author who wants a space
+ * between running text and the tag that follows it has to write one: `{" "}`.
+ * Nothing else in this tree writes that — a standalone call to action, a row
+ * of links, a cell's own anchor all sit alone in their parent and need no
+ * separator. So the rule is decidable rather than heuristic: text, then
+ * `{" "}`, then an anchor, means the anchor continues a line of prose.
+ *
+ * Run over the tree when this was written it returned sixteen anchors and all
+ * sixteen were genuinely in a sentence — no false positives, which is what
+ * makes it a gate rather than a suggestion. What it does NOT catch is an
+ * anchor separated by a literal space on the same line, because there the
+ * space is ordinary text and the shape is indistinguishable from a caption
+ * followed by a chip; two of the fifteen were that, and they were found by
+ * reading. A gate that is exactly right about a subset beats one that guesses
+ * about everything — the scan above says the same thing about its own limit.
+ */
+export function unmarkedInSentence(source: string): number[] {
+  const text = source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/^[ \t]*\/\/[^\n]*/gm, "");
+  const lines: number[] = [];
+  for (const match of text.matchAll(/\{" "\}\s*(<(?:a|ScreenLink)\s[^>]*>)/g)) {
+    const tag = match[1]!;
+    // `ScreenLink` carries `.prose-link` by default, so only an explicit
+    // `standalone` takes it off — and that is the claim being made here.
+    if (/^<ScreenLink/.test(tag) && !/\bstandalone\b/.test(tag)) continue;
+    if (/prose-link/.test(tag)) continue;
+    // The ANCHOR's line, not the `{" "}`'s: the two are usually on different
+    // lines, and a report pointing at the separator sends the reader to the
+    // end of the sentence rather than to the tag they have to classify.
+    lines.push(text.slice(0, match.index + match[0].indexOf(tag)).split("\n").length);
+  }
+  return lines;
+}
+
 describe("an anchor in a sentence", () => {
   const scanned = files(SRC).map((path) => ({
     where: path.slice(SRC.length),
@@ -147,8 +196,47 @@ describe("an anchor in a sentence", () => {
     expect(unclassified('<a href="https://x.example">y</a>')).toEqual([1]);
   });
 
+  test("carries `.prose-link` when the JSX spaces it off the text before it", () => {
+    const wrong = scanned.flatMap((file) =>
+      unmarkedInSentence(file.text).map((line) => `${file.where}:${line}`),
+    );
+    expect(
+      wrong,
+      'text then `{" "}` then an anchor is an anchor inside a sentence — give it `.prose-link`, ' +
+        "or `standalone` on a ScreenLink that is really a call to action on its own line",
+    ).toEqual([]);
+  });
+
+  test("and that scan can tell — the wrong class is caught, the right one is not", () => {
+    // Both arms, against the function the test above calls.
+    expect(
+      unmarkedInSentence('is not connected.{" "}\n<a className="t-link" href="#/x">Open</a>'),
+    ).toEqual([2]);
+    expect(
+      unmarkedInSentence(
+        'is not connected.{" "}\n<a className="t-link prose-link" href="#/x">Open</a>',
+      ),
+    ).toEqual([]);
+    // A ScreenLink is prose by DEFAULT, so a bare one is right...
+    expect(
+      unmarkedInSentence('set.{" "}\n<ScreenLink to="integrations">Open</ScreenLink>'),
+    ).toEqual([]);
+    // ...and opting out inside a sentence is the thing to catch.
+    expect(
+      unmarkedInSentence('set.{" "}\n<ScreenLink to="integrations" standalone>Open</ScreenLink>'),
+    ).toEqual([2]);
+    // An anchor with no `{" "}` before it is not this question.
+    expect(unmarkedInSentence('<a className="t-link" href="#/x">Open</a>')).toEqual([]);
+    // Prose ABOUT the shape is not the shape.
+    expect(unmarkedInSentence('// {" "} <a className="t-link">x</a>\n')).toEqual([]);
+  });
+
   test("the scan reads the tree at all, so it cannot pass on nothing", () => {
     expect(scanned.length).toBeGreaterThan(50);
     expect(scanned.some((file) => /className="prose-link"/.test(file.text))).toBe(true);
+    // And the second scan has something to look at: the `{" "}` shape exists
+    // in this tree, so an empty result above means "all classified" rather
+    // than "nothing matched".
+    expect(scanned.some((file) => /\{" "\}/.test(file.text))).toBe(true);
   });
 });

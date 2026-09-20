@@ -8,6 +8,7 @@
  */
 
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { cx } from "@crewlethq/ui";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
@@ -109,10 +110,31 @@ export function screenPath(name: ScreenName): string[] {
  * entry, which the router puts to the form's leave guard first
  * (`useLeaveGuard`), the same as Back; a click that opens another tab or
  * window moves nothing here and is left alone by the browser itself.
+ *
+ * AND IT IS PROSE UNTIL TOLD OTHERWISE, because eleven of its fourteen call
+ * sites are a remedy trailing the sentence that states the problem — "…so it
+ * has no channel to set. Open Integrations" — which is an anchor that is a
+ * word in a line and therefore takes `.prose-link` (base.css, WCAG 1.4.1).
+ * They carried `.t-link` alone, so what told them apart from the sentence was
+ * colour; the baseline's hover underline had been standing in for the mark,
+ * which no keyboard or touch reader ever saw, and resetting it is what made
+ * that visible. THE DEFAULT IS THE COMMON CASE so a new call site is right
+ * without anybody deciding: `standalone` is the opt-out, for the three that
+ * are a call to action on a line of their own with no sentence for an
+ * underline to separate them from.
  */
-export function ScreenLink({ to, children }: { to: ScreenName; children: ReactNode }) {
+export function ScreenLink({
+  to,
+  children,
+  standalone,
+}: {
+  to: ScreenName;
+  children: ReactNode;
+  /** This link is chrome on a line of its own, not a word inside a sentence. */
+  standalone?: boolean;
+}) {
   return (
-    <a className="t-link" href={href(screenPath(to))}>
+    <a className={cx("t-link", !standalone && "prose-link")} href={href(screenPath(to))}>
       {children}
     </a>
   );
@@ -359,7 +381,9 @@ export function StrandedNotes({ stranded }: { stranded: readonly StrandedSchedul
           <li key={`${s.unit}/${s.schedule}`}>{strandedSentence(s)}</li>
         ))}
       </ul>
-      <ScreenLink to="schedules">Open Schedules</ScreenLink>
+      <ScreenLink to="schedules" standalone>
+        Open Schedules
+      </ScreenLink>
     </Callout>
   );
 }
@@ -559,7 +583,7 @@ export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] 
       {links.length > 0 && (
         <p className="row wrap gap-3">
           {links.map((link) => (
-            <ScreenLink key={link} to={link}>
+            <ScreenLink key={link} to={link} standalone>
               {PROBLEM_LINKS[link]}
             </ScreenLink>
           ))}
