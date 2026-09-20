@@ -296,6 +296,13 @@ function toneOf(tone: string): SidebarRow["tone"] {
  * first day they spend somewhere else, and one built only from stars never
  * offers the thing they were reading five minutes ago.
  *
+ * NEITHER SECTION MOVES WHILE IT IS BEING READ. A star is a decision, so its
+ * row is where the reader put it; and `useRecents` is ARRIVAL order rather
+ * than visit order precisely so that opening a row from this rail does not
+ * send it to the top and slide the rows above it down — which is what it did,
+ * at the instant the pointer landed. `lib/recents.ts` carries the reasoning,
+ * and the command palette takes the other order from the same store.
+ *
  * SCOPED TO THIS WORKSPACE. Both records carry the workspace they were made
  * in, so the Work sidebar offers work and the Admin sidebar offers nodes —
  * a single global list would put a config revision under Knowledge.
