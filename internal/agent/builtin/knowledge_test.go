@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -147,18 +148,53 @@ func TestSearchKnowledgeWithNoTurnRefusesRatherThanPanicking(t *testing.T) {
 	}
 }
 
-// A pathological query would reach a backend's own query language. Four
-// hundred characters is a long sentence and several keywords; a whole thread
-// pasted in is prose no ranker can use.
-func TestALongQueryIsBounded(t *testing.T) {
+// A LONG QUERY IS REFUSED, NEVER CUT, and NOTHING reaches the backend.
+//
+// The cut this replaced searched on the first four hundred bytes of whatever
+// was pasted in and answered with real, ranked pages about it — a plausible
+// answer to a question the model never asked, and one it had no way to spot,
+// because the hits look exactly like hits for the query it sent.
+func TestALongQueryIsRefusedRatherThanCut(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}
 	tool := &searchKnowledge{search: backend}
-	if _, err := tool.CallForTurn(context.Background(), searchTurn(),
-		map[string]any{"query": strings.Repeat("z", 5000)}); err != nil {
+	res, err := tool.CallForTurn(context.Background(), searchTurn(),
+		map[string]any{"query": strings.Repeat("z", 5000)})
+	if err != nil {
 		t.Fatalf("CallForTurn: %v", err)
 	}
-	if got := len(backend.queries[0].Text); got != searchQueryMax {
-		t.Errorf("the query reached the backend at %d characters, want %d", got, searchQueryMax)
+	if !res.Failed {
+		t.Error("an over-long query was accepted")
+	}
+	if len(backend.queries) != 0 {
+		t.Errorf("the backend was searched anyway, with %d bytes",
+			len(backend.queries[0].Text))
+	}
+	// NAMES THE FIELD AND THE BOUND: a refusal the model cannot act on
+	// costs the same round as a cut and buys nothing.
+	for _, want := range []string{"`query`", "5000", strconv.Itoa(searchQueryMax)} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("the refusal does not mention %s: %q", want, res.Output)
+		}
+	}
+}
+
+// A query AT the bound is served: the refusal is for what exceeds it, and an
+// off-by-one here would refuse the longest query the tool documents.
+func TestAQueryAtTheBoundIsServed(t *testing.T) {
+	t.Parallel()
+	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}
+	tool := &searchKnowledge{search: backend}
+	query := strings.Repeat("z", searchQueryMax)
+	res, err := tool.CallForTurn(context.Background(), searchTurn(),
+		map[string]any{"query": query})
+	if err != nil {
+		t.Fatalf("CallForTurn: %v", err)
+	}
+	if res.Failed {
+		t.Fatalf("a query at the bound was refused: %q", res.Output)
+	}
+	if len(backend.queries) != 1 || backend.queries[0].Text != query {
+		t.Error("the query did not reach the backend verbatim")
 	}
 }
