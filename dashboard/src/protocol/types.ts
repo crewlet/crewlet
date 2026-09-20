@@ -423,6 +423,12 @@ export interface Rollup {
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
   by_turn: TurnSpendRow[];
+  /** How many turns the window held, against the page `by_turn` carries.
+   *  Without it the table and the totals above it describe different sets:
+   *  `totals` is summed over every record in the window, and a reader who
+   *  asked for fifty and got fifty could not tell fifty-one turns from five
+   *  thousand. */
+  turns_total: number;
   /** High-water mark: live completions past it are folded in, earlier ones skipped. */
   aggregated_through: string;
 }

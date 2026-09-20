@@ -2090,7 +2090,21 @@ export function SeatScreen({ handle }: { handle: string }) {
               </div>
 
               <Card padding="none">
-                <Card.Header icon={<LayersGlyph size="sm" />}>
+                {/* THE TABLE IS A PAGE AND THE SUBTITLE SAYS SO. `by_turn` is
+                    the newest N of the window, while the totals above it are
+                    summed over every record in it — so a grid showing fifty
+                    rows beside a figure covering five thousand turns was two
+                    numbers about two different sets with nothing between
+                    them. `turns_total` is what the server counts before it
+                    cuts. */}
+                <Card.Header
+                  icon={<LayersGlyph size="sm" />}
+                  subtitle={
+                    (spend.data?.turns_total ?? 0) > (spend.data?.by_turn.length ?? 0)
+                      ? `The newest ${spend.data?.by_turn.length} of ${spend.data?.turns_total} in this window.`
+                      : undefined
+                  }
+                >
                   <Card.Title>Recent turns</Card.Title>
                 </Card.Header>
                 <DataGrid
