@@ -57,6 +57,19 @@ type resumeSpy struct {
 	requests []ResumeRequest
 	err      error
 
+	// owned counts the re-entries after which the TURN's own frame is
+	// answerable for whatever was held up while it worked: one that returned
+	// nil ran to its end, and one that returned [ErrResumeActed] broke after
+	// acting — both took their hold down on the way out.
+	//
+	// NOT EVERY RE-ENTRY, which is the distinction the coordinator's contract
+	// turns on: any OTHER error leaves the hold standing, because the engine
+	// keeps it on this package's promise to give the claim back so the
+	// completion comes round again. A promise the coordinator then breaks —
+	// a revert it cannot write — is exactly when it still owes somebody a
+	// word, which is why [entryDrive.run] counts this rather than the calls.
+	owned int
+
 	// during runs inside the resumed Execute, before any error is returned:
 	// the turn calling run_sandbox again (the box-reuse branch), or an event
 	// redelivered to the seat while the turn runs.
@@ -66,6 +79,9 @@ type resumeSpy struct {
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
 	err, during := s.err, s.during
+	if err == nil || errors.Is(err, ErrResumeActed) {
+		s.owned++
+	}
 	if err == nil {
 		s.requests = append(s.requests, req)
 	}
@@ -76,6 +92,13 @@ func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 		during(ctx, req.Run)
 	}
 	return err
+}
+
+// ownedHolds is how many re-entries ended their own hold. See owned.
+func (s *resumeSpy) ownedHolds() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owned
 }
 
 func (s *resumeSpy) calls() []ResumeRequest {
@@ -499,8 +522,8 @@ func TestAResumeWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = errors.New("the node lost the seat mid-resume")
-	rig.coordinator.pending = refusingWrites{
-		PendingStore: rig.pending, refuse: []string{"ReleaseClaim"},
+	rig.coordinator.pending = &refusingStore{
+		inner: rig.pending, refuse: []string{"ReleaseClaim"},
 	}
 
 	payload, ev := rig.completion("t1")
@@ -985,8 +1008,8 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			// completion would have been retried from. Nothing will ever
 			// pick the run up, so the stop is real and this is the one
 			// path that reports it through a settle it chose itself.
-			rig.coordinator.pending = refusingWrites{
-				PendingStore: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
+			rig.coordinator.pending = &refusingStore{
+				inner: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
 			}
 			rig.runner.Finish(Result{
 				NeedsInput: true, Question: "which branch?", AskTo: "requester",
@@ -1001,8 +1024,8 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 		{"a resume whose claim could not be given back", func(t *testing.T, rig *coordRig) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			rig.coordinator.pending = refusingWrites{
-				PendingStore: rig.pending, refuse: []string{"ReleaseClaim"},
+			rig.coordinator.pending = &refusingStore{
+				inner: rig.pending, refuse: []string{"ReleaseClaim"},
 			}
 			rig.resumer.err = errors.New("the node lost the seat mid-resume")
 			rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -1041,50 +1064,6 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 	}
 }
 
-// refusingWrites is a store whose named writes all fail, for the paths that
-// only exist because a write can.
-//
-// A LIST rather than one name, because the failures this package has to be
-// correct about come in sequences: a park whose question does not land tries to
-// give its claim back, and what a deployment with an unreachable coordination
-// store actually sees is both refusing.
-type refusingWrites struct {
-	PendingStore
-	refuse []string
-}
-
-func (s refusingWrites) refuses(name string) bool { return slices.Contains(s.refuse, name) }
-
-func (s refusingWrites) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
-	if s.refuses("MarkAwaiting") {
-		return errRefusedWrite
-	}
-	return s.PendingStore.MarkAwaiting(ctx, turnID, q)
-}
-
-func (s refusingWrites) SetStatus(ctx context.Context, turnID, status string, fence Fence) error {
-	if s.refuses("SetStatus") {
-		return errRefusedWrite
-	}
-	return s.PendingStore.SetStatus(ctx, turnID, status, fence)
-}
-
-func (s refusingWrites) ReleaseClaim(ctx context.Context, turnID string, r Release) (bool, error) {
-	if s.refuses("ReleaseClaim") {
-		return false, errRefusedWrite
-	}
-	return s.PendingStore.ReleaseClaim(ctx, turnID, r)
-}
-
-func (s refusingWrites) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
-	if s.refuses("Finish") {
-		return false, errRefusedWrite
-	}
-	return s.PendingStore.Finish(ctx, turnID, fence)
-}
-
-var errRefusedWrite = errors.New("the coordination store refused the write")
-
 // A PARK THAT COULD NOT BE WRITTEN IS A RETRY OR AN ENDING, NEVER A SILENCE.
 //
 // Its two branches are opposites and the row is what decides which: the run
@@ -1112,8 +1091,8 @@ func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
 		rig := newCoordRig(t)
 		run := rig.launch("t1")
 		rig.coordinator.countRun("swe", StatusRunning)
-		rig.coordinator.pending = refusingWrites{
-			PendingStore: rig.pending, refuse: []string{"MarkAwaiting"},
+		rig.coordinator.pending = &refusingStore{
+			inner: rig.pending, refuse: []string{"MarkAwaiting"},
 		}
 		rig.runner.Finish(asks)
 
@@ -1168,8 +1147,8 @@ func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
 		rig := newCoordRig(t)
 		run := rig.launch("t1")
 		rig.coordinator.countRun("swe", StatusRunning)
-		rig.coordinator.pending = refusingWrites{
-			PendingStore: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
+		rig.coordinator.pending = &refusingStore{
+			inner: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
 		}
 		rig.runner.Finish(asks)
 
