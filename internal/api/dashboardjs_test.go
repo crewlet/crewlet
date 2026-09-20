@@ -66,17 +66,31 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		t.Fatalf("no built shell at %s — run `make dashboard`: %v", servedTree, err)
 	}
 
-	// The shell must name a hashed entry script and a hashed stylesheet. A
+	// The shell must name an entry script and a stylesheet under assets/. A
 	// build that emitted neither is a build whose output directory was not
-	// cleaned; one that emitted an unhashed name is a build whose config lost
-	// its cache-busting, which puts a stale module in every reader's browser.
+	// cleaned, which leaves a tree that diffs plausibly and serves a blank
+	// page.
+	//
+	// IT DOES NOT CLAIM THE NAMES ARE HASHED, which is what it used to say on
+	// both counts and could not see either way: `[^"]+` matches `index` as
+	// happily as `index-Cd0p1oTg`, so the assertion was true of every build
+	// and the comment was describing a check nobody had written. The stated
+	// consequence was wrong too — an unhashed name was said to put "a stale
+	// module in every reader's browser", which internal/api/dashboard.go
+	// forecloses: every asset answers `Cache-Control: no-cache` with an ETag
+	// derived from the bytes, so a changed file is picked up on the next
+	// request whatever it is called. What pins the caching contract is
+	// TestAnUnchangedAssetRevalidatesCheaply, where it can fail.
 	entry := regexp.MustCompile(`src="(/static/dashboard/assets/[^"]+\.js)"`)
 	sheet := regexp.MustCompile(`href="(/static/dashboard/assets/[^"]+\.css)"`)
 	if !entry.Match(shell) {
-		t.Errorf("the shell names no hashed entry module:\n%s", shell)
+		t.Errorf("the shell names no entry module under assets/:\n%s", shell)
 	}
+	// FATAL, not an error: the submatch below indexes this match, so a shell
+	// that lost its stylesheet used to panic the whole api_test binary one
+	// line after printing the message that explains it.
 	if !sheet.Match(shell) {
-		t.Errorf("the shell names no hashed stylesheet:\n%s", shell)
+		t.Fatalf("the shell names no stylesheet under assets/:\n%s", shell)
 	}
 
 	// The protocol bundle is a SEPARATE build target and is easy to forget:
@@ -92,13 +106,21 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// back silently to a system font.
 	//
 	// ASKED FOR AND PRESENT, rather than a list of names. The names used to be
-	// written out here and the faces lived at a fixed `fonts/` path this
-	// repository controlled; they are the design system's now, emitted under
-	// `assets/` with a content hash, so a spelled list would be a second copy
-	// of a filename a bundler chooses. Reading them out of the stylesheet is
-	// also the stronger claim: a hardcoded list cannot see a face the CSS asks
-	// for and the build did not emit, which is the failure that renders a
-	// fallback font with nothing missing from the tree.
+	// written out here; they are the design system's now, arriving through
+	// @crewlethq/tokens' own stylesheet, so a spelled list would be a second
+	// copy of a name this repository does not choose. Reading them out of the
+	// stylesheet is also the stronger claim: a hardcoded list cannot see a
+	// face the CSS asks for and the build did not emit, which is the failure
+	// that renders a fallback font with nothing missing from the tree.
+	//
+	// THE FACES ARE UNHASHED, UNDER `fonts/`, which is the opposite of what
+	// this said — it claimed they were "emitted under `assets/` with a content
+	// hash". They never were: dashboard/vite.config.ts routes every .woff2 to
+	// `fonts/[name][extname]` and everything else to `assets/[name]-[hash]`,
+	// and the claim was already false the day it was written (901ddeb1, when
+	// the faces were plain files under dashboard/public/fonts/). Nothing
+	// depended on the wrong half, because this reads whatever path the
+	// stylesheet names — which is why it went unnoticed.
 	sheetPath := string(sheet.FindSubmatch(shell)[1])
 	css, err := os.ReadFile(filepath.Join(servedTree, strings.TrimPrefix(sheetPath, "/static/dashboard/")))
 	if err != nil {
@@ -113,8 +135,23 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 	for _, face := range faces {
 		ref := strings.Trim(string(face[1]), `"'`)
-		if _, err := os.Stat(filepath.Join(servedTree, strings.TrimPrefix(ref, "/static/dashboard/"))); err != nil {
+		rel := strings.TrimPrefix(ref, "/static/dashboard/")
+		if _, err := os.Stat(filepath.Join(servedTree, rel)); err != nil {
 			t.Errorf("the stylesheet asks for %s and the built tree has no such file: %v", ref, err)
+		}
+		// AND UNDER fonts/, which nothing asserted. The .woff2 exception in
+		// dashboard/vite.config.ts exists so these keep a stable path: the
+		// notice this tree publishes states it ("served from
+		// /static/dashboard/fonts/"), and OFL.txt is filed beside them on the
+		// strength of it. Drop the exception and Vite content-hashes every
+		// face into assets/ — where the loop above would still find each one,
+		// because it follows whatever path the stylesheet names, so the whole
+		// arrangement would come apart with every test still green.
+		if dir := path.Dir(rel); dir != "fonts" {
+			t.Errorf("the stylesheet asks for %s, which is under %q — the faces "+
+				"are pinned to fonts/ by the .woff2 branch in "+
+				"dashboard/vite.config.ts, and THIRD_PARTY_NOTICES.txt "+
+				"publishes that path beside the OFL notice", ref, dir)
 		}
 	}
 	// The licence travels with the files it covers, and both are inside what
