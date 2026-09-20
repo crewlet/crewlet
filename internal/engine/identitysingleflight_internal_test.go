@@ -33,7 +33,8 @@ type countingForge struct {
 	calls atomic.Int64
 
 	arrived chan struct{} // closed by the first call, once it is in flight
-	release chan struct{} // closed by the test, to let the calls answer
+	release chan struct{} // closed by let, to let the held calls answer
+	let     func()        // closes release, once, however often it is called
 }
 
 func startCountingForge(t *testing.T, path, body string) *countingForge {
@@ -52,17 +53,30 @@ func startCountingForge(t *testing.T, path, body string) *countingForge {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	t.Cleanup(func() {
-		// A RUN THAT NEVER REACHED THE FORGE still has to unblock any
-		// handler parked on release, or the server's Close waits for it.
-		select {
-		case <-f.release:
-		default:
-			close(f.release)
-		}
-	})
+	f.let = unblockOnCleanup(t, f.release)
 	f.url = srv.URL
 	return f
+}
+
+// unblockOnCleanup returns a function that closes gate exactly once, and
+// arranges for the test's end to call it if the test never did.
+//
+// REGISTERED AFTER the server's own Close, because [testing.T.Cleanup] runs
+// LAST-REGISTERED-FIRST and the order is the whole point: a handler parked on
+// this gate is an outstanding request, and [httptest.Server.Close] waits for
+// those for ever. A test that fails BEFORE its own release — a barrier that
+// timed out, an assertion that fataled — would otherwise hang rather than
+// fail. Measured: a forced early failure in the parked-waiter case turned a
+// one-line FAIL into a 45-second timeout panic, and CI runs the suite at
+// -timeout 30m.
+//
+// ONCE, so the test's own release and this one cannot double-close.
+func unblockOnCleanup(t *testing.T, gate chan struct{}) func() {
+	t.Helper()
+	var once sync.Once
+	let := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(let)
+	return let
 }
 
 // raceTwo runs resolve twice at once against f, releasing the held lookup only
@@ -86,7 +100,7 @@ func raceTwo(t *testing.T, f *countingForge, resolve func() string) []string {
 	case <-time.After(30 * time.Second):
 		t.Fatal("no identity lookup arrived at the forge")
 	}
-	close(f.release)
+	f.let()
 	wg.Wait()
 	return seen
 }
@@ -268,7 +282,7 @@ func TestAWaiterIsNotHeldPastItsOwnDeadline(t *testing.T) {
 		t.Error("a caller whose own context was cancelled was held by a peer's lookup")
 	}
 
-	close(forge.release)
+	forge.let()
 	<-held
 
 	// AND NOTHING IS ASSERTED ABOUT THE FORGE HERE. A request issued on an
@@ -315,6 +329,10 @@ func TestAWaiterIsProvablyParkedOnAPeersClaim(t *testing.T) {
 		_, _ = w.Write([]byte(`{"username":"` + token + `"}`))
 	}))
 	t.Cleanup(srv.Close)
+	// AFTER Close, so it runs BEFORE it: the holder's handler is parked on
+	// hold, and a barrier below that fatals would otherwise leave Close
+	// waiting on it for the rest of the suite's timeout.
+	let := unblockOnCleanup(t, hold)
 
 	ids := &gitlabIdentities{}
 	holder := make(chan struct{})
@@ -339,7 +357,7 @@ func TestAWaiterIsProvablyParkedOnAPeersClaim(t *testing.T) {
 		t.Fatal("the waiter never issued its own lookup, so it never passed the claim check")
 	}
 
-	close(hold)
+	let()
 	<-holder
 	<-waiter
 
