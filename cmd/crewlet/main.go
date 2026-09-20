@@ -2582,21 +2582,53 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Await:    e.WaitCommitted,
 		}
 	}
+	// THE CHART, RESOLVED PER CALL. An operator has no turn, so every
+	// seam on this surface that needs the org reads it from here — and a
+	// config apply replaces the epoch, so a captured chart would scope a
+	// search, and resolve a chat token's seat, against a company that has
+	// moved. ONE closure rather than one per consumer: two would be two
+	// answers to which chart is current.
+	chart := func() *org.Organization {
+		c := e.Company()
+		if c == nil {
+			return nil
+		}
+		return c.Org
+	}
+	// THE COMPANY'S OWN ROOMS. Offered on the same terms as the wiki
+	// above — both halves present or nothing — and without it the six
+	// operator chat tools were built and catalogued against a zero
+	// [builtin.ChatDeps], which gates every one of them off.
+	if reader, writer := e.Chat(), e.ChatStore(); reader != nil && writer != nil {
+		opts.Chat = builtin.ChatDeps{
+			Reader: reader, Writer: writer,
+			// THE TOKEN'S OWN SEAT, never the token's name: a room
+			// where a credential can appear as a speaker is one
+			// where "who said this" has two vocabularies. See
+			// [opsmcp.ChatActor], which also refuses an unbound
+			// token its READS, because a caller the engine cannot
+			// resolve to a seat has no membership to serve.
+			Actor:    opsmcp.ChatActor(chart),
+			Mentions: engine.LiveMentions(e),
+			// THE SEAT SURFACE'S OWN SEARCHER. It resolves the
+			// visible rooms from the viewer it is handed, so the
+			// operator's bound seat is scoped exactly as that
+			// person's own seat is.
+			Search: engine.LiveChatSearch(e),
+			Await:  e.WaitCommitted,
+			// NO ReadState, deliberately: a read cursor is written
+			// when somebody OPENS a room, and an assistant calling
+			// a tool is not that. Nil means the listing carries no
+			// unread counts at all, which is the honest answer —
+			// see [builtin.ChatDeps.ReadState].
+		}
+	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
 	// unlike the ten write tools, ranked search over the company's own
 	// wiki is exactly as useful to an operator's assistant on Confluence.
 	if e.Knowledge() != nil {
 		opts.Knowledge = operatorKnowledge{engine: e}
-		// AND THE CHART BESIDE IT. An operator has no turn, so the org
-		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it.
-		opts.Org = func() *org.Organization {
-			c := e.Company()
-			if c == nil {
-				return nil
-			}
-			return c.Org
-		}
+		opts.Org = chart
 	}
 	// THE LEAD RELATION, which the tracker deliberately does not derive:
 	// it holds no org chart, and one it derived would be a second opinion

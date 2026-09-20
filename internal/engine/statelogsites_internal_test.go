@@ -251,8 +251,24 @@ func TestNativeChatContributesBothAParserAndAPrompt(t *testing.T) {
 	}
 	if len(prompts) != 1 || sources[0] != chat.Source {
 		t.Fatalf("a native-chat node registered prompts for %v, want exactly "+
-			"[%q] — an empty source is SKIPPED, and every chat wake then "+
-			"renders through the generic fallback naming none of the tools a "+
-			"turn answers with", sources, chat.Source)
+			"[%q] — a wake whose source no prompt answers for renders through "+
+			"the generic fallback, which names none of the tools a turn "+
+			"discharges its obligation with", sources, chat.Source)
+	}
+
+	// AND IT IS THE CONSTRUCTED PROMPT rather than a `chat.Prompt{}`. The
+	// source would survive that — the package declares Source on the type
+	// for exactly this reason — but the EMBEDDED value would not: a zero
+	// [notify.ChatPrompt.Address] reads a direct conversation as an
+	// ordinary room, so a person's consecutive messages in a DM land in as
+	// many turns as they typed and nothing anywhere reports it.
+	built, isChats := prompts[0].(chat.Prompt)
+	if !isChats {
+		t.Fatalf("the chat prompt is a %T, which is not this package's", prompts[0])
+	}
+	if len(built.Address.DirectKinds) != len(chat.AddressRule().DirectKinds) {
+		t.Errorf("the registered prompt addresses %v as direct and the package "+
+			"says %v — the zero rule reads a DM as a room",
+			built.Address.DirectKinds, chat.AddressRule().DirectKinds)
 	}
 }

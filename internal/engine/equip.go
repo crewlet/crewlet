@@ -85,6 +85,12 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// captured chart would grant or refuse against an org that has moved.
 	deps.LeadsProject = LeadsProjectOf(e)
 	deps.Pages = e.pageDeps(c)
+	// AND THE ROOMS. Without this the nine chat tools were built,
+	// documented and registered against a zero [builtin.ChatDeps] — which
+	// gates every one of them off — so a company on `chat.backend: native`
+	// ran the domain, applied its records and woke its seats about
+	// messages they had no tool to answer with.
+	deps.Chat = e.chatDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}

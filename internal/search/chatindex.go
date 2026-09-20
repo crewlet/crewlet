@@ -537,3 +537,42 @@ const chatShardSource = "message"
 // in chat renders at the same size as a hit in the knowledge base and a
 // screen showing both does not have two idea of how long a preview is.
 const chatExcerptBytes = 600
+
+// Run sweeps until the context ends.
+//
+// THE CADENCE IS THE SAME [indexIdle] THE KNOWLEDGE INDEXER USES, and a lap
+// that wrote nothing is what earns the sleep: a cold start runs flat out and a
+// steady state costs one watermark read per idle tick. Two loops rather than
+// one over both corpora because the walks are not alike — this one is forward
+// over `chat_messages.version` with a durable watermark, and the other is a
+// lap by id that repairs a drifted row — so a shared loop would have to pick
+// one of the two shapes for both.
+//
+// A FAILED SWEEP IS LOGGED AND RETRIED rather than ending the loop. The index
+// is this node's own and is rebuilt from rows that are still there, so the
+// honest consequence of a bad step is that `search_messages` answers over
+// slightly older messages until the next one — never that a node stops
+// indexing for the life of the process.
+func (x *ChatIndexer) Run(ctx context.Context) {
+	for {
+		wrote, err := x.Sweep(ctx, time.Now())
+		if ctx.Err() != nil {
+			return
+		}
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "chat_index_step_failed",
+				"error", err.Error(),
+				"detail", "the chat index is behind this node's own rows; "+
+					"search_messages answers over the messages it has "+
+					"indexed so far and catches up on the next sweep")
+		case wrote > 0:
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(indexIdle):
+		}
+	}
+}

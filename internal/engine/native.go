@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,12 @@ type native struct {
 	trackerReader *tracker.Reader
 	pageReader    *pages.Reader
 	chatReader    *chat.Reader
+
+	// chatIndex is the chat corpus's own keyword index, and it is separate
+	// from [native.indexer] for the reason ADR-0019 gives: chat is in
+	// neither half of the knowledge corpus, so it has its own inverted
+	// list, its own forward-only walk and its own loop.
+	chatIndex *search.ChatIndexer
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -360,6 +367,19 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}); err != nil {
 			return fmt.Errorf("engine: chat reader: %w", err)
 		}
+		// AND THE KEYWORD INDEX OVER THE ROOMS, which is what makes
+		// `search_messages` a tool this node can serve at all: the
+		// builtin is registered on a non-nil searcher and OMITTED
+		// otherwise, so a node that built the store and not the index
+		// runs chat with one of its nine tools permanently missing.
+		//
+		// BUILT WITH THE ROOMS rather than beside the knowledge
+		// indexer above, because its corpus is the chat domain's: a
+		// company on `chat.backend: vendor` has no `chat_messages` to
+		// walk, and an indexer over an empty table is a loop that
+		// wakes every two seconds for the life of the process to
+		// establish that chat is still switched off.
+		n.chatIndex = search.NewChatIndexer(e.backends.Store)
 	}
 
 	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log
@@ -371,6 +391,16 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		go func() {
 			defer n.done.Done()
 			n.indexer.Run(runCtx)
+		}()
+	}
+	// AND THE CHAT INDEX'S OWN LOOP, on the same terms and stopped by the
+	// same context: two loops rather than one because the two walks are
+	// not alike — see [search.ChatIndexer.Run].
+	if n.chatIndex != nil {
+		n.done.Add(1)
+		go func() {
+			defer n.done.Done()
+			n.chatIndex.Run(runCtx)
 		}()
 	}
 
@@ -755,14 +785,13 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		// reasoning rather than the wiki's, and it is why this arm
 		// takes no company at all.
 		parsers = append(parsers, chat.NewParser())
-		// A CONSTRUCTOR RATHER THAN `chat.Prompt{}`, which is the one
-		// thing this arm can get wrong silently: the prompt embeds
-		// [notify.ChatPrompt], so a zero value answers an empty
-		// Source, and [notify.NewPrompts] SKIPS a prompt whose source
-		// is empty — every chat wake would render through the generic
-		// fallback with nothing anywhere to say so. The tracker's and
-		// the wiki's zero values are safe only because their Source is
-		// a package constant.
+		// A CONSTRUCTOR RATHER THAN `chat.Prompt{}`, unlike the two
+		// arms above it, and the difference is the EMBEDDED value:
+		// this prompt is a [notify.ChatPrompt] with fields, so a zero
+		// literal carries a zero addressing rule — which reads a
+		// direct conversation as an ordinary room, and lands a
+		// person's consecutive messages in a DM in as many turns as
+		// they typed. Nothing reports that; the wakes keep arriving.
 		prompts = append(prompts, chat.NewPrompt())
 	}
 	return parsers, prompts
@@ -1451,6 +1480,98 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 	}
 }
 
+// chatDeps is the rooms half, on the same terms as the two above.
+//
+// NO ACTOR AND NO READ STATE, which is what tells a seat's deps from the
+// operator surface's. The actor is nil so a write is attributed to the turn's
+// own seat — a model that could name its author could speak as anybody — and
+// the read state is nil because a cursor is a PERSON's attention: a seat is
+// woken rather than browsing, and reporting a room's whole tail as unread to
+// one is how a turn spends itself catching up on a conversation it was never
+// reading. See [builtin.ChatDeps.ReadState].
+func (e *Engine) chatDeps(c *Company) builtin.ChatDeps {
+	if e.native == nil || e.native.chatReader == nil || e.native.chat == nil {
+		return builtin.ChatDeps{}
+	}
+	return builtin.ChatDeps{
+		Reader: e.native.chatReader,
+		Writer: e.native.chat,
+		// THE SAME INTERSECTION THE WIKI TAKES: `notify.Mentions` is
+		// deliberately permissive, and this is where the company is
+		// known, so a handle nobody holds is dropped rather than
+		// becoming a wake that can never be delivered.
+		Mentions: seatMentions{org: c.Org},
+		Search:   e.chatSearch(),
+		Await:    e.WaitCommitted,
+	}
+}
+
+// chatSearch is the seat surface's ranked search over this node's chat index,
+// or nil where this node holds no index — which OMITS the tool rather than
+// registering one that refuses, on [builtin.Register]'s own rule.
+func (e *Engine) chatSearch() builtin.ChatSearcher {
+	if e.native == nil || e.native.chatIndex == nil || e.native.chatReader == nil {
+		return nil
+	}
+	return liveChatSearch{engine: e}
+}
+
+// liveChatSearch resolves the VIEWER's visible rooms and searches only those.
+//
+// THE VISIBLE SET IS RESOLVED HERE AND NEVER PASSED IN, which is the whole
+// reason [builtin.ChatSearch] is its own type rather than
+// [search.ChatQuery]: that type carries the channel set, which is an
+// authorization fact, and a tool able to supply it is a tool able to supply
+// the wrong one. The seam that holds both the membership rows and the index
+// is the half that gets to answer it, and this is that half.
+//
+// PER CALL for every other live seam's reason in this file: the rooms
+// somebody may read change with a membership and with the chart, and a set
+// captured when the node booted would go on searching a private room a seat
+// has since been removed from.
+type liveChatSearch struct{ engine *Engine }
+
+// SearchMessages ranks the company's chat for one viewer.
+func (s liveChatSearch) SearchMessages(ctx context.Context, viewer string,
+	q builtin.ChatSearch) ([]search.ChatHit, error) {
+
+	n := s.engine.native
+	if n == nil || n.chatIndex == nil || n.chatReader == nil {
+		return nil, nil
+	}
+	// LINEARIZABLE, like every other read this surface makes: a seat that
+	// has just been added to a room must not be told the room is not
+	// there. It costs a barrier append on the visible set and nothing on
+	// the index, which is this node's own and has no read level.
+	visible, err := n.chatReader.Readable(ctx, viewer,
+		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)})
+	if err != nil {
+		return nil, err
+	}
+	if q.Channel != "" {
+		// INTERSECTED AND NEVER TRUSTED. Naming a room the viewer may
+		// not read answers NOTHING rather than refusing, because a
+		// refusal confirms the room exists — and "there is no such
+		// room" and "you may not see it" must read identically from
+		// outside.
+		if !slices.Contains(visible, q.Channel) {
+			return nil, nil
+		}
+		visible = []string{q.Channel}
+	}
+	if len(visible) == 0 {
+		// A VIEWER WHO MAY READ NOTHING IS ANSWERED, not refused. The
+		// index's own [search.ErrNoViewer] is for a caller that lost
+		// its viewer, and handing it an empty set here would turn a
+		// real, ordinary state into an error a seat reports as a
+		// broken tool.
+		return nil, nil
+	}
+	return n.chatIndex.SearchMessages(ctx, search.ChatQuery{
+		Text: q.Text, Channels: visible, Author: q.Author, Limit: q.Limit,
+	})
+}
+
 // reservedContainers are the containers a seat's own writes may not target.
 func reservedContainers(cfg *config.Company) []string {
 	if cfg == nil {
@@ -1500,6 +1621,17 @@ func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
 func LiveMentions(e *Engine) builtin.MentionResolver {
 	return liveMentions{engine: e}
 }
+
+// LiveChatSearch is the chat searcher the OPERATOR surface takes, and it is
+// the seat surface's own — exported for [LiveMentions]'s reason rather than a
+// second one.
+//
+// A SEARCH IS RESOLVED FROM ITS VIEWER, so one implementation serves both
+// callers: the seat surface hands it the turn's seat and the operator surface
+// hands it the seat its token is bound to. A copy built for the operator would
+// be a second answer to which rooms somebody may read, which is the one
+// question in chat that may not have two.
+func LiveChatSearch(e *Engine) builtin.ChatSearcher { return e.chatSearch() }
 
 type liveMentions struct{ engine *Engine }
 

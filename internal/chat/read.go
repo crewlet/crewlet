@@ -441,6 +441,102 @@ func (r *Reader) Channels(ctx context.Context, viewer string, q ChannelsQuery,
 	return out, nil
 }
 
+// Readable is every room this viewer may READ, as channel ids.
+//
+// # The rail is not this set
+//
+// A rail is what somebody is IN, and [Visible]'s rule is wider than that: a
+// public room and a unit's room are readable by any seat of the company,
+// joined or not. A search driven off the rail would therefore answer nothing
+// from exactly the rooms a company does most of its talking in, and would do
+// it silently — an empty result reads as "nobody said that" rather than as
+// "this search could not see the room".
+//
+// # Archived rooms are in
+//
+// An archive closes a room to new messages, not to reading it, and a search is
+// the read where a closed room is most of the point: what a team concluded
+// last quarter is in the room they stopped using. The rail leaves them out
+// because it is the list somebody works out of; this is not that list.
+//
+// # Bounded by the company, not by the person
+//
+// [MaxChannels] is the cap a company's rooms are already written against, and
+// the create counts EVERY row — archived ones included — so the whole set
+// materialises here and there is no truncation to report. That is what makes
+// this safe to hand a search as its visible set: a partial one would narrow
+// the answer without saying so, which is the failure the search's own
+// [github.com/crewlet/crewlet/internal/search.ErrNoViewer] exists to refuse.
+//
+// THAT DEPENDENCY IS LOAD-BEARING IN BOTH DIRECTIONS, so anything that makes
+// the cap count live rooms rather than all of them has to come here first:
+// the set this returns is bound one variable per channel by the index's own
+// posting query, against a store whose variable budget is two thousand. A cap
+// over live rooms alone leaves the row count unbounded, and the first company
+// past it loses chat search outright rather than gradually.
+//
+// An empty slice with no error is a viewer who may read nothing at all — a
+// real state, and the caller's to tell apart from a viewer it failed to
+// resolve, which is refused here by name.
+func (r *Reader) Readable(ctx context.Context, viewer string,
+	fresh statelog.Freshness) ([]string, error) {
+
+	who, err := viewerOf(viewer)
+	if err != nil {
+		return nil, err
+	}
+	if fresh.Level == "" {
+		return nil, errNoLevel("a readable channel set")
+	}
+	var out []string
+	if _, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
+		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			var err error
+			out, err = readableChannels(ctx, tx, who)
+			return err
+		}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readableChannels is [Reader.Readable] inside one transaction.
+//
+// THE SQL NARROWS AND GO DECIDES, which is [visibleWhere]'s own contract: the
+// predicate drives `chat_members_handle_idx` and admits a superset, and every
+// row it admits is still put through [Visible] — so a kind a newer peer wrote
+// is left out here exactly as it is left out of a rail, rather than being
+// served on the guess that it resembles a public room.
+func readableChannels(ctx context.Context, tx *sql.Tx, who string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT c.id, c.kind FROM chat_channels c
+		  WHERE `+visibleWhere+`
+		  ORDER BY c.id LIMIT ?`, who, MaxChannels)
+	if err != nil {
+		return nil, fmt.Errorf("chat: read the rooms %q may search: %w", who, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]string, 0, 16)
+	for rows.Next() {
+		var id, kind string
+		if err := rows.Scan(&id, &kind); err != nil {
+			return nil, fmt.Errorf("chat: scan a readable room: %w", err)
+		}
+		// MEMBER IS TRUE because the predicate above already
+		// established it for every private row it admitted, and the
+		// flag is ignored for every row it did not have to.
+		if !Visible(who, Channel{Kind: Kind(kind)}, true) {
+			continue
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chat: read the rooms %q may search: %w", who, err)
+	}
+	return out, nil
+}
+
 // rail is the whole listing inside one transaction.
 //
 // FOUR STATEMENT SHAPES, and the order is what keeps the cost proportional to
