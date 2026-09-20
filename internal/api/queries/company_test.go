@@ -2324,3 +2324,73 @@ func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
 		}
 	}
 }
+
+// A FULL MEMORY PAGE SAYS IT IS A PAGE.
+//
+// The three per-seat memories were bounded and silent, so a seat that had
+// written four thousand notes and one that had written fifty rendered
+// identically — and "what does this seat remember" is the whole question the
+// panel exists for. The fourth memory on the same answer, `skills`, already
+// carried `skills_total` and its own comment names the rule the other three
+// broke: a seat past the cap "would otherwise report exactly MemoryPageLimit
+// skills — a number an operator has no reason to doubt and no way to check.
+// Every other cut in this tree says so."
+func TestAFullMemoryPageSaysItIsAPage(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	diary := learning.NewDiary(db)
+	episodes := learning.NewEpisodes(db)
+
+	// ONE PAST THE PAGE on both halves, which is the only shape that tells
+	// a full page from a complete set.
+	over := queries.MemoryPageLimit + 1
+	for i := range over {
+		if err := diary.Write(t.Context(), learning.DiaryEntry{
+			ID: fmt.Sprintf("d-%03d", i), AgentID: "ceo", Kind: learning.DiaryLong,
+			Content: "a note", CreatedAt: pinned.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("diary %d: %v", i, err)
+		}
+		if _, err := episodes.Append(t.Context(), learning.Episode{
+			ID: fmt.Sprintf("ep-%03d", i), Handle: "ceo", TaskSummary: "did a thing",
+			StartedAt: pinned.Add(time.Duration(i) * time.Second),
+			EndedAt:   pinned.Add(time.Duration(i)*time.Second + time.Minute),
+		}); err != nil {
+			t.Fatalf("episode %d: %v", i, err)
+		}
+	}
+
+	body := asMap(t, answer(t, queries.Sources{Diary: diary, Episodes: episodes},
+		"agent_memory", map[string]any{"id": "ceo"}))
+
+	for _, half := range []string{"diary", "episodes"} {
+		rows, _ := body[half].([]any)
+		if len(rows) != queries.MemoryPageLimit {
+			t.Errorf("%s holds %d rows, want the page of %d",
+				half, len(rows), queries.MemoryPageLimit)
+		}
+		if body[half+"_truncated"] != true {
+			t.Errorf("%s is a full page and does not say so, so it reads as a "+
+				"seat with exactly %d", half, queries.MemoryPageLimit)
+		}
+	}
+
+	// AND A SHORT PAGE CLAIMS NOTHING — a flag that were always on would
+	// tell an operator every seat has more memory than it shows.
+	quiet := openStore(t)
+	short := learning.NewDiary(quiet)
+	if err := short.Write(t.Context(), learning.DiaryEntry{
+		ID: "d-1", AgentID: "cto", Kind: learning.DiaryLong,
+		Content: "one note", CreatedAt: pinned,
+	}); err != nil {
+		t.Fatalf("diary: %v", err)
+	}
+	small := asMap(t, answer(t, queries.Sources{
+		Diary: short, Episodes: learning.NewEpisodes(quiet),
+	}, "agent_memory", map[string]any{"id": "cto"}))
+	for _, half := range []string{"diary", "episodes", "counterparties"} {
+		if small[half+"_truncated"] != false {
+			t.Errorf("%s on a one-note seat reports itself cut", half)
+		}
+	}
+}

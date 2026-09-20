@@ -35,9 +35,18 @@ const RecentRunsLimit = 50
 // first fire. The history is the dispatch ledger, which is the only thing that
 // knows what actually happened.
 func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
+	runs, truncated := s.recentRuns(ctx)
 	return map[string]any{
 		"schedules":   s.ConfiguredSchedules(),
-		"recent_runs": s.recentRuns(ctx),
+		"recent_runs": runs,
+		// SAYS WHEN IT CUT, which its own sibling `schedule_runs` already
+		// does in as many words: "a page that filled is indistinguishable
+		// from a schedule that has fired exactly that many times". This is
+		// the MORE likely of the two to fill, because it is every
+		// schedule's fires rather than one's — twenty hourly ones fill it
+		// in two and a half hours — so a company of any size sat
+		// permanently on a full page it could not see was full.
+		"recent_runs_truncated": truncated,
 	}, nil
 }
 
@@ -82,14 +91,14 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 // DEGRADES rather than fails: the configured schedules are the half an
 // operator opens this screen for, and refusing to show them because the
 // history is unreadable would blank the page over its footnote.
-func (s Sources) recentRuns(ctx context.Context) []map[string]any {
+func (s Sources) recentRuns(ctx context.Context) ([]map[string]any, bool) {
 	if s.Runs == nil {
-		return []map[string]any{}
+		return []map[string]any{}, false
 	}
 	runs, err := s.Runs.Recent(ctx, RecentRunsLimit)
 	if err != nil {
 		log.WarnContext(ctx, "schedule_history_unreadable", "error", err)
-		return []map[string]any{}
+		return []map[string]any{}, false
 	}
 	out := make([]map[string]any, 0, len(runs))
 	for _, run := range runs {
@@ -105,7 +114,7 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 			"trace_id":      run.TraceID,
 		})
 	}
-	return out
+	return out, len(out) == RecentRunsLimit
 }
 
 // integrations answers how each external surface is wired, and what has come
@@ -741,6 +750,13 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		"skills_total":   0,
 		"counterparties": []map[string]any{},
 		"onboarded_at":   "",
+		// PRESENT AND FALSE rather than absent, like every other key on
+		// this answer: a client that has to guard a field either way
+		// reads an absent flag as "unknown" and a false one as "this is
+		// all of it", and only the second is true of a short page.
+		"diary_truncated":          false,
+		"episodes_truncated":       false,
+		"counterparties_truncated": false,
 	}
 	now := s.clock()
 	if s.Diary != nil {
@@ -750,9 +766,19 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		// about a seat it has no rows for — and answered an empty memory
 		// rather than the seat's, which reads identically to a seat that
 		// has not learned anything yet.
-		entries, err := s.Diary.Recent(ctx, s.agentIDOf(id), now, MemoryPageLimit)
+		// ONE PAST THE PAGE, as evidence. A seat that has written four
+		// thousand notes and one that has written fifty rendered
+		// identically, and "what does this seat remember" is the whole
+		// question this panel exists for — so the page needed the marker
+		// `skills_total` beside it already carries. A probe row rather
+		// than a count, because neither of these two seams has a count
+		// and the answer to "is there more" is one row.
+		entries, err := s.Diary.Recent(ctx, s.agentIDOf(id), now, MemoryPageLimit+1)
 		if err != nil {
 			return nil, err
+		}
+		if len(entries) > MemoryPageLimit {
+			entries, out["diary_truncated"] = entries[:MemoryPageLimit], true
 		}
 		rows := make([]map[string]any, 0, len(entries))
 		for _, e := range entries {
@@ -766,9 +792,12 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		// it and the one that does not recognise it answers nothing —
 		// which is correct rather than an error, and is what a seat with
 		// no episodes yet looks like anyway.
-		episodes, err := s.Episodes.Recent(ctx, id, MemoryPageLimit)
+		episodes, err := s.Episodes.Recent(ctx, id, MemoryPageLimit+1)
 		if err != nil {
 			return nil, err
+		}
+		if len(episodes) > MemoryPageLimit {
+			episodes, out["episodes_truncated"] = episodes[:MemoryPageLimit], true
 		}
 		rows := make([]map[string]any, 0, len(episodes))
 		for _, e := range episodes {
@@ -835,7 +864,7 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	// the diary, whose key is the derived agent id. Both are asked with the
 	// dashboard's one identifier and the one that does not recognise it
 	// answers nothing.
-	profiles, err := s.counterpartiesFor(ctx, id)
+	profiles, profilesCut, err := s.counterpartiesFor(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -844,6 +873,7 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		rows = append(rows, counterpartyRow(profile))
 	}
 	out["counterparties"] = rows
+	out["counterparties_truncated"] = profilesCut
 	return out, nil
 }
 

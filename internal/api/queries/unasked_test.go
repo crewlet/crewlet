@@ -265,14 +265,15 @@ func TestNamingAThreadAddsItsTurnsToTheSameAnswer(t *testing.T) {
 // ---- counterparties ------------------------------------------------------ //
 
 type stubCounterparties struct {
-	profiles []learning.Profile
-	observer string
-	err      error
+	profiles  []learning.Profile
+	observer  string
+	err       error
+	truncated bool
 }
 
-func (s *stubCounterparties) List(_ context.Context, observer string) ([]learning.Profile, error) {
+func (s *stubCounterparties) List(_ context.Context, observer string) ([]learning.Profile, bool, error) {
 	s.observer = observer
-	return s.profiles, s.err
+	return s.profiles, s.truncated, s.err
 }
 
 // THE THIRD MEMORY, and the key that was always an empty list. The store has

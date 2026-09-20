@@ -234,7 +234,7 @@ func (s Sources) inboxRetention() time.Duration {
 // Counterparties is the profiles the learning loop keeps about WHO a seat has
 // worked with — the one memory object that is about somebody else.
 type Counterparties interface {
-	List(ctx context.Context, observer string) ([]learning.Profile, error)
+	List(ctx context.Context, observer string) ([]learning.Profile, bool, error)
 }
 
 // counterpartiesFor is the memory answer's own half of this, kept beside the
@@ -246,13 +246,13 @@ type Counterparties interface {
 // has worked with nobody" when the truth is "the store could not be reached"
 // is the same collapse the coordination layer's three-valued answers exist to
 // prevent, so the failure is returned and the surface says so.
-func (s Sources) counterpartiesFor(ctx context.Context, observer string) ([]learning.Profile, error) {
+func (s Sources) counterpartiesFor(ctx context.Context, observer string) ([]learning.Profile, bool, error) {
 	if s.Counterparties == nil || observer == "" {
-		return nil, nil
+		return nil, false, nil
 	}
-	profiles, err := s.Counterparties.List(ctx, observer)
+	profiles, truncated, err := s.Counterparties.List(ctx, observer)
 	if err != nil {
-		return nil, fmt.Errorf("counterparties for %s: %w", observer, err)
+		return nil, false, fmt.Errorf("counterparties for %s: %w", observer, err)
 	}
-	return profiles, nil
+	return profiles, truncated, nil
 }
