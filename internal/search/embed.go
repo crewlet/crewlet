@@ -513,11 +513,12 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	// many in TOTAL, so with every corpus behind at once (N-1)/N of what
 	// was read is discarded — 1 024 documents at the two corpora shipped,
 	// 7 168 at the eight [NewEmbedder] allows. It is not only SQL work:
-	// [Document.Body] holds the UNTRUNCATED body, since the cut to
-	// EmbedInputBytes happens in [Document.text] at send time, so N x 1 024
-	// whole documents are live for the length of the tick and a third
-	// corpus is a 50 % rise in this duty's peak footprint before it embeds
-	// anything new. That is the figure to weigh when adding one. None of it
+	// [Document.Body] holds the WHOLE body, so N x 1 024 whole documents
+	// are live for the length of the tick and a third corpus is a 50 %
+	// rise in this duty's peak footprint before it embeds anything new.
+	// That is the figure to weigh when adding one — and it did not change
+	// when chunking landed, because the body was already held whole: what
+	// used to be cut at send time is now split there instead. None of it
 	// is lost WORK — the selection is derived from the rows, so the next
 	// tick asks again.
 	//
