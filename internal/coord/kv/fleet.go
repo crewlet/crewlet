@@ -1119,8 +1119,18 @@ func (f *FleetStore) stampRefusal(ctx context.Context, scope string) error {
 // A failure is logged for the reason [FleetStore.refuse] gives: the charge
 // already happened, and the stamp is what a dashboard reads, not what the gate
 // decides with.
+//
+// On a context that OUTLIVES the caller's, for the reason [FleetStore.unwindOrg]
+// gives: this runs AFTER both counters have been written, so the charge is a
+// fact whatever happens next, and the caller's context dying between the two
+// writes and this one is ordinary — a turn cancelled, a node draining. Left on
+// that context the clear failed with it, and the scope kept telling every
+// dashboard it was refusing charges while it had just admitted one. It cannot
+// hang in the caller's place: the client bounds a request made on a context
+// with no deadline by its own API timeout.
 func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen time.Time) {
 	key := encodeKey(scope)
+	ctx = context.WithoutCancel(ctx)
 	for range fleetCASRetries {
 		entry, err := f.budgets.Get(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {

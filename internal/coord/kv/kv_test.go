@@ -842,6 +842,46 @@ func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
 	}
 }
 
+// AN ADMITTED CHARGE CLEARS THE STAMP EVEN IF THE CALLER HAS HUNG UP.
+//
+// The clear runs after BOTH counters are written, so the charge is a fact by
+// then and the caller's context dying in between is ordinary — a turn
+// cancelled, a node draining. Left on that context the clear failed with it,
+// and the scope went on telling every dashboard it was refusing charges while
+// it had just admitted one, until the next admitted charge on a live context.
+func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
+	store := openFleet(t, embeddedNATS(t))
+	seat := coord.AgentScope("x")
+	if err := store.stampRefusal(t.Context(), coord.OrgScope); err != nil {
+		t.Fatalf("stampRefusal(org): %v", err)
+	}
+	if err := store.stampRefusal(t.Context(), seat); err != nil {
+		t.Fatalf("stampRefusal(seat): %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The SEAT's write is the last one before the clears, so a hang-up
+	// there leaves both counters written and both clears to make.
+	store.budgets = hangUpAfterWriting{
+		KeyValue: store.budgets, key: encodeKey(seat), hangUp: cancel,
+	}
+
+	if got, err := store.Charge(ctx, seat, 10, 100, 100); err != nil || !got.OK {
+		t.Fatalf("Charge = (%+v, %v), want it admitted", got, err)
+	}
+	rows, err := store.Usage(t.Context())
+	if err != nil {
+		t.Fatalf("Usage: %v", err)
+	}
+	for _, row := range rows {
+		if !row.RefusedAt.IsZero() {
+			t.Errorf("%s still reads as refusing after an admitted charge: the "+
+				"clear ran on the caller's cancelled context", row.Scope)
+		}
+	}
+}
+
 // hangUpAfterWriting is the budgets bucket with one fault injected: the moment
 // one key is written, the caller's context is cancelled, the way a caller
 // hanging up between the org's write and the seat's makes the second fail.
