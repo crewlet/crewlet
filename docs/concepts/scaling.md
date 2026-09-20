@@ -219,6 +219,18 @@ What each one decides:
   instead would either replay the whole subject on every handoff or lose
   whatever arrived while a seat was unowned. The suite asserts it rather than
   taking the broker's word for it.
+- **A chat broadcast's fan-out is bounded by the node's own turn budget.** This
+  is the constant native chat adds, and it is borrowed rather than chosen:
+  `@channel` wakes at most **32** agents, which is `node.DefaultMaxConcurrent`.
+  The reasoning is the one that makes an agent company different from a human
+  one — a person in a busy room reads passively and an agent has no passive
+  read, so every wake is a two-phase turn against that budget. Uncapped, one
+  broadcast in a large room would occupy a node's entire turn capacity and
+  every other trigger would queue behind a message that was addressed to
+  nobody in particular. The channel says when it truncated, rather than
+  quietly waking fewer than the gesture implied. See
+  [Chat § Who gets woken](chat.md#who-gets-woken).
+
 - **The broker imposes no floor on the lease TTL** — so the **45-second TTL**
   is not a number any broker measurement sets. Creating a mailbox costs
   ~1.7 ms and a clean handoff returns the mail in about a millisecond, so a
@@ -296,6 +308,13 @@ theoretical one:
   node can host them, but the scheduler tick, the curator, clustering and the
   sandbox waiter are each one logical instance at a time. A fleet does not
   parallelise them.
+- **Native chat does not reach a person who is not looking at it.** The engine
+  has never sent anything as itself — no email, no push, no SMS — so a mention
+  on `chat.backend: native` becomes an unread count and a mention feed, and
+  nothing more. That is a property of the product rather than of the fleet,
+  and it does not change with node count. See
+  [Chat § What is not here](chat.md#what-is-not-here).
+
 - **A rolling upgrade across a protocol bump has a visible outage window**, and
   a rollback across one needs a full drain. See
   [Mixed-version fleets](seat-ownership.md#mixed-version-fleets).
