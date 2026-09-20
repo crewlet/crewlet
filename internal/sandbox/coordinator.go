@@ -148,53 +148,50 @@ type CoordinatorOptions struct {
 	// not finished, and its box will resume into the same session.
 	Ended func(runID string)
 
-	// Parked is called once for every run that stops to ask a person
-	// something, after the question is durably recorded.
+	// Stopped is called once for every way a run stops with a turn still
+	// suspended into it, and it is the ONE report above this package of a
+	// fact this package alone can see.
 	//
-	// The counterpart of Ended, and the reason both exist is that a parked
-	// run is neither finished nor working: the turn that suspended into it
-	// has not come back, so nothing on the Ended path fires, and the agent
-	// has nonetheless STOPPED — everything now waits on a person who may
-	// take days. Anything the engine holds up "while the agent works" has
-	// to come down here, the working indicator above all: an "is thinking…"
-	// that outlives the thinking tells the one person who could answer the
-	// question that nobody is waiting on them.
+	// THREE WAYS, ONE FACT. A run parks on a question and waits for a
+	// person; a run is destroyed and its turn is never resumed; or a claim
+	// this node took cannot be given back, which is the second of those
+	// wearing the first's clothes. In every one of them the frame that
+	// raised whatever the engine holds up "while the agent works" has
+	// already returned — it returned when the turn suspended — so nothing
+	// above this package can learn that the agent stopped unless this call
+	// makes it. The working indicator is the caller it exists for: an "is
+	// thinking…" that outlives the thinking tells the one person who could
+	// move the work that nobody is waiting on them.
 	//
-	// After MarkAwaiting, never before: until the question is on the row
-	// this completion can still be retried, and a retry that resumed the
-	// turn would find the hold already dropped.
-	Parked func(ctx context.Context, handle, turnID string)
-
-	// Lost is called once for every run this node DESTROYS while a turn is
-	// still suspended into it: the box is reclaimed, the record deleted,
-	// the seat freed, and that turn is never resumed.
+	// ONE OPTION RATHER THAN ONE PER REASON, because three rounds of
+	// hand-enumerating the ways a run stops each missed one, and a second
+	// field is a second thing a wiring can declare and never pass. A caller
+	// that needs to tell a wait from an ending reads the events that already
+	// say which — [types.SandboxClarificationRequested] and
+	// [types.SandboxRunFailed] — rather than a parameter nothing else needs.
 	//
-	// The SETTLE-side counterpart of Parked, and the two together are the
-	// whole of "the agent stopped and its turn did not come back to say
-	// so". A park is a wait and this is an ending, but the frame that
-	// raised whatever the engine holds up while a turn works is equally
-	// gone either way — it returned when the turn suspended — so nothing
-	// above this package can learn of the stop unless this call makes it.
+	// It is reported from exactly two places, which are the only two that
+	// can take a suspended turn out of the engine's hands:
+	// [Coordinator.finish], the one place a run's record is deleted, and
+	// [Coordinator.park], the one stop that is not an ending. Both report
+	// only where the transition was THIS call's — the same gate the failure
+	// announcement takes, since a run a newer lease owns or one somebody else
+	// ended first is that party's to settle, to explain and to drop the holds
+	// of. Over-reporting is harmless and under-reporting is the defect, so a
+	// path that cannot tell reports.
 	//
-	// The working indicator is the caller it was added for, and the hole it
-	// closes is the one Parked did not: a suspension the engine DID record
-	// keeps the indicator up deliberately, because a box is working, and a
-	// settle here is the moment that stops being true. Without it a run
-	// whose collect failed left the indicator heart-beating for the life of
-	// the process — the same failure, on the same rule, that Parked exists
-	// for.
+	// After the durable write and before the announcement, never the other
+	// way round: until the park is on the row the completion can still be
+	// retried, and a retry that resumed the turn would find the hold already
+	// dropped — while the announcement is a publish that can block, and what
+	// comes down here is a claim on somebody's screen.
 	//
 	// NOT Ended, which fires for every finish including a collected run's:
 	// there the turn is resumed immediately and the agent never stopped.
-	// Ended is about a credential the run HOLDS and is keyed on the run;
-	// this is about the turn, and is keyed on the seat and turn a caller
-	// addresses its holds by.
-	//
-	// Fired only where the ending was THIS call's, on the same gate the
-	// failure announcement takes: a run a newer lease owns, or one somebody
-	// else ended first, is that party's to settle and to explain, and its
-	// holds are that party's to drop.
-	Lost func(ctx context.Context, handle, turnID string)
+	// Ended is about a credential the run HOLDS and is keyed on the run; this
+	// is about the turn, and is keyed on the seat and turn a caller addresses
+	// its holds by.
+	Stopped func(ctx context.Context, handle, turnID string)
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -221,7 +218,11 @@ type CoordinatorOptions struct {
 //     works as usual, with one difference: every delivery is offered to
 //     [Coordinator.TryResumeFromAnswer] before anything else consumes it,
 //     because the reply that resumes an hours-old coding run is an ordinary
-//     chat message and nothing about it says so.
+//     chat message and nothing about it says so. The wait is DURABLE FIRST
+//     and everything else follows it: a park whose write does not land gives
+//     the claim it holds back instead, and ends the run where even that
+//     cannot be written — because a row left in the claim is picked up by
+//     nothing at all ([Coordinator.revertClaim]).
 //   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs held,
 //     inherits its open questions, and reaps any tail the previous owner
 //     abandoned mid-resume.
@@ -232,8 +233,7 @@ type Coordinator struct {
 	resume  Resumer
 	account Accountant
 	ended   func(runID string)
-	parked  func(ctx context.Context, handle, turnID string)
-	lost    func(ctx context.Context, handle, turnID string)
+	stopped func(ctx context.Context, handle, turnID string)
 	now     func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
@@ -308,10 +308,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
-		parked: opts.Parked,
-		lost:   opts.Lost,
-		now:    opts.Now,
-		runs:   map[string]seatRuns{},
+		stopped: opts.Stopped,
+		now:     opts.Now,
+		runs:    map[string]seatRuns{},
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -620,8 +619,17 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // question again. A question recorded but never announced would then wait for
 // an answer nobody was asked for, and a question that could not be recorded
 // left the row resumed, its paused box held until the seat changed hands. So
-// the announcement goes first and the record second, and either failing
-// reverts the claim for the completion's retry to ask again.
+// the announcement goes first and the record second, and either failing gives
+// the claim back for the completion's retry to ask again — or, where it cannot
+// be given back, ENDS the run, because a row nothing will pick up is a turn
+// destroyed in silence rather than one left for next time
+// ([Coordinator.unclaim]).
+//
+// THE ONE STOP THAT IS NOT AN ENDING, which is why the report is made here and
+// not only in [Coordinator.finish]: the run is alive and a person can move it,
+// but the turn that suspended into it has stopped and will not come back to
+// say so. A park whose write did not land is neither a stop nor a park, and
+// reports nothing here — the settle that may follow makes its own report.
 //
 // The seat is freed only once the question is on the row. A clarification wait
 // FREES it, because a person can take days and the answer arrives on the
@@ -651,7 +659,12 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		c.unclaim(ctx, run, true)
+		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
+			//nolint:nilerr // Deliberate, as at the record below: the
+			// claim did not go back, so the run has been ended and a
+			// redelivered completion would find no record to claim.
+			return nil
+		}
 		return fmt.Errorf("sandbox: announcing the question %s asked: %w", run.TurnID, err)
 	}
 
@@ -659,7 +672,26 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
 	}); err != nil {
-		c.unclaim(ctx, run, true)
+		// THE WAIT DID NOT LAND, so this run is not parked and this turn
+		// is not waiting for anybody: the row is still in the claim that
+		// brought us here. Handed back, the completion poll fires again,
+		// the paused box is collected a second time and the park is
+		// retried. Where it cannot be handed back the run is ended
+		// instead, because a row left in the claim is picked up by
+		// nothing at all.
+		log.ErrorContext(ctx, "sandbox_park_write_failed",
+			"turn_id", run.TurnID, "error", err.Error(),
+			"detail", "the question could not be recorded, so the run is not parked; its "+
+				"claim is given back for the completion to be retried, or the run is "+
+				"ended where it cannot be")
+		if unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail); unclaimErr != nil {
+			//nolint:nilerr // Deliberate: the claim was not handed back,
+			// so the run has been SETTLED and there is nothing left for
+			// a redelivered completion to claim. Sending it back would
+			// retry against no record. Both failures are logged and the
+			// loss is announced.
+			return nil
+		}
 		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
 	}
 	// FREED AND OPENED AS ONE MOVE, not two: a person can take days, the
@@ -673,10 +705,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 
 	// THE AGENT HAS STOPPED, and this is the moment that becomes durable.
 	// Whatever the engine holds up while a turn works comes down here — see
-	// [CoordinatorOptions.Parked].
-	if c.parked != nil {
-		c.parked(ctx, run.AgentHandle, run.TurnID)
-	}
+	// [CoordinatorOptions.Stopped].
+	c.reportStopped(ctx, run)
 
 	if run.PauseTTLSeconds == 0 {
 		c.teardown(ctx, run)
@@ -834,7 +864,13 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// conversation is permanently lost with the row stranded in resumed.
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
-		c.unclaim(ctx, run, false)
+		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
+			//nolint:nilerr // Deliberate, and the same answer the
+			// acted-and-broke branch above gives for the same reason:
+			// the run has been settled, so the completion is not sent
+			// back for a retry that would find nothing to claim.
+			return nil
+		}
 		return err
 	}
 
@@ -923,7 +959,26 @@ func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, 
 // inherited it wrote nothing. The run then stayed resumed, and the seat's next
 // owner, the node the drain was handing it to, reaped it as abandoned instead
 // of resuming it.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool) {
+//
+// # A HAND-BACK THAT CANNOT BE WRITTEN IS NOT A RETRY, so it ENDS the run
+//
+// Giving the claim back is the whole of what makes every failure after it a
+// retry, and a row left in [StatusResumed] is picked up by nothing: the
+// completion poll reads only running rows, a redelivered completion is refused
+// by the very claim it would retake, no answer matches a row that is not
+// awaiting, and the pause reaper expires only one that is. So what looks like
+// "leave it for next time" is a turn destroyed in silence, its box paused and
+// billed until the seat happens to change hands. It is settled instead — box
+// reclaimed, record deleted, loss announced, stop reported — which is what
+// every other destroyed turn gets, and detail is the sentence that reaches an
+// operator's board.
+//
+// Reports whether the run is back in the hands of whatever will retry it: nil
+// where the claim went back (or had already moved on), and the release's own
+// error where the run was ended in its place. The caller's own error is not
+// this answer — a retry keeps it, so the delivery comes back, and an ending
+// drops it, because there is nothing left to come back to.
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
@@ -933,8 +988,14 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool)
 	switch {
 	case err != nil:
 		log.ErrorContext(ctx, "sandbox_claim_revert_failed",
-			"turn_id", run.TurnID, "revert_to", to, "error", err.Error())
+			"turn_id", run.TurnID, "revert_to", to, "error", err.Error(),
+			"detail", "the claim could not be handed back, so nothing would ever pick "+
+				"this run up; it is ended and announced instead")
+		c.settleFailed(ctx, run, types.SandboxFailureClaimStranded, detail)
+		// AUTHORITATIVE, not assumed: the settle moved the row and this
+		// call moved the counts, and neither knows what the other found.
 		c.syncSeat(ctx, run.AgentHandle)
+		return fmt.Errorf("sandbox: handing back the claim on %s (to %s): %w", run.TurnID, to, err)
 	case !released:
 		log.WarnContext(ctx, "sandbox_claim_moved_on",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID,
@@ -944,6 +1005,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool)
 	case !counted:
 		c.countRun(run.AgentHandle, to)
 	}
+	return nil
 }
 
 // claimedFrom is the status a claimed run held before its claim. A claim
@@ -974,8 +1036,8 @@ func claimedFrom(run PendingRun) string {
 // Announced only when this call ended the run. One that a newer lease owns,
 // or that somebody else ended first, is that party's to settle and to explain,
 // and a second announcement would name a reason the run did not end for. The
-// engine is told on the same gate and for the same reason — see
-// [CoordinatorOptions.Lost].
+// engine is told on the same gate, by [Coordinator.finish] itself — see
+// [CoordinatorOptions.Stopped].
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
 	ended := c.finish(ctx, run, fenceOf(run))
 	// Out of whichever set the record was in: this path settles a claimed
@@ -985,16 +1047,46 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 	if !ended {
 		return
 	}
-	// THE TURN IS DESTROYED, and this is the moment it becomes so: the
-	// record is deleted and the box reclaimed above, so nothing will ever
-	// resume it. Whatever the engine holds up while a turn works comes down
-	// here for the reason it comes down at a park — the turn does not return
-	// to say so itself. BEFORE the announcement, which is a publish that can
-	// block: what is being released is a claim on somebody's screen.
-	if c.lost != nil {
-		c.lost(ctx, run.AgentHandle, run.TurnID)
-	}
 	c.announceFailure(ctx, run, reason, detail)
+}
+
+// The three sentences a stranded claim reaches an operator's board with.
+//
+// One per caller rather than one shared line, because what an operator does
+// about them differs: a question that was never announced is one nobody saw, a
+// question announced but not recorded is one somebody may be composing an
+// answer to that will never be matched, and a resume that could not be given
+// back is work a box had already finished. All three name the coordination
+// store, because a claim that could not be handed back is what brought every
+// one of them here.
+const (
+	parkUnannouncedDetail = "the coding run stopped to ask a person a question, but neither the " +
+		"question could be announced nor the run's own claim given back to the " +
+		"coordination store, so nobody was asked and the turn cannot be continued; the " +
+		"work it pushed, if any, is on its branch"
+
+	parkUnrecordedDetail = "the coding run stopped to ask a person a question, but neither the " +
+		"question nor the run's own claim could be written to the coordination store, so " +
+		"the turn cannot be continued and nobody can answer it; the work it pushed, if " +
+		"any, is on its branch"
+
+	resumeUnrevertedDetail = "the coding job finished but the turn it belongs to could not be " +
+		"re-entered, and the run's claim could not be given back to the coordination " +
+		"store for another attempt, so the turn cannot be continued; the work it pushed, " +
+		"if any, is on its branch"
+)
+
+// reportStopped tells the engine one suspended turn has stopped.
+//
+// One helper rather than a nil check at each of the two call sites, so "a stop
+// is reported" is one statement rather than two that have to keep agreeing. A
+// caller that wired nothing gets a no-op, which is a valid build: nothing above
+// this package need hold anything up while a turn works.
+func (c *Coordinator) reportStopped(ctx context.Context, run PendingRun) {
+	if c.stopped == nil {
+		return
+	}
+	c.stopped(ctx, run.AgentHandle, run.TurnID)
 }
 
 // FailRun settles a run the turn that launched it cannot suspend into.
@@ -1072,10 +1164,29 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	}
 }
 
-// finish ends a run: its box is reclaimed and then its record deleted.
+// finish ends a run: its box is reclaimed, its record deleted, and — where the
+// ending was this call's — the stop REPORTED.
 // Reports whether the ending is this call's, which is what licenses the caller
 // to announce it: false when a newer lease owns the run or somebody else had
 // already ended it.
+//
+// THE ONE PLACE A RUN'S RECORD IS DELETED, which is what makes it the one place
+// that can say a suspended turn is over, and why the report is made here rather
+// than by each caller. Three rounds of hand-enumerating the callers each missed
+// one; a report keyed to the deletion cannot be missed by a path that deletes.
+// It fires on exactly the gate the caller's own announcement takes, because it
+// IS that gate — the ending being this call's — so a losing racer neither
+// announces a reason the run did not end for nor drops a hold belonging to
+// whoever did end it. And before any caller's announcement, which is a publish
+// that can block: what comes down is a claim on somebody's screen.
+//
+// It reports for a turn that came back too — a collected run whose resumed
+// executor finished, which every ordinary completion is. That is deliberate:
+// the hold is ended by the resume's own frame before this call is reached, so
+// the report finds nothing to drop, and a report gated on "was this turn
+// suspended when we got here" would be a second opinion about a question the
+// store has already answered. Over-reporting costs a map lookup;
+// under-reporting is the defect. See [CoordinatorOptions.Stopped].
 //
 // IN THAT ORDER, for the reason [PendingStore.Finish] gives: a record that
 // outlives its box is reaped by the next recovery pass, while a box that
@@ -1103,9 +1214,15 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) b
 		log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the run's box is reclaimed but its record was not deleted; the seat's "+
 				"next recovery pass reaps it")
-		return true
+		// The ending is this call's whatever the record says, for the
+		// reason above: the box is gone and the turn is over.
+		ended = true
 	}
-	return ended
+	if !ended {
+		return false
+	}
+	c.reportStopped(ctx, run)
+	return true
 }
 
 // detached is the context a teardown runs under.
@@ -1303,6 +1420,15 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 			// it if it was lost.
 			continue
 		}
+		// REPORTED HERE RATHER THAN BY [Coordinator.finish], which this
+		// path deliberately does not use: a retirement keeps the record of
+		// a box it could not reclaim, so its retry still knows the box
+		// exists. The rule is the same one and so is the gate — a run this
+		// call ended tells whoever is holding something up for its turn.
+		// The seat is gone from the company, so a hold for it has usually
+		// been taken down with the seat already; this is what covers the
+		// order in which it has not.
+		c.reportStopped(ctx, run)
 		c.announceFailure(ctx, run, types.SandboxFailureSeatRemoved,
 			"the seat was removed from the company and not restored within the retirement "+
 				"grace, so its run was ended; any work it pushed is on its branch")

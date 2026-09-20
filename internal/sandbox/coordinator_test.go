@@ -141,24 +141,16 @@ type coordRig struct {
 	resumer     *resumeSpy
 	accountant  *ledgerSpy
 
-	mu     sync.Mutex
-	parked []string
-	lost   []string
+	mu      sync.Mutex
+	stopped []string
 }
 
-// parkedTurns is every turn the coordinator reported as stopped on a
-// question, in order.
-func (r *coordRig) parkedTurns() []string {
+// stoppedTurns is every turn the coordinator reported as stopped, in order,
+// however it stopped: parked on a question, destroyed, or ended.
+func (r *coordRig) stoppedTurns() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]string(nil), r.parked...)
-}
-
-// lostTurns is every turn the coordinator reported as destroyed, in order.
-func (r *coordRig) lostTurns() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.lost...)
+	return append([]string(nil), r.stopped...)
 }
 
 func newCoordRig(t *testing.T) *coordRig {
@@ -172,15 +164,10 @@ func newCoordRig(t *testing.T) *coordRig {
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
-		Parked: func(_ context.Context, handle, turnID string) {
+		Stopped: func(_ context.Context, handle, turnID string) {
 			rig.mu.Lock()
 			defer rig.mu.Unlock()
-			rig.parked = append(rig.parked, handle+"/"+turnID)
-		},
-		Lost: func(_ context.Context, handle, turnID string) {
-			rig.mu.Lock()
-			defer rig.mu.Unlock()
-			rig.lost = append(rig.lost, handle+"/"+turnID)
+			rig.stopped = append(rig.stopped, handle+"/"+turnID)
 		},
 		Now: func() time.Time { return base.now },
 	})
@@ -305,39 +292,50 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	}
 }
 
-// AND THE PARK IS ANNOUNCED TO THE ENGINE, which is the only way anything
-// above this package can learn that an agent STOPPED.
+// AND THE PARK IS REPORTED TO THE ENGINE, which is the only way anything above
+// this package can learn that an agent STOPPED.
 //
 // A parked run is neither finished nor working: the turn that suspended into
 // it does not return, so nothing on the Ended path fires, and a person who may
 // take days is now the only thing that can move it. Whatever the engine holds
 // up "while the agent works" — the working indicator first of all — has
-// nothing else to come down on. An ordinary completion must NOT report one:
-// there the turn is resumed immediately and the agent never stopped.
-func TestAParkedRunIsReportedAndAnOrdinaryCompletionIsNot(t *testing.T) {
+// nothing else to come down on.
+//
+// AFTER THE QUESTION IS ON THE ROW, and NOT BEFORE — which is the order the
+// report's whole value depends on. Until that write lands the completion can
+// still be retried, and a retry that resumed the turn would find the hold
+// already dropped; what comes down here is a claim on somebody's screen.
+//
+// The ANNOUNCEMENT goes first, ahead of both, and is not what this asserts:
+// see [Coordinator.park] for why a question recorded but never announced is
+// the worse of the two orders.
+func TestAParkedRunIsReportedOnlyOnceItsQuestionIsOnTheRow(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
 	})
+	// The publish tells the order from the other end: it happens FIRST, so
+	// a report made before the row was written is visible here as a stop
+	// with no question recorded.
+	rig.queue.before = func() {
+		if got := rig.stoppedTurns(); len(got) != 0 {
+			t.Errorf("%v was reported stopped before the question was recorded, "+
+				"so a completion retried from here resumes a turn whose hold is "+
+				"already down", got)
+		}
+	}
 	payload, ev := rig.completion("asks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if got := rig.parkedTurns(); len(got) != 1 || got[0] != "swe/asks" {
+	if got := rig.stoppedTurns(); len(got) != 1 || got[0] != "swe/asks" {
 		t.Fatalf("the park reported %v, want the seat and turn that stopped", got)
 	}
-
-	rig.launch("answers")
-	rig.coordinator.countRun("swe", StatusRunning)
-	rig.runner.Finish(Result{Success: true})
-	payload, ev = rig.completion("answers")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	if got := rig.parkedTurns(); len(got) != 1 {
-		t.Fatalf("a run that came back with an answer reported a park: %v", got)
+	if run := rig.get("asks"); run.Status != StatusAwaiting || run.Question == "" {
+		t.Fatalf("the stop was reported with the row in %q / question %q, want "+
+			"it recorded first", run.Status, run.Question)
 	}
 }
 
@@ -478,6 +476,52 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	}
 	if got := len(rig.resumer.calls()); got != 1 {
 		t.Fatalf("resumed %d times, want the retry to succeed exactly once", got)
+	}
+}
+
+// AND A REVERT THAT CANNOT BE WRITTEN IS NOT A RETRY AT ALL.
+//
+// The un-claim above is the whole reason a failed resume is harmless, so the
+// write that makes it is load-bearing: with it refused the row stays in
+// [StatusResumed], where the completion poll does not look, a redelivery is
+// refused by the very claim it would retake, no answer matches and no reaper
+// expires it. "Leave it for next time" is then a turn destroyed in silence,
+// with its box paused and billed until the seat happens to change hands — and
+// the indicator the suspended turn left up heart-beating over it for the life
+// of the process, which is the same hole a park that could not be written had
+// and the fifth instance of it found in this file.
+//
+// So the run is ENDED instead, under the same reason a stranded park takes:
+// nothing about the two failures differs once the claim is stuck.
+func TestAResumeWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.err = errors.New("the node lost the seat mid-resume")
+	rig.coordinator.pending = refusingWrites{
+		PendingStore: rig.pending, refuse: []string{"ReleaseClaim"},
+	}
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted = %v, want nil: the run is settled, so a redelivery would "+
+			"find nothing to claim", err)
+	}
+	rig.finished("t1")
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Errorf("killed %v, want the paused box of a turn nothing can resume reclaimed", killed)
+	}
+	if got := rig.stoppedTurns(); len(got) != 1 || got[0] != "swe/t1" {
+		t.Errorf("reported %v as stopped, want the turn whose claim is stuck", got)
+	}
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureClaimStranded {
+		t.Fatalf("announced %+v, want one %q", failed, types.SandboxFailureClaimStranded)
+	}
+	if held, awaits := rig.coordinator.SeatRuns("swe"); held || awaits {
+		t.Errorf("SeatRuns = held %v / awaiting %v, want neither: the seat's only run is over",
+			held, awaits)
 	}
 }
 
@@ -874,19 +918,25 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 	}
 }
 
-// AND A DESTROYED TURN IS REPORTED TO THE ENGINE, exactly as a parked one is.
+// AND SO IS EVERY OTHER WAY A RUN STOPS, which is the property this file has
+// missed one path of in each of three rounds.
 //
-// A settle here ends a turn that is still SUSPENDED into the run: the record
-// is deleted, the box reclaimed and the seat freed, and the frame that started
-// the turn returned the moment it suspended. So nothing above this package
-// learns the agent stopped unless [CoordinatorOptions.Lost] says so — which is
-// the same hole [CoordinatorOptions.Parked] closed on the other stop, left
-// open on this one. Its first victim was the working indicator: a run whose
+// A settle ends a turn that is still SUSPENDED into its run: the record is
+// deleted, the box reclaimed and the seat freed, and the frame that started the
+// turn returned the moment it suspended. So nothing above this package learns
+// that the agent stopped unless [CoordinatorOptions.Stopped] says so, and the
+// working indicator was the first victim each time it did not — a run whose
 // collect failed kept it up for the life of the process.
 //
-// Every call site of settleFailed, because the lesson of the park was that
-// enumerating them by hand is what missed this one.
-func TestALostRunIsReportedLikeAParkedOne(t *testing.T) {
+// EVERY ENDING, NOT EVERY ENDING SOMEBODY ENUMERATED. The report is made by
+// [Coordinator.finish], the one place a run's record is deleted, so the cases
+// below are evidence rather than the rule: a path added later reports because
+// it deletes, not because anybody remembered. That includes a run whose turn
+// came back and ended its own hold — the sentence "this run is over, stop
+// holding anything up for its turn" is simply TRUE there, the resume frame has
+// already acted on it, and a gate would be a second opinion about a question
+// the store has answered.
+func TestEveryWayARunStopsReportsIt(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		drive func(*testing.T, *coordRig)
@@ -928,15 +978,38 @@ func TestALostRunIsReportedLikeAParkedOne(t *testing.T) {
 			// knowing: the release is idempotent, and a gate here would
 			// be a second answer to "did this turn stop".
 		}, []string{"swe/t1"}},
-		{"a completion that resumed its turn", func(t *testing.T, rig *coordRig) {
+		{"a park whose question could not be written", func(t *testing.T, rig *coordRig) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
+			// Neither write lands: the question, and then the claim the
+			// completion would have been retried from. Nothing will ever
+			// pick the run up, so the stop is real and this is the one
+			// path that reports it through a settle it chose itself.
+			rig.coordinator.pending = refusingWrites{
+				PendingStore: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
+			}
+			rig.runner.Finish(Result{
+				NeedsInput: true, Question: "which branch?", AskTo: "requester",
+			})
+			payload, ev := rig.completion("t1")
+			// WHAT IT RETURNS IS ASSERTED WHERE IT MEANS SOMETHING —
+			// [TestAParkThatCouldNotBeWrittenIsRetriedOrEnded] — because
+			// here the only question is whether the stop was reported,
+			// and failing on the error would mask that answer.
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+		}, []string{"swe/t1"}},
+		{"a resume whose claim could not be given back", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.coordinator.pending = refusingWrites{
+				PendingStore: rig.pending, refuse: []string{"ReleaseClaim"},
+			}
+			rig.resumer.err = errors.New("the node lost the seat mid-resume")
 			rig.runner.Finish(Result{Success: true, Text: "done"})
 			payload, ev := rig.completion("t1")
-			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-				t.Fatalf("OnCompleted: %v", err)
-			}
-		}, nil},
+			// As above: the return is this path's own test's business.
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+		}, []string{"swe/t1"}},
 		{"a run that parked on a question", func(t *testing.T, rig *coordRig) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
@@ -947,16 +1020,181 @@ func TestALostRunIsReportedLikeAParkedOne(t *testing.T) {
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted: %v", err)
 			}
-		}, nil},
+		}, []string{"swe/t1"}},
+		{"a completion that resumed its turn and ended it", func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+		}, []string{"swe/t1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newCoordRig(t)
 			tc.drive(t, rig)
-			if got := rig.lostTurns(); !slices.Equal(got, tc.want) {
-				t.Errorf("reported %v as lost, want %v", got, tc.want)
+			if got := rig.stoppedTurns(); !slices.Equal(got, tc.want) {
+				t.Errorf("reported %v as stopped, want %v", got, tc.want)
 			}
 		})
 	}
+}
+
+// refusingWrites is a store whose named writes all fail, for the paths that
+// only exist because a write can.
+//
+// A LIST rather than one name, because the failures this package has to be
+// correct about come in sequences: a park whose question does not land tries to
+// give its claim back, and what a deployment with an unreachable coordination
+// store actually sees is both refusing.
+type refusingWrites struct {
+	PendingStore
+	refuse []string
+}
+
+func (s refusingWrites) refuses(name string) bool { return slices.Contains(s.refuse, name) }
+
+func (s refusingWrites) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	if s.refuses("MarkAwaiting") {
+		return errRefusedWrite
+	}
+	return s.PendingStore.MarkAwaiting(ctx, turnID, q)
+}
+
+func (s refusingWrites) SetStatus(ctx context.Context, turnID, status string, fence Fence) error {
+	if s.refuses("SetStatus") {
+		return errRefusedWrite
+	}
+	return s.PendingStore.SetStatus(ctx, turnID, status, fence)
+}
+
+func (s refusingWrites) ReleaseClaim(ctx context.Context, turnID string, r Release) (bool, error) {
+	if s.refuses("ReleaseClaim") {
+		return false, errRefusedWrite
+	}
+	return s.PendingStore.ReleaseClaim(ctx, turnID, r)
+}
+
+func (s refusingWrites) Finish(ctx context.Context, turnID string, fence Fence) (bool, error) {
+	if s.refuses("Finish") {
+		return false, errRefusedWrite
+	}
+	return s.PendingStore.Finish(ctx, turnID, fence)
+}
+
+var errRefusedWrite = errors.New("the coordination store refused the write")
+
+// A PARK THAT COULD NOT BE WRITTEN IS A RETRY OR AN ENDING, NEVER A SILENCE.
+//
+// Its two branches are opposites and the row is what decides which: the run
+// arrives here claimed, and a claim is the promise that a tail will run.
+//
+//   - THE CLAIM GOES BACK, so the completion comes round again — the poll reads
+//     running rows and the box is still there to collect a second time. Nothing
+//     stopped, so nothing is reported and the indicator a suspended turn left up
+//     is CORRECT to still be up. The error goes back to the caller so the
+//     delivery does too.
+//   - THE CLAIM CANNOT GO BACK, and then nothing retries at all: a row left in
+//     [StatusResumed] is polled by nothing, refused by the claim a redelivery
+//     would retake, matched by no answer and expired by no reaper. So the run is
+//     ENDED — box reclaimed, record deleted, loss announced under its own reason
+//     — and the stop reported, because that turn is never coming back.
+//
+// AND THE SEAT'S COUNTS FOLLOW THE ROW, which is the third thing this branch
+// got wrong: the park's two counts moved before the write, so a question the
+// store never recorded left the seat reading as free with an answer pending —
+// the exact state in which a person's reply is run as an unrelated turn.
+func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
+	asks := Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"}
+
+	t.Run("the claim goes back", func(t *testing.T) {
+		rig := newCoordRig(t)
+		run := rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.coordinator.pending = refusingWrites{
+			PendingStore: rig.pending, refuse: []string{"MarkAwaiting"},
+		}
+		rig.runner.Finish(asks)
+
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+			t.Fatal("OnCompleted = nil, want the park's error so the completion comes back")
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Errorf("the row is %q, want %q: nothing polls or re-claims a row left in the claim",
+				got.Status, StatusRunning)
+		}
+		if got := rig.stoppedTurns(); len(got) != 0 {
+			t.Errorf("reported %v as stopped, want nothing: the box is still there and the "+
+				"completion is retried, so the suspended turn's indicator is honest", got)
+		}
+		// COUNTED AS IT IS FILED. The row went back to running, which is a
+		// seat HELD — where a delivery is offered to the answer match and
+		// then requeued — and never a free seat with a question open on it,
+		// which is a delivery consumed as an unrelated turn.
+		held, awaits := rig.coordinator.SeatRuns("swe")
+		if !held || awaits {
+			t.Errorf("SeatRuns = held %v / awaiting %v, want the seat still held on a "+
+				"run that is not parked", held, awaits)
+		}
+		// AND THE RETRY REALLY DOES COME ROUND, which is the whole
+		// justification for keeping the indicator up: the poll fires the
+		// completion again, the paused box is collected a second time and
+		// the park lands.
+		rig.coordinator.pending = rig.pending
+		if fired := rig.tick(); fired != 1 {
+			t.Fatalf("the poll fired %d completions for the reverted run, want 1", fired)
+		}
+		payload, ev = rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("the retried completion: %v", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusAwaiting || got.Question != asks.Question {
+			t.Errorf("after the retry the row is %q / %q, want the question parked",
+				got.Status, got.Question)
+		}
+		if got := rig.stoppedTurns(); len(got) != 1 || got[0] != "swe/t1" {
+			t.Errorf("the retried park reported %v, want the stop it did not report first "+
+				"time round", got)
+		}
+		if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+			t.Errorf("killed %v; a run that is coming back keeps its box %q",
+				killed, run.SandboxID)
+		}
+	})
+
+	t.Run("the claim cannot go back", func(t *testing.T) {
+		rig := newCoordRig(t)
+		run := rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.coordinator.pending = refusingWrites{
+			PendingStore: rig.pending, refuse: []string{"MarkAwaiting", "ReleaseClaim"},
+		}
+		rig.runner.Finish(asks)
+
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted = %v, want nil: the run is settled, so there is nothing "+
+				"for a redelivery to claim", err)
+		}
+		rig.finished("t1")
+		if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+			t.Errorf("killed %v, want the box of the run that can never resume reclaimed", killed)
+		}
+		if got := rig.stoppedTurns(); len(got) != 1 || got[0] != "swe/t1" {
+			t.Errorf("reported %v as stopped, want the turn nothing will ever resume", got)
+		}
+		failed := rig.failures()
+		if len(failed) != 1 || failed[0].Reason != types.SandboxFailureClaimStranded {
+			t.Fatalf("announced %+v, want one %q: a lost turn cannot be quieter than the "+
+				"question it was about to ask", failed, types.SandboxFailureClaimStranded)
+		}
+		if held, awaits := rig.coordinator.SeatRuns("swe"); held || awaits {
+			t.Errorf("SeatRuns = held %v / awaiting %v, want neither on a seat whose only "+
+				"run is over", held, awaits)
+		}
+	})
 }
 
 // AND A RUN THIS CALL DID NOT END REPORTS NOTHING, on the gate the failure
@@ -966,15 +1204,15 @@ func TestALostRunIsReportedLikeAParkedOne(t *testing.T) {
 // this settle, is that party's to end and to explain — and its holds are that
 // party's to drop. Reporting it here would tell a node that is still running
 // the turn that its turn is over.
-func TestASettleSomebodyElseEndedReportsNoLoss(t *testing.T) {
+func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	var lost []string
+	var stopped []string
 	coordinator, err := NewCoordinator(CoordinatorOptions{
 		Queue: rig.queue, Pending: endedFirst{rig.pending},
 		Manager: rig.manager, Resume: rig.resumer,
-		Lost: func(_ context.Context, handle, turnID string) {
-			lost = append(lost, handle+"/"+turnID)
+		Stopped: func(_ context.Context, handle, turnID string) {
+			stopped = append(stopped, handle+"/"+turnID)
 		},
 	})
 	if err != nil {
@@ -989,8 +1227,8 @@ func TestASettleSomebodyElseEndedReportsNoLoss(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	rig.finished("t1")
-	if len(lost) != 0 {
-		t.Errorf("reported %v as lost for a run somebody else had already ended", lost)
+	if len(stopped) != 0 {
+		t.Errorf("reported %v as stopped for a run somebody else had already ended", stopped)
 	}
 }
 

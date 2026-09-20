@@ -211,6 +211,16 @@ const (
 	// conversation landed after all, or somebody else already ended it.
 	SandboxFailureSuspensionUnrecorded = "suspension_unrecorded"
 
+	// SandboxFailureClaimStranded is a run whose tail this node claimed and
+	// then could not give back: the park or the resume the claim was taken
+	// for did not land, and the row could not be reverted to the status it
+	// was claimed from either. A row left in the at-most-once claim is read
+	// by no completion poll, re-claimed by no redelivery and matched by no
+	// answer, so the run is ended here rather than left to strand its box
+	// until the seat changes hands. It names the coordination store: two
+	// writes on one row failed in a row.
+	SandboxFailureClaimStranded = "claim_unreverted"
+
 	// SandboxFailureSeatRemoved is a run of a seat that was removed from the
 	// company and not restored within the mailbox retirement grace. It is
 	// ended when the seat's mailbox is retired, because no resume, answer or

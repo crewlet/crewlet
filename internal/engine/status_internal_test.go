@@ -794,7 +794,7 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 // The park's counterpart, and the one settleFailed reaches: a suspension whose
 // row DID land keeps the indicator up because a box is working, and a settle is
 // the moment that stops being true. The turn never returns to say so, so
-// without [sandbox.CoordinatorOptions.Lost] the indicator heartbeat outlives
+// without [sandbox.CoordinatorOptions.Stopped] the indicator heartbeat outlives
 // the process.
 //
 // Driven through [Engine.buildSandboxRuntime] rather than a coordinator this

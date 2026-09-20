@@ -18,6 +18,16 @@ type recorder struct {
 	mu        sync.Mutex
 	published []publication
 	err       error
+
+	// before, when set, runs at the top of every Publish, OUTSIDE this
+	// recorder's own lock so the hook can read the rest of the world.
+	//
+	// It is how a case asserts an ORDER rather than an outcome: several
+	// rules here are "this happens before the announcement", and an
+	// announcement is a publish, so the only place from which the rule is
+	// observable is inside one. Asserted after the fact instead, every one
+	// of those rules passes whatever order the code took.
+	before func()
 }
 
 type publication struct {
@@ -26,6 +36,12 @@ type publication struct {
 }
 
 func (r *recorder) Publish(_ context.Context, topic string, ev *events.Event) error {
+	r.mu.Lock()
+	before := r.before
+	r.mu.Unlock()
+	if before != nil {
+		before()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {

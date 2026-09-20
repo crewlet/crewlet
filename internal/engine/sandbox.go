@@ -1186,19 +1186,14 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
-		// A run that stops to ask a person something takes the working
-		// indicator down with it: the agent is waiting on THEM, and the
-		// turn that suspended into it does not return to say so. See
-		// [sandbox.CoordinatorOptions.Parked].
-		Parked: e.releaseWorkingStatus,
-		// AND SO DOES A RUN THIS NODE DESTROYS, which is the same fact
-		// reached by the other door: a settled run's turn is never
-		// resumed, so the frame that raised the indicator is as gone as
-		// it is at a park and nothing else would take it down. One
-		// function for both, because "this turn stopped and is not
-		// coming back" is one thing to do. See
-		// [sandbox.CoordinatorOptions.Lost].
-		Lost: e.releaseWorkingStatus,
+		// A run that stops with a turn still suspended into it takes the
+		// working indicator down with it, whichever way it stopped: the
+		// agent is waiting on a person, or is never coming back at all,
+		// and either way the turn does not return to say so. ONE
+		// FUNCTION FOR EVERY REASON, because to the indicator they are
+		// one fact — the frame that raised it has already returned. See
+		// [sandbox.CoordinatorOptions.Stopped].
+		Stopped: e.releaseWorkingStatus,
 	})
 	if err != nil {
 		return err

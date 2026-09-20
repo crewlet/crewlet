@@ -151,21 +151,30 @@ func stillWorking(resumable bool, err error) bool {
 // releaseWorkingStatus drops one turn's hold because the agent has STOPPED and
 // the turn is not coming back to say so.
 //
-// TWO CALLERS, ONE FACT. The detached run a turn suspended into either parked
-// on a question and is waiting for a person
-// ([sandbox.CoordinatorOptions.Parked]), or was settled and its box reclaimed
-// with the turn still suspended into it
-// ([sandbox.CoordinatorOptions.Lost]). A wait and an ending are different
-// things to the run; to the indicator they are the same one, because in both
-// the frame that raised it has already returned and nothing below it holds the
-// turn any more.
+// ONE CALLER, ONE FACT, and the one is deliberate. The detached run a turn
+// suspended into can stop in several ways — parked on a question and waiting
+// for a person, destroyed with its box reclaimed, or left holding a claim its
+// node could not give back — and they are different things to the RUN and the
+// same one to the indicator, because in every one of them the frame that
+// raised it has already returned and nothing below it holds the turn any more.
+// So the sandbox layer reports them through a single seam
+// ([sandbox.CoordinatorOptions.Stopped]) and this is what sits behind it: a
+// second entry point per reason is a second thing a wiring can declare and
+// never pass, which is exactly how three earlier rounds each left one way of
+// stopping unreported.
 //
 // The counterpart of the keep-alive above, and the reason that rule needs one:
-// a suspended turn's indicator is kept up because a box is working, and these
-// are the two moments the engine learns it no longer is. Nothing else can say
-// so — the turn does not return, and on the park side a person can take days —
-// so without them the indicator says "is thinking…" at the one person who
-// could answer, for as long as this process lives.
+// a suspended turn's indicator is kept up because a box is working, and a stop
+// is the moment the engine learns it no longer is. Nothing else can say so —
+// the turn does not return, and on the park side a person can take days — so
+// without this the indicator says "is thinking…" at the one person who could
+// answer, for as long as this process lives.
+//
+// IDEMPOTENT BY CONSTRUCTION, which is what lets the seam over-report rather
+// than decide: a hold this node does not have answers a nil session whose End
+// is a no-op, so a stop reported for a turn that already ended its own hold —
+// every ordinary collected run — costs one map lookup. See
+// [notify.Statuses.Release].
 //
 // It is one turn's HOLD, not the seat's indicators: a second turn in the same
 // thread keeps its own. See [notify.Statuses.Release].
