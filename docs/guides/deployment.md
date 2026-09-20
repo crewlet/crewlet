@@ -496,16 +496,24 @@ A tiered account that has **no tier for the class you asked for** — `R1` and
 `R5` declared while `stream.replicas: 3` — is neither, and neither is a tier
 that *is* declared but carries no storage limit: the account's report lists
 every class it holds objects in, whether or not a limit was ever set for one,
-so `R3` being present is not `R3` being declared, and the broker resolves both
-through the same table. It refuses every stream, consumer and bucket create on
-such an account with `no JetStream default or applicable tiered limit present`,
-before it compares a single byte. The engine reports a budget of **zero** under
-its own source — `account_no_tier` or `account_tier_no_limit` — rather than as
-an account that is merely full: the two carry the same number and the opposite
-instruction, since one clears by somebody freeing room and these only by a
-change of configuration. A tier declared **unlimited** is neither again: it
-states its limit as a negative, the broker creates against it, and the engine
-sizes from its own free disk as it does for any broker that states no limit.
+so `R3` being present is not `R3` being declared. The engine reports a budget
+of **zero** under its own source — `account_no_tier` or
+`account_tier_no_limit` — rather than as an account that is merely full: the
+two carry the same number and the opposite instruction, since one clears by
+somebody freeing room and these only by a change of configuration. A tier
+declared **unlimited** is neither again: it states its limit as a negative, the
+broker creates against it, and the engine sizes from its own free disk as it
+does for any broker that states no limit.
+
+The broker refuses every stream, consumer and bucket create either way, but
+**not with the same words**, so the engine's own refusal carries the ones you
+will actually see. A class the account's limit table has no entry for is never
+resolved at all — `no JetStream default or applicable tiered limit present`,
+before a single byte is compared — and that covers both the missing tier and a
+tier the report carries only because the account holds objects in that class. A
+class it really does declare with no disk, a memory-only tier, resolves
+normally and is refused by the byte comparison instead: `insufficient storage
+resources available` on every create that reserves bytes.
 
 What that does to a node depends on **whether its objects already exist**, and
 the two cases look nothing alike.
@@ -513,11 +521,11 @@ the two cases look nothing alike.
 *A node that has not provisioned them does not start.* `crewlet run` creates
 its streams while it is opening its broker client, and its coordination buckets
 straight after — all of it before anything sizes a ceiling — so the first
-create is refused and the process exits. The refusal names the class the
-account carries no limit for and the two levers that move it: the engine
-classifies it rather than reading it as the object having failed to appear, so
-what you get is `R3` and `stream.replicas` and not `(and it is not there:
-stream not found)` appended to the broker's bare text.
+create is refused and the process exits. The first of those two refusals names
+the class the account carries no limit for and the two levers that move it: the
+engine classifies it rather than reading it as the object having failed to
+appear, so what you get is `R3` and `stream.replicas` and not `(and it is not
+there: stream not found)` appended to the broker's bare text.
 
 *A node whose objects are all already there boots, on numbers the broker never
 agreed to.* Nothing is created, so nothing is refused. The

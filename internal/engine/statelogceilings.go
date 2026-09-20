@@ -457,16 +457,27 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 		return "that limit is the NATS account's own JetStream storage limit, " +
 			"which whoever operates the broker sets"
 	case jetstream.BudgetAccountTierNoLimit:
-		// THE SAME REFUSAL AS THE MISSING TIER, and a different thing to
-		// go and do about it — which is the whole reason it is a source
-		// of its own rather than the same zero.
-		return "that limit is zero because the NATS account is TIERED, has the replica " +
-			"class stream.replicas puts this node in and declares no limit on it — a " +
-			"class an account holds objects in is reported whether or not a limit was " +
-			"ever set for it — so the broker refuses every stream on it, `no JetStream " +
-			"default or applicable tiered limit present`, whatever ceiling is asked " +
-			"for. Have the cluster's operator declare a limit on that tier, or set " +
-			"stream.replicas to a class that has one"
+		// TWO REALITIES UNDER ONE REPORT, which is why this clause names
+		// both refusals rather than the missing tier's alone. A class
+		// the limit table has no entry for is never resolved and is
+		// refused before a byte is compared; a class the account really
+		// does declare with NO DISK — a memory-only tier, whose
+		// DiskStorage reaches MaxStore verbatim — resolves normally and
+		// is refused by the byte comparison instead. Nothing in the
+		// account's own report tells the two apart, so an operator sent
+		// looking for a missing declaration would be hunting the one
+		// thing that account is not missing.
+		return "that limit is zero because the NATS account is TIERED, reports the " +
+			"replica class stream.replicas puts this node in and states no storage " +
+			"for it — a class an account holds objects in is reported whether or not " +
+			"a limit was ever set for it, so a class being present is not a class " +
+			"being declared. Either the limit table has no entry for it, and every " +
+			"create is refused before a byte is compared (`no JetStream default or " +
+			"applicable tiered limit present`), or the tier is declared with no disk " +
+			"and every create that reserves bytes is refused by the comparison " +
+			"(`insufficient storage resources available`). Have the cluster's " +
+			"operator declare storage on that tier, or set stream.replicas to a class " +
+			"that has some"
 	case jetstream.BudgetAccountNoTier:
 		// NOT A CAPACITY SENTENCE, which is why it is not folded into the
 		// one above. The account grants this node's replica class nothing

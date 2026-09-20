@@ -353,7 +353,7 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 		jetstream.BudgetServerMemory:       "stream.store_dir",
 		jetstream.BudgetAccount:            "whoever operates the broker",
 		jetstream.BudgetAccountNoTier:      "stream.replicas",
-		jetstream.BudgetAccountTierNoLimit: "declare a limit on that tier",
+		jetstream.BudgetAccountTierNoLimit: "declare storage on that tier",
 		// UNSTATED HAS NO SETTING TO NAME — the account declares no
 		// limit and a client cannot read the server's — so what it owes
 		// a reader is who to ask.
@@ -388,6 +388,31 @@ func TestEveryBudgetSourceNamesTheLeverThatChangesIt(t *testing.T) {
 	if !strings.Contains(noTier, "no JetStream default or applicable tiered limit present") {
 		t.Errorf("the no-tier sentence does not quote what the broker will "+
 			"actually say, so nobody can match the two: %s", noTier)
+	}
+	// AND IT DOES NOT OFFER THE BYTE COMPARISON'S WORDS, which a missing
+	// tier never reaches: the class is not resolved at all, so nothing is
+	// ever compared. Naming both would send an operator to look at how
+	// full an account is when the account has no entry for them.
+	if strings.Contains(noTier, "insufficient storage resources available") {
+		t.Errorf("the no-tier sentence offers a refusal a missing tier cannot "+
+			"reach: %s", noTier)
+	}
+	// THE LIMITLESS TIER NAMES BOTH, because its report covers two
+	// realities the account cannot be asked to tell apart: a class with no
+	// entry in the limit table, and a class declared with no disk. The
+	// first is refused before a byte is compared and the second by the
+	// comparison, and an operator sent to only one of them is hunting
+	// either a declaration that is there or a fullness that is not.
+	tierNoLimit := limitSource(jetstream.BudgetAccountTierNoLimit, volume)
+	for _, want := range []string{
+		"no JetStream default or applicable tiered limit present",
+		"insufficient storage resources available",
+	} {
+		if !strings.Contains(tierNoLimit, want) {
+			t.Errorf("the limitless-tier sentence does not quote %q, so one of "+
+				"the two refusals it covers reaches a reader unexplained: %s",
+				want, tierNoLimit)
+		}
 	}
 	if strings.Contains(limitSource(jetstream.BudgetAccount, volume), "stream.replicas") {
 		t.Error("an ordinary account limit sends an operator to stream.replicas, " +
